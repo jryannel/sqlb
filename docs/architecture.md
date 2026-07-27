@@ -217,7 +217,6 @@ working is worse than no test, so those are exercised as real build attempts.
 
 ## Known gaps
 
-- `?expand` validates relation names but does not perform the join.
 - `introspect` produces a registry from a live database and
   `codegen.RenderSchema` renders it back as `schema.go`, so adoption is a closed
   loop. There is still no shadow database replaying a migration history, so the
@@ -225,5 +224,8 @@ working is worse than no test, so those are exercised as real build attempts.
   proving the migrations produce it.
 - No change feed, and no generated TypeScript client. See the
   [vision](vision.md).
-- The REST layer does not implement `?expand`, so `rest.Options.Expandable`
-  should stay empty until the join exists.
+- `?expand` validates relation names but does not perform the join, so
+  `rest.Options.Expandable` should stay empty until it exists. Every surface
+  that would promise expansion refuses rather than answering without it:
+  `rest.Resource` rejects a non-empty `Options.Expandable` at startup, and
+  `filter.Apply` fails the builder rather than dropping a parsed `?expand`.
