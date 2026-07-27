@@ -1,7 +1,7 @@
 # ADR-0014: Migrations by diff, adoption by import
 
 - **Status:** Exploring
-- **Confidence:** Low
+- **Confidence:** Medium
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 
@@ -112,7 +112,50 @@ one step.
 **What this costs.** The shadow-database step needs a real Postgres available at
 generation time, which complicates CI. Rename hints are a manual step that is
 easy to forget, and forgetting one is data loss unless the destructive guard
-catches it. None of this is built, hence Low confidence.
+catches it.
+
+**What is built.** `migrate.Diff(current, target *schema.Registry) ([]Change,
+error)` and the Postgres DDL under it. The symmetry claim held: the diff is a
+pure function, tested exhaustively without a database. Still unbuilt: the
+shadow database that produces `current`, `sqlb import`, and rename hints — so
+in practice `Diff` currently has no way to learn the current state except from
+another hand-written registry.
+
+The generated DDL has been applied to a real Postgres 17 once, by hand: an
+initial migration for the blog schema and an incremental one exercising every
+kind of change the diff emits, each applied forward against seeded rows and
+then reversed, ending in the exact structure it started from. That is what
+raised confidence to Medium. It is not High because the check was manual and is
+not in CI — the test suite deliberately needs no database, so the round-trip
+that proves the DDL is *valid* rather than merely *expected* has to be
+re-run by hand whenever the DDL layer changes. Automating it behind a build tag
+is the obvious next increment.
+
+Building it surfaced three constraints the record did not anticipate, each now
+enforced in code:
+
+- **Foreign keys are never inlined into `CREATE TABLE`.** Adding them as
+  separate `ALTER TABLE` changes means table creation needs no dependency sort
+  and no cycle special case, and one code path adds a reference whether the
+  table is new or not.
+- **Ordering is a correctness property, not presentation.** Changes are emitted
+  in phases so nothing is dropped out from under something that still refers to
+  it, and rendering reverses that list for the Down — so reversibility falls
+  out of the ordering rather than being arranged separately.
+- **The concurrent-index file split can reorder against itself.** An index drop
+  is normally `CONCURRENTLY`, which `Split` moves into a file that runs *after*
+  the one holding the column drops — by which time Postgres has already dropped
+  that index along with its column, and the statement fails. An index over a
+  column that is going away therefore drops non-concurrently, which costs
+  nothing: `DROP COLUMN` takes an `ACCESS EXCLUSIVE` lock on the same table
+  moments later regardless. The general lesson is that the split is not
+  order-preserving, and any future concurrent change has to be checked against
+  the ordinary changes it depends on.
+
+**No `USING` clause is ever generated** for a type change. Postgres refusing a
+cast it cannot make implicitly is the correct outcome; a generated `USING`
+would pick a cast nobody reviewed, and casting to a narrower type truncates
+silently rather than failing.
 
 ## What would change our mind
 
@@ -129,6 +172,10 @@ catches it. None of this is built, hence Low confidence.
 - If the shipped formats stop being ~15 lines each, the `Format` interface is
   carrying the wrong responsibilities and the shared semantics have leaked into
   it. That is a design signal, not a reason to add more formats.
+- If the DDL layer changes and the manual Postgres round-trip is not re-run,
+  that is the signal it needs to become a build-tagged test rather than a
+  habit. A habit that has to be remembered is a guard that will eventually not
+  be ([ADR-0016](0016-guards-proven-both-ways.md)).
 - If the diff starts emitting changes that need a lock long enough to matter
   (`SET NOT NULL` on a large table, a type narrowing), rendering them as a
   single migration is actively harmful. They need to be flagged as requiring an
@@ -137,7 +184,8 @@ catches it. None of this is built, hence Low confidence.
 ## Cost of change
 
 Rising sharply once the first generated migration is applied anywhere real.
-Before that, the diff engine is a pure function and can be rewritten freely.
+Before that — which is still true today — the diff engine is a pure function
+and can be rewritten freely.
 
 After that, the migration history is a permanent artefact: changing the file
 format, the numbering, or the semantics of the destructive guard means
@@ -175,6 +223,14 @@ sqlb to own DDL.
   nondeterminism in the one place the project cannot afford it. Verified the
   `Format` interface stays cheap by implementing a fourth format outside the
   package in fourteen lines.
+- 2026-07-27 — Built the diff engine and the Postgres DDL under it. Confidence
+  Low → Medium: the pure-function claim held and is now covered by tests, and
+  the generated DDL was applied to and reversed against a real Postgres 17 by
+  hand — but that check is manual, not in CI. Recorded three constraints
+  implementation surfaced — foreign keys are never inlined, phase ordering is a
+  correctness property, and the concurrent-index split is not order-preserving
+  — plus the decision never to generate a `USING` clause. Enum representation
+  became large enough to need its own record, [ADR-0017](0017-enums-as-text-and-check.md).
 - 2026-07-27 — Revised on learning the project uses goose. The original record
   specified separate `.up.sql`/`.down.sql` files, which is golang-migrate's
   convention, not goose's. Corrected to goose's single-file format, made the

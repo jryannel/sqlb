@@ -44,7 +44,8 @@ Almost everything else follows from those two.
 | `schema` | The declarative DSL and its validation. Design-time only; nothing at runtime imports it. | nothing |
 | `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`. | stdlib only |
 | `filter` | URL grammar → predicates, validated against model capabilities. | `sqlb` |
-| `migrate` | Renders schema changes as migration files for goose, golang-migrate or plain SQL. Does not apply them. | stdlib only |
+| `migrate` | Diffs two schemas into changes, renders them as Postgres DDL, and writes migration files for goose, golang-migrate or plain SQL. Does not apply them. | `schema` |
+| `codegen` | Generates models, the typed column facade and the manifest. `Check` is the dry-run mode wired into CI. | `schema` |
 | `example/blog` | A worked schema plus the artefacts codegen must produce. | all of the above |
 
 The dependency direction matters: `schema` is a leaf that nothing imports at
@@ -53,6 +54,13 @@ what makes [ADR-0010](adr/0010-codegen-is-optional.md) possible — the engine
 cannot quietly grow a dependency on the schema DSL, because it cannot see it.
 Capabilities reach the runtime as struct tags or `Describe` calls, never as a
 schema import.
+
+`migrate` and `codegen` sit on the other side of that line: both are design-time
+tools that read `schema` and emit text, and neither is reachable from the
+request path. `migrate` is the only package that renders DDL, which is why the
+Postgres type mapping lives there rather than beside the query compiler — a
+`Format` decides what a *runner* wants a file to look like, and the DDL layer
+decides what the *database* wants a statement to look like.
 
 `sqlb` has no third-party dependencies. `Executor` is the two-method subset of
 `*sql.DB` that the engine needs, so pgx works through its stdlib adapter and any

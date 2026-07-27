@@ -177,6 +177,28 @@ func TestStatementBlocksWrapMultiStatementSQL(t *testing.T) {
 	}
 }
 
+// The other direction of the same guard: a semicolon in a comment is prose, not
+// a statement separator. A destructive change renders as nothing but comment
+// lines, so getting this wrong wraps every one of them in delimiters it does
+// not need.
+func TestStatementBlocksIgnoreSemicolonsInComments(t *testing.T) {
+	files, err := migrate.Render(migrate.Migration{
+		Version: "1", Name: "drop",
+		Changes: []migrate.Change{{
+			Up:          `DROP TABLE "posts";`,
+			Destructive: true,
+			Reason:      "deletes every row; the Down cannot bring them back",
+		}},
+	}, migrate.Options{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := files["1_drop.sql"]
+	if strings.Contains(body, "+goose Statement") {
+		t.Errorf("a single statement needs no delimiters:\n%s", body)
+	}
+}
+
 func TestGolangMigrateFormatUsesSeparateFiles(t *testing.T) {
 	files, err := migrate.Render(migrate.Migration{
 		Version: "20260727120000", Name: "add_view_count",

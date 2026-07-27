@@ -221,8 +221,11 @@ Working and tested:
 
 Not built yet, in the order they matter:
 
-1. **Migrations** — DDL emission plus a diff against the live database. The file
-   rendering exists (`migrate`); the diff engine does not.
+1. **Migrations** — `migrate.Diff` computes the changes between two schemas and
+   renders them as Postgres DDL, and `migrate.Write` emits the files. What is
+   missing is where the *current* schema comes from: `sqlb import` reading
+   `pg_catalog`, or a shadow database replaying the existing history. Until one
+   of those exists, both sides of a diff have to be hand-written registries.
 2. **REST handlers and OpenAPI** — the generator emits models and the typed
    facade today, not handlers.
 3. **`?expand`** — the grammar validates relation names; the joins are not
@@ -306,6 +309,7 @@ inspected first:
 |---|---|---|
 | Query | `q.SQL()` — text and args, nothing executed | `q.All(ctx, db)` |
 | Query against the live schema | `sqlb.Explain(ctx, db, q)` — plans it, does not run it | `q.All(ctx, db)` |
+| Schema change | `migrate.Diff(current, target)` — the changes, as values | — |
 | Migration | `migrate.Render(m, opts)` — files in memory | `migrate.Write(dir, m, opts)` |
 | Generated code | `codegen.Check(opts)` — what is stale | `codegen.Generate(opts)` |
 

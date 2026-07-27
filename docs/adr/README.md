@@ -114,3 +114,6 @@ nobody finishes reading has failed at its only job.
 | [0012](0012-change-feed-outbox.md) | Change notification via a transactional outbox | Exploring | Low |
 | [0013](0013-no-internal-split.md) | No public/internal package split | Working | Medium |
 | [0014](0014-migrations-and-import.md) | Migrations by diff, adoption by import | Exploring | Medium |
+| [0015](0015-module-isolation.md) | Modules own their tables, and do not reference each other's | Working | Medium |
+| [0016](0016-guards-proven-both-ways.md) | A guard is not trusted until it has failed on purpose | Working | High |
+| [0017](0017-enums-as-text-and-check.md) | An enum is text with a CHECK constraint | Working | Medium |

@@ -1,5 +1,12 @@
-// Package migrate renders schema changes as migration files for an existing
+// Package migrate turns a schema change into migration files for an existing
 // migration runner.
+//
+// There are three layers. Diff compares two schema registries and returns the
+// Changes between them. The DDL layer renders those changes as Postgres
+// statements. A Format renders a set of changes as the files a particular
+// runner expects. They are separable on purpose: the first is a pure function
+// over two data structures, the second knows only Postgres, and the third
+// knows only goose or golang-migrate.
 //
 // sqlb does not apply migrations and does not track which have run. Projects
 // already have a runner — goose, golang-migrate, atlas, a shell script — and
@@ -245,8 +252,19 @@ func statement(sql string, c Change, opts Options) string {
 // needsStatementBlock reports whether SQL contains a semicolon anywhere but the
 // end, which is how a runner tells one statement from several. Function bodies
 // and DO blocks need explicit delimiting.
+//
+// Line comments are stripped first. A semicolon inside one does not delimit
+// anything, and prose reaches here routinely: a destructive change renders as
+// nothing but comment lines, and its Reason is written by a human.
 func needsStatementBlock(sql string) bool {
-	trimmed := strings.TrimRight(strings.TrimSpace(sql), ";")
+	var code []string
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		code = append(code, line)
+	}
+	trimmed := strings.TrimRight(strings.TrimSpace(strings.Join(code, "\n")), ";")
 	return strings.Contains(trimmed, ";")
 }
 
