@@ -12,10 +12,18 @@ name: pages
 on:
   push:
     branches: [main]
-    # The site is generated from docs/guide, so a guide edit has to redeploy it.
+    # The site is generated from docs/, so an edit there has to redeploy it.
+    #
+    # Deliberately the whole directory rather than the published subset. This
+    # filter listed docs/guide/** when the guide was the only source, and adding
+    # docs/adr/ and docs/ silently outgrew it: ADR-0022 was committed, CI was
+    # green, and the page 404d because no deploy ran. A filter that has to be
+    # widened every time SOURCES grows is a filter that will be wrong again.
+    # Building on an unpublished docs/ change is cheap; not building on a
+    # published one is invisible.
     paths:
       - "site/**"
-      - "docs/guide/**"
+      - "docs/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
