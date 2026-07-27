@@ -172,6 +172,55 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			},
 			want: "not a valid SQL identifier",
 		},
+		{
+			// A rename hint asserts that the old name is gone. If the old
+			// column is still declared, either the hint is wrong or the two
+			// columns are being swapped — which Postgres cannot do in one
+			// statement either.
+			name: "column renamed from one that still exists",
+			build: func(r *schema.Registry) {
+				r.Table("l",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Text("headline"),
+					schema.Text("title").RenamedFrom("headline"),
+				)
+			},
+			want: "still declared as a column of its own",
+		},
+		{
+			name: "two columns renamed from the same one",
+			build: func(r *schema.Registry) {
+				r.Table("m",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Text("title").RenamedFrom("headline"),
+					schema.Text("subtitle").RenamedFrom("headline"),
+				)
+			},
+			want: "also claimed by column",
+		},
+		{
+			name: "column renamed from itself",
+			build: func(r *schema.Registry) {
+				r.Table("n", schema.UUIDv7("id").PrimaryKey(), schema.Text("title").RenamedFrom("title"))
+			},
+			want: "RenamedFrom names the column itself",
+		},
+		{
+			name: "table renamed from one that still exists",
+			build: func(r *schema.Registry) {
+				r.Table("orgs", schema.UUIDv7("id").PrimaryKey())
+				r.Table("organisations", schema.UUIDv7("id").PrimaryKey()).RenamedFrom("orgs")
+			},
+			want: "still declared as a table of its own",
+		},
+		{
+			name: "two tables renamed from the same one",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey()).RenamedFrom("old")
+				r.Table("q", schema.UUIDv7("id").PrimaryKey()).RenamedFrom("old")
+			},
+			want: "also claimed by table",
+		},
 	}
 
 	for _, tt := range tests {

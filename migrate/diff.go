@@ -28,9 +28,13 @@ import (
 // # What is not inferred
 //
 // A rename is indistinguishable from a drop and an add when only the before
-// and after states are known, so it is emitted as a drop and an add: correct,
-// lossy, and never silently wrong. Declaring renames explicitly is the
-// unbuilt half of this (ADR-0014).
+// and after states are known, so it has to be declared: schema.RenamedFrom
+// says a column or a table used to be called something else, and the diff
+// emits ALTER TABLE … RENAME. Without the hint a rename is a drop and an add,
+// which is correct, lossy, and never silently wrong. Inferring one from a
+// similar name and type is the tempting alternative and is rejected on
+// consequence asymmetry: a wrong inference destroys a column of production
+// data, a missing one costs a hint (ADR-0014).
 //
 // # Ordering
 //
@@ -42,15 +46,23 @@ import (
 //     cover can disappear
 //  3. DROP CONSTRAINT, foreign keys first, since a foreign key depends on the
 //     unique or primary key constraint it points at
-//  4. ADD COLUMN and ALTER COLUMN
-//  5. DROP COLUMN
-//  6. ADD CONSTRAINT, foreign keys last, once every table and column exists
-//  7. CREATE INDEX
-//  8. DROP TABLE
+//  4. RENAME, of tables, columns, constraints and indexes
+//  5. ADD COLUMN and ALTER COLUMN
+//  6. DROP COLUMN
+//  7. ADD CONSTRAINT, foreign keys last, once every table and column exists
+//  8. CREATE INDEX
+//  9. DROP TABLE
 //
 // Rendering reverses this list for the Down section, which is exactly the
 // mirror of it, so reversibility falls out of the ordering rather than being
 // arranged separately.
+//
+// The renames sit where they do because that is the only place both sides work
+// out. Everything before them is expressed in the old names and everything
+// after in the new ones — and because the Down runs the list backwards, each
+// half is reversed while the names it was written against are the ones in
+// effect. Putting the renames first instead would leave every drop's Down
+// re-adding a constraint against a column that no longer answers to that name.
 func Diff(current, target *schema.Registry) ([]Change, error) {
 	if current == nil {
 		current = schema.NewRegistry()
@@ -82,10 +94,16 @@ func Diff(current, target *schema.Registry) ([]Change, error) {
 type differ struct {
 	current, target *schema.Registry
 
+	// tableRenames maps an old storage name to its new one. A foreign key
+	// names the table it points at, so a reference to a renamed table has to
+	// be recognised as unchanged rather than dropped and re-added.
+	tableRenames map[string]string
+
 	createTables   []Change
 	dropIndexes    []Change
 	dropForeignKey []Change
 	dropOther      []Change
+	renames        []Change
 	alterColumns   []Change
 	dropColumns    []Change
 	addOther       []Change
@@ -101,6 +119,7 @@ func (d *differ) changes() []Change {
 		d.dropIndexes,
 		d.dropForeignKey,
 		d.dropOther,
+		d.renames,
 		d.alterColumns,
 		d.dropColumns,
 		d.addOther,
@@ -114,24 +133,64 @@ func (d *differ) changes() []Change {
 }
 
 func (d *differ) run() error {
+	d.tableRenames = map[string]string{}
+	claimed := map[string]bool{}
 	for _, t := range d.target.Tables() {
-		if d.current.Get(t.Name()) != nil {
-			continue // altered below, walking the current registry
+		cur := d.currentFor(t)
+		if cur == nil {
+			continue // created below, once the rename map is complete
 		}
-		if err := d.tableCreated(t); err != nil {
-			return err
+		claimed[cur.Name()] = true
+		if cur.Name() != t.Name() {
+			d.tableRenames[cur.Name()] = t.Name()
 		}
 	}
-	for _, t := range d.current.Tables() {
-		if d.target.Get(t.Name()) == nil {
-			if err := d.tableDropped(t); err != nil {
+
+	for _, t := range d.target.Tables() {
+		cur := d.currentFor(t)
+		if cur == nil {
+			if err := d.tableCreated(t); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := d.tableAltered(t, d.target.Get(t.Name())); err != nil {
+		if cur.Name() != t.Name() {
+			d.renames = append(d.renames, Change{
+				Comment: "rename table " + cur.Name() + " to " + t.Name(),
+				Up:      renameTable(cur.Name(), t.Name()),
+				Down:    renameTable(t.Name(), cur.Name()),
+			})
+		}
+		if err := d.tableAltered(cur, t); err != nil {
 			return err
 		}
+	}
+	for _, t := range d.current.Tables() {
+		if claimed[t.Name()] {
+			continue
+		}
+		if err := d.tableDropped(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// currentFor returns the table in the current registry that t describes, or
+// nil if t is new.
+//
+// A table matching by name wins over a rename hint, which is what makes a hint
+// left behind after its migration was generated harmless: by then the table
+// answers to its new name, the old one is gone, and the hint resolves to
+// nothing. Deleting it is still the right thing to do — it is a claim about the
+// schema that has stopped being true — but forgetting to does not produce a
+// second rename.
+func (d *differ) currentFor(t *schema.TableDef) *schema.TableDef {
+	if cur := d.current.Get(t.Name()); cur != nil {
+		return cur
+	}
+	if old := t.RenamedFromName(); old != "" {
+		return d.current.Get(old)
 	}
 	return nil
 }
@@ -198,19 +257,58 @@ func (d *differ) tableDropped(t *schema.TableDef) error {
 }
 
 func (d *differ) tableAltered(cur, tgt *schema.TableDef) error {
-	if err := d.columns(cur, tgt); err != nil {
+	cols := columnRenames(cur, tgt)
+	for _, old := range sortedKeys(cols) {
+		d.renames = append(d.renames, Change{
+			Comment: "rename " + tgt.Name() + "." + old + " to " + cols[old],
+			Up:      renameColumn(tgt.Name(), old, cols[old]),
+			Down:    renameColumn(tgt.Name(), cols[old], old),
+		})
+	}
+	if err := d.columns(cur, tgt, cols); err != nil {
 		return err
 	}
 	d.tableComment(cur, tgt)
-	d.constraints(cur, tgt)
-	d.indexes(cur, tgt)
+	d.constraints(cur, tgt, cols)
+	d.indexes(cur, tgt, cols)
 	return nil
 }
 
-func (d *differ) columns(cur, tgt *schema.TableDef) error {
+// columnRenames resolves a table's rename hints into old name → new name.
+//
+// A hint counts only when the old column is present and the new one is not:
+// anything else means the rename has already been generated and applied, and
+// the leftover hint describes a schema that no longer exists. See currentFor
+// for why that is a no-op rather than an error.
+func columnRenames(cur, tgt *schema.TableDef) map[string]string {
+	out := map[string]string{}
+	for _, f := range tgt.Fields() {
+		td := f.Desc()
+		old := td.RenamedFrom
+		if old == "" || cur.Field(old) == nil || cur.Field(td.Name) != nil {
+			continue
+		}
+		out[old] = td.Name
+	}
+	return out
+}
+
+func (d *differ) columns(cur, tgt *schema.TableDef, cols map[string]string) error {
+	renamedFrom := make(map[string]string, len(cols))
+	for old, name := range cols {
+		renamedFrom[name] = old
+	}
+
 	for _, f := range tgt.Fields() {
 		td := f.Desc()
 		existing := cur.Field(td.Name)
+		if existing == nil {
+			// A renamed column is not new: the rename is already emitted, and
+			// what remains is whatever else changed about it at the same time.
+			if old, renamed := renamedFrom[td.Name]; renamed {
+				existing = cur.Field(old)
+			}
+		}
 		if existing == nil {
 			if err := d.columnAdded(tgt, td); err != nil {
 				return err
@@ -223,15 +321,17 @@ func (d *differ) columns(cur, tgt *schema.TableDef) error {
 	}
 	for _, f := range cur.Fields() {
 		cd := f.Desc()
-		if tgt.Field(cd.Name) != nil {
+		if tgt.Field(cd.Name) != nil || cols[cd.Name] != "" {
 			continue
 		}
+		// The column drop runs after the renames, so it and its Down are both
+		// written against the table's new name.
 		d.dropColumns = append(d.dropColumns, Change{
-			Comment:     "drop column " + cur.Name() + "." + cd.Name,
-			Up:          dropColumn(cur.Name(), cd.Name),
-			Down:        mustAddColumnDown(cur, cd),
+			Comment:     "drop column " + tgt.Name() + "." + cd.Name,
+			Up:          dropColumn(tgt.Name(), cd.Name),
+			Down:        mustAddColumnDown(tgt.Name(), cd),
 			Destructive: true,
-			Reason:      "dropping " + cur.Name() + "." + cd.Name + " deletes its contents. The Down restores the column but not the values",
+			Reason:      "dropping " + tgt.Name() + "." + cd.Name + " deletes its contents. The Down restores the column but not the values",
 		})
 	}
 	return nil
@@ -240,8 +340,8 @@ func (d *differ) columns(cur, tgt *schema.TableDef) error {
 // mustAddColumnDown renders the ADD COLUMN that reverses a drop. The column
 // came from a registry that already rendered, so a failure here is impossible;
 // an empty Down would render as "not reversible", which is honest either way.
-func mustAddColumnDown(t *schema.TableDef, d *schema.FieldDesc) string {
-	sql, err := addColumn(t, d)
+func mustAddColumnDown(table string, d *schema.FieldDesc) string {
+	sql, err := addColumn(table, d)
 	if err != nil {
 		return ""
 	}
@@ -249,7 +349,7 @@ func mustAddColumnDown(t *schema.TableDef, d *schema.FieldDesc) string {
 }
 
 func (d *differ) columnAdded(t *schema.TableDef, td *schema.FieldDesc) error {
-	up, err := addColumn(t, td)
+	up, err := addColumn(t.Name(), td)
 	if err != nil {
 		return err
 	}
@@ -361,38 +461,77 @@ func (d *differ) tableComment(cur, tgt *schema.TableDef) {
 	d.alterColumns = append(d.alterColumns, Change{
 		Comment: "describe " + tgt.Name(),
 		Up:      commentOnTable(tgt.Name(), tgt.Comment()),
-		Down:    commentOnTable(cur.Name(), cur.Comment()),
+		Down:    commentOnTable(tgt.Name(), cur.Comment()),
 	})
 }
 
-func (d *differ) constraints(cur, tgt *schema.TableDef) {
-	curCons := byName(constraints(cur))
+// constraints emits the changes between a table's current and target
+// constraints.
+//
+// The current side is compared in its post-rename form, so that a constraint
+// which merely follows a renamed column or table matches its target and
+// produces nothing. It is *dropped* in its original form: a drop is ordered
+// before the renames, so its Down runs after they have been reversed and the
+// old names are the ones in effect.
+func (d *differ) constraints(cur, tgt *schema.TableDef, cols map[string]string) {
+	orig := byName(constraints(cur))
+	curCons := make(map[string]constraint, len(orig))
+	for name, c := range orig {
+		curCons[name] = c.renamed(cols, d.tableRenames)
+	}
 	tgtCons := byName(constraints(tgt))
+	usedCur, usedTgt := map[string]bool{}, map[string]bool{}
 
+	// Same name: either unchanged, or replaced in place.
 	for _, name := range sortedKeys(curCons) {
-		c := curCons[name]
 		t, kept := tgtCons[name]
-		if kept && t.def == c.def {
+		if !kept {
 			continue
 		}
-		d.dropConstraintChange(tgt.Name(), c)
+		usedCur[name], usedTgt[name] = true, true
+		if t.def == curCons[name].def {
+			continue
+		}
+		prev := curCons[name]
+		d.dropConstraintChange(cur.Name(), orig[name])
+		d.addConstraintChange(tgt.Name(), t, &prev)
+	}
+
+	// Same definition, different name. Constraint names are derived from the
+	// table and column they cover, so a rename changes them — and Postgres
+	// does not rename a constraint when the thing it is named after is
+	// renamed. Renaming it is a catalog write; dropping and re-adding it
+	// revalidates every row in the table, and for a foreign key every row in
+	// the table it points at as well.
+	for _, name := range sortedKeys(curCons) {
+		if usedCur[name] {
+			continue
+		}
+		for _, want := range sortedKeys(tgtCons) {
+			if usedTgt[want] || tgtCons[want].def != curCons[name].def {
+				continue
+			}
+			usedCur[name], usedTgt[want] = true, true
+			d.renames = append(d.renames, Change{
+				Comment: "rename constraint " + name + " to " + want,
+				Up:      renameConstraint(tgt.Name(), name, want),
+				Down:    renameConstraint(tgt.Name(), want, name),
+			})
+			break
+		}
+	}
+
+	// Whatever is left is genuinely gone, or genuinely new.
+	for _, name := range sortedKeys(curCons) {
+		if !usedCur[name] {
+			d.dropConstraintChange(cur.Name(), orig[name])
+		}
 	}
 	for _, name := range sortedKeys(tgtCons) {
-		t := tgtCons[name]
-		c, existed := curCons[name]
-		if existed && c.def == t.def {
-			continue
+		if !usedTgt[name] {
+			d.addConstraintChange(tgt.Name(), tgtCons[name], nil)
 		}
-		d.addConstraintChange(tgt.Name(), t, existing(curCons, name))
 	}
-}
-
-// existing returns the constraint previously held under this name, or nil.
-func existing(m map[string]constraint, name string) *constraint {
-	if c, ok := m[name]; ok {
-		return &c
-	}
-	return nil
 }
 
 func (d *differ) dropConstraintChange(table string, c constraint) {
@@ -453,48 +592,95 @@ func removedEnumValues(prev *constraint, next constraint) []string {
 	return removed
 }
 
-func (d *differ) indexes(cur, tgt *schema.TableDef) {
-	curIdx := indexesByName(cur)
+// indexes emits the changes between a table's current and target indexes. The
+// current side is compared post-rename and dropped in its original form, for
+// the reasons given on constraints.
+func (d *differ) indexes(cur, tgt *schema.TableDef, cols map[string]string) {
+	orig := indexesByName(cur)
+	curIdx := make(map[string]schema.Index, len(orig))
+	for name, idx := range orig {
+		curIdx[name] = renamedIndex(idx, cols)
+	}
 	tgtIdx := indexesByName(tgt)
+	usedCur, usedTgt := map[string]bool{}, map[string]bool{}
 
 	for _, name := range sortedKeys(curIdx) {
-		c := curIdx[name]
 		t, kept := tgtIdx[name]
-		if kept && indexDef(t) == indexDef(c) {
+		if !kept {
 			continue
 		}
-		// An index over a column that is going away is dropped without
-		// CONCURRENTLY, which is what keeps it in the same file as the column
-		// drop and therefore ordered before it — a concurrent one is split
-		// into a file that runs afterwards, by which time Postgres has already
-		// dropped the index along with the column and the statement fails.
-		//
-		// Nothing is lost by giving up CONCURRENTLY here: DROP COLUMN takes an
-		// ACCESS EXCLUSIVE lock on the same table moments later, so the brief
-		// lock this takes is one the migration was going to take anyway.
-		concurrent := !coversDroppedColumn(c, tgt)
-		d.dropIndexes = append(d.dropIndexes, Change{
-			Comment:    "drop index " + name,
-			Up:         dropIndex(name, concurrent),
-			Down:       createIndex(cur, c, concurrent),
-			Concurrent: concurrent,
-		})
+		usedCur[name], usedTgt[name] = true, true
+		if indexDef(t) == indexDef(curIdx[name]) {
+			continue
+		}
+		d.indexDropped(cur, tgt, orig[name], curIdx[name])
+		d.indexCreated(tgt, t)
+	}
+
+	// Same definition, different name: rebuilding an index to change its name
+	// is the most expensive way to do nothing. ALTER INDEX … RENAME touches
+	// the catalog and takes no lock worth naming.
+	for _, name := range sortedKeys(curIdx) {
+		if usedCur[name] {
+			continue
+		}
+		for _, want := range sortedKeys(tgtIdx) {
+			if usedTgt[want] || indexDef(tgtIdx[want]) != indexDef(curIdx[name]) {
+				continue
+			}
+			usedCur[name], usedTgt[want] = true, true
+			d.renames = append(d.renames, Change{
+				Comment: "rename index " + name + " to " + want,
+				Up:      renameIndex(name, want),
+				Down:    renameIndex(want, name),
+			})
+			break
+		}
+	}
+
+	for _, name := range sortedKeys(curIdx) {
+		if !usedCur[name] {
+			d.indexDropped(cur, tgt, orig[name], curIdx[name])
+		}
 	}
 	for _, name := range sortedKeys(tgtIdx) {
-		t := tgtIdx[name]
-		c, existed := curIdx[name]
-		if existed && indexDef(c) == indexDef(t) {
-			continue
+		if !usedTgt[name] {
+			d.indexCreated(tgt, tgtIdx[name])
 		}
-		// The table already holds rows, so building the index without
-		// CONCURRENTLY would lock it against writes for the duration.
-		d.createIndexes = append(d.createIndexes, Change{
-			Comment:    "index " + name,
-			Up:         createIndex(tgt, t, true),
-			Down:       dropIndex(name, true),
-			Concurrent: true,
-		})
 	}
+}
+
+// indexDropped emits the drop of an index. orig is the index as it exists now,
+// which is what the Down recreates; renamed is the same index with any column
+// rename applied, which is what decides whether it is about to lose a column.
+func (d *differ) indexDropped(cur, tgt *schema.TableDef, orig, renamed schema.Index) {
+	// An index over a column that is going away is dropped without
+	// CONCURRENTLY, which is what keeps it in the same file as the column
+	// drop and therefore ordered before it — a concurrent one is split
+	// into a file that runs afterwards, by which time Postgres has already
+	// dropped the index along with the column and the statement fails.
+	//
+	// Nothing is lost by giving up CONCURRENTLY here: DROP COLUMN takes an
+	// ACCESS EXCLUSIVE lock on the same table moments later, so the brief
+	// lock this takes is one the migration was going to take anyway.
+	concurrent := !coversDroppedColumn(renamed, tgt)
+	d.dropIndexes = append(d.dropIndexes, Change{
+		Comment:    "drop index " + orig.Name,
+		Up:         dropIndex(orig.Name, concurrent),
+		Down:       createIndex(cur, orig, concurrent),
+		Concurrent: concurrent,
+	})
+}
+
+func (d *differ) indexCreated(tgt *schema.TableDef, idx schema.Index) {
+	// The table already holds rows, so building the index without
+	// CONCURRENTLY would lock it against writes for the duration.
+	d.createIndexes = append(d.createIndexes, Change{
+		Comment:    "index " + idx.Name,
+		Up:         createIndex(tgt, idx, true),
+		Down:       dropIndex(idx.Name, true),
+		Concurrent: true,
+	})
 }
 
 // coversDroppedColumn reports whether the index spans a column the target no

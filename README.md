@@ -222,10 +222,13 @@ Working and tested:
 Not built yet, in the order they matter:
 
 1. **Migrations** — `migrate.Diff` computes the changes between two schemas and
-   renders them as Postgres DDL, and `migrate.Write` emits the files. What is
-   missing is where the *current* schema comes from: `sqlb import` reading
-   `pg_catalog`, or a shadow database replaying the existing history. Until one
-   of those exists, both sides of a diff have to be hand-written registries.
+   renders them as Postgres DDL, and `migrate.Write` emits the files. Renames
+   are declared with `.RenamedFrom("old")` on a column or a table, because a
+   rename cannot be told from a drop and an add by looking at the two states.
+   What is missing is where the *current* schema comes from: `sqlb import`
+   reading `pg_catalog`, or a shadow database replaying the existing history.
+   Until one of those exists, both sides of a diff have to be hand-written
+   registries.
 2. **REST handlers and OpenAPI** — the generator emits models and the typed
    facade today, not handlers.
 3. **`?expand`** — the grammar validates relation names; the joins are not

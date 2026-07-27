@@ -53,6 +53,11 @@ type FieldDesc struct {
 	// recreating it under a name of its own choosing.
 	ConstraintName string
 
+	// RenamedFrom is the column's previous name, declared for one release so
+	// that a migration renames the column instead of dropping and re-adding
+	// it. Nothing else reads it.
+	RenamedFrom string
+
 	Ref *Reference
 }
 
@@ -234,6 +239,27 @@ func (f *Field) Named(column string) *Field {
 // ones this package would generate.
 func (f *Field) ConstraintNamed(name string) *Field {
 	f.d.ConstraintName = name
+	return f
+}
+
+// RenamedFrom declares that this column used to be called old, so that a
+// generated migration renames it rather than dropping it and adding a new one:
+//
+//	schema.Text("email_address").RenamedFrom("email")
+//
+// A rename is indistinguishable from a drop and an add when only the before and
+// after states are known, and inferring one from a similar name and type would
+// destroy data whenever the inference was wrong. So it is declared, never
+// inferred (ADR-0014).
+//
+// The hint is needed for exactly one release: the migration it produces is
+// generated once, and after that the old name is gone from every database the
+// migration has been applied to. A hint whose old column no longer exists is
+// ignored, so leaving one behind is harmless — but delete it at the next edit,
+// because a stale hint reads as a claim about the current schema that is no
+// longer true.
+func (f *Field) RenamedFrom(old string) *Field {
+	f.d.RenamedFrom = old
 	return f
 }
 

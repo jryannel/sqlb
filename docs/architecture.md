@@ -175,6 +175,7 @@ is that a wrong answer must never be quieter than no answer.
 | `Describe` names a column that does not exist | Panic at startup, listing the columns that do |
 | `Update`/`Delete` with no `WHERE` | `ErrUnscoped` until `Everything()` is called |
 | Destructive migration | Rendered commented out with the reason stated |
+| A column or table that was renamed | A drop and an add, unless `RenamedFrom` says otherwise — inferring a rename from a similar name would destroy data whenever the guess was wrong |
 | A change with no `Down` | Renders an explanation, not an empty section that looks like a working rollback |
 | Filter names an unknown or uncapable column | 400 listing what would have been accepted |
 | Schema authoring mistake | Every problem reported at once, each with the fix |
@@ -199,7 +200,10 @@ working is worse than no test, so those are exercised as real build attempts.
 
 ## Known gaps
 
-- The generator does not exist. Everything under `example/blog` is hand-written
-  to the exact shape it must produce, so it doubles as the generator's fixture.
 - `?expand` validates relation names but does not perform the join.
-- No migration diffing and no change feed. See the [vision](vision.md).
+- The diff has no way to learn the current schema. It compares two registries,
+  and nothing yet produces one from a database — neither `sqlb import` nor the
+  shadow database that would replay the existing migration history. Both sides
+  have to be hand-written until one exists.
+- No REST handlers, no OpenAPI document, and no change feed. See the
+  [vision](vision.md).

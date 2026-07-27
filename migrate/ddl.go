@@ -232,6 +232,114 @@ type constraint struct {
 	// enum holds the permitted values when this is an enum column's CHECK,
 	// so that removing a value can be told from adding one.
 	enum []string
+
+	// ref holds a foreign key's parts. A def is otherwise an opaque string,
+	// and a foreign key is the one constraint naming something outside its own
+	// table — so applying a rename to it has to know which identifier is
+	// which rather than substituting across the whole line.
+	ref *fkRef
+}
+
+// fkRef is a foreign key's parts, kept apart so a rename can re-render it.
+type fkRef struct {
+	column    string // the constrained column, in this table
+	table     string // the referenced table
+	refColumn string // the referenced column, in that table
+	actions   string // " ON DELETE CASCADE" and the like; no identifiers in it
+}
+
+func (r fkRef) render() string {
+	return fmt.Sprintf("FOREIGN KEY (%s) REFERENCES %s (%s)%s",
+		quoteIdent(r.column), quoteIdent(r.table), quoteIdent(r.refColumn), r.actions)
+}
+
+// renamed returns the constraint as it will read once cols and tables have been
+// renamed — which is how a constraint that merely follows a renamed column is
+// recognised as unchanged instead of being dropped and rebuilt.
+//
+// A hand-written CHECK expression is rewritten only where it spells a column in
+// quotes, which in Postgres is unambiguously an identifier: a string literal is
+// single-quoted, so a substitution cannot reach inside one. An expression that
+// spells its columns bare is left exactly as written, because telling an
+// identifier from a keyword or a function name there would mean parsing SQL,
+// and a generator that guesses at that produces something plausible and wrong.
+// Such a check is dropped and re-added instead — correct and cheap, since
+// Postgres validates it against the existing rows either way.
+//
+// The result of this is only ever compared, never rendered: a drop emits the
+// original definition and an add emits the target's. So the worst a rewrite
+// that misreads hand-written SQL can do is fail to match, which costs a drop
+// and an add. It cannot produce a statement.
+func (c constraint) renamed(cols, tables map[string]string) constraint {
+	if len(cols) == 0 && len(tables) == 0 {
+		return c
+	}
+	if c.ref != nil {
+		r := *c.ref
+		r.column = rename(cols, r.column)
+		r.table = rename(tables, r.table)
+		c.ref = &r
+		c.def = r.render()
+		return c
+	}
+	c.def = rewriteIdents(c.def, cols)
+	return c
+}
+
+func rename(m map[string]string, name string) string {
+	if to, ok := m[name]; ok {
+		return to
+	}
+	return name
+}
+
+// rewriteIdents maps the quoted identifiers in a rendered definition.
+//
+// Every definition this package renders spells a column with quoteIdent and a
+// value with sqlString, so a quoted identifier is unambiguously a column name
+// and a substitution cannot reach inside a string literal. Text that arrived
+// from somewhere else — a hand-written CHECK expression, a partial index
+// predicate — spells its columns bare and is left untouched, which is the
+// intent: see constraint.renamed.
+func rewriteIdents(def string, m map[string]string) string {
+	if len(m) == 0 || !strings.Contains(def, `"`) {
+		return def
+	}
+	var b strings.Builder
+	for i := 0; i < len(def); {
+		if def[i] != '"' {
+			b.WriteByte(def[i])
+			i++
+			continue
+		}
+		name, end, ok := scanIdent(def, i)
+		if !ok {
+			b.WriteString(def[i:]) // unterminated: not ours to interpret
+			return b.String()
+		}
+		b.WriteString(quoteIdent(rename(m, name)))
+		i = end
+	}
+	return b.String()
+}
+
+// scanIdent reads the quoted identifier starting at s[i], returning its
+// unescaped text and the index just past its closing quote.
+func scanIdent(s string, i int) (string, int, bool) {
+	var name strings.Builder
+	for j := i + 1; j < len(s); j++ {
+		if s[j] != '"' {
+			name.WriteByte(s[j])
+			continue
+		}
+		if j+1 < len(s) && s[j+1] == '"' {
+			name.WriteByte('"')
+			j++
+			continue
+		}
+		return name.String(), j + 1, true
+	}
+	return "", 0, false
 }
 
 // constraints returns every named constraint the table declares, in a stable
@@ -267,10 +375,12 @@ func constraints(t *schema.TableDef) []constraint {
 			})
 		}
 		if hasForeignKey(d) {
+			ref := foreignKeyRef(d)
 			out = append(out, constraint{
 				name: foreignKeyName(t, d),
-				def:  foreignKeyDef(d),
+				def:  ref.render(),
 				fk:   true,
+				ref:  &ref,
 			})
 		}
 	}
@@ -285,7 +395,7 @@ func constraints(t *schema.TableDef) []constraint {
 	return out
 }
 
-func foreignKeyDef(d *schema.FieldDesc) string {
+func foreignKeyRef(d *schema.FieldDesc) fkRef {
 	r := d.Ref
 	col := r.Column
 	if col == "" {
@@ -293,17 +403,16 @@ func foreignKeyDef(d *schema.FieldDesc) string {
 			col = pk.Name()
 		}
 	}
-	s := fmt.Sprintf("FOREIGN KEY (%s) REFERENCES %s (%s)",
-		quoteIdent(d.Name), quoteIdent(r.Table.Name()), quoteIdent(col))
+	out := fkRef{column: d.Name, table: r.Table.Name(), refColumn: col}
 	// NO ACTION is the Postgres default, so emitting it would only add noise
 	// and make a diff against an introspected schema look like a change.
 	if r.OnDelete != "" && r.OnDelete != schema.NoAction {
-		s += " ON DELETE " + string(r.OnDelete)
+		out.actions += " ON DELETE " + string(r.OnDelete)
 	}
 	if r.OnUpdate != "" && r.OnUpdate != schema.NoAction {
-		s += " ON UPDATE " + string(r.OnUpdate)
+		out.actions += " ON UPDATE " + string(r.OnUpdate)
 	}
-	return s
+	return out
 }
 
 // createTable renders CREATE TABLE with its columns and every constraint that
@@ -376,12 +485,12 @@ func dropTable(t *schema.TableDef) string {
 	return "DROP TABLE " + quoteIdent(t.Name()) + ";"
 }
 
-func addColumn(t *schema.TableDef, d *schema.FieldDesc) (string, error) {
+func addColumn(table string, d *schema.FieldDesc) (string, error) {
 	def, err := columnDef(d)
 	if err != nil {
 		return "", err
 	}
-	return "ALTER TABLE " + quoteIdent(t.Name()) + " ADD COLUMN " + def + ";", nil
+	return "ALTER TABLE " + quoteIdent(table) + " ADD COLUMN " + def + ";", nil
 }
 
 func dropColumn(table, column string) string {
@@ -391,6 +500,31 @@ func dropColumn(table, column string) string {
 func alterColumn(table, column, action string) string {
 	return "ALTER TABLE " + quoteIdent(table) + " ALTER COLUMN " + quoteIdent(column) +
 		" " + action + ";"
+}
+
+// Renames. Each of these touches the catalog only: no table is rewritten, no
+// index is rebuilt, and nothing is locked for longer than the statement takes.
+// That is the whole reason for preferring them over a drop and an add.
+
+func renameTable(from, to string) string {
+	return "ALTER TABLE " + quoteIdent(from) + " RENAME TO " + quoteIdent(to) + ";"
+}
+
+func renameColumn(table, from, to string) string {
+	return "ALTER TABLE " + quoteIdent(table) + " RENAME COLUMN " +
+		quoteIdent(from) + " TO " + quoteIdent(to) + ";"
+}
+
+// renameConstraint renames a constraint. Postgres does not do this for you when
+// the table or the column a constraint is named after is renamed, so a schema
+// whose names are derived from the new name needs it said explicitly.
+func renameConstraint(table, from, to string) string {
+	return "ALTER TABLE " + quoteIdent(table) + " RENAME CONSTRAINT " +
+		quoteIdent(from) + " TO " + quoteIdent(to) + ";"
+}
+
+func renameIndex(from, to string) string {
+	return "ALTER INDEX " + quoteIdent(from) + " RENAME TO " + quoteIdent(to) + ";"
 }
 
 func addConstraint(table string, c constraint) string {
@@ -407,6 +541,22 @@ func dropConstraint(table, name string) string {
 func indexDef(idx schema.Index) string {
 	return fmt.Sprintf("unique=%t method=%q columns=%s where=%q",
 		idx.Unique, idx.Method, strings.Join(idx.Columns, ","), idx.Where)
+}
+
+// renamedIndex returns the index as it will read once cols have been renamed.
+// The covered columns are a list of names and are mapped exactly; a partial
+// index's Where is hand-written SQL and is left alone for the same reason a
+// hand-written CHECK is (see constraint.renamed).
+func renamedIndex(idx schema.Index, cols map[string]string) schema.Index {
+	if len(cols) == 0 {
+		return idx
+	}
+	out := idx
+	out.Columns = make([]string, len(idx.Columns))
+	for i, c := range idx.Columns {
+		out.Columns[i] = rename(cols, c)
+	}
+	return out
 }
 
 // createIndex renders CREATE INDEX. concurrent is decided by the caller: an

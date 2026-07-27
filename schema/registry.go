@@ -133,12 +133,31 @@ func (r *Registry) Validate() error {
 		errs = append(errs, Error{Table: table, Column: column, Msg: fmt.Sprintf(format, args...)})
 	}
 
+	// A rename hint claims that a name is gone, so two tables cannot claim the
+	// same one and no table may claim a name that is still declared.
+	renamedTables := make(map[string]string)
+
 	for _, t := range r.Tables() {
 		if !isIdent(t.name) {
 			report(t.name, "", "table name is not a valid SQL identifier")
 		}
+		if old := t.oldName; old != "" {
+			switch {
+			case !isIdent(old):
+				report(t.name, "", "RenamedFrom %q is not a valid SQL identifier", old)
+			case old == t.name:
+				report(t.name, "", "RenamedFrom names the table itself")
+			case r.Get(old) != nil:
+				report(t.name, "", "RenamedFrom %q is still declared as a table of its own; a rename means the old name is gone", old)
+			}
+			if prev, dup := renamedTables[old]; dup {
+				report(t.name, "", "RenamedFrom %q is also claimed by table %q", old, prev)
+			}
+			renamedTables[old] = t.name
+		}
 
 		seen := make(map[string]bool, len(t.fields))
+		renamedCols := make(map[string]string)
 		pks := 0
 		for _, f := range t.fields {
 			d := f.Desc()
@@ -149,6 +168,24 @@ func (r *Registry) Validate() error {
 				report(t.name, d.Name, "column declared twice")
 			}
 			seen[d.Name] = true
+
+			if old := d.RenamedFrom; old != "" {
+				switch {
+				case !isIdent(old):
+					report(t.name, d.Name, "RenamedFrom %q is not a valid SQL identifier", old)
+				case old == d.Name:
+					report(t.name, d.Name, "RenamedFrom names the column itself")
+				case t.Field(old) != nil:
+					// Either the hint is wrong, or the two columns are being
+					// swapped — which Postgres cannot do in one statement
+					// either, and which a generator should not attempt.
+					report(t.name, d.Name, "RenamedFrom %q is still declared as a column of its own; a rename means the old name is gone", old)
+				}
+				if prev, dup := renamedCols[old]; dup {
+					report(t.name, d.Name, "RenamedFrom %q is also claimed by column %q", old, prev)
+				}
+				renamedCols[old] = d.Name
+			}
 
 			if d.PrimaryKey {
 				pks++

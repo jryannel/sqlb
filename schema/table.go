@@ -83,6 +83,7 @@ type TableDef struct {
 	module  string
 	comment string
 	pkName  string
+	oldName string // previous storage name, from RenamedFrom
 	fields  []*Field
 	indexes []Index
 	checks  []Check
@@ -200,6 +201,26 @@ func (t *TableDef) PrimaryKeyName() string { return t.pkName }
 // existing database whose constraint is not called <table>_pkey.
 func (t *TableDef) PrimaryKeyNamed(name string) *TableDef {
 	t.pkName = name
+	return t
+}
+
+// RenamedFromName returns the table's previous storage name, or "".
+func (t *TableDef) RenamedFromName() string { return t.oldName }
+
+// RenamedFrom declares that this table used to be called local, so that a
+// generated migration renames it rather than dropping it and creating a new
+// one. See Field.RenamedFrom for why a rename is declared rather than inferred,
+// and for how long the hint is needed.
+//
+// The old name is local, without the module prefix, and is qualified with the
+// same prefix as the current one — so this renames a table within a module, not
+// between modules. Moving a table between modules changes which registry
+// declares it, and is a drop and a create until something asks for otherwise.
+func (t *TableDef) RenamedFrom(local string) *TableDef {
+	t.oldName = local
+	if t.module != "" {
+		t.oldName = t.module + "_" + local
+	}
 	return t
 }
 

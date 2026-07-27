@@ -57,10 +57,15 @@ and catches drift.
 type, or adding a NOT NULL without a default is emitted commented out, with the
 reason, and requires an explicit flag to emit live.
 
-**Renames are declared, never inferred.** A column carries `.RenamedFrom("old")`
-for one release; the diff reads it and emits `ALTER TABLE … RENAME COLUMN`
-instead of a drop and an add. Without the hint, a rename is a drop and an add,
-which is correct if lossy and never silently wrong.
+**Renames are declared, never inferred.** A column or a table carries
+`.RenamedFrom("old")` for one release; the diff reads it and emits
+`ALTER TABLE … RENAME` instead of a drop and an add. Without the hint, a rename
+is a drop and an add, which is correct if lossy and never silently wrong.
+
+A hint whose old name is no longer there is ignored rather than rejected. It has
+to be: the migration it produced was generated once, and after that every
+database it was applied to knows only the new name. Making a leftover hint an
+error would mean every rename came with a scheduled build break.
 
 **Adoption is `sqlb import`.** It reads `pg_catalog` and emits a `schema.go`.
 Capabilities cannot be inferred from DDL, so everything imports with none: the
@@ -115,21 +120,37 @@ easy to forget, and forgetting one is data loss unless the destructive guard
 catches it.
 
 **What is built.** `migrate.Diff(current, target *schema.Registry) ([]Change,
-error)` and the Postgres DDL under it. The symmetry claim held: the diff is a
-pure function, tested exhaustively without a database. Still unbuilt: the
-shadow database that produces `current`, `sqlb import`, and rename hints — so
-in practice `Diff` currently has no way to learn the current state except from
-another hand-written registry.
+error)`, the Postgres DDL under it, and rename hints. The symmetry claim held:
+the diff is a pure function, tested exhaustively without a database. Still
+unbuilt: the shadow database that produces `current`, and `sqlb import` — so in
+practice `Diff` has no way to learn the current state except from another
+hand-written registry.
 
-The generated DDL has been applied to a real Postgres 17 once, by hand: an
-initial migration for the blog schema and an incremental one exercising every
-kind of change the diff emits, each applied forward against seeded rows and
-then reversed, ending in the exact structure it started from. That is what
-raised confidence to Medium. It is not High because the check was manual and is
-not in CI — the test suite deliberately needs no database, so the round-trip
-that proves the DDL is *valid* rather than merely *expected* has to be
-re-run by hand whenever the DDL layer changes. Automating it behind a build tag
-is the obvious next increment.
+The generated DDL has been applied to a real Postgres and reversed twice, by
+hand: once on 17 for the blog schema and an incremental migration exercising
+every kind of change the diff emits, and once on 18 for a rename of a table and
+a column carrying an index, a unique constraint and a foreign key, alongside an
+added column, a dropped one and a changed enum. Each was applied forward
+against seeded rows and then reversed, ending in the exact structure it started
+from. That is what raised confidence to Medium.
+
+It is not High because the check is manual and not in CI — the test suite
+deliberately needs no database, so the round-trip that proves the DDL is *valid*
+rather than merely *expected* has to be re-run by hand whenever the DDL layer
+changes. Automating it behind a build tag is the obvious next increment, and it
+now has a cost attached that the record did not anticipate: every Postgres
+driver is a third-party module, and this project currently depends on the
+standard library alone and has a CI gate asserting it. Automating the
+round-trip means either giving that up or moving the test into a module of its
+own.
+
+One thing the second round-trip surfaced, worth recording because it will look
+alarming to whoever meets it first: Postgres 18 names `NOT NULL` constraints
+after the table and column they came from, and does not rename them when either
+is renamed — so a renamed table keeps `orgs_id_not_null` indefinitely. That is
+invisible here only because sqlb neither generates nor compares those names. If
+a future `sqlb import` reads them from `pg_catalog`, it will have to keep
+ignoring them, or every renamed table will diff against itself forever.
 
 Building it surfaced three constraints the record did not anticipate, each now
 enforced in code:
@@ -152,6 +173,33 @@ enforced in code:
   order-preserving, and any future concurrent change has to be checked against
   the ordinary changes it depends on.
 
+Renames surfaced three more:
+
+- **Where the renames sit in the order is the design.** Everything emitted
+  before them is written in the old names and everything after in the new ones,
+  so that reversing the list reverses each half while the names it was written
+  against are the ones in effect. Putting renames first — the obvious choice —
+  leaves every constraint drop's `Down` re-adding a constraint against a column
+  that no longer answers to that name. The `Down` is only free if the `Up` is
+  ordered for it.
+- **A rename is not one statement.** Postgres does not rename a constraint or
+  an index when the table or column it is named after is renamed, and this
+  package derives those names from the table and column. So the rename has to
+  carry its dependent objects with it explicitly. Otherwise the derived names
+  diverge permanently: the very next diff sees `orgs_pkey` where it expects
+  `organisations_pkey`, and proposes dropping and rebuilding it — every time,
+  forever.
+- **The rewritten schema is compared, never rendered.** To recognise an index
+  that merely follows a renamed column, the current schema has to be read as it
+  will be *after* the rename. That rewrite has to touch hand-written SQL — a
+  `CHECK` expression, a partial index predicate — which is exactly the kind of
+  guessing this record rejects elsewhere. It is safe here for a structural
+  reason worth stating: the rewritten form only ever feeds a comparison. A drop
+  emits the original definition and an add emits the target's, so the worst a
+  misread can do is fail to match, which costs a drop and an add rather than
+  producing a wrong statement. A heuristic is acceptable when it cannot reach
+  the output.
+
 **No `USING` clause is ever generated** for a type change. Postgres refusing a
 cast it cannot make implicitly is the correct outcome; a generated `USING`
 would pick a cast nobody reviewed, and casting to a narrower type truncates
@@ -169,6 +217,15 @@ silently rather than failing.
   constraints, partial indexes, generated columns), it needs a passthrough for
   raw DDL rather than silently dropping it. Silently dropping is the failure
   mode to watch for hardest.
+- If rename hints turn out to be forgotten in practice — a schema edit that
+  should have carried one and did not, caught only by the destructive guard —
+  the hint is in the wrong place. The alternative is a review step that lists
+  every drop-and-add and asks whether it was meant, which is a worse developer
+  experience and a better safety property.
+- If matching a constraint or an index by definition when its name changed ever
+  pairs the wrong two objects, that rule has to go. It is safe today because
+  two constraints with identical definitions are interchangeable, and that
+  stops being true the moment a definition stops fully describing the object.
 - If the shipped formats stop being ~15 lines each, the `Format` interface is
   carrying the wrong responsibilities and the shared semantics have leaked into
   it. That is a design signal, not a reason to add more formats.
@@ -216,6 +273,17 @@ sqlb to own DDL.
 
 ## Revisions
 
+- 2026-07-27 — Built rename hints, the half of the diff this record specified
+  and the previous increment left out. Confidence stays Medium: the pure
+  function claim held again, and the DDL was round-tripped against a real
+  Postgres 18 — but by hand, which is the same gap as before. Recorded three
+  constraints implementation surfaced: the renames' position in the phase order
+  is what makes the `Down` free, a rename has to carry the constraints and
+  indexes named after what it renamed, and a heuristic that only ever feeds a
+  comparison is safe in a way the same heuristic in the output would not be.
+  Also noted that automating the round-trip costs more than the record assumed,
+  since every Postgres driver is a third-party module and the project gates on
+  having none.
 - 2026-07-27 — Written, before implementation.
 - 2026-07-27 — Recorded the decision to render formats in code rather than
   emit one canonical output for an agent to translate. Prompted by the question
