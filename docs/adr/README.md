@@ -123,3 +123,4 @@ nobody finishes reading has failed at its only job.
 | [0021](0021-hooks-receive-an-event.md) | A hook gets a transaction, not an event | Working | High |
 | [0022](0022-references-declare-their-inverse.md) | A reference declares the name its target knows it by | Exploring | Medium |
 | [0023](0023-mixins-carry-behaviour.md) | A mixin contributes columns; carrying behaviour needs codegen | Exploring | Medium |
+| [0024](0024-no-annotation-slot.md) | No annotation slot until something can consume one | Working | Medium |
