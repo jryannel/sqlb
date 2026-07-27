@@ -283,12 +283,17 @@ validation — an error rolls the write back — and wrong for anything the outs
 world can observe.
 
 The write hooks are narrower than `BeforeQuery`: they receive the row or the
-statement, not a way to reach the database, so a rule that has to *ask* the
-database something cannot be written as one.
-[ADR-0021](../adr/0021-hooks-receive-an-event.md) proposes handing them an event
-carrying an executor. That part is exploratory — the evidence there is for the
-problem, not yet for the answer — so what this page describes is what the code
-does today.
+statement rather than a handle. They can still reach the database, but only
+where a transaction is — `rest` wraps every generated write in one, so
+`sqlb.TxFrom(ctx)` finds it and a hook can query, as
+[Reading your own writes](#reading-your-own-writes) below shows. On a read, or
+under `Options.DisableTransactions`, there is nothing to find.
+
+The gap that remains is narrower and deliberate: `BeforeUpdate` cannot read the
+assignments it was handed, so a rule that depends on what a column is *becoming*
+belongs in a `BEFORE` trigger.
+[ADR-0021](../adr/0021-hooks-receive-an-event.md) records why the event types
+that would have closed it are not being built.
 
 What has landed from that record is the transaction: `rest.Resource` wraps every
 generated create, update and delete in one, so `AfterCommit` is reachable from a

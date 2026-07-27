@@ -49,9 +49,11 @@ write hooks can actually do. `BeforeQuery` receives the builder and is a genuine
 seam; `BeforeCreate` receives a bare row, `BeforeUpdate` cannot read the
 statement it is given, and neither can reach the database. Building
 `example/tasks` found three domain rules that had to leave the hook layer as a
-result. [ADR-0021](0021-hooks-receive-an-event.md) is the proposal to close
-that; until it lands, "hooks are the domain-logic seam" is true of reads and
-only partly true of writes.
+result. [ADR-0021](0021-hooks-receive-an-event.md) closed most of that gap, and
+not the way it proposed to: `rest` wraps a generated write in a transaction, so
+a hook's context carries one and `TxFrom` reaches the database. What remains is
+narrower — a hook on an ordinary read has no executor, and `BeforeUpdate` still
+cannot read its own assignments.
 
 ## What would change our mind
 
@@ -69,8 +71,9 @@ only partly true of writes.
 - This record did not anticipate that a domain rule might need to *read* the
   database from inside a hook, and that turned out to be the common case rather
   than an exotic one — `example/tasks` hit it three times. The gap is in what a
-  hook is handed, not in the idea, and it is tracked in
-  [ADR-0021](0021-hooks-receive-an-event.md). Recorded here as a miss, because a
+  hook is handed, not in the idea, and it was closed by
+  [ADR-0021](0021-hooks-receive-an-event.md) — by giving the write a
+  transaction rather than the hook an event. Recorded here as a miss, because a
   revisit trigger nobody wrote is the kind this list exists to catch.
 
 ## Cost of change
@@ -104,4 +107,6 @@ normalise input or reject a request with a useful error.
 - 2026-07-27 — Narrowed the claim. `example/tasks` showed the write hooks are a
   much thinner seam than this record implied, because they cannot read the
   database and cannot inspect the statement they are given.
-  [ADR-0021](0021-hooks-receive-an-event.md) proposes the fix.
+  [ADR-0021](0021-hooks-receive-an-event.md) fixed the first half — a hook on a
+  generated write can reach the database through the transaction that wraps it —
+  and deliberately left the second.
