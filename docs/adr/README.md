@@ -117,3 +117,4 @@ nobody finishes reading has failed at its only job.
 | [0015](0015-module-isolation.md) | Modules own their tables, and do not reference each other's | Working | Medium |
 | [0016](0016-guards-proven-both-ways.md) | A guard is not trusted until it has failed on purpose | Working | High |
 | [0017](0017-enums-as-text-and-check.md) | An enum is text with a CHECK constraint | Working | Medium |
+| [0018](0018-tooling-scoped-to-tracked-files.md) | Repository tooling operates on the files git tracks | Working | Medium |

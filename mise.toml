@@ -68,7 +68,8 @@ run = '''
 # part of this repository at all. `fmt-check` was the only gate with that
 # exposure: vet, lint, test-race, generate-check and bisect-check all reach the
 # tree through the go tool's `./...`, which skips directories whose name begins
-# with a dot.
+# with a dot. ADR-0018 has the rule this follows and why fmt-check is kept even
+# though golangci-lint's gofmt formatter currently covers the same ground.
 files=$(git ls-files '*.go')
 if [ -z "$files" ]; then
   echo "fmt-check: no tracked Go files, so nothing was checked"; exit 1
