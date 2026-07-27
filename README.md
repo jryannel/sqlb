@@ -179,6 +179,9 @@ and the escape hatch that would require reopens the hole anyway.
 | `.` (`sqlb`) | Expression AST, Postgres compiler, generic query builder, model reflection, mutations, hooks |
 | `filter` | URL query grammar → the same predicate AST, validated against capabilities |
 | `rest` | Mounts a model on a Huma API, with an OpenAPI operation built from its capabilities |
+| `codegen` | Emits the models, the typed facade, the REST bodies and the manifest — and renders a registry back to schema source |
+| `migrate` | Diffs two registries, renders the changes as Postgres DDL, and writes the files a runner applies |
+| `introspect` | Reads a live schema out of `pg_catalog` into a registry, reporting what the DSL cannot express |
 | `shadow` | Replays a migration history into an empty database, so the current schema comes from the history rather than from production |
 | `describe.go` | Runtime column metadata, for using sqlb without the schema DSL or codegen |
 | `example/blog` | A worked schema, everything codegen emits from it, and an assembled server |
@@ -301,54 +304,57 @@ Working and tested:
 - Schema manifest (JSON), schema linting, and `Explain` with plan diagnostics
 - `sqlb.Describe[T]()` for runtime-only use: the schema DSL and codegen are
   optional, and sqlb can be layered over structs it did not generate
+- Migrations (`migrate`): `Diff` computes the changes between two schemas and
+  renders them as Postgres DDL; `Render` and `Write` emit the files for goose,
+  golang-migrate or plain SQL. Renames are declared with `.RenamedFrom("old")`
+  on a column or a table, because a rename cannot be told from a drop and an add
+  by looking at the two states. Destructive changes render commented out unless
+  explicitly allowed, and so does anything depending on one. sqlb does not apply
+  migrations and does not track which have run — your runner does that
+- Lock-aware migration sequencing: `Migration.Blocking` lists the changes that
+  hold a lock proportional to the size of the table, and `migrate.Unblock`
+  rewrites the ones whose remedy is mechanical — a scanning `ADD CONSTRAINT`
+  becomes `NOT VALID` plus a `VALIDATE` in a later file, a `UNIQUE` becomes a
+  concurrent index build plus an `ADD CONSTRAINT … USING INDEX` that adopts it.
+  A type change is left flagged, because rewriting a table has no in-place form.
+  `migrate.Split` separates the changes that cannot share a file, since
+  transaction control in both runners is per file rather than per statement
+- Reading a schema back: `introspect.Registry` reads `pg_catalog` into a
+  registry, reporting every construct the DSL cannot express rather than
+  dropping it. `shadow.Build` replays a checked-in migration history into an
+  empty database, which is the better source for the current side of a diff —
+  it says what the *history* builds rather than what production happens to look
+  like, so an edited or skipped migration surfaces instead of being baked into
+  the next one. Drift detection needs no extra API: it is `migrate.Diff` between
+  the two registries. `codegen.RenderSchema` turns a registry into the
+  `schema.go` you edit from then on, which closes the adoption loop — CI
+  compiles the rendered source and checks it declares the database it came from
+
+  Adopting an existing database is therefore two calls:
+
+  ```go
+  reg, report, err := introspect.Registry(ctx, db, introspect.Options{})
+  if !report.Empty() {
+      // Constructs the DSL cannot express. Read them: the schema does not
+      // describe the database completely until this is empty.
+      log.Print(report)
+  }
+  src, err := codegen.RenderSchema(reg, codegen.SchemaOptions{Package: "blogschema"})
+  os.WriteFile("blogschema/schema.go", src, 0o644)
+  ```
+
+  Everything imports with no capabilities and nothing exposed over REST, because
+  neither can be read from DDL — widening it is a deliberate edit. Table names
+  are not singularised (`orgs` becomes `var Orgs`), because guessing wrongly on
+  *status* or *address* costs more than renaming a variable the compiler checks
+  for you. [docs/guide/migrations.md](docs/guide/migrations.md) walks the whole
+  path
 
 Not built yet, in the order they matter:
 
-1. **Migrations** — `migrate.Diff` computes the changes between two schemas and
-   renders them as Postgres DDL, and `migrate.Write` emits the files. Renames
-   are declared with `.RenamedFrom("old")` on a column or a table, because a
-   rename cannot be told from a drop and an add by looking at the two states. A
-   change that rewrites or scans a table carries the lock it takes and the
-   sequence to use instead; `Migration.Blocking` lists them, and
-   `migrate.Unblock` rewrites the ones whose remedy is mechanical: a scanning
-   `ADD CONSTRAINT` becomes `NOT VALID` plus a `VALIDATE` in a later file, and a
-   `UNIQUE` becomes a concurrent index build plus an `ADD CONSTRAINT … USING
-   INDEX` that adopts it. What it cannot rewrite is a type change, which stays
-   flagged.
-   `introspect.Registry` reads `pg_catalog` back into a registry, so the current
-   side of a diff can come from a live database, and it reports every construct
-   the DSL cannot express rather than dropping it. `codegen.RenderSchema` turns
-   that registry into the `schema.go` you edit from then on, which closes the
-   adoption loop — CI compiles the rendered source and checks it declares the
-   database it came from. `shadow.Build` replays a checked-in migration history
-   into an empty database and reads back what it produced, which is the better
-   source for the current side of a diff: it says what the *history* builds
-   rather than what production happens to look like, so an edited or skipped
-   migration surfaces instead of being baked into the next one. Drift detection
-   needs no extra API — it is `migrate.Diff` between the replayed registry and
-   the live one.
-
-   Adopting an existing database is therefore two calls:
-
-   ```go
-   reg, report, err := introspect.Registry(ctx, db, introspect.Options{})
-   if !report.Empty() {
-       // Constructs the DSL cannot express. Read them: the schema does not
-       // describe the database completely until this is empty.
-       log.Print(report)
-   }
-   src, err := codegen.RenderSchema(reg, codegen.SchemaOptions{Package: "blogschema"})
-   os.WriteFile("blogschema/schema.go", src, 0o644)
-   ```
-
-   Everything imports with no capabilities and nothing exposed over REST,
-   because neither can be read from DDL — widening it is a deliberate edit.
-   Table names are not singularised (`orgs` becomes `var Orgs`), because
-   guessing wrongly on *status* or *address* costs more than renaming a
-   variable the compiler checks for you.
-2. **TypeScript client** — the OpenAPI document is generated and precise; the
+1. **TypeScript client** — the OpenAPI document is generated and precise; the
    client derived from it is not written yet.
-3. **`?expand`** — the grammar validates relation names; the joins are not
+2. **`?expand`** — the grammar validates relation names; the joins are not
    performed yet. Until they are, every surface that would promise expansion
    refuses instead of accepting the parameter and answering without it:
    `rest.Resource` rejects a non-empty `Options.Expandable` at startup,
@@ -356,14 +362,16 @@ Not built yet, in the order they matter:
    and the manifest reports neither the capability nor the relation names.
    `schema.Ref(…).Expandable()` still parses and validates, so schemas can
    declare the intent; nothing acts on it yet.
-4. **Change feed** — transactional outbox written in the same transaction as
+3. **Change feed** — transactional outbox written in the same transaction as
    the mutation, tailed via `LISTEN/NOTIFY` and fanned out to SSE/WebSocket
    subscribers. `sqlb.AfterCommit` already exists and covers the in-process,
    at-most-once half of this; what is missing is the durability — a callback
    that never ran because the process died leaves no trace, which is precisely
    what the outbox is for.
-5. **Agent affordances** — a `sqlb.json` manifest and generated `AGENTS.md`, and
-   `sqlb explain` to print the SQL a query compiles to without running it.
+4. **Agent affordances** — the `sqlb.json` manifest ships and `Explain` answers
+   what a query compiles to. What is missing is a generated `AGENTS.md` and a
+   command-line entry point; today both are reachable only from Go, which suits
+   an agent that already runs `go test` and suits nothing else.
 
 Postgres only. `LISTEN/NOTIFY`, jsonb aggregation for expansions and `RETURNING`
 are all load-bearing; multi-dialect support would cost the best features.
