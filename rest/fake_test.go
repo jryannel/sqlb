@@ -109,6 +109,9 @@ type fakeDB struct {
 	mu      sync.Mutex
 	replies []reply
 	log     []string
+	// args are the bind parameters of each statement, so a test can assert on
+	// the values a request produced and not only on the SQL around them.
+	args [][]any
 }
 
 var fakeSeq struct {
@@ -135,10 +138,15 @@ func newFakeDB(t *testing.T, replies ...reply) *fakeDB {
 }
 
 // answer picks the reply for a statement, recording the statement either way.
-func (f *fakeDB) answer(query string) (reply, bool) {
+func (f *fakeDB) answer(query string, args []driver.NamedValue) (reply, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log = append(f.log, query)
+	values := make([]any, 0, len(args))
+	for _, a := range args {
+		values = append(values, a.Value)
+	}
+	f.args = append(f.args, values)
 	for _, r := range f.replies {
 		if r.match == "" || strings.Contains(query, r.match) {
 			return r, true
@@ -163,6 +171,16 @@ func (f *fakeDB) lastStatement() string {
 	return stmts[len(stmts)-1]
 }
 
+// lastArgs is the bind parameters of the most recent statement.
+func (f *fakeDB) lastArgs() []any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.args) == 0 {
+		return nil
+	}
+	return append([]any(nil), f.args[len(f.args)-1]...)
+}
+
 type fakeDriver struct{ f *fakeDB }
 
 func (d *fakeDriver) Open(string) (driver.Conn, error) { return &fakeConn{f: d.f}, nil }
@@ -175,8 +193,8 @@ func (c *fakeConn) Prepare(string) (driver.Stmt, error) {
 func (c *fakeConn) Close() error              { return nil }
 func (c *fakeConn) Begin() (driver.Tx, error) { return nil, errors.New("fake driver: no transactions") }
 
-func (c *fakeConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	r, ok := c.f.answer(query)
+func (c *fakeConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	r, ok := c.f.answer(query, args)
 	if !ok {
 		return &fakeRows{}, nil
 	}
@@ -186,8 +204,8 @@ func (c *fakeConn) QueryContext(_ context.Context, query string, _ []driver.Name
 	return &fakeRows{cols: r.cols, data: r.rows}, nil
 }
 
-func (c *fakeConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	r, ok := c.f.answer(query)
+func (c *fakeConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	r, ok := c.f.answer(query, args)
 	if !ok {
 		return fakeResult{}, nil
 	}
@@ -227,4 +245,42 @@ func postCols() []string {
 
 func postRow(id, title string) []driver.Value {
 	return []driver.Value{id, "acme", title, "body text", "excerpt text", "draft", int64(3), time.Unix(0, 0).UTC()}
+}
+
+// Tenanted is the shape the ReadOnly-plus-hook pattern needs, and the one the
+// Post model above cannot express: a read-only column with no database default,
+// whose value a BeforeCreate hook supplies. A tenant id and an author id are
+// both this.
+type Tenanted struct {
+	ID string `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	// No `default`: nothing in the database will fill this in, so if the hook's
+	// value does not reach the INSERT the row is written with a NULL.
+	TenantID string `db:"tenant_id" json:"tenant_id" sqlb:"filter,readonly"`
+	Title    string `db:"title" json:"title" sqlb:"filter,sort"`
+}
+
+func (Tenanted) TableName() string { return "tenanted" }
+
+// TenantedCreate is what codegen would emit: the read-only columns are absent.
+type TenantedCreate struct {
+	Title string `json:"title"`
+}
+
+func (c TenantedCreate) Row() (*Tenanted, error) { return &Tenanted{Title: c.Title}, nil }
+
+// SmugglingCreate is the hand-written body the clearing defends against: it
+// sets a read-only column the schema says a request may not write.
+type SmugglingCreate struct {
+	Title    string `json:"title"`
+	TenantID string `json:"tenant_id"`
+}
+
+func (c SmugglingCreate) Row() (*Tenanted, error) {
+	return &Tenanted{Title: c.Title, TenantID: c.TenantID}, nil
+}
+
+func tenantedCols() []string { return []string{"id", "tenant_id", "title"} }
+
+func tenantedRow(id, tenant, title string) []driver.Value {
+	return []driver.Value{id, tenant, title}
 }

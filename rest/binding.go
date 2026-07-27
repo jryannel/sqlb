@@ -33,8 +33,55 @@ type binding[T any] struct {
 	// outside it either.
 	writable []*sqlb.ColumnInfo
 
-	// readOnly is the complement, as names, for Insert.Omit.
-	readOnly []string
+	// readOnly is the complement of writable, as reflect field paths.
+	//
+	// Paths rather than column names because of how the guarantee is enforced:
+	// the fields are cleared on the row a request produced, rather than the
+	// columns being omitted from the INSERT. See clearReadOnly.
+	readOnly [][]int
+}
+
+// clearReadOnly resets every read-only field of value to its zero value.
+//
+// This is what stops a request writing a column the schema says it may not.
+// The generated create body has no field for one, so ordinarily there is
+// nothing to clear — but a hand-written CreateBody's Row() can set anything on
+// the struct it builds, and the capability would then be advisory.
+//
+// It runs before the insert and therefore before BeforeCreate, which is the
+// whole point: a hook may still supply the value. That ordering is what makes
+// `ReadOnly` mean "the database or a hook owns this" rather than "nothing can
+// ever put a value here".
+func (b *binding[T]) clearReadOnly(value *T) {
+	if len(b.readOnly) == 0 {
+		return
+	}
+	rv := reflect.ValueOf(value).Elem()
+	for _, index := range b.readOnly {
+		field, ok := fieldAt(rv, index)
+		if !ok {
+			continue
+		}
+		field.SetZero()
+	}
+}
+
+// fieldAt walks a reflect index path, which may traverse embedded structs.
+//
+// It stops at a nil embedded pointer rather than allocating one: there is no
+// value behind it to clear, and allocating would add a struct the caller never
+// asked for.
+func fieldAt(v reflect.Value, index []int) (reflect.Value, bool) {
+	for i, x := range index {
+		if i > 0 && v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				return reflect.Value{}, false
+			}
+			v = v.Elem()
+		}
+		v = v.Field(x)
+	}
+	return v, true
 }
 
 func bind[T any](opts Options) (*binding[T], error) {
@@ -54,7 +101,7 @@ func bind[T any](opts Options) (*binding[T], error) {
 		}
 		b.jsonName[col.Name] = name
 		if col.ReadOnly {
-			b.readOnly = append(b.readOnly, col.Name)
+			b.readOnly = append(b.readOnly, col.Index)
 			continue
 		}
 		if !col.Hidden {

@@ -122,11 +122,23 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, db sqlb.Executor, b *b
 			return nil, unprocessable(fmt.Errorf("the request body produced no %s", opts.name()), "body")
 		}
 
-		// Read-only columns are omitted rather than rejected: the database or a
+		// Read-only columns are cleared rather than rejected: the database or a
 		// BeforeCreate hook owns them, and the body type has no field for them
-		// anyway. Omit leaves the rest of Insert's behaviour intact, so a
-		// defaulted column left at its zero value still comes from the database.
-		created, err := sqlb.InsertRows(value).Omit(b.readOnly...).One(ctx, db)
+		// anyway.
+		//
+		// Cleared, specifically, and not omitted from the statement. Omitting
+		// them was wrong in a way that only showed up with a hook: hooks run
+		// inside Exec, after the omit set has been recorded, so a tenant id a
+		// BeforeCreate hook had just filled in was dropped and the row arrived
+		// with a NULL. Clearing keeps the same guarantee against the request —
+		// whatever Row() built is discarded — while leaving the hook able to
+		// supply the value.
+		//
+		// The rest of Insert's behaviour is intact: a defaulted column still
+		// holding its zero value is omitted by Insert itself, so id, created_at
+		// and anything else the database owns still comes from the database.
+		b.clearReadOnly(value)
+		created, err := sqlb.InsertRows(value).One(ctx, db)
 		if err != nil {
 			return nil, asHumaError(err, opts.name())
 		}

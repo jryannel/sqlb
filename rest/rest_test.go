@@ -411,3 +411,83 @@ func TestResourceRefusesAnEmptyOpSet(t *testing.T) {
 		t.Fatal("a resource exposing nothing should not mount")
 	}
 }
+
+// TestCreateKeepsWhatAHookPutInAReadOnlyColumn is the regression test for the
+// bug this pattern hides behind.
+//
+// ReadOnly means "a request may not write this; the database or a BeforeCreate
+// hook owns it" — a claim the README, this package and the generated request
+// bodies all make. The create path used to honour the first half by calling
+// Insert.Omit, which also defeated the second: hooks run inside Exec, after the
+// omit set is fixed, so a tenant id a hook had just filled in never reached the
+// statement and the row was written with a NULL.
+//
+// Both halves are asserted here, because a fix for either one alone is easy and
+// wrong.
+func TestCreateKeepsWhatAHookPutInAReadOnlyColumn(t *testing.T) {
+	hooks := sqlb.NewRegistry()
+	sqlb.OnIn[Tenanted](hooks).BeforeCreate(func(_ context.Context, row *Tenanted) error {
+		row.TenantID = "acme"
+		return nil
+	})
+
+	fake := newFakeDB(t, reply{
+		cols: tenantedCols(),
+		rows: [][]driver.Value{tenantedRow("t1", "acme", "Hello")},
+	})
+	db := sqlb.New(fake.db).WithHooks(hooks)
+
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	if err := rest.Resource[Tenanted, TenantedCreate, rest.None[Tenanted]](api, db, rest.Options{
+		Path: "/tenanted", Name: "tenanted", Ops: rest.OpCreate | rest.OpList,
+	}); err != nil {
+		t.Fatalf("mounting the resource: %v", err)
+	}
+
+	resp := api.Post("/tenanted", map[string]any{"title": "Hello"})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+
+	stmt := fake.lastStatement()
+	columns := strings.SplitN(stmt, "VALUES", 2)[0]
+	if !strings.Contains(columns, `"tenant_id"`) {
+		t.Errorf("the hook's read-only column did not reach the insert:\n%s", stmt)
+	}
+	// id is read-only too, and defaulted, and no hook filled it — so Insert
+	// still omits it and the database supplies it. Clearing must not have cost
+	// that.
+	if strings.Contains(columns, `"id"`) {
+		t.Errorf("a defaulted read-only column nothing filled reached the insert:\n%s", stmt)
+	}
+}
+
+// TestCreateClearsAReadOnlyColumnTheBodySet is the other half: the guarantee
+// against the request, which is what made Omit look correct in the first place.
+func TestCreateClearsAReadOnlyColumnTheBodySet(t *testing.T) {
+	fake := newFakeDB(t, reply{
+		cols: tenantedCols(),
+		rows: [][]driver.Value{tenantedRow("t1", "", "Hello")},
+	})
+
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	if err := rest.Resource[Tenanted, SmugglingCreate, rest.None[Tenanted]](api, fake.db, rest.Options{
+		Path: "/tenanted", Name: "tenanted", Ops: rest.OpCreate | rest.OpList,
+	}); err != nil {
+		t.Fatalf("mounting the resource: %v", err)
+	}
+
+	resp := api.Post("/tenanted", map[string]any{"title": "Hello", "tenant_id": "someone-else"})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+
+	// The column is still written — it has no default, so there is nothing else
+	// to write — but with the zero value rather than the one the body chose.
+	// What must not happen is the request's value reaching the arguments.
+	for _, arg := range fake.lastArgs() {
+		if arg == "someone-else" {
+			t.Errorf("a request wrote a read-only column: %v\n%s", fake.lastArgs(), fake.lastStatement())
+		}
+	}
+}
