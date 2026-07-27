@@ -16,14 +16,26 @@ type Article struct {
 	Body      string     `db:"body" sqlb:"search"`
 	Status    string     `db:"status" sqlb:"filter"`
 	Views     int64      `db:"views" sqlb:"filter,sort"`
-	AuthorID  string     `db:"author_id" sqlb:"filter"`
+	AuthorID  string     `db:"author_id" json:"author_id" sqlb:"filter,expand"`
 	Draft     bool       `db:"draft" sqlb:"filter"`
 	Secret    string     `db:"internal_note" sqlb:"hidden"`
 	Published *time.Time `db:"published_at" sqlb:"filter,sort"`
 	CreatedAt time.Time  `db:"created_at" sqlb:"sort,readonly,default"`
+
+	Author *Author `db:"-" json:"author,omitempty" sqlb:"expands=author_id"`
 }
 
 func (Article) TableName() string { return "articles" }
+
+// Author is the expansion target. Its hidden column is here on purpose: a
+// hidden column must stay hidden when the row is reached through a join.
+type Author struct {
+	ID    string `db:"id" json:"id" sqlb:"pk"`
+	Name  string `db:"name" json:"name"`
+	Email string `db:"email" json:"-" sqlb:"hidden"`
+}
+
+func (Author) TableName() string { return "authors" }
 
 func opts() filter.Options {
 	return filter.Options{Model: sqlb.ModelOf[Article](), Expandable: []string{"author"}}
@@ -319,28 +331,54 @@ func TestApplyNeverProjectsHiddenColumns(t *testing.T) {
 	}
 }
 
-// The package contract is that a parameter is never silently ignored. Apply
-// cannot join, so an accepted ?expand has to fail the builder rather than
-// compile to SQL that quietly lacks the relation.
-func TestApplyRefusesToDropAnExpand(t *testing.T) {
+// The package contract is that a parameter is never silently ignored. Apply now
+// performs the join rather than refusing it, so the assertion is that the
+// relation reaches the SQL — an accepted ?expand that compiled to a statement
+// without the join would be the same silent drop, wearing a 200.
+func TestApplyPerformsAnExpand(t *testing.T) {
 	values, _ := url.ParseQuery("expand=author")
 	q, err := filter.Parse(values, opts())
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(q.Expand) != 1 || q.Expand[0] != "author" {
-		t.Fatalf("Expand = %v, want [author]: parsing is unchanged", q.Expand)
+		t.Fatalf("Expand = %v, want [author]", q.Expand)
 	}
 
 	b := filter.Apply(sqlb.Query[Article](), q)
-	if err := b.Err(); err == nil {
-		t.Fatal("Apply dropped ?expand and reported success")
+	if err := b.Err(); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	sql, _, err := b.SQL()
-	if err == nil {
-		t.Errorf("SQL() succeeded for a query whose expansion was never applied: %s", sql)
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
 	}
-	if !strings.Contains(err.Error(), "author") {
-		t.Errorf("error = %v, want it to name the relation that was asked for", err)
+	for _, want := range []string{
+		`LEFT JOIN "authors" AS "__ex_author"`,
+		`AS "__expand_author"`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("statement missing %q:\n%s", want, sql)
+		}
+	}
+	// Hidden survives the join: the target's email must not be built into the
+	// JSON object, or expansion becomes a way around the capability.
+	if strings.Contains(sql, "email") {
+		t.Errorf("a hidden column of the expanded target reached the statement:\n%s", sql)
+	}
+}
+
+// Not asking for an expansion must not pay for one.
+func TestApplyWithoutExpandDoesNotJoin(t *testing.T) {
+	q, err := filter.Parse(url.Values{}, opts())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	sql, _, err := filter.Apply(sqlb.Query[Article](), q).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(sql, "LEFT JOIN") {
+		t.Errorf("an unexpanded query joined anyway:\n%s", sql)
 	}
 }

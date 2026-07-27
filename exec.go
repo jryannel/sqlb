@@ -193,11 +193,25 @@ func scan[T any](rows *sql.Rows, m *Model, mode scanMode) ([]T, error) {
 	}
 
 	targets := make([][]int, len(cols))
+	// expansions maps a result column onto the relation it carries. An
+	// expanded relation arrives as one JSON value rather than as columns, so
+	// it is scanned into []byte here and decoded per row below.
+	var expansions map[int]*RelationInfo
 	matched := 0
 	for i, name := range cols {
 		if ci := m.Column(name); ci != nil {
 			targets[i] = ci.Index
 			matched++
+			continue
+		}
+		if rel, found := strings.CutPrefix(name, expandPrefix); found {
+			if info := m.Relation(rel); info != nil {
+				if expansions == nil {
+					expansions = make(map[int]*RelationInfo, 1)
+				}
+				expansions[i] = info
+				matched++
+			}
 		}
 	}
 	if matched == 0 {
@@ -214,6 +228,9 @@ func scan[T any](rows *sql.Rows, m *Model, mode scanMode) ([]T, error) {
 				filled[name] = true
 			}
 		}
+		// An expanded relation fills no column, so it neither satisfies nor
+		// violates the exact-scan requirement.
+		_ = expansions
 		var missing []string
 		for _, col := range m.Columns {
 			if !filled[col.Name] {
@@ -233,7 +250,15 @@ func scan[T any](rows *sql.Rows, m *Model, mode scanMode) ([]T, error) {
 	for rows.Next() {
 		var row T
 		rv := reflect.ValueOf(&row).Elem()
+		raws := make(map[int]*[]byte, len(expansions))
 		for i := range cols {
+			if rel, isExpansion := expansions[i]; isExpansion {
+				_ = rel
+				raw := new([]byte)
+				raws[i] = raw
+				dest[i] = raw
+				continue
+			}
 			if targets[i] == nil {
 				if discard[i] == nil {
 					discard[i] = new(any)
@@ -249,6 +274,11 @@ func scan[T any](rows *sql.Rows, m *Model, mode scanMode) ([]T, error) {
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("sqlb: scanning %s: %w", m.Type, err)
+		}
+		for i, raw := range raws {
+			if err := scanExpansion(rv, expansions[i], *raw); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, row)
 	}

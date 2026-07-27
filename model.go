@@ -39,6 +39,7 @@ type ColumnInfo struct {
 	Filterable bool
 	Sortable   bool
 	Searchable bool
+	Expandable bool
 	ReadOnly   bool
 	Immutable  bool
 	Hidden     bool
@@ -50,6 +51,12 @@ type Model struct {
 	Table   string
 	Columns []*ColumnInfo
 	PK      *ColumnInfo
+
+	// Relations are the expandable references this model declares — the
+	// struct fields carrying an expanded row rather than a column of their
+	// own. They are not columns: a relation field is `db:"-"`, so nothing
+	// selects, inserts or updates it.
+	Relations []*RelationInfo
 
 	byName map[string]*ColumnInfo
 	// inUse is set the first time a statement is built against this model.
@@ -133,18 +140,61 @@ func buildModel(t reflect.Type) (*Model, error) {
 	if len(m.Columns) == 0 {
 		return nil, fmt.Errorf("sqlb: model %s maps no columns (are its fields exported?)", t)
 	}
+	// After the columns, because a relation field may be declared above the
+	// column it joins on.
+	if err := resolveRelations(m); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// modelOfType is ModelOf without the type parameter, for resolving a relation's
+// target from a reflect.Type. It shares the same cache, so a model reached
+// through a relation and one reached through ModelOf are the same value.
+func modelOfType(t reflect.Type) (*Model, error) {
+	if cached, found := modelCache.Load(t); found {
+		m, ok := cached.(*Model)
+		if !ok {
+			return nil, fmt.Errorf("sqlb: model cache holds %T for %s", cached, t)
+		}
+		return m, nil
+	}
+	m, err := buildModel(t)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := modelCache.LoadOrStore(t, m)
+	cached, ok := actual.(*Model)
+	if !ok {
+		return nil, fmt.Errorf("sqlb: model cache holds %T for %s", actual, t)
+	}
+	return cached, nil
 }
 
 func collectColumns(m *Model, t reflect.Type, prefix []int) error {
 	for i := 0; i < t.NumField(); i++ {
 		sf := t.Field(i)
 		tag, hasTag := sf.Tag.Lookup("db")
-		if tag == "-" {
+		index := append(append([]int(nil), prefix...), i)
+
+		// A relation field holds an expanded row rather than a column. It is
+		// checked before the `db:"-"` skip below, because `db:"-"` is exactly
+		// how it declares that it is not a column.
+		if fk, isRelation := expansionOf(sf.Tag.Get("sqlb")); isRelation {
+			if !sf.IsExported() {
+				return fmt.Errorf("sqlb: field %s.%s expands %q but is not exported", t.Name(), sf.Name, fk)
+			}
+			rel, err := newRelation(sf, index, fk)
+			if err != nil {
+				return err
+			}
+			m.Relations = append(m.Relations, rel)
 			continue
 		}
 
-		index := append(append([]int(nil), prefix...), i)
+		if tag == "-" {
+			continue
+		}
 
 		// An untagged embedded struct contributes its own fields, so shared
 		// column sets can live in a mixin type.
@@ -210,6 +260,8 @@ func applyCapabilities(c *ColumnInfo, tag string) {
 		case "search":
 			c.Searchable = true
 			c.Filterable = true
+		case "expand":
+			c.Expandable = true
 		case "readonly":
 			c.ReadOnly = true
 		case "immutable":

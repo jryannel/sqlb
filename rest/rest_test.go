@@ -475,7 +475,11 @@ func TestResourceRefusesSingleRowOpsWithoutAPrimaryKey(t *testing.T) {
 // ?expand parses cleanly and performs no join, so a resource that advertised it
 // would answer 200 with the relation missing — a failure no client can detect.
 // Startup is the last point that can see the discrepancy, so it fails there.
-func TestResourceRefusesExpandableUntilExpansionIsImplemented(t *testing.T) {
+// A resource declaring a relation its model does not have fails at mount. This
+// replaces an earlier test that asserted mounting failed because expansion was
+// unimplemented — it kept passing after expansion landed, for the wrong reason:
+// Post declares no relations, so the refusal it saw was this one all along.
+func TestExpandableOnAModelWithNoRelationsIsRefused(t *testing.T) {
 	db := newFakeDB(t)
 	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
 
@@ -484,10 +488,10 @@ func TestResourceRefusesExpandableUntilExpansionIsImplemented(t *testing.T) {
 
 	err := rest.Resource[Post, PostCreate, PostUpdate](api, db.db, opts)
 	if err == nil {
-		t.Fatal("expected mounting to fail: ?expand would be advertised but never performed")
+		t.Fatal("expected mounting to fail: Post has no expandable relation")
 	}
-	if !strings.Contains(err.Error(), "expand") {
-		t.Errorf("error = %v, want it to name the unimplemented parameter", err)
+	if !strings.Contains(err.Error(), "author") {
+		t.Errorf("error = %v, want it to name the relation that was asked for", err)
 	}
 }
 
@@ -591,5 +595,109 @@ func TestCreateClearsAReadOnlyColumnTheBodySet(t *testing.T) {
 		if arg == "someone-else" {
 			t.Errorf("a request wrote a read-only column: %v\n%s", fake.lastArgs(), fake.lastStatement())
 		}
+	}
+}
+
+// mountDocs registers the expandable Doc resource.
+func mountDocs(t *testing.T, db sqlb.Executor, expandable []string) humatest.TestAPI {
+	t.Helper()
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	if err := rest.Resource[Doc, rest.None[Doc], rest.None[Doc]](api, db, rest.Options{
+		Path: "/documents", Name: "document", Ops: rest.OpRead | rest.OpList,
+		Expandable: expandable,
+	}); err != nil {
+		t.Fatalf("mounting the resource: %v", err)
+	}
+	return api
+}
+
+func TestExpandJoinsAndNestsTheRelation(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols(), rows: [][]driver.Value{
+		docRow("d1", "Hello", []byte(`{"id":"acme","name":"Acme"}`)),
+	}})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	resp := api.Get("/documents?expand=org")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+
+	stmt := db.lastStatement()
+	if !strings.Contains(stmt, `LEFT JOIN "orgs" AS "__ex_org"`) {
+		t.Errorf("no join in the statement:\n%s", stmt)
+	}
+	// Hidden survives the join.
+	if strings.Contains(stmt, "secret") {
+		t.Errorf("a hidden column of the target reached the statement:\n%s", stmt)
+	}
+
+	body := decode(t, resp.Body.Bytes())
+	items, ok := body["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %v", body["items"])
+	}
+	item, _ := items[0].(map[string]any)
+	org, ok := item["org"].(map[string]any)
+	if !ok {
+		t.Fatalf("the expansion is not nested under its relation name: %v", item)
+	}
+	if org["name"] != "Acme" {
+		t.Errorf("expanded org = %v", org)
+	}
+	// The foreign key is still its own property.
+	if item["org_id"] != "acme" {
+		t.Errorf("org_id = %v, want acme", item["org_id"])
+	}
+}
+
+// Not asking for the expansion must leave the response and the SQL alone.
+func TestWithoutExpandNothingIsJoinedOrNested(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]driver.Value{
+		{"d1", "acme", "Hello"},
+	}})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	resp := api.Get("/documents")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	if strings.Contains(db.lastStatement(), "LEFT JOIN") {
+		t.Errorf("an unexpanded request joined anyway:\n%s", db.lastStatement())
+	}
+	items, _ := decode(t, resp.Body.Bytes())["items"].([]any)
+	item, _ := items[0].(map[string]any)
+	if _, present := item["org"]; present {
+		t.Errorf("an unexpanded response carries the relation: %v", item)
+	}
+}
+
+// A relation the model does not declare must fail at mount, not at request
+// time, where it would parse cleanly and answer 200 without the relation.
+func TestExpandableIsCheckedAgainstTheModelAtStartup(t *testing.T) {
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	err := rest.Resource[Doc, rest.None[Doc], rest.None[Doc]](api, newFakeDB(t).db, rest.Options{
+		Path: "/documents", Name: "document", Ops: rest.OpList,
+		Expandable: []string{"owner"},
+	})
+	if err == nil {
+		t.Fatal("a resource declared an expandable relation the model does not have")
+	}
+	if !strings.Contains(err.Error(), "org") {
+		t.Errorf("the refusal does not name the declared relations: %v", err)
+	}
+}
+
+// ?expand naming a relation the resource did not expose is a 400 with the
+// allow-list, like every other rejected parameter (ADR-0011).
+func TestExpandRejectionNamesWhatWouldHaveWorked(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols(), rows: nil})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	resp := api.Get("/documents?expand=owner")
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body)
+	}
+	if !strings.Contains(resp.Body.String(), "org") {
+		t.Errorf("the rejection does not name the expandable relations: %s", resp.Body)
 	}
 }

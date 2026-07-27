@@ -392,6 +392,7 @@ func (d *FieldDesc) Capabilities() string {
 	add(d.Filterable, "filter")
 	add(d.Sortable, "sort")
 	add(d.Searchable, "search")
+	add(d.Expandable, "expand")
 	add(d.ReadOnly, "readonly")
 	add(d.Immutable, "immutable")
 	add(d.Hidden, "hidden")

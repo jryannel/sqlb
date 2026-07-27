@@ -119,6 +119,18 @@ func bind[T any](opts Options) (*binding[T], error) {
 				m.Type, col.Field, b.jsonName[col.Name])
 		}
 	}
+	// Expandable names a relation, not a column, and an unknown one has to fail
+	// here: at request time the parameter parses cleanly against Options and the
+	// response would come back 200 with the relation missing.
+	for _, name := range opts.Expandable {
+		if m.Relation(name) == nil {
+			return nil, fmt.Errorf(
+				"rest: %s declares Expandable %q, but %s has no such relation (declared: %s); "+
+					"a relation is a field tagged `sqlb:\"expands=<column>\"` beside a column tagged `expand`",
+				opts.Path, name, m.Type.Name(), strings.Join(m.RelationNames(), ", "))
+		}
+	}
+
 	return b, nil
 }
 
@@ -186,39 +198,76 @@ type row[T any] struct {
 	value T
 	cols  []*sqlb.ColumnInfo
 	names map[string]string
+	// expand are the relations this request asked to resolve. They are not
+	// columns, so they are serialised after them, under the relation's own
+	// name — which is the JSON name of the field the expansion landed in.
+	expand []*sqlb.RelationInfo
 }
 
-// MarshalJSON writes only the projected columns, in projection order.
+// MarshalJSON writes only the projected columns, in projection order, followed
+// by whatever relations the request expanded.
 func (r row[T]) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
 	rv := reflect.ValueOf(r.value)
-	for i, col := range r.cols {
+
+	// A separator counter rather than the loop index: a column can be skipped
+	// (no JSON name), and keying the comma off the index would emit a leading
+	// one the moment the first column is the skipped one.
+	written := 0
+	write := func(name string, v any) error {
+		if written > 0 {
+			buf.WriteByte(',')
+		}
+		written++
+		key, err := json.Marshal(name)
+		if err != nil {
+			return err
+		}
+		buf.Write(key)
+		buf.WriteByte(':')
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoded)
+		return nil
+	}
+
+	for _, col := range r.cols {
 		name := r.names[col.Name]
 		if name == "" {
 			continue
 		}
-		if i > 0 {
-			buf.WriteByte(',')
-		}
-		key, err := json.Marshal(name)
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(key)
-		buf.WriteByte(':')
-
 		fv, ok := valueByIndex(rv, col.Index)
 		if !ok {
-			buf.WriteString("null")
+			if written > 0 {
+				buf.WriteByte(',')
+			}
+			written++
+			key, err := json.Marshal(name)
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(key)
+			buf.WriteString(":null")
 			continue
 		}
-		encoded, err := json.Marshal(fv.Interface())
-		if err != nil {
+		if err := write(name, fv.Interface()); err != nil {
 			return nil, fmt.Errorf("rest: encoding %s: %w", col.Name, err)
 		}
-		buf.Write(encoded)
 	}
+
+	for _, rel := range r.expand {
+		fv, ok := valueByIndex(rv, rel.Index)
+		if !ok {
+			continue
+		}
+		if err := write(rel.Name, fv.Interface()); err != nil {
+			return nil, fmt.Errorf("rest: encoding expanded %s: %w", rel.Name, err)
+		}
+	}
+
 	buf.WriteByte('}')
 	return buf.Bytes(), nil
 }
@@ -267,10 +316,30 @@ func valueByIndex(v reflect.Value, index []int) (reflect.Value, bool) {
 }
 
 // rowsOf wraps scanned rows for serialisation under a projection.
-func (b *binding[T]) rowsOf(values []T, cols []*sqlb.ColumnInfo) []row[T] {
+func (b *binding[T]) rowsOf(values []T, cols []*sqlb.ColumnInfo, expand []string) []row[T] {
+	// Resolved once for the page rather than per row: the relations are the
+	// same for every row in it, and the lookup is a scan of a short slice.
+	rels := b.relationsFor(expand)
 	out := make([]row[T], len(values))
 	for i, v := range values {
-		out[i] = row[T]{value: v, cols: cols, names: b.jsonName}
+		out[i] = row[T]{value: v, cols: cols, names: b.jsonName, expand: rels}
+	}
+	return out
+}
+
+// relationsFor resolves the request's expand names to the relations to
+// serialise. Names are already validated — by the parser against
+// Options.Expandable, and by bind against the model — so an unknown one here
+// would be a bug rather than bad input, and is skipped rather than guessed at.
+func (b *binding[T]) relationsFor(names []string) []*sqlb.RelationInfo {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]*sqlb.RelationInfo, 0, len(names))
+	for _, name := range names {
+		if rel := b.model.Relation(name); rel != nil {
+			out = append(out, rel)
+		}
 	}
 	return out
 }

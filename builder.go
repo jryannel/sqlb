@@ -23,6 +23,7 @@ type Builder[T any] struct {
 	groups   []Expr
 	having   []Pred
 	orders   []Order
+	expand   []string
 	limit    *int
 	offset   *int
 	lock     string
@@ -82,6 +83,7 @@ func (b *Builder[T]) Clone() *Builder[T] {
 	c.groups = append([]Expr(nil), b.groups...)
 	c.having = append([]Pred(nil), b.having...)
 	c.orders = append([]Order(nil), b.orders...)
+	c.expand = append([]string(nil), b.expand...)
 	if b.limit != nil {
 		v := *b.limit
 		c.limit = &v
@@ -255,6 +257,7 @@ func (b *Builder[T]) compile(c *compiler) {
 		c.write("DISTINCT ")
 	}
 	b.compileProjection(c)
+	b.compileExpansionSelections(c)
 
 	c.write(" FROM ")
 	c.table(b.model.Table)
@@ -273,6 +276,7 @@ func (b *Builder[T]) compile(c *compiler) {
 		c.write(" ON ")
 		c.expr(j.on.Expr())
 	}
+	b.compileExpansions(c)
 
 	if len(b.where) > 0 {
 		c.write(" WHERE ")
@@ -368,3 +372,12 @@ func (b *Builder[T]) countSQL() (string, []any, error) {
 // ErrNotFound is returned by One when the query matches no rows. It is a
 // sentinel so that HTTP handlers can map it to 404 without inspecting text.
 var ErrNotFound = errors.New("sqlb: no rows matched")
+
+// from is the name the base table is referenced by: its alias if it has one,
+// otherwise the table itself. Expansion joins qualify the foreign key with it.
+func (b *Builder[T]) from() string {
+	if b.alias != "" {
+		return b.alias
+	}
+	return b.model.Table
+}

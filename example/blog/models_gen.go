@@ -7,7 +7,7 @@ import "time"
 // Author is a row of authors.
 type Author struct {
 	ID           string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	OrgID        string    `db:"org_id" json:"org_id"`
+	OrgID        string    `db:"org_id" json:"org_id" sqlb:"expand"`
 	Email        string    `db:"email" json:"email" sqlb:"filter,search"`
 	Name         string    `db:"name" json:"name" sqlb:"filter,sort,search"`
 	PasswordHash string    `db:"password_hash" json:"-" sqlb:"hidden"`
@@ -43,7 +43,7 @@ const (
 type Post struct {
 	ID          string     `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
 	OrgID       string     `db:"org_id" json:"org_id"`
-	AuthorID    string     `db:"author_id" json:"author_id"`
+	AuthorID    string     `db:"author_id" json:"author_id" sqlb:"expand"`
 	Title       string     `db:"title" json:"title" sqlb:"filter,sort,search"`
 	Body        string     `db:"body" json:"body" sqlb:"filter,search"`
 	Status      PostStatus `db:"status" json:"status" sqlb:"default,filter,sort"`

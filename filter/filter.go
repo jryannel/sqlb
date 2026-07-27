@@ -122,19 +122,13 @@ type Query struct {
 // custom projection should apply Where, Order and the limits from the Query
 // fields directly instead.
 //
-// Apply cannot perform an expansion, so it fails the builder rather than
-// dropping one. Expansion is a join whose shape Apply does not know: the
-// builder is generic over the row type T, and an expanded row is wider than T.
-// A caller that means to expand reads Query.Expand and issues the Join itself.
+// An expansion is applied as a relation join. Apply does this rather than
+// refusing, and the projection below is why it can: ?select names columns of T,
+// and an expanded relation is not one — it arrives as its own JSON value in a
+// column the scanner recognises, so the row stays exactly as wide as T.
 func Apply[T any](b *sqlb.Builder[T], q *Query) *sqlb.Builder[T] {
-	if len(q.Expand) > 0 {
-		return b.Fail(fmt.Errorf(
-			"filter: cannot apply ?expand=%s: Apply does not perform relation joins, "+
-				"so applying it would drop the parameter; read Query.Expand and join explicitly",
-			strings.Join(q.Expand, ",")))
-	}
-
 	b.Where(q.Where...)
+	b.Expand(q.Expand...)
 
 	names := q.Select
 	if len(names) == 0 {

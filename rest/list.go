@@ -87,7 +87,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		}
 
 		body := Page[T]{
-			Items:   b.rowsOf(rows, b.columnsFor(q.Select)),
+			Items:   b.rowsOf(rows, b.columnsFor(q.Select), q.Expand),
 			Page:    q.Page,
 			PerPage: q.PageSize,
 			HasMore: hasMore,

@@ -349,3 +349,29 @@ func archivedCols() []string {
 func archivedRow(id, title string) []driver.Value {
 	return []driver.Value{id, title, time.Unix(0, 0).UTC()}
 }
+
+// Expandable models, for ?expand. The relation is the two-field shape the
+// engine expects: `expand` on the column, `expands=` on the field beside it.
+type Org struct {
+	ID     string `db:"id" json:"id" sqlb:"pk"`
+	Name   string `db:"name" json:"name"`
+	Secret string `db:"secret" json:"-" sqlb:"hidden"`
+}
+
+func (Org) TableName() string { return "orgs" }
+
+type Doc struct {
+	ID    string `db:"id" json:"id" sqlb:"pk,default"`
+	OrgID string `db:"org_id" json:"org_id" sqlb:"filter,expand"`
+	Title string `db:"title" json:"title" sqlb:"filter,sort"`
+
+	Org *Org `db:"-" json:"org,omitempty" sqlb:"expands=org_id"`
+}
+
+func (Doc) TableName() string { return "docs" }
+
+func docCols() []string { return []string{"id", "org_id", "title", "__expand_org"} }
+
+func docRow(id, title string, org []byte) []driver.Value {
+	return []driver.Value{id, "acme", title, org}
+}
