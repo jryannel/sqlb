@@ -118,3 +118,4 @@ nobody finishes reading has failed at its only job.
 | [0016](0016-guards-proven-both-ways.md) | A guard is not trusted until it has failed on purpose | Working | High |
 | [0017](0017-enums-as-text-and-check.md) | An enum is text with a CHECK constraint | Working | Medium |
 | [0018](0018-tooling-scoped-to-tracked-files.md) | Repository tooling operates on the files git tracks | Working | Medium |
+| [0019](0019-pgbouncer-in-the-path.md) | Connections go through PgBouncer, except the ones that cannot | Exploring | Low |

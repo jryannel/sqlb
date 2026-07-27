@@ -26,16 +26,59 @@ hooks and to SSE or WebSocket subscribers.
 Subscribers receive invalidation events (table plus row key), not recomputed
 query results. Clients refetch.
 
+### The event is the row; the notification is only a doorbell
+
+This distinction decides most of the design, so it is worth stating outright
+rather than leaving implied by the word "woken".
+
+**The outbox row is the event.** It is written by sqlb's Go mutation code, which
+is what keeps the payload a typed domain event rather than a decoded row — the
+same property that defers logical replication below. The durable read path is
+the dispatcher's tail query over that table.
+
+**`NOTIFY` carries nothing.** It exists so the tail query runs promptly instead
+of on a timer. Two consequences follow:
+
+- **A lost notification degrades to latency, not lost data.** The row is already
+  committed. So the dispatcher also polls on a slow fallback interval, and the
+  feed stays correct if the `LISTEN` connection drops, or if someone points the
+  dispatcher at a connection pooler that silently swallows it
+  ([ADR-0019](0019-pgbouncer-in-the-path.md)).
+- **The 8000-byte `NOTIFY` payload limit is not a constraint we have to design
+  around**, because we are not putting anything in the payload.
+
+### The doorbell is rung by a trigger on the outbox table
+
+An `AFTER INSERT` trigger on the outbox table — and on no other table — calls
+`pg_notify` with an empty payload.
+
+The alternative is for sqlb to issue `NOTIFY` in the mutation transaction, which
+is one fewer object in the migration surface. It loses because it is forgettable:
+a new mutation path that writes the outbox but omits the notify produces a feed
+that works in tests and lags in production. Putting it on the table means any
+writer of the outbox rings the bell, including one that is not Go.
+
+This is deliberately *not* a trigger on each domain table. That would capture row
+changes rather than domain events — the same trade-off that defers logical
+replication — and would fire during backfills and migrations, which are exactly
+the moments a live view least wants a flood.
+
 ## Consequences
 
 **What this buys.** Delivery is at-least-once and survives a process restart,
 because the event and the data commit or roll back together. The dispatcher is
 the only component that needs to be highly available, and it can be restarted
-without losing events.
+without losing events. Because the notification is a doorbell rather than a
+transport, the design tolerates a connection pooler in the path: only the
+dispatcher's `LISTEN` needs a direct connection, while `NOTIFY` works fine from a
+pooled one.
 
 **What this costs.** A write amplification on every mutation, and a table that
 needs pruning. Ordering is per-table at best. At-least-once means consumers must
-be idempotent. None of this is built, hence Low confidence.
+be idempotent. The fallback poll that makes a lost notification harmless is also
+capable of hiding a permanently broken `LISTEN`, so slow delivery is a symptom
+that has to be looked for rather than one that announces itself. None of this is
+built, hence Low confidence.
 
 ## What would change our mind
 
@@ -48,10 +91,22 @@ be idempotent. None of this is built, hence Low confidence.
   bring cache-coherence problems that invalidation does not have.
 - If consumers cannot practically be made idempotent, we need deduplication in
   the dispatcher, which changes its storage requirements.
+- If the fallback poll ever turns out to be doing the real work — that is, if
+  delivery latency sits at the poll interval rather than spiking to it — the
+  `LISTEN` connection is broken or pooled, and the dispatcher needs a startup
+  assertion rather than a quieter symptom.
+- If the outbox trigger shows up as measurable overhead on write-heavy tables,
+  the answer is to move the `pg_notify` back into sqlb's mutation path and accept
+  the forgettability, not to drop the doorbell.
 
 ## Cost of change
 
 Free now, since nothing is built.
+
+Once it ships, the outbox trigger is part of the migration surface, so moving the
+`pg_notify` into sqlb's mutation path later means a migration rather than a code
+change. Cheap, but not free — and it has to land before the code stops sending
+it, or events go undelivered in the gap.
 
 After it ships, moving to logical replication means draining or migrating
 in-flight outbox rows, and a different operational posture — a replication slot
@@ -70,8 +125,28 @@ which is a real advantage. Deferred: it requires a replication slot, careful
 operational handling, and it decodes rows rather than domain events, so hooks
 would lose their typed payload.
 
-**Polling.** Rejected: the latency-versus-load curve is bad at both ends.
+**Polling.** Rejected as the *primary* mechanism: the latency-versus-load curve
+is bad at both ends. It survives as the fallback, run slowly enough that its load
+does not matter and its latency only shows when the doorbell has failed.
+
+**sqlb issues `NOTIFY` in the mutation transaction**, instead of a trigger on the
+outbox table. One fewer database object, and no migration surface. Lost on
+forgettability — see the Decision section.
+
+**A trigger on every domain table.** Would capture changes sqlb did not make,
+which is a genuine advantage and the same one that makes logical replication
+tempting. Lost for the same reason: it decodes rows rather than carrying domain
+events, so hooks lose their typed payload. It also fires during backfills and
+migrations.
 
 ## Revisions
 
 - 2026-07-27 — Written, before any implementation exists.
+- 2026-07-27 — Recorded that the outbox row is the event and `NOTIFY` is only a
+  doorbell, which the original text left implied. Added the fallback poll, named
+  an `AFTER INSERT` trigger on the outbox table as what rings it, and noted the
+  consequence for a pooled connection path ([ADR-0019](0019-pgbouncer-in-the-path.md)).
+  Prompted by PgBouncer turning out to be in the target deployment: the question
+  "is this at the DB level or the Go API level?" had no clear answer in the
+  record, and the two halves of `LISTEN/NOTIFY` behave differently behind a
+  pooler.

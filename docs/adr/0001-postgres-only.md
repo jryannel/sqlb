@@ -26,9 +26,10 @@ stops being true, but do not pretend to be portable.
 ## Consequences
 
 **What this buys.** Every feature can assume the best available primitive. The
-change feed can use `LISTEN/NOTIFY` rather than polling. Mutations return their
-rows in one round trip. The compiler stays small because there is one set of
-rules.
+change feed can use `LISTEN/NOTIFY` rather than polling — though `LISTEN` needs a
+session, so a connection pooler in transaction mode takes part of this back
+([ADR-0019](0019-pgbouncer-in-the-path.md)). Mutations return their rows in one
+round trip. The compiler stays small because there is one set of rules.
 
 **What this costs.** sqlb is unusable for MySQL or SQLite projects, which
 removes a large part of the potential audience. Tests that want an in-memory
@@ -65,3 +66,7 @@ constraint that other dialects stay implementable.
 ## Revisions
 
 - 2026-07-27 — Written.
+- 2026-07-27 — Qualified the `LISTEN/NOTIFY` benefit: it holds, but not through a
+  transaction-pooling connection pooler. The decision is unaffected — the
+  alternative dialects do not offer it at all — but the record overstated what
+  the deployment gets for free.
