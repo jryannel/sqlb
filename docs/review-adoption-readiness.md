@@ -99,7 +99,17 @@ a process-default registry, so no existing call site breaks; `rest.Resource`
 grows a `*DB` where it takes an `Executor` today. Deferring costs more later —
 every month of adoption adds call sites that assume the global.
 
-### 2. `AfterCreate` runs inside the transaction, and there is no `AfterCommit` — **blocking**
+### 2. `AfterCreate` runs inside the transaction, and there is no `AfterCommit` — **FIXED 2026-07-27**
+
+> Resolved, and close to the thirty lines this predicted. `WithTx` holds the
+> callback list and drains it after `Commit` returns nil; `sqlb.AfterCommit(ctx,
+> fn)` is the form a hook uses. Two things this finding did not anticipate:
+> registering outside a transaction is *refused* rather than run immediately,
+> because under autocommit the callback's timing would depend on which hook
+> registered it; and `ErrAfterCommit` distinguishes a failed side effect from a
+> failed unit of work, since retrying a durable write would double it.
+> [ADR-0012](adr/0012-change-feed-outbox.md) now says why this is not the change
+> feed.
 
 [hooks.go:79](../hooks.go) documents that `AfterCreate` "runs inside the
 caller's transaction, so returning an error rolls the [operation] back." That is
@@ -229,7 +239,7 @@ common objection — "why not just use sqlc" — into a compatibility story.
 | 5 | ~~No release tag~~ | Adoption | **Fixed** — `v0.1.0`, with [compatibility.md](compatibility.md) |
 | 3 | ~~`?expand` accepted, advertised, inert~~ | Correctness | **Fixed** |
 | 4 | Promote `Explain` to documented practice | Perception | Low, docs only |
-| 2 | No `AfterCommit` | Blocking | Low, and now unblocked |
+| 2 | ~~No `AfterCommit`~~ | Blocking | **Fixed** |
 | 6 | No sqlc pairing story | Adoption | Low, docs only |
 | 1 | ~~No transaction-scoped handle~~ | Blocking | **Fixed** — [ADR-0020](adr/0020-transaction-scoped-handle.md) |
 
@@ -237,10 +247,10 @@ Ordered by leverage per unit of effort, which is not the order they will
 naturally get done in — 1 is the one that matters most and 2 depends on it, so
 the remaining sequence is 5, 1, 2, then the two documents.
 
-**Where that sequence stands:** 5, 3 and 1 are done. 2 is next and is now a
-small change rather than a blocked one — `WithTx` is the only code that knows a
-commit succeeded, so the deferred-callback list has an obvious home. 4 and 6
-remain, and both are documentation.
+**Where that sequence stands:** 5, 3, 1 and 2 are done, which is both blocking
+findings closed. What remains is 4 and 6, and both are documentation.
+
+That does not make the verdict "yes" — see below. The clock is what is left.
 
 ## What would change the verdict
 
@@ -251,3 +261,10 @@ is exactly what [vision.md:91](vision.md) already predicts, and the reason the
 original question was framed on the wrong axis.
 
 The design is not what is holding this back. The clock is.
+
+**Half of that condition is now met**, on the same day the review was written,
+which should be read as evidence about the code's malleability rather than
+about its maturity. Both blocking findings closed cheaply because the design
+they landed on was already close to right — but the other half of the condition
+has not moved at all, and cannot be made to. Nothing above substitutes for
+elapsed time under someone else's traffic.

@@ -81,8 +81,9 @@ rollback semantics, including on panic. Hooks can be scoped to a handle, which
 makes test isolation a fresh `Registry` rather than a `Reset` in a teardown, and
 makes two sets of domain rules in one process expressible. A hook can tell it is
 inside a transaction and read what that transaction has written — the case that
-was previously not expressible at all. `AfterCommit` now has an obvious home:
-`WithTx` is the only code that knows a commit succeeded.
+was previously not expressible at all. `AfterCommit` got an obvious home and was
+built on top of this: `WithTx` is the only code that knows a commit succeeded,
+so it holds the callback list and drains it once, after `Commit` returns nil.
 
 **What this costs.** `sqlb.QueryIn[T](tx)` is not offered, so the executor is
 still threaded through terminal calls — `All(ctx, tx)` rather than
@@ -158,3 +159,10 @@ changes what "the unit of work succeeded" means, and no caller needs it yet.
 
 - 2026-07-27 — Written, closing finding 1 of
   [the adoption review](../review-adoption-readiness.md).
+- 2026-07-27 — `AfterCommit` built on top of the handle, closing finding 2.
+  Registering outside a transaction is refused rather than run immediately:
+  under autocommit sqlb does not own the commit, so the callback's timing would
+  depend on which hook happened to register it. `ErrAfterCommit` distinguishes
+  "committed, side effect failed" from "the unit of work failed", because the
+  two call for opposite responses. See [ADR-0012](0012-change-feed-outbox.md)
+  for why this is not the change feed.

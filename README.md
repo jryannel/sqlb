@@ -282,7 +282,11 @@ Working and tested:
 - Insert (with default-omission and upsert), Update, Delete, all with a guard
   against unscoped mutations
 - Hooks: BeforeQuery / Before+AfterCreate / Before+AfterUpdate / Before+AfterDelete,
-  registered process-wide with `On[T]()` or scoped to a handle with `OnIn[T]`
+  registered process-wide with `On[T]()` or scoped to a handle with `OnIn[T]`.
+  Those all run *inside* the transaction; `AfterCommit` registers work that must
+  not happen if it aborts — publishing an event, enqueuing a job, invalidating a
+  cache. It is in-process and at-most-once, so it is not a change feed
+  ([ADR-0012](docs/adr/0012-change-feed-outbox.md))
 - `sqlb.DB` — a handle carrying an executor and a hook registry, with `WithTx`
   for multi-statement units of work. It satisfies `Executor`, so it goes
   wherever a `*sql.DB` went; `TxFrom(ctx)` is how a hook reads rows the same
@@ -348,8 +352,11 @@ Not built yet, in the order they matter:
    `schema.Ref(…).Expandable()` still parses and validates, so schemas can
    declare the intent; nothing acts on it yet.
 4. **Change feed** — transactional outbox written in the same transaction as
-   the mutation, tailed via `LISTEN/NOTIFY` and fanned out to `AfterCommit`
-   hooks and SSE/WebSocket subscribers.
+   the mutation, tailed via `LISTEN/NOTIFY` and fanned out to SSE/WebSocket
+   subscribers. `sqlb.AfterCommit` already exists and covers the in-process,
+   at-most-once half of this; what is missing is the durability — a callback
+   that never ran because the process died leaves no trace, which is precisely
+   what the outbox is for.
 5. **Agent affordances** — a `sqlb.json` manifest and generated `AGENTS.md`, and
    `sqlb explain` to print the SQL a query compiles to without running it.
 

@@ -172,6 +172,96 @@ func TestHookReadsUncommittedRowsThroughTxFrom(t *testing.T) {
 	}
 }
 
+// The fake driver proves an after-commit callback fires after COMMIT is
+// issued. Only a real Postgres ties it to durability: the callback runs when
+// the rows are actually there, and does not run when a constraint the database
+// enforces has thrown the whole unit of work away.
+func TestAfterCommitFiresOnlyForDurableWrites(t *testing.T) {
+	ctx := context.Background()
+	db := accountsDB(t)
+	// The handle is an Executor, so DDL goes through it like anything else.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE accounts ADD CONSTRAINT owner_unique UNIQUE (owner)`); err != nil {
+		t.Fatalf("adding the unique constraint: %v", err)
+	}
+
+	var published []string
+	record := func(owner string) func(context.Context) error {
+		return func(context.Context) error {
+			published = append(published, owner)
+			return nil
+		}
+	}
+
+	// A unit of work the database refuses on the second insert.
+	err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
+		for _, owner := range []string{"ada", "ada"} {
+			a := Account{Owner: owner, Balance: 1}
+			if _, err := sqlb.InsertRows(&a).One(ctx, tx); err != nil {
+				return err
+			}
+			if err := tx.AfterCommit(record(owner)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected the unique constraint to reject the second insert")
+	}
+	if len(published) != 0 {
+		t.Errorf("published %v for a transaction Postgres rolled back", published)
+	}
+	if n := countAccounts(t, db); n != 0 {
+		t.Fatalf("%d accounts survived the rollback, want 0", n)
+	}
+
+	// The same shape, without the conflict.
+	err = db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
+		for _, owner := range []string{"ada", "grace"} {
+			a := Account{Owner: owner, Balance: 1}
+			if _, err := sqlb.InsertRows(&a).One(ctx, tx); err != nil {
+				return err
+			}
+			if err := tx.AfterCommit(record(owner)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+	if len(published) != 2 || published[0] != "ada" || published[1] != "grace" {
+		t.Errorf("published %v, want [ada grace] in registration order", published)
+	}
+	if n := countAccounts(t, db); n != 2 {
+		t.Errorf("%d accounts, want 2", n)
+	}
+}
+
+// A callback failing after a successful commit is not the unit of work
+// failing. Confusing the two would have a caller retry a write that is already
+// durable.
+func TestAfterCommitFailureLeavesTheWriteDurable(t *testing.T) {
+	ctx := context.Background()
+	db := accountsDB(t)
+
+	boom := errors.New("broker unreachable")
+	err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
+		a := Account{Owner: "ada", Balance: 1}
+		if _, err := sqlb.InsertRows(&a).One(ctx, tx); err != nil {
+			return err
+		}
+		return tx.AfterCommit(func(context.Context) error { return boom })
+	})
+	if !errors.Is(err, sqlb.ErrAfterCommit) {
+		t.Fatalf("error = %v, want ErrAfterCommit", err)
+	}
+	if n := countAccounts(t, db); n != 1 {
+		t.Errorf("%d accounts, want 1 — the write should have survived the callback's failure", n)
+	}
+}
+
 // Refusing the create rolls the whole unit of work back, including the rows
 // that had already succeeded. This is what makes BeforeCreate usable as a
 // guard rather than as advice.

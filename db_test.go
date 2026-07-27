@@ -376,6 +376,257 @@ func TestTxFromIsAbsentOutsideATransaction(t *testing.T) {
 	}
 }
 
+// --- after-commit callbacks -------------------------------------------------
+
+func TestAfterCommitRunsOnceCommitted(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	var order []string
+	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
+		if err := tx.AfterCommit(func(context.Context) error {
+			order = append(order, "first")
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := tx.AfterCommit(func(context.Context) error {
+			order = append(order, "second")
+			return nil
+		}); err != nil {
+			return err
+		}
+		order = append(order, "inside")
+		u := User{Email: "a@b.c"}
+		_, err := sqlb.InsertRows(&u).One(ctx, tx)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+	want := []string{"inside", "first", "second"}
+	sameStatements(t, order, want)
+	sameStatements(t, h.statements(), []string{"BEGIN", "INSERT", "COMMIT"})
+}
+
+// The whole point of the hook: a side effect the outside world can see must not
+// fire for a write that never happened.
+func TestAfterCommitDoesNotRunOnRollback(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	fired := false
+	err := db.WithTx(context.Background(), func(_ context.Context, tx *sqlb.DB) error {
+		if err := tx.AfterCommit(func(context.Context) error {
+			fired = true
+			return nil
+		}); err != nil {
+			return err
+		}
+		return errors.New("aborted")
+	})
+	if err == nil {
+		t.Fatal("expected the caller's error")
+	}
+	if fired {
+		t.Error("an after-commit callback fired for a transaction that rolled back")
+	}
+}
+
+func TestAfterCommitDoesNotRunWhenCommitFails(t *testing.T) {
+	h := txHarness(t)
+	h.commitErr = errors.New("serialization failure")
+	db := sqlb.New(h.db)
+
+	fired := false
+	err := db.WithTx(context.Background(), func(_ context.Context, tx *sqlb.DB) error {
+		return tx.AfterCommit(func(context.Context) error {
+			fired = true
+			return nil
+		})
+	})
+	if err == nil {
+		t.Fatal("expected the commit failure")
+	}
+	if fired {
+		t.Error("an after-commit callback fired although the commit failed")
+	}
+}
+
+// A failing callback must be distinguishable from a failing unit of work: the
+// row is durable either way, and retrying the write would double it.
+func TestAfterCommitFailureIsDistinguishable(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	boom := errors.New("broker unreachable")
+	ran := 0
+	err := db.WithTx(context.Background(), func(_ context.Context, tx *sqlb.DB) error {
+		if err := tx.AfterCommit(func(context.Context) error { ran++; return boom }); err != nil {
+			return err
+		}
+		// Independent side effects: one failing must not cancel the rest.
+		return tx.AfterCommit(func(context.Context) error { ran++; return nil })
+	})
+	if !errors.Is(err, sqlb.ErrAfterCommit) {
+		t.Fatalf("error = %v, want it to wrap ErrAfterCommit", err)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error = %v, want the callback's own error reachable", err)
+	}
+	if ran != 2 {
+		t.Errorf("ran %d callbacks, want 2 — one failing should not skip the others", ran)
+	}
+	// The commit still happened, which is what the sentinel exists to say.
+	sameStatements(t, h.statements(), []string{"BEGIN", "COMMIT"})
+}
+
+// Registering from a hook is the intended use, and the hook only has a context.
+func TestAfterCommitFromAHook(t *testing.T) {
+	h := txHarness(t)
+
+	scoped := sqlb.NewRegistry()
+	published := 0
+	sqlb.OnIn[User](scoped).AfterCreate(func(ctx context.Context, _ *User) error {
+		return sqlb.AfterCommit(ctx, func(context.Context) error {
+			published++
+			return nil
+		})
+	})
+
+	db := sqlb.New(h.db).WithHooks(scoped)
+	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
+		u := User{Email: "a@b.c"}
+		_, err := sqlb.InsertRows(&u).One(ctx, tx)
+		if published != 0 {
+			t.Error("the callback fired before the commit")
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+	if published != 1 {
+		t.Errorf("published %d times, want 1", published)
+	}
+}
+
+// A callback must not find a live handle: the transaction it would name has
+// already committed, so anything it ran there would be outside the unit of
+// work while looking like it was inside it.
+func TestAfterCommitCallbackSeesNoTransaction(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	sawTx := true
+	err := db.WithTx(context.Background(), func(_ context.Context, tx *sqlb.DB) error {
+		return tx.AfterCommit(func(ctx context.Context) error {
+			_, sawTx = sqlb.TxFrom(ctx)
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+	if sawTx {
+		t.Error("the callback found a committed transaction in its context")
+	}
+}
+
+// Callbacks registered by an inner block belong to the one transaction, and
+// drain once, when the outermost commit lands.
+func TestAfterCommitFromNestedBlockDrainsOnce(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	var order []string
+	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
+		if err := tx.AfterCommit(func(context.Context) error {
+			order = append(order, "outer")
+			return nil
+		}); err != nil {
+			return err
+		}
+		return tx.WithTx(ctx, func(_ context.Context, inner *sqlb.DB) error {
+			return inner.AfterCommit(func(context.Context) error {
+				order = append(order, "inner")
+				return nil
+			})
+		})
+	})
+	if err != nil {
+		t.Fatalf("nested WithTx: %v", err)
+	}
+	sameStatements(t, order, []string{"outer", "inner"})
+	sameStatements(t, h.statements(), []string{"BEGIN", "COMMIT"})
+}
+
+// An inner rollback discards the outer block's callbacks too, because joining
+// means there was only ever one transaction to be after.
+func TestAfterCommitDiscardedWhenNestedBlockFails(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	fired := false
+	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
+		if err := tx.AfterCommit(func(context.Context) error {
+			fired = true
+			return nil
+		}); err != nil {
+			return err
+		}
+		return tx.WithTx(ctx, func(context.Context, *sqlb.DB) error {
+			return errors.New("inner failed")
+		})
+	})
+	if err == nil {
+		t.Fatal("expected the inner error")
+	}
+	if fired {
+		t.Error("the outer block's callback fired although the transaction rolled back")
+	}
+}
+
+// "After commit" has no meaning when sqlb does not own the commit. Refusing is
+// the accurate answer, and it says what to do instead.
+func TestAfterCommitRefusedOutsideATransaction(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	err := db.AfterCommit(func(context.Context) error { return nil })
+	if err == nil {
+		t.Fatal("expected AfterCommit to refuse a handle with no transaction")
+	}
+	if !strings.Contains(err.Error(), "WithTx") {
+		t.Errorf("error %q should name WithTx", err)
+	}
+
+	if err := sqlb.AfterCommit(context.Background(), func(context.Context) error { return nil }); err == nil {
+		t.Fatal("expected the context form to refuse a bare context")
+	}
+}
+
+func TestAfterCommitRefusedOnceDrained(t *testing.T) {
+	h := txHarness(t)
+	db := sqlb.New(h.db)
+
+	var escaped *sqlb.DB
+	if err := db.WithTx(context.Background(), func(_ context.Context, tx *sqlb.DB) error {
+		escaped = tx
+		return nil
+	}); err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	err := escaped.AfterCommit(func(context.Context) error {
+		t.Error("a callback registered after the drain still ran")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected AfterCommit to refuse a transaction that had already committed")
+	}
+}
+
 // execOnly implements Executor and nothing else, standing in for the tracer
 // wrapper the README documents.
 type execOnly struct{ inner sqlb.Executor }

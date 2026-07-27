@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // Beginner is the subset of *sql.DB that opens a transaction. It is asserted
@@ -42,6 +43,114 @@ type DB struct {
 	// inTx records that this handle is already inside a transaction, so a
 	// nested WithTx joins it rather than opening a second one.
 	inTx bool
+	// tx is the shared state of the transaction this handle runs in, nil
+	// outside one. A nested WithTx hands back the same handle, so callbacks
+	// registered by an inner block accumulate here and drain once.
+	tx *txState
+}
+
+// txState is what a transaction accumulates besides its statements.
+type txState struct {
+	mu          sync.Mutex
+	afterCommit []func(context.Context) error
+	drained     bool
+}
+
+// ErrAfterCommit reports that the transaction committed but an after-commit
+// callback failed. The distinction matters: the write is durable and must not
+// be retried, while the side effect did not happen and may need to be.
+//
+//	if err := db.WithTx(ctx, placeOrder); err != nil {
+//	    if errors.Is(err, sqlb.ErrAfterCommit) {
+//	        // The order exists. Something downstream of it did not fire.
+//	        log.Error("order placed, notification failed", "err", err)
+//	    } else {
+//	        return err // The order does not exist.
+//	    }
+//	}
+var ErrAfterCommit = errors.New("sqlb: transaction committed, but an after-commit callback failed")
+
+// AfterCommit registers fn to run once this transaction commits, and not at all
+// if it rolls back.
+//
+// This is where publishing an event, enqueuing a job or invalidating a cache
+// belongs. AfterCreate and its siblings run inside the transaction, which is
+// correct for validation — an error there rolls the write back — and wrong for
+// anything the outside world can observe, because the transaction may still
+// abort after the hook has already told the world it succeeded.
+//
+// Callbacks run in registration order after Commit returns nil, each receiving
+// the context WithTx was called with. That context carries no transaction:
+// there is nothing left to join, and handing back a committed one would be a
+// trap.
+//
+// A failing callback does not stop the others — these are independent side
+// effects, and abandoning the rest leaves more inconsistency rather than less.
+// The failures are joined under ErrAfterCommit.
+func (d *DB) AfterCommit(fn func(context.Context) error) error {
+	if fn == nil {
+		return errors.New("sqlb: AfterCommit called with a nil function")
+	}
+	if d.tx == nil {
+		return errors.New("sqlb: AfterCommit needs a transaction to be after, " +
+			"but this handle is not in one; wrap the write in db.WithTx")
+	}
+	d.tx.mu.Lock()
+	defer d.tx.mu.Unlock()
+	if d.tx.drained {
+		return errors.New("sqlb: AfterCommit called after the transaction had already " +
+			"committed; register it from inside the WithTx function or a hook it runs")
+	}
+	d.tx.afterCommit = append(d.tx.afterCommit, fn)
+	return nil
+}
+
+// AfterCommit registers fn on the transaction carried by ctx. It is the form to
+// use from a hook, which receives a context rather than a handle:
+//
+//	sqlb.On[Order]().AfterCreate(func(ctx context.Context, o *Order) error {
+//	    id := o.ID
+//	    return sqlb.AfterCommit(ctx, func(ctx context.Context) error {
+//	        return events.Publish(ctx, OrderPlaced{ID: id})
+//	    })
+//	})
+//
+// Outside a transaction this is an error rather than an immediate call. "After
+// commit" only means something when sqlb owns the commit; under autocommit the
+// driver has already committed each statement and sqlb cannot say when, so a
+// callback registered from BeforeCreate would fire before the insert and one
+// registered from AfterCreate would fire after it. Running fn at a moment that
+// depends on which hook happened to call it is the kind of quietly-wrong
+// behaviour this codebase refuses elsewhere; the fix is one call, WithTx.
+func AfterCommit(ctx context.Context, fn func(context.Context) error) error {
+	tx, ok := TxFrom(ctx)
+	if !ok {
+		return errors.New("sqlb: AfterCommit found no transaction in the context; " +
+			"the write it should follow must be inside db.WithTx")
+	}
+	return tx.AfterCommit(fn)
+}
+
+// drain runs the registered callbacks and reports their failures together.
+// Called only after a successful commit; a rollback discards them by never
+// reaching here.
+func (s *txState) drain(ctx context.Context) error {
+	s.mu.Lock()
+	fns := s.afterCommit
+	s.afterCommit = nil
+	s.drained = true
+	s.mu.Unlock()
+
+	var errs []error
+	for _, fn := range fns {
+		if err := fn(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrAfterCommit, errors.Join(errs...))
 }
 
 // New returns a handle over exec, using the process-default hook registry — so
@@ -144,7 +253,8 @@ func (d *DB) WithTxOptions(ctx context.Context, opts *sql.TxOptions, fn func(ctx
 		return fmt.Errorf("sqlb: beginning transaction: %w", err)
 	}
 
-	tx := &DB{exec: sqlTx, hooks: d.hooks, inTx: true}
+	state := &txState{}
+	tx := &DB{exec: sqlTx, hooks: d.hooks, inTx: true, tx: state}
 	txCtx := context.WithValue(ctx, txKey{}, tx)
 
 	// A panic must not leave the transaction open, and it must still reach the
@@ -173,7 +283,10 @@ func (d *DB) WithTxOptions(ctx context.Context, opts *sql.TxOptions, fn func(ctx
 		return fmt.Errorf("sqlb: committing transaction: %w", err)
 	}
 	committed = true
-	return nil
+
+	// Drained with ctx rather than txCtx: the transaction is over, so a
+	// callback must not find a live handle through TxFrom.
+	return state.drain(ctx)
 }
 
 // compatibleWithOuter rejects options that the outer transaction cannot honour.

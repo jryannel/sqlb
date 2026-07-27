@@ -101,6 +101,11 @@ func (h *Hooks[T]) BeforeCreate(fn func(context.Context, *T) error) *Hooks[T] {
 // AfterCreate runs on each inserted row, with database defaults populated.
 // It runs inside the caller's transaction, so returning an error rolls the
 // insert back.
+//
+// That makes it right for validation and wrong for anything the outside world
+// can observe — publishing an event, enqueuing a job, invalidating a cache —
+// because the transaction may still abort after the hook has announced a write
+// that then never happened. Register those with [AfterCommit] instead.
 func (h *Hooks[T]) AfterCreate(fn func(context.Context, *T) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -117,7 +122,8 @@ func (h *Hooks[T]) BeforeUpdate(fn func(context.Context, *Update[T]) error) *Hoo
 	return h
 }
 
-// AfterUpdate receives the updated rows.
+// AfterUpdate receives the updated rows. Like AfterCreate it runs inside the
+// transaction; side effects the outside world can see belong in [AfterCommit].
 func (h *Hooks[T]) AfterUpdate(fn func(context.Context, []T) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -133,7 +139,9 @@ func (h *Hooks[T]) BeforeDelete(fn func(context.Context, *Delete[T]) error) *Hoo
 	return h
 }
 
-// AfterDelete receives the number of rows removed.
+// AfterDelete receives the number of rows removed. Like AfterCreate it runs
+// inside the transaction; side effects the outside world can see belong in
+// [AfterCommit].
 func (h *Hooks[T]) AfterDelete(fn func(context.Context, int64) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()

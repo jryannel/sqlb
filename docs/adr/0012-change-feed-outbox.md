@@ -63,6 +63,29 @@ changes rather than domain events — the same trade-off that defers logical
 replication — and would fire during backfills and migrations, which are exactly
 the moments a live view least wants a flood.
 
+### `AfterCommit` exists now, and is not this
+
+The hook this record assumed was built in
+[ADR-0020](0020-transaction-scoped-handle.md), before the outbox. That makes the
+relationship worth stating before someone concludes the feed is done.
+
+`sqlb.AfterCommit` is an **in-process, at-most-once** callback: it runs after
+`Commit` returns nil, and if the process dies in that window the callback never
+runs and nothing records that it did not. That is exactly the failure mode this
+record's Context names, and it is fine for the things people actually reach for
+first — invalidating a local cache, logging, enqueuing to a broker that is
+itself allowed to lose work.
+
+It is not a change feed, and using it as one silently loses events.
+
+What it changes here is the outbox's shape. The dispatcher fans out *to*
+`AfterCommit` callbacks was the original phrasing; the accurate version is that
+writing the outbox row happens inside the transaction like any other write, and
+`AfterCommit` is how the *doorbell* gets rung in-process if we ever want that
+without a trigger. The outbox becomes one registered callback among others
+rather than the only way to observe a write, which is the property worth having:
+a consumer that does not need durability should not have to run a dispatcher.
+
 ## Consequences
 
 **What this buys.** Delivery is at-least-once and survives a process restart,
@@ -117,8 +140,11 @@ what consumers build against.
 ## Alternatives considered
 
 **In-process `AfterCommit` publish.** Simplest, and adequate for a single
-process that may drop events. Rejected because losing a change event silently
-desynchronises every live view.
+process that may drop events. Rejected as the *change feed* because losing a
+change event silently desynchronises every live view — but built anyway, as a
+primitive in its own right, since plenty of side effects are allowed to be
+at-most-once and were previously forced to run inside the transaction. See the
+section above for why having it does not make this record redundant.
 
 **Logical replication from the start.** Captures changes sqlb did not make,
 which is a real advantage. Deferred: it requires a replication slot, careful
@@ -150,3 +176,7 @@ migrations.
   "is this at the DB level or the Go API level?" had no clear answer in the
   record, and the two halves of `LISTEN/NOTIFY` behave differently behind a
   pooler.
+- 2026-07-27 — `sqlb.AfterCommit` shipped ahead of this
+  ([ADR-0020](0020-transaction-scoped-handle.md)). Said plainly that it is
+  at-most-once and in-process, so it is not a change feed, and corrected the
+  Decision's implication that the dispatcher fans out *to* it.
