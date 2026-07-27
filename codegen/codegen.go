@@ -48,16 +48,21 @@ type Options struct {
 	// Package is the package clause for generated Go. Required.
 	Package string
 
-	// ModelsFile, ColumnsFile and ManifestFile override the default names.
-	// Set one to "-" to skip that artefact.
+	// ModelsFile, ColumnsFile, ManifestFile and RestFile override the default
+	// names. Set one to "-" to skip that artefact.
+	//
+	// RestFile is written only when the schema exposes at least one table, so a
+	// package with no REST surface does not acquire a dependency on huma.
 	ModelsFile   string
 	ColumnsFile  string
 	ManifestFile string
+	RestFile     string
 }
 
 func (o Options) modelsFile() string   { return orDefault(o.ModelsFile, "models_gen.go") }
 func (o Options) columnsFile() string  { return orDefault(o.ColumnsFile, "columns_gen.go") }
 func (o Options) manifestFile() string { return orDefault(o.ManifestFile, "sqlb.json") }
+func (o Options) restFile() string     { return orDefault(o.RestFile, "rest_gen.go") }
 
 func orDefault(v, def string) string {
 	if v == "" {
@@ -158,6 +163,17 @@ func render(opts Options) (map[string][]byte, error) {
 		}
 		files[name] = src
 	}
+	if name := opts.restFile(); name != "-" {
+		src, err := renderREST(opts)
+		if err != nil {
+			return nil, err
+		}
+		// A nil result means nothing is exposed, which is not an error and
+		// should not leave an empty file behind.
+		if src != nil {
+			files[name] = src
+		}
+	}
 	if name := opts.manifestFile(); name != "-" {
 		src, err := opts.Registry.BuildManifest().JSON()
 		if err != nil {
@@ -193,8 +209,23 @@ func header(pkg string, imports []string) *bytes.Buffer {
 		if len(imports) == 1 {
 			fmt.Fprintf(&b, "import %q\n", imports[0])
 		} else {
+			// Standard library first, then everything else, separated by a
+			// blank line. gofmt sorts within a group but will not split one,
+			// so the grouping has to be written here or the output looks
+			// unlike hand-written Go.
 			fmt.Fprintln(&b, "import (")
+			var external []string
 			for _, imp := range imports {
+				if strings.Contains(strings.SplitN(imp, "/", 2)[0], ".") {
+					external = append(external, imp)
+					continue
+				}
+				fmt.Fprintf(&b, "\t%q\n", imp)
+			}
+			if len(external) > 0 && len(external) < len(imports) {
+				fmt.Fprintln(&b)
+			}
+			for _, imp := range external {
 				fmt.Fprintf(&b, "\t%q\n", imp)
 			}
 			fmt.Fprintln(&b, ")")

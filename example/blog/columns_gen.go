@@ -3,8 +3,9 @@
 package blog
 
 import (
-	"github.com/jryannel/sqlb"
 	"time"
+
+	"github.com/jryannel/sqlb"
 )
 
 type authorColumns struct {

@@ -136,10 +136,16 @@ func Apply[T any](b *sqlb.Builder[T], q *Query) *sqlb.Builder[T] {
 }
 
 // reserved parameter names, which never name a column.
+//
+// "count" is reserved but unused here: it asks a list endpoint for a total row
+// count, which costs a second query and so is the REST layer's decision rather
+// than the parser's. It is listed anyway, because a column named `count` would
+// otherwise shadow it and the collision would only surface once someone asked
+// for a total.
 var reserved = map[string]bool{
 	"select": true, "sort": true, "order": true, "search": true,
 	"expand": true, "limit": true, "offset": true, "page": true,
-	"per_page": true, "or": true, "and": true,
+	"per_page": true, "or": true, "and": true, "count": true,
 }
 
 // Parse compiles URL query parameters into a Query.
@@ -353,7 +359,7 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 		}
 		vals := make([]any, 0, len(parts))
 		for _, part := range parts {
-			v, err := coerce(unquote(part), col.Type)
+			v, err := Coerce(unquote(part), col.Type)
 			if err != nil {
 				p.errf(param, part, "%v", err)
 				return sqlb.Pred{}, false
@@ -371,12 +377,12 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 			p.errf(param, raw, "operator \"between\" needs exactly two values, got %d", len(parts))
 			return sqlb.Pred{}, false
 		}
-		lo, err := coerce(unquote(parts[0]), col.Type)
+		lo, err := Coerce(unquote(parts[0]), col.Type)
 		if err != nil {
 			p.errf(param, parts[0], "%v", err)
 			return sqlb.Pred{}, false
 		}
-		hi, err := coerce(unquote(parts[1]), col.Type)
+		hi, err := Coerce(unquote(parts[1]), col.Type)
 		if err != nil {
 			p.errf(param, parts[1], "%v", err)
 			return sqlb.Pred{}, false
@@ -384,7 +390,7 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 		return f.Between(lo, hi), true
 
 	default:
-		v, err := coerce(unquote(value), col.Type)
+		v, err := Coerce(unquote(value), col.Type)
 		if err != nil {
 			p.errf(param, value, "%v", err)
 			return sqlb.Pred{}, false
@@ -643,9 +649,13 @@ func (p *parser) parsePagination(values url.Values, q *Query) {
 	}
 }
 
-// coerce converts a query-string token into the Go type of its column, so that
-// the driver binds an int as an int rather than as text.
-func coerce(s string, t reflect.Type) (any, error) {
+// Coerce converts a URL token into the Go type of its column, so that the
+// driver binds an int as an int rather than as text.
+//
+// It is exported because a path segment needs the same treatment as a query
+// parameter: `GET /posts/{id}` has to bind a uuid as a uuid, since Postgres
+// will not compare one to text. Parse uses it for every filter value.
+func Coerce(s string, t reflect.Type) (any, error) {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}

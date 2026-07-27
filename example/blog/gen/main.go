@@ -19,11 +19,16 @@ import (
 
 func main() {
 	check := flag.Bool("check", false, "report stale generated files instead of writing them")
+	// go generate runs a directive with the working directory set to the
+	// package that declares it — blogschema, not the module root — so the
+	// output directory has to be given rather than assumed. The default suits
+	// a run from the root; the directive in blogschema passes "..".
+	dir := flag.String("dir", "example/blog", "output directory, relative to the working directory")
 	flag.Parse()
 
 	opts := codegen.Options{
 		Registry: schema.DefaultRegistry(),
-		Dir:      "example/blog",
+		Dir:      *dir,
 		Package:  "blog",
 	}
 

@@ -174,8 +174,72 @@ and the escape hatch that would require reopens the hole anyway.
 | `schema` | The declarative DSL, plus validation that reports every authoring mistake at once |
 | `.` (`sqlb`) | Expression AST, Postgres compiler, generic query builder, model reflection, mutations, hooks |
 | `filter` | URL query grammar → the same predicate AST, validated against capabilities |
+| `rest` | Mounts a model on a Huma API, with an OpenAPI operation built from its capabilities |
 | `describe.go` | Runtime column metadata, for using sqlb without the schema DSL or codegen |
-| `example/blog` | A worked schema, the models codegen will emit from it, and an end-to-end list handler |
+| `example/blog` | A worked schema, everything codegen emits from it, and an assembled server |
+
+## The REST server
+
+`rest` takes a `huma.API`, not a router, so chi, gin, echo or `net/http` — and
+all of that router's middleware — stays your choice:
+
+```go
+router := chi.NewRouter()
+router.Use(middleware.RequestID, middleware.Recoverer, yourAuth)
+
+api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
+if err := blog.Register(api, db); err != nil {   // generated from the schema
+    return err
+}
+http.ListenAndServe(":8080", router)
+```
+
+`blog.Register` is one `rest.Resource` call per exposed table. The handlers are
+not generated — `rest.Resource[T, C, U]` is one generic function — but the
+OpenAPI document *is* per resource, built from each column's capabilities:
+
+```yaml
+# GET /posts, from the schema above
+parameters:
+  - name: status              # declared Filterable
+    schema: {type: array, items: {type: string}}
+    description: "Filter on `status`. Written `operator.value`, or a bare value
+                  for equality. Operators: eq, ne, gt, gte, lt, lte, in, nin,
+                  between, like, ilike, contains, startswith, endswith."
+  - name: sort                # enumerated, in both directions
+    schema: {type: array, items: {enum: [title, -title, status, -status, ...]}}
+```
+
+`password_hash` is `Hidden`, so it appears nowhere: not as a parameter, not in
+the response schema, and not in the allow-list of a rejection.
+
+A rejection says what would have worked ([ADR-0011](docs/adr/0011-actionable-errors.md)),
+as data rather than prose:
+
+```json
+{
+  "title": "Bad Request", "status": 400,
+  "detail": "one or more query parameters were rejected",
+  "errors": [{
+    "message": "column is not sortable",
+    "location": "query.sort", "value": "body",
+    "allowed": ["title", "status", "view_count", "published_at", "created_at"]
+  }]
+}
+```
+
+A list response pages without counting. `has_more` comes from reading one row
+beyond the page; `total` costs a second query and so is opt-in, with
+`?count=exact`:
+
+```json
+{"items": [...], "page": 1, "per_page": 20, "has_more": true}
+```
+
+Because reads go through `sqlb.Query[T]`, a `BeforeQuery` hook registered on the
+model applies to them — which is why registration is generic over the model
+rather than reflective. Tenant scoping is a startup registration, not something
+each handler remembers.
 
 ## Filter grammar
 
@@ -208,9 +272,12 @@ Working and tested:
   ordering, pagination, locking, raw-SQL escape hatch with placeholder renumbering
 - Generic query builder over struct tags; `Collect[R]` for aggregate shapes
 - Typed column facade (`Col[T]`, `TextCol[T]`) and a typed update wrapper
-- Code generation for models, the typed facade and the manifest (`codegen`).
-  The blog example is generated from its schema, so every behaviour test in it
-  is a test of the generator's output
+- Code generation for models, the typed facade, the REST request bodies and the
+  manifest (`codegen`). The blog example is generated from its schema, so every
+  behaviour test in it is a test of the generator's output
+- REST surface over [Huma](https://huma.rocks) (`rest`): list, read, create,
+  patch and delete, driven by the schema's `Expose` declaration, with an OpenAPI
+  document built from each column's capabilities
 - Insert (with default-omission and upsert), Update, Delete, all with a guard
   against unscoped mutations
 - Hooks: BeforeQuery / Before+AfterCreate / Before+AfterUpdate / Before+AfterDelete
@@ -236,10 +303,10 @@ Not built yet, in the order they matter:
    reading `pg_catalog`, or a shadow database replaying the existing history.
    Until one of those exists, both sides of a diff have to be hand-written
    registries.
-2. **REST handlers and OpenAPI** — the generator emits models and the typed
-   facade today, not handlers.
+2. **TypeScript client** — the OpenAPI document is generated and precise; the
+   client derived from it is not written yet.
 3. **`?expand`** — the grammar validates relation names; the joins are not
-   performed yet.
+   performed yet, so `rest.Options.Expandable` should stay empty.
 4. **Change feed** — transactional outbox written in the same transaction as
    the mutation, tailed via `LISTEN/NOTIFY` and fanned out to `AfterCommit`
    hooks and SSE/WebSocket subscribers.

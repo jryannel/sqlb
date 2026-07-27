@@ -11,12 +11,12 @@ going, see the [vision](vision.md).
 ```
   blogschema/schema.go          ← you edit this
          │
-         │  sqlb generate                                    (not built yet)
-         ├──────────────▶ migrations/*.sql
+         │  go generate ./...           (a generator main, not a CLI)
+         ├──────────────▶ migrations/*.sql                    (not wired up yet)
          ├──────────────▶ models.go        db + sqlb struct tags
          ├──────────────▶ columns.go       typed column facade
-         ├──────────────▶ rest.go          per-resource handlers
-         └──────────────▶ openapi.json ──▶ TypeScript client
+         ├──────────────▶ rest_gen.go      request bodies + registration
+         └──────────────▶ openapi.json ──▶ TypeScript client   (client not built)
 
                     ┌─────────────────────────────┐
    Go code ────────▶│                             │
@@ -45,7 +45,8 @@ Almost everything else follows from those two.
 | `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`. | stdlib only |
 | `filter` | URL grammar → predicates, validated against model capabilities. | `sqlb` |
 | `migrate` | Diffs two schemas into changes, renders them as Postgres DDL, and writes migration files for goose, golang-migrate or plain SQL. Does not apply them. | `schema` |
-| `codegen` | Generates models, the typed column facade and the manifest. `Check` is the dry-run mode wired into CI. | `schema` |
+| `codegen` | Generates models, the typed column facade, the REST request bodies and the manifest. `Check` is the dry-run mode wired into CI. | `schema` |
+| `rest` | Mounts a model on a Huma API: handlers, and an OpenAPI operation built from the model's capabilities. | `sqlb`, `filter`, huma |
 | `example/blog` | A worked schema plus the artefacts codegen must produce. | all of the above |
 
 The dependency direction matters: `schema` is a leaf that nothing imports at
@@ -62,13 +63,21 @@ Postgres type mapping lives there rather than beside the query compiler — a
 `Format` decides what a *runner* wants a file to look like, and the DDL layer
 decides what the *database* wants a statement to look like.
 
-`sqlb` has no third-party dependencies. `Executor` is the two-method subset of
-`*sql.DB` that the engine needs, so pgx works through its stdlib adapter and any
-instrumenting wrapper works unchanged.
+`sqlb` has no third-party dependencies, and neither does anything else on the
+request path. `rest` is the single exception: it depends on huma, and nothing
+depends on `rest`, so importing the engine still costs nothing. `mise run
+deps-check` proves this per package rather than per module, and ends by checking
+that it can still see huma in `rest` — a guard that cannot fail is worse than no
+guard ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+
+`Executor` is the two-method subset of `*sql.DB` that the engine needs, so pgx
+works through its stdlib adapter and any instrumenting wrapper works unchanged.
+`rest` takes a `huma.API`, not a router, so the choice of chi, gin, echo or
+`net/http` — and all of that router's middleware — stays the application's.
 
 ## Request path
 
-A list request through a generated handler:
+A list request through `rest.Resource`:
 
 1. **Parse.** `filter.Parse` reads the query string against the model. Unknown
    parameters, undeclared capabilities and uncoercible values are collected into
@@ -206,5 +215,7 @@ working is worse than no test, so those are exercised as real build attempts.
   and nothing yet produces one from a database — neither `sqlb import` nor the
   shadow database that would replay the existing migration history. Both sides
   have to be hand-written until one exists.
-- No REST handlers, no OpenAPI document, and no change feed. See the
+- No change feed, and no generated TypeScript client. See the
   [vision](vision.md).
+- The REST layer does not implement `?expand`, so `rest.Options.Expandable`
+  should stay empty until the join exists.

@@ -101,26 +101,57 @@ exit $status
 '''
 
 [tasks.deps-check]
-description = "Fail if a third-party module dependency has crept in. sqlb depends on the standard library only, on purpose: it is a library, and every dependency it takes is one its consumers inherit."
+description = "Fail if a third-party dependency has crept into the engine. Everything on the request path depends on the standard library only, on purpose: it is a library, and every dependency it takes is one its consumers inherit. Exactly two packages are exempt — `rest`, which is an adapter onto huma, and the generated example that mounts it — so importing `sqlb` still costs nothing."
 run = '''
-# The command's own failure must fail the check. Two earlier versions of this
-# task reported success while checking nothing: the first grepped package paths
-# and matched the standard library's vendored golang.org/x packages, and the
-# second let `go list` error to stderr, leaving the result empty and therefore
-# "clean". A guard that cannot fail is worse than no guard.
-if ! out=$(go list -m all 2>&1); then
-  echo "deps-check: could not resolve modules, so nothing was verified:"
-  echo "$out" | sed 's/^/  /'
+# The check the module-wide version could not express: sqlb now has an HTTP
+# adapter, so "zero dependencies anywhere" is no longer the invariant. What must
+# hold is that a consumer importing the engine inherits nothing.
+#
+# ADR-0016: a guard must be proven in both directions, so this one ends by
+# checking that it *does* fire for `rest`. Three earlier guards in this repo
+# reported success while verifying nothing.
+allowed='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
+
+# third_party lists the non-stdlib, non-sqlb packages one package imports,
+# transitively. A stdlib path has no dot in its first element, which is what
+# distinguishes it from a module path — and is why an earlier version that
+# grepped for "golang.org/x" matched the standard library's own vendored copies.
+third_party() {
+  go list -deps "$1" | grep -E '^[^/]+\.[^/]+/' | grep -v '^github.com/jryannel/sqlb' | sort -u
+}
+
+if ! pkgs=$(go list ./... 2>&1); then
+  echo "deps-check: could not resolve packages, so nothing was verified:"
+  printf '%s\n' "$pkgs" | sed 's/^/  /'
   exit 1
 fi
-# Line 1 is the main module; anything after it is a real dependency.
-deps=$(printf '%s\n' "$out" | tail -n +2)
-if [ -n "$deps" ]; then
-  echo "unexpected third-party dependencies:"
-  printf '%s\n' "$deps" | sed 's/^/  /'
+
+checked=0
+fail=0
+for pkg in $pkgs; do
+  case " $allowed " in *" $pkg "*) continue ;; esac
+  checked=$((checked + 1))
+  if deps=$(third_party "$pkg") && [ -n "$deps" ]; then
+    echo "$pkg has third-party dependencies:"
+    printf '%s\n' "$deps" | sed 's/^/  /'
+    fail=1
+  fi
+done
+
+if [ "$checked" -eq 0 ]; then
+  echo "deps-check: no packages were checked, so nothing was verified"
   exit 1
 fi
-echo "deps-check: standard library only"
+[ "$fail" -eq 0 ] || exit 1
+
+# The positive control. If this stops reporting huma, the check above has
+# stopped being able to see a dependency at all and its silence means nothing.
+if ! third_party github.com/jryannel/sqlb/rest | grep -q '^github.com/danielgtaylor/huma'; then
+  echo "deps-check: the check cannot see a dependency it should — rest imports huma but none was found"
+  exit 1
+fi
+
+echo "deps-check: $checked packages, standard library only"
 '''
 
 [tasks.generate]

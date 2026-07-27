@@ -11,9 +11,10 @@ import (
 // renderModels emits one struct per table, plus a named string type for each
 // enum column.
 //
-// The struct tags are the contract with the runtime: `db` names the column and
-// `sqlb` carries the capabilities the schema declared. Everything the engine
-// knows about a model at runtime comes from here.
+// The struct tags are the contract with the runtime: `db` names the column,
+// `sqlb` carries the capabilities the schema declared, and `json` names the
+// property the REST layer serialises it as. Everything the engine knows about a
+// model at runtime comes from here.
 func renderModels(opts Options) ([]byte, error) {
 	tables := opts.Registry.Tables()
 
@@ -59,7 +60,8 @@ func renderModels(opts Options) ([]byte, error) {
 		fmt.Fprintf(b, "type %s struct {\n", typeName)
 		for _, f := range t.Fields() {
 			d := f.Desc()
-			fmt.Fprintf(b, "\t%s %s `db:%q%s`", GoName(d.Name), goType(typeName, d), d.Name, capTag(d))
+			fmt.Fprintf(b, "\t%s %s `db:%q %s%s`",
+				GoName(d.Name), goType(typeName, d), d.Name, jsonTag(d), capTag(d))
 			if c := d.Comment; c != "" {
 				fmt.Fprintf(b, " // %s", c)
 			}
@@ -87,6 +89,19 @@ func goType(typeName string, d *schema.FieldDesc) string {
 		return enum
 	}
 	return d.GoType()
+}
+
+// jsonTag renders the `json` struct tag.
+//
+// A hidden column gets `json:"-"`. The REST layer already excludes it from
+// every projection, but a hidden column that could still be marshalled is one
+// stray json.Marshal away from leaking — a debug log, a hand-written handler —
+// and the tag closes that off at the type.
+func jsonTag(d *schema.FieldDesc) string {
+	if d.Hidden {
+		return `json:"-"`
+	}
+	return fmt.Sprintf("json:%q", d.Name)
 }
 
 // capTag renders the `sqlb` struct tag, omitted entirely when a column has no
