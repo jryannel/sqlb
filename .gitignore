@@ -1,0 +1,19 @@
+# Build output
+/sqlb
+/dist/
+*.exe
+
+# Test and coverage artefacts
+*.test
+*.out
+coverage.*
+
+# Local environment
+.env
+.env.local
+
+# Editor and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
