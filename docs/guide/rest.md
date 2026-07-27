@@ -238,6 +238,10 @@ own. Where a hook enforces a boundary the expansion has to respect, the schema
 has to enforce it too: `example/tasks` keeps a task and its list in the same
 workspace with a composite foreign key, not with the hook.
 
+[ADR-0025](../adr/0025-expansion-is-one-statement.md) records why it is one
+statement, why the columns are listed rather than taken wholesale, and what
+would make either worth revisiting.
+
 ## Next
 
 - [Queries and hooks](queries-and-hooks.md) — the hooks these handlers run

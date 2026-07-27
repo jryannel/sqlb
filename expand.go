@@ -39,6 +39,15 @@ import (
 // because `Hidden` has to hold across a join. A hidden column on the target is
 // hidden when the target is expanded, and `row_to_json` of the whole row would
 // quietly carry a password hash into a response.
+//
+// # Why the base table is qualified
+//
+// Both arguments above are settled; a third was not knowable until Postgres saw
+// the SQL. Once a second table is in the statement, an unqualified column is
+// ambiguous rather than merely unclear — the compiler resolves bare names to the
+// base table for a joined query, and only for a joined query. See compiler.column.
+//
+// ADR-0025 records all three, and the reason the third one is the useful one.
 
 // expandPrefix marks a result column as an expanded relation. It is not a legal
 // column name in any schema this generates, so it cannot collide with one.
