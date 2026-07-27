@@ -33,16 +33,18 @@ export default defineConfig({
           items: [{ autogenerate: { directory: "guide" } }],
         },
         {
+          label: "Decision records",
+          // Collapsed: 23 records would otherwise push the guide off the screen,
+          // and someone arriving at the site is reading the guide first.
+          collapsed: true,
+          items: [{ autogenerate: { directory: "adr" } }],
+        },
+        {
           label: "Reference",
           items: [
             {
               label: "API reference (pkg.go.dev)",
               link: "https://pkg.go.dev/github.com/jryannel/sqlb",
-              attrs: { target: "_blank" },
-            },
-            {
-              label: "Decision records",
-              link: "https://github.com/jryannel/sqlb/tree/main/docs/adr",
               attrs: { target: "_blank" },
             },
             {

@@ -349,6 +349,6 @@ npm run build
 '''
 
 [tasks.site-check]
-description = "Report whether docs/guide can be published as it stands, without building. Fails on a link the rewriter has no rule for, on a page with no H1 to take a title from, and on a page missing from the sidebar order. Needs no npm install."
+description = "Report whether docs/guide and docs/adr can be published as they stand, without building. Fails on a link the rewriter has no rule for, on a page with no H1 to take a title from, and on a page missing from the sidebar order. Needs no npm install."
 dir = "site"
 run = "node scripts/sync-docs.mjs --check"

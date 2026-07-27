@@ -3,6 +3,12 @@ dist/
 node_modules/
 .astro/
 
-# Generated from docs/guide by scripts/sync-docs.mjs on every build. The source
-# of truth is docs/guide; committing a second copy would invite editing it.
-src/content/docs/guide/
+# Generated from docs/ by scripts/sync-docs.mjs on every build. The source of
+# truth is docs/guide and docs/adr; committing a second copy would invite
+# editing it.
+#
+# Every subdirectory, not a list of them: each entry in that script's SOURCES
+# array writes one, so naming them here would be a second place to update and
+# the failure — a generated page committed by accident — is silent.
+# Hand-written pages sit directly in src/content/docs/ and are unaffected.
+src/content/docs/*/
