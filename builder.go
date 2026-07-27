@@ -39,6 +39,7 @@ type joinClause struct {
 // Query starts a SELECT against the table mapped by T.
 func Query[T any]() *Builder[T] {
 	m := ModelOf[T]()
+	m.markInUse()
 	return &Builder[T]{model: m, alias: m.Table}
 }
 

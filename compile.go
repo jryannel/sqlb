@@ -32,8 +32,15 @@ func (Postgres) QuoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-// DefaultDialect is used by every builder that does not override it.
-var DefaultDialect Dialect = Postgres{}
+// defaultDialect is used by every statement that does not override it.
+//
+// It is deliberately not exported and not settable. A package-level mutable
+// dialect would be read on the compile path of every query while being
+// writable from anywhere, which is a data race with no legitimate trigger:
+// sqlb targets Postgres only (ADR-0001), so there is nothing to switch to
+// globally. A caller who genuinely needs a different dialect for one statement
+// uses UseDialect on that statement, which is scoped and race-free.
+var defaultDialect Dialect = Postgres{}
 
 // compiler accumulates SQL text and its bind parameters.
 type compiler struct {
@@ -45,7 +52,7 @@ type compiler struct {
 
 func newCompiler(d Dialect) *compiler {
 	if d == nil {
-		d = DefaultDialect
+		d = defaultDialect
 	}
 	return &compiler{d: d}
 }

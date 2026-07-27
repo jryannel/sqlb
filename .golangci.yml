@@ -1,0 +1,40 @@
+# Pinned to golangci-lint 2.x (see mise.toml for why the version is pinned).
+version: "2"
+
+linters:
+  enable:
+    - errcheck      # an unchecked error is the usual cause of a silent failure
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - errorlint     # %w and errors.Is/As used correctly
+    - copyloopvar
+    - makezero
+    - nilerr
+    - unconvert
+    - misspell
+
+  settings:
+    errcheck:
+      # A bad type assertion panics with a message that says nothing about
+      # which invariant broke, so require the comma-ok form.
+      check-type-assertions: true
+      # `_ =` is the idiom for "considered and deliberately ignored"; flagging
+      # it removes the only way to say that.
+      check-blank: false
+      exclude-functions:
+        # Redundant with rows.Err(), which every read path already checks.
+        - (*database/sql.Rows).Close
+
+  exclusions:
+    rules:
+      # Test helpers legitimately ignore errors from the fake driver.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

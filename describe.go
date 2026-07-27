@@ -35,9 +35,20 @@ import (
 // Call it during initialisation, before any query runs. It mutates the cached
 // model in place and does not lock, because doing so would put a mutex on the
 // read path of every query to pay for something that happens once at startup.
-// Naming a column that does not exist panics, listing the ones that do.
+// Calling it after the first statement has been built against the model panics
+// rather than racing. Naming a column that does not exist panics too, listing
+// the ones that do.
 func Describe[T any]() *Description[T] {
-	return &Description[T]{m: ModelOf[T]()}
+	m := ModelOf[T]()
+	if m.InUse() {
+		// Mutating the cached model now would race against every in-flight
+		// query, and a half-applied description is a capability silently
+		// missing rather than a visible failure.
+		panic(fmt.Sprintf(
+			"sqlb: Describe[%s] called after a statement was already built against it; "+
+				"describe models during initialisation, before any query runs", m.Type))
+	}
+	return &Description[T]{m: m}
 }
 
 // Description is a set of pending metadata changes to a model.

@@ -45,7 +45,9 @@ func TestListHandler(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		q, err := filter.Parse(r.URL.Query(), opts)
 		if err != nil {
-			err.(filter.Errors).WriteHTTP(w)
+			if !filter.WriteError(w, err) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 		sql, _, err := filter.Apply(sqlb.Query[blog.Post](), q).SQL()

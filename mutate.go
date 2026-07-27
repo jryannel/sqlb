@@ -37,7 +37,9 @@ type conflictClause struct {
 // InsertRows starts an INSERT for one or more rows. The rows are pointers so
 // that hooks and returned database values can be written back into them.
 func InsertRows[T any](rows ...*T) *Insert[T] {
-	ins := &Insert[T]{model: ModelOf[T](), rows: rows}
+	m := ModelOf[T]()
+	m.markInUse()
+	ins := &Insert[T]{model: m, rows: rows}
 	if len(rows) == 0 {
 		ins.err = errors.New("sqlb: InsertRows called with no rows")
 	}
@@ -256,7 +258,9 @@ type assignment struct {
 
 // UpdateRows starts an UPDATE.
 func UpdateRows[T any]() *Update[T] {
-	return &Update[T]{model: ModelOf[T]()}
+	m := ModelOf[T]()
+	m.markInUse()
+	return &Update[T]{model: m}
 }
 
 // Set assigns a value to a column.
@@ -391,7 +395,9 @@ type Delete[T any] struct {
 
 // DeleteRows starts a DELETE.
 func DeleteRows[T any]() *Delete[T] {
-	return &Delete[T]{model: ModelOf[T]()}
+	m := ModelOf[T]()
+	m.markInUse()
+	return &Delete[T]{model: m}
 }
 
 // Where narrows the affected rows.

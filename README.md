@@ -310,11 +310,20 @@ Each one carries both a **What would change our mind** section and a **Cost of
 change** section, so revising a decision is a trade someone can weigh rather
 than a rule they have to argue against.
 
-## Testing
+## Development
+
+Tool versions are pinned in `mise.toml`, so local runs and CI use the same Go
+and the same linter.
 
 ```
-go test ./...
+mise run test          # the inner loop; no Docker or Postgres needed
+mise run ci            # the full gate, same as .github/workflows/ci.yml
+mise run bisect-check  # verify every commit builds on its own
+mise tasks             # everything else
 ```
+
+The engine's tests run against an in-memory `database/sql` driver, so hooks,
+scanning and the mutation paths are covered end to end without a live database.
 
 The engine's tests run against an in-memory `database/sql` driver, so hooks,
 scanning and the mutation paths are covered end to end without a live database.

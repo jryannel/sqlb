@@ -1,0 +1,44 @@
+# Mirrors `mise run ci`. Tool versions come from mise.toml, so a green run here
+# and a green run locally use the same Go and the same golangci-lint — the whole
+# reason those versions are pinned.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      # Individually rather than via `mise run ci`, so a failure names the gate
+      # that failed in the job summary instead of one opaque step.
+      - run: mise run fmt-check
+      - run: mise run vet
+      - run: mise run lint
+      - run: mise run tidy-check
+      - run: mise run deps-check
+      - run: mise run test-race
+
+  bisect:
+    # Linear in the number of commits, so it runs on pull requests only. It is
+    # the guard that silently rots: without it, "every commit builds" decays to
+    # "HEAD builds" within a few merges.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - run: BASE=origin/${{ github.base_ref }}..HEAD mise run bisect-check

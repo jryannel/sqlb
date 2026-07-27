@@ -1,0 +1,140 @@
+# sqlb tasks and pinned toolchain.
+#
+#   mise tasks          list what is here
+#   mise run ci         the full gate, same as .github/workflows/ci.yml
+#   mise run test       the inner loop
+#
+# Tool versions are pinned so every checkout and CI runner builds and lints with
+# the same toolchain.
+[tools]
+# Matches studio-apps, so sqlb is developed against the toolchain it will be
+# consumed by. go.mod deliberately declares a *lower* minimum (1.25): a library
+# should not force its consumers onto a newer toolchain than it needs.
+go = "1.26.4"
+# Pinned for the same reason as in studio-apps: a newer golangci-lint can add or
+# redefine analyzers and turn a green tree red, or quietly stop reporting a real
+# finding. Bump deliberately, then run `mise run lint`.
+golangci-lint = "2.12.2"
+
+# ---- Tasks ----
+
+[tasks.test]
+description = "Run all tests. No Docker and no Postgres needed: the engine's tests run against an in-memory database/sql driver, so hooks, scanning and the mutation paths are covered without a live database."
+run = "go test ./..."
+
+[tasks.test-race]
+description = "Run all tests with the race detector. Worth running before touching anything that caches per-type state — the model cache, the hook registry, or Describe, which mutates a cached model on purpose and is only safe at init."
+run = "go test -race ./..."
+
+[tasks.cover]
+description = "Run tests with coverage and print the per-function summary. Writes coverage.out, which is gitignored."
+run = '''
+go test -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out | tail -20
+'''
+
+[tasks.vet]
+description = "go vet across the module"
+run = "go vet ./..."
+
+[tasks.lint]
+description = "golangci-lint across the module"
+run = "golangci-lint run"
+
+[tasks.lint-fix]
+description = "golangci-lint --fix (applies autofixes; review the diff)"
+run = "golangci-lint run --fix"
+
+[tasks.fmt]
+description = "gofmt -w across the module"
+run = "gofmt -w ."
+
+[tasks.fmt-check]
+description = "Fail if anything needs gofmt. Run `mise run fmt` to fix."
+run = '''
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "needs gofmt:"; echo "$unformatted"; exit 1
+fi
+'''
+
+[tasks.tidy]
+description = "go mod tidy"
+run = "go mod tidy"
+
+[tasks.tidy-check]
+description = "Fail if go.mod or go.sum would change. Catches a dependency added but not tidied."
+run = '''
+cp go.mod go.mod.bak
+[ -f go.sum ] && cp go.sum go.sum.bak
+go mod tidy
+status=0
+diff -q go.mod go.mod.bak >/dev/null || { echo "go.mod is not tidy; run: mise run tidy"; status=1; }
+mv go.mod.bak go.mod
+[ -f go.sum.bak ] && mv go.sum.bak go.sum
+exit $status
+'''
+
+[tasks.deps-check]
+description = "Fail if a third-party module dependency has crept in. sqlb depends on the standard library only, on purpose: it is a library, and every dependency it takes is one its consumers inherit."
+run = '''
+# The command's own failure must fail the check. Two earlier versions of this
+# task reported success while checking nothing: the first grepped package paths
+# and matched the standard library's vendored golang.org/x packages, and the
+# second let `go list` error to stderr, leaving the result empty and therefore
+# "clean". A guard that cannot fail is worse than no guard.
+if ! out=$(go list -m all 2>&1); then
+  echo "deps-check: could not resolve modules, so nothing was verified:"
+  echo "$out" | sed 's/^/  /'
+  exit 1
+fi
+# Line 1 is the main module; anything after it is a real dependency.
+deps=$(printf '%s\n' "$out" | tail -n +2)
+if [ -n "$deps" ]; then
+  echo "unexpected third-party dependencies:"
+  printf '%s\n' "$deps" | sed 's/^/  /'
+  exit 1
+fi
+echo "deps-check: standard library only"
+'''
+
+[tasks.bisect-check]
+description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing."
+run = '''
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+fail=0
+for sha in $(git rev-list --reverse ${BASE:-HEAD}); do
+  subject=$(git log -1 --format=%s "$sha")
+  rm -rf "$tmp/wt"; mkdir -p "$tmp/wt"
+  git archive "$sha" | tar -x -C "$tmp/wt"
+  out=$(cd "$tmp/wt" && go build ./... 2>&1 && go vet ./... 2>&1 && go test ./... 2>&1); rc=$?
+  note=""
+  # A commit that has not introduced any Go package yet is legitimately empty.
+  if [ $rc -ne 0 ] && echo "$out" | grep -qE "no packages to (test|vet)|matched no packages"; then
+    rc=0; note="  (no packages yet)"
+  fi
+  if [ $rc -eq 0 ]; then
+    printf "  %-9s PASS  %s%s\\n" "${sha:0:7}" "$subject" "$note"
+  else
+    printf "  %-9s FAIL  %s\\n" "${sha:0:7}" "$subject"
+    echo "$out" | tail -5 | sed 's/^/             /'
+    fail=1
+  fi
+done
+[ $fail -eq 0 ] || { echo; echo "history is not bisectable"; exit 1; }
+echo; echo "every commit builds, vets and tests green in isolation"
+'''
+
+[tasks.ci]
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: fmt-check, vet, lint, tidy-check, deps-check, test-race. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+run = '''
+set -e
+mise run fmt-check
+mise run vet
+mise run lint
+mise run tidy-check
+mise run deps-check
+mise run test-race
+echo
+echo "ci: all gates passed"
+'''

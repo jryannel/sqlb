@@ -711,3 +711,118 @@ func TestQualifiedTableNames(t *testing.T) {
 		t.Errorf("unqualified\n got: %s\nwant: %s", plain, want)
 	}
 }
+
+// dialect overriding is per statement, not global. There is deliberately no
+// package-level setter: a mutable global read on every query's compile path
+// would be a data race with no legitimate trigger.
+type ansiDialect struct{}
+
+func (ansiDialect) Placeholder(int) string     { return "?" }
+func (ansiDialect) Name() string               { return "ansi" }
+func (ansiDialect) QuoteIdent(s string) string { return "`" + s + "`" }
+
+func TestDialectIsOverriddenPerStatement(t *testing.T) {
+	q := sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("age").Gte(18))
+
+	def, _, err := q.Clone().SQL()
+	if err != nil {
+		t.Fatalf("SQL(): %v", err)
+	}
+	if def != `SELECT "id" FROM "users" WHERE "age" >= $1` {
+		t.Errorf("default dialect: %s", def)
+	}
+
+	alt, _, err := q.Clone().UseDialect(ansiDialect{}).SQL()
+	if err != nil {
+		t.Fatalf("SQL(): %v", err)
+	}
+	if alt != "SELECT `id` FROM `users` WHERE `age` >= ?" {
+		t.Errorf("overridden dialect: %s", alt)
+	}
+
+	// The override must not leak into any other statement.
+	after, _, _ := sqlb.Query[User]().Select(sqlb.F("id")).SQL()
+	if after != `SELECT "id" FROM "users"` {
+		t.Errorf("a per-statement override leaked globally: %s", after)
+	}
+}
+
+// A field with no matching result column would scan as its zero value, which
+// is indistinguishable from a real zero: a mistyped alias on a Sum silently
+// reports 0 revenue. Collect must refuse rather than return a wrong number.
+func TestCollectRejectsUnmatchedFields(t *testing.T) {
+	type Revenue struct {
+		Status string  `db:"status"`
+		Total  float64 `db:"revenue"`
+	}
+	// The query aliases "revenu" — one character off.
+	h := newHarness(t, []string{"status", "revenu"}, [][]driver.Value{{"published", 1234.5}})
+	defer h.close()
+
+	_, err := sqlb.Collect[Revenue](context.Background(), h.db,
+		sqlb.Query[User]().Select(sqlb.F("status"), sqlb.Sum(sqlb.F("total")).As("revenu")).
+			GroupBy(sqlb.F("status")))
+	if err == nil {
+		t.Fatal("a mistyped alias must not scan as a silent zero")
+	}
+	for _, want := range []string{"Total", "revenue", "revenu"} {
+		if !contains(err.Error(), want) {
+			t.Errorf("error should name the field and both column names, got: %v", err)
+		}
+	}
+}
+
+func TestCollectAcceptsAnExactMatch(t *testing.T) {
+	type Revenue struct {
+		Status string  `db:"status"`
+		Total  float64 `db:"revenue"`
+	}
+	h := newHarness(t, []string{"status", "revenue"}, [][]driver.Value{{"published", 1234.5}})
+	defer h.close()
+
+	rows, err := sqlb.Collect[Revenue](context.Background(), h.db,
+		sqlb.Query[User]().Select(sqlb.F("status"), sqlb.Sum(sqlb.F("total")).As("revenue")))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Total != 1234.5 {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
+
+// All stays permissive: a projection legitimately leaves fields unfilled, which
+// is what ?select=id,name is.
+func TestAllToleratesPartialProjection(t *testing.T) {
+	h := newHarness(t, []string{"id", "name"}, [][]driver.Value{{"u1", "Ada"}})
+	defer h.close()
+
+	users, err := sqlb.Query[User]().Select(sqlb.F("id"), sqlb.F("name")).All(context.Background(), h.db)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(users) != 1 || users[0].Name != "Ada" || users[0].Email != "" {
+		t.Fatalf("rows = %#v", users)
+	}
+}
+
+// Describing a model after a statement has been built against it would race
+// against every in-flight query and half-apply. It must refuse.
+func TestDescribeAfterUsePanics(t *testing.T) {
+	type Late struct {
+		ID   string `db:"id" sqlb:"pk"`
+		Name string `db:"name"`
+	}
+	_ = sqlb.Query[Late]() // closes the model
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("describing a model already in use should panic")
+		}
+		msg, _ := r.(string)
+		if !contains(msg, "initialisation") {
+			t.Errorf("the panic should say when Describe is safe: %v", r)
+		}
+	}()
+	sqlb.Describe[Late]().Filterable("name")
+}

@@ -134,14 +134,14 @@ func TestDescribeRejectsUnknownColumns(t *testing.T) {
 			t.Fatal("naming a column that does not exist should panic")
 		}
 		msg, _ := r.(string)
-		if !strings.Contains(msg, "nmae") {
+		if !strings.Contains(msg, "does_not_exist") {
 			t.Errorf("panic should quote the bad name: %v", r)
 		}
 		if !strings.Contains(msg, "id, name") {
 			t.Errorf("panic should list the real columns: %v", r)
 		}
 	}()
-	sqlb.Describe[Widget]().Filterable("nmae")
+	sqlb.Describe[Widget]().Filterable("does_not_exist")
 }
 
 func TestDescribeColumnRename(t *testing.T) {

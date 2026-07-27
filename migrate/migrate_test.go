@@ -89,10 +89,11 @@ func TestConcurrentChangesGetTheirOwnFile(t *testing.T) {
 	if !strings.Contains(idx, "CONCURRENTLY") || strings.Contains(main, "CONCURRENTLY") {
 		t.Error("the concurrent statement landed in the wrong file")
 	}
-	// The follow-up must sort after its parent, or the runner applies them
-	// in the wrong order.
-	if !(("20260727120000_add_view_count.sql") < "20260727120001_add_view_count_indexes.sql") {
-		t.Error("the index migration must sort after the migration it depends on")
+	// The follow-up must sort after its parent, or the runner applies the
+	// index before the column it indexes exists.
+	const parent, follow = "20260727120000_add_view_count.sql", "20260727120001_add_view_count_indexes.sql"
+	if parent >= follow {
+		t.Errorf("%q must sort before %q", parent, follow)
 	}
 }
 

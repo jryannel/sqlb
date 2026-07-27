@@ -141,7 +141,7 @@ check, and they exist because the module is `v0`:
 | Tier | What | Promise |
 |---|---|---|
 | **Stable** | `Query`/`Builder`, `F`/`Pred`/`And`/`Or`/`Not`/`If`, `Field` and its operators, `Col`/`TextCol`/`Typed`/`TextColumn`, `Order`, the aggregates, `InsertRows`/`UpdateRows`/`DeleteRows`, `On`/`Hooks`, `Describe`, `Collect`, `Executor`, `ErrNotFound`/`ErrUnscoped`, all of `filter` and `schema` | Changes are breaking changes and are treated as such |
-| **Provisional** | `Model`, `ColumnInfo`, `ModelOf`, `Selectable`, `Selection`, `Dialect`, `Postgres`, `DefaultDialect` | Public because `filter` and generated code need them across a package boundary. Expect movement |
+| **Provisional** | `Model`, `ColumnInfo`, `ModelOf`, `Selectable`, `Selection`, `Dialect`, `Postgres` | Public because `filter` and generated code need them across a package boundary. Expect movement |
 | **Escape hatch** | `Expr` and the node types: `Raw`, `Binary`, `Unary`, `Call`, `Cast`, `BetweenExpr`, `List`, `Param`, `Column` | Use `Raw`, `RawPred`, `RawSel`. The rest is the compiler's vocabulary and will change without ceremony |
 
 The tiers exist because the obvious extraction does not work: `Expr` and `Raw`
@@ -150,9 +150,33 @@ are the documented escape hatch and appear in `SetExpr`, `GroupByExpr`,
 node set alone would buy little and would leave `Pred.Expr()` returning a type
 callers cannot name.
 
-One known wart: `DefaultDialect` is a mutable package-level variable. It is set
-once at init in practice, and `UseDialect` is the per-statement override, but it
-is global mutable state and should probably become unexported.
+The dialect is not among them. It is package-level but unexported and
+unsettable: a mutable global read on the compile path of every query is a data
+race with no legitimate trigger, since sqlb targets Postgres only. `UseDialect`
+overrides it per statement, which is scoped and race-free.
+
+## Failing loudly
+
+Where sqlb cannot do the right thing, it says so rather than guessing. The rule
+is that a wrong answer must never be quieter than no answer.
+
+| Situation | Behaviour |
+|---|---|
+| `Collect[R]` has a field no result column fills | Error naming the field and both names — a mistyped `As("revenu")` would otherwise scan as a real-looking `0` |
+| `Describe` called after a statement was built | Panic; mutating the cached model then would race and half-apply |
+| `Describe` names a column that does not exist | Panic at startup, listing the columns that do |
+| `Update`/`Delete` with no `WHERE` | `ErrUnscoped` until `Everything()` is called |
+| Destructive migration | Rendered commented out with the reason stated |
+| A change with no `Down` | Renders an explanation, not an empty section that looks like a working rollback |
+| Filter names an unknown or uncapable column | 400 listing what would have been accepted |
+| Schema authoring mistake | Every problem reported at once, each with the fix |
+
+Two deliberate exceptions, both documented where they happen: a page size above
+the maximum is capped rather than rejected, since a client asking for too much
+should get the maximum rather than an error; and `Builder.All` tolerates
+unfilled fields, because a partial projection is exactly what `?select=id,name`
+is. `Collect` is strict precisely because its destination type was written to
+match the projection.
 
 ## Testing
 
@@ -170,7 +194,4 @@ working is worse than no test, so those are exercised as real build attempts.
 - The generator does not exist. Everything under `example/blog` is hand-written
   to the exact shape it must produce, so it doubles as the generator's fixture.
 - `?expand` validates relation names but does not perform the join.
-- No migrations, no change feed. See the [vision](vision.md) for sequencing.
-- `Describe` mutates the cached model without locking, which is correct at
-  `init` and unsafe afterwards. Documented rather than enforced; the fix if it
-  bites is a freeze that panics on late mutation, not a lock on the read path.
+- No migration diffing and no change feed. See the [vision](vision.md).

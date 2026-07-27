@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 var (
@@ -157,13 +158,35 @@ func Collect[R, T any](ctx context.Context, db Executor, b *Builder[T]) ([]R, er
 		return nil, wrapQueryErr(err, query)
 	}
 	defer rows.Close()
-	return scanAll[R](rows, ModelOf[R]())
+	// Exact, unlike All: R was declared specifically to receive this
+	// projection, so a field with no matching column is a mistake rather than
+	// a deliberate partial select.
+	return scan[R](rows, ModelOf[R](), scanExact)
 }
 
-// scanAll maps a result set onto a slice of T. Result columns with no matching
-// model field are read and discarded rather than failing, so that a query
-// selecting extra expressions still scans.
+// scanMode controls how strictly a result set must match its destination.
+type scanMode int
+
+const (
+	// scanPartial allows model fields to go unfilled, which is what a
+	// projection is: ?select=id,name legitimately leaves the rest zero.
+	scanPartial scanMode = iota
+	// scanExact requires every model field to be filled by some result
+	// column. Used where the destination type was written to match the
+	// projection, so an unfilled field means a mismatch rather than an
+	// intention.
+	scanExact
+)
+
+// scanAll maps a result set onto a slice of T, tolerating unfilled fields.
 func scanAll[T any](rows *sql.Rows, m *Model) ([]T, error) {
+	return scan[T](rows, m, scanPartial)
+}
+
+// scan maps a result set onto a slice of T. Result columns with no matching
+// model field are read and discarded, so a query selecting extra expressions
+// still scans.
+func scan[T any](rows *sql.Rows, m *Model, mode scanMode) ([]T, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		return nil, err
@@ -179,6 +202,27 @@ func scanAll[T any](rows *sql.Rows, m *Model) ([]T, error) {
 	}
 	if matched == 0 {
 		return nil, fmt.Errorf("sqlb: none of the result columns %v map to %s; check the db tags or the Select aliases", cols, m.Type)
+	}
+
+	// A field left unfilled would scan as its zero value, which is
+	// indistinguishable from a real zero — a mistyped alias on a Sum would
+	// silently report 0 revenue rather than failing. Name the offenders.
+	if mode == scanExact && matched < len(m.Columns) {
+		filled := make(map[string]bool, matched)
+		for i, name := range cols {
+			if targets[i] != nil {
+				filled[name] = true
+			}
+		}
+		var missing []string
+		for _, col := range m.Columns {
+			if !filled[col.Name] {
+				missing = append(missing, fmt.Sprintf("%s (db:%q)", col.Field, col.Name))
+			}
+		}
+		return nil, fmt.Errorf(
+			"sqlb: %s has no result column for %s; the query returned %v — check the Select aliases match the db tags",
+			m.Type, strings.Join(missing, ", "), cols)
 	}
 
 	var (

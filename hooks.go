@@ -2,6 +2,7 @@ package sqlb
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 )
@@ -41,11 +42,19 @@ var hookRegistry sync.Map // reflect.Type -> *Hooks[T]
 // On returns the hook set for model T, creating it on first use.
 func On[T any]() *Hooks[T] {
 	t := reflect.TypeOf((*T)(nil)).Elem()
-	if v, ok := hookRegistry.Load(t); ok {
-		return v.(*Hooks[T])
+	if v, found := hookRegistry.Load(t); found {
+		h, ok := v.(*Hooks[T])
+		if !ok {
+			panic(fmt.Sprintf("sqlb: hook registry holds %T for model %s", v, t))
+		}
+		return h
 	}
 	actual, _ := hookRegistry.LoadOrStore(t, &Hooks[T]{})
-	return actual.(*Hooks[T])
+	h, ok := actual.(*Hooks[T])
+	if !ok {
+		panic(fmt.Sprintf("sqlb: hook registry holds %T for model %s", actual, t))
+	}
+	return h
 }
 
 // BeforeQuery runs before every SELECT against T, including those issued by

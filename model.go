@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 )
 
@@ -51,7 +52,19 @@ type Model struct {
 	PK      *ColumnInfo
 
 	byName map[string]*ColumnInfo
+	// inUse is set the first time a statement is built against this model.
+	// Describe refuses to mutate a model past that point: doing so is a data
+	// race against every in-flight query, and a description that silently
+	// half-applied would be worse than one that never ran.
+	inUse atomic.Bool
 }
+
+// markInUse records that a statement has been built against this model, closing
+// it to further description.
+func (m *Model) markInUse() { m.inUse.Store(true) }
+
+// InUse reports whether a statement has been built against this model.
+func (m *Model) InUse() bool { return m.inUse.Load() }
 
 // Column returns the named column, or nil.
 func (m *Model) Column(name string) *ColumnInfo { return m.byName[name] }
@@ -85,8 +98,12 @@ var modelCache sync.Map // reflect.Type -> *Model
 func ModelOf[T any]() *Model {
 	var zero T
 	t := reflect.TypeOf(&zero).Elem()
-	if cached, ok := modelCache.Load(t); ok {
-		return cached.(*Model)
+	if cached, found := modelCache.Load(t); found {
+		m, ok := cached.(*Model)
+		if !ok {
+			panic(fmt.Sprintf("sqlb: model cache holds %T for %s", cached, t))
+		}
+		return m
 	}
 	m, err := buildModel(t)
 	if err != nil {
@@ -94,7 +111,11 @@ func ModelOf[T any]() *Model {
 	}
 	// A concurrent build for the same type is harmless: both are equivalent.
 	actual, _ := modelCache.LoadOrStore(t, m)
-	return actual.(*Model)
+	cached, ok := actual.(*Model)
+	if !ok {
+		panic(fmt.Sprintf("sqlb: model cache holds %T for %s", actual, t))
+	}
+	return cached
 }
 
 func buildModel(t reflect.Type) (*Model, error) {

@@ -2,6 +2,7 @@ package filter
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -53,6 +54,35 @@ func (e Errors) Error() string {
 		parts[i] = err.Error()
 	}
 	return "filter: " + strings.Join(parts, "; ")
+}
+
+// AsErrors extracts parse errors from err, unwrapping as it goes.
+//
+// Prefer it to a type assertion. Parse returns Errors directly today, but a
+// hook, a middleware or a caller adding context will wrap it, and
+// `err.(filter.Errors)` panics the moment that happens:
+//
+//	if errs, ok := filter.AsErrors(err); ok {
+//	    errs.WriteHTTP(w)
+//	    return
+//	}
+func AsErrors(err error) (Errors, bool) {
+	var errs Errors
+	if errors.As(err, &errs) {
+		return errs, true
+	}
+	return nil, false
+}
+
+// WriteError writes err as a JSON problem response if it is a parse failure,
+// and reports whether it did. It is the whole error path of a list handler.
+func WriteError(w http.ResponseWriter, err error) bool {
+	errs, ok := AsErrors(err)
+	if !ok {
+		return false
+	}
+	errs.WriteHTTP(w)
+	return true
 }
 
 // StatusCode is 400: every parse failure is a malformed request.

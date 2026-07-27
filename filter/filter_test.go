@@ -224,7 +224,7 @@ func TestEveryProblemIsReported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected errors")
 	}
-	errs, ok := err.(filter.Errors)
+	errs, ok := filter.AsErrors(err)
 	if !ok {
 		t.Fatalf("error type = %T, want filter.Errors", err)
 	}

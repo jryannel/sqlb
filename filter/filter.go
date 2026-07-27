@@ -666,7 +666,13 @@ func coerce(s string, t reflect.Type) (any, error) {
 	// uuid.UUID and similar wrappers used by generated models.
 	if reflect.PointerTo(t).Implements(textUnmarshalerType) {
 		v := reflect.New(t)
-		if err := v.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(s)); err != nil {
+		// Guaranteed by the Implements check above, but asserted with the
+		// comma-ok form so a future change to that condition fails loudly.
+		u, ok := v.Interface().(encoding.TextUnmarshaler)
+		if !ok {
+			return nil, fmt.Errorf("filter: %s does not implement encoding.TextUnmarshaler", t)
+		}
+		if err := u.UnmarshalText([]byte(s)); err != nil {
 			return nil, fmt.Errorf("invalid %s value %q: %w", t, s, err)
 		}
 		return v.Elem().Interface(), nil
