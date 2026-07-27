@@ -181,8 +181,25 @@ connects. The rendered file is the one artefact here that carries **no DO NOT
 EDIT header**: it is written once and then owned, which is the opposite of every
 other generated file in the project and is worth saying twice.
 
-Still unbuilt: the shadow database that would replay a migration history rather
-than reading a live schema.
+**The shadow database is `shadow.Build`**, and it is deliberately not a
+migration runner. A runner tracks what has run and applies the outstanding ones
+to a database people depend on; this applies all of them to an empty database
+nobody depends on and throws the result away. No version table is read or
+written, nothing is skipped, and Down sections never execute. It will not create
+or drop a database either — that needs credentials the rest of sqlb does not
+ask for, and dropping the wrong one is unrecoverable, so the caller supplies an
+empty database and a non-empty one is refused rather than worked around.
+
+**What replay cannot reproduce is a destructive change.** Those render commented
+out, so the file in the repository is not the SQL that ran: production has the
+column and the shadow does not, permanently, and that difference is
+indistinguishable from the drift this exists to detect. Worse, such a file does
+not apply at all — a change depending on the commented-out one is still emitted
+live, so a replay fails partway rather than producing a schema missing a column.
+That is a defect in the diff engine rather than in replay, and `pgtest` pins the
+current behaviour so fixing it is visible.
+
+Still unbuilt: nothing in this record. The gap above is the one to close next.
 
 The import round trip was measured rather than assumed. A schema exercising
 every construct the DSL can express was rendered to DDL, applied to a real
@@ -575,3 +592,22 @@ sqlb to own DDL.
   a subtly different schema, passes every string assertion in `codegen`'s own
   tests and fails this one — confirmed by dropping `.Nullable()` and watching it
   fail.
+- 2026-07-27 — Built the shadow database, `shadow.Build`. The current side of a
+  diff can now come from replaying the checked-in history into an empty database
+  rather than from reading production, which is the difference between "this is
+  what the migrations build" and "this is what the database happens to look
+  like". Drift detection needed no API of its own: it is `migrate.Diff` between
+  the replayed registry and the live one, and `pgtest` proves it catches a
+  column added by hand.
+  Statement splitting turned out to be unavoidable rather than a convenience.
+  Postgres wraps a multi-statement request in an implicit transaction, so a
+  file marked `NO TRANSACTION` — which exists precisely because it holds a
+  `CREATE INDEX CONCURRENTLY` — fails if sent whole. The splitter is a scanner
+  over four states (string literal, quoted identifier, dollar-quoted body,
+  comment), tested without a database because each case is cheap to enumerate
+  there and costs a container here.
+  Building it immediately found the destructive-change limitation recorded
+  above, which had been reasoned about nowhere: a history containing a
+  commented-out destructive change does not replay at all, because the changes
+  depending on it are still emitted live. The shadow database earned its keep
+  before it had a caller.

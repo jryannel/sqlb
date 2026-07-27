@@ -219,9 +219,11 @@ working is worse than no test, so those are exercised as real build attempts.
 
 - `introspect` produces a registry from a live database and
   `codegen.RenderSchema` renders it back as `schema.go`, so adoption is a closed
-  loop. There is still no shadow database replaying a migration history, so the
-  current state of a diff comes from reading a live schema rather than from
-  proving the migrations produce it.
+  loop, and `shadow.Build` replays a migration history into an empty database so
+  the current side of a diff can come from what the history builds. What it
+  cannot reproduce is a destructive change: those render commented out, so the
+  checked-in file is not the SQL that ran, and the shadow will differ from
+  production wherever one was uncommented by hand.
 - No change feed, and no generated TypeScript client. See the
   [vision](vision.md).
 - `?expand` validates relation names but does not perform the join, so

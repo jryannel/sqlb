@@ -175,6 +175,7 @@ and the escape hatch that would require reopens the hole anyway.
 | `.` (`sqlb`) | Expression AST, Postgres compiler, generic query builder, model reflection, mutations, hooks |
 | `filter` | URL query grammar → the same predicate AST, validated against capabilities |
 | `rest` | Mounts a model on a Huma API, with an OpenAPI operation built from its capabilities |
+| `shadow` | Replays a migration history into an empty database, so the current schema comes from the history rather than from production |
 | `describe.go` | Runtime column metadata, for using sqlb without the schema DSL or codegen |
 | `example/blog` | A worked schema, everything codegen emits from it, and an assembled server |
 
@@ -304,8 +305,13 @@ Not built yet, in the order they matter:
    the DSL cannot express rather than dropping it. `codegen.RenderSchema` turns
    that registry into the `schema.go` you edit from then on, which closes the
    adoption loop — CI compiles the rendered source and checks it declares the
-   database it came from. What is still missing is a shadow database that
-   replays an existing migration history instead of reading a live schema.
+   database it came from. `shadow.Build` replays a checked-in migration history
+   into an empty database and reads back what it produced, which is the better
+   source for the current side of a diff: it says what the *history* builds
+   rather than what production happens to look like, so an edited or skipped
+   migration surfaces instead of being baked into the next one. Drift detection
+   needs no extra API — it is `migrate.Diff` between the replayed registry and
+   the live one.
 
    Adopting an existing database is therefore two calls:
 
