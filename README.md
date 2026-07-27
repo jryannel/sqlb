@@ -307,7 +307,13 @@ Not built yet, in the order they matter:
 2. **TypeScript client** — the OpenAPI document is generated and precise; the
    client derived from it is not written yet.
 3. **`?expand`** — the grammar validates relation names; the joins are not
-   performed yet, so `rest.Options.Expandable` should stay empty.
+   performed yet. Until they are, every surface that would promise expansion
+   refuses instead of accepting the parameter and answering without it:
+   `rest.Resource` rejects a non-empty `Options.Expandable` at startup,
+   `filter.Apply` fails the builder rather than dropping a parsed `?expand`,
+   and the manifest reports neither the capability nor the relation names.
+   `schema.Ref(…).Expandable()` still parses and validates, so schemas can
+   declare the intent; nothing acts on it yet.
 4. **Change feed** — transactional outbox written in the same transaction as
    the mutation, tailed via `LISTEN/NOTIFY` and fanned out to `AfterCommit`
    hooks and SSE/WebSocket subscribers.

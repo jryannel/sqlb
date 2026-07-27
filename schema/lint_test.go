@@ -152,8 +152,17 @@ func TestManifestDescribesTheQueryableSurface(t *testing.T) {
 	if !contains(posts.REST.Filterable, "status") || !contains(posts.REST.Searchable, "title") {
 		t.Errorf("capabilities not reported: %+v", posts.REST)
 	}
-	if !contains(posts.REST.Expandable, "org") {
-		t.Errorf("expandable relation not reported: %+v", posts.REST.Expandable)
+	// The manifest reports what a caller can actually ask for. "org" is
+	// declared Expandable above, but ?expand performs no join yet, so
+	// advertising it would send a client into a request that returns 200 with
+	// the relation missing. This assertion inverts when expansion lands.
+	if len(posts.REST.Expandable) != 0 {
+		t.Errorf("manifest advertises expansion, which is not implemented: %+v", posts.REST.Expandable)
+	}
+	for _, c := range posts.Columns {
+		if contains(c.Capabilities, "expand") {
+			t.Errorf("column %s advertises the expand capability, which is not implemented", c.Name)
+		}
 	}
 	if len(posts.REST.Examples) == 0 {
 		t.Error("no worked examples emitted")

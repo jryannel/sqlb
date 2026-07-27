@@ -13,7 +13,11 @@ const ManifestVersion = "1"
 
 // Manifest is a machine-readable description of a schema: every table, every
 // column, and — the part that matters most — exactly what a client may filter,
-// sort, search and expand on each exposed resource.
+// sort and search on each exposed resource.
+//
+// It reports capabilities that work, not capabilities that are declared. The
+// two differ today only for ?expand, which the DSL accepts and no request can
+// yet use; see RESTManifest.Expandable.
 //
 // It exists because reading a Go DSL to answer "what can I query here?" is a
 // poor interface for a program. The manifest answers it directly, in one file,
@@ -89,6 +93,12 @@ type RESTManifest struct {
 	Filterable []string `json:"filterable"`
 	Sortable   []string `json:"sortable"`
 	Searchable []string `json:"searchable"`
+
+	// Expandable stays declared but is deliberately left empty: ?expand does
+	// not perform the join yet, and the manifest describes what a caller can
+	// actually ask for. Populating it would send an agent reading this document
+	// straight into a request that returns 200 with the relation missing.
+	// Filling it in is part of implementing expansion, not a separate change.
 	Expandable []string `json:"expandable,omitempty"`
 
 	Examples []string `json:"examples,omitempty"`
@@ -154,7 +164,9 @@ func (t *TableDef) manifest() TableManifest {
 			name string
 		}{
 			{d.Filterable, "filter"}, {d.Sortable, "sort"},
-			{d.Searchable, "search"}, {d.Expandable, "expand"},
+			{d.Searchable, "search"},
+			// "expand" is omitted: the capability can be declared on a Ref, but
+			// no request can currently use it. See RESTManifest.Expandable.
 		} {
 			if c.on {
 				cm.Capabilities = append(cm.Capabilities, c.name)
@@ -217,9 +229,8 @@ func (t *TableDef) restManifest() *RESTManifest {
 		if d.Searchable {
 			rm.Searchable = append(rm.Searchable, d.Name)
 		}
-		if d.Expandable && d.Ref != nil {
-			rm.Expandable = append(rm.Expandable, d.Ref.Name)
-		}
+		// d.Expandable is intentionally not reported here; see
+		// RESTManifest.Expandable for why.
 	}
 	rm.Examples = t.examples(rm)
 	return rm
@@ -272,7 +283,9 @@ func paramDocs() []ParamDoc {
 		{"select", "select=id,name — projection; the primary key is always included"},
 		{"sort", "sort=-created_at,name — leading '-' is descending"},
 		{"search", "search=TERM — fans out over searchable columns"},
-		{"expand", "expand=author — inlines an expandable relation"},
+		// "expand" is not listed: paramDocs is unconditional, so listing it
+		// would advertise expansion on every resource in the document,
+		// including the ones that declare no expandable relation at all.
 		{"page", "page=2 — 1-based"},
 		{"per_page", "per_page=50 — capped by maxPageSize"},
 		{"limit", "limit=50 — alternative to per_page"},

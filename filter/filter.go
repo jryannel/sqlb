@@ -58,7 +58,12 @@ type Options struct {
 	MaxSortTerms    int
 
 	// Expandable lists the relation names ?expand may name. Parsing validates
-	// against it; performing the join is the caller's job.
+	// against it; performing the join is the caller's job, and Apply is not
+	// that caller — it fails rather than dropping the parameter. Setting this
+	// is therefore a commitment to reading Query.Expand and joining explicitly.
+	//
+	// The rest package cannot make that commitment yet, so it rejects a
+	// non-empty Expandable at startup.
 	Expandable []string
 
 	// DisableSearch rejects ?search even when columns are searchable.
@@ -116,7 +121,19 @@ type Query struct {
 // a REST response any time a handler forgot to project. A caller wanting a
 // custom projection should apply Where, Order and the limits from the Query
 // fields directly instead.
+//
+// Apply cannot perform an expansion, so it fails the builder rather than
+// dropping one. Expansion is a join whose shape Apply does not know: the
+// builder is generic over the row type T, and an expanded row is wider than T.
+// A caller that means to expand reads Query.Expand and issues the Join itself.
 func Apply[T any](b *sqlb.Builder[T], q *Query) *sqlb.Builder[T] {
+	if len(q.Expand) > 0 {
+		return b.Fail(fmt.Errorf(
+			"filter: cannot apply ?expand=%s: Apply does not perform relation joins, "+
+				"so applying it would drop the parameter; read Query.Expand and join explicitly",
+			strings.Join(q.Expand, ",")))
+	}
+
 	b.Where(q.Where...)
 
 	names := q.Select

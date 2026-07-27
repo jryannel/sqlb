@@ -318,3 +318,29 @@ func TestApplyNeverProjectsHiddenColumns(t *testing.T) {
 		t.Errorf("visible columns should still be projected: %s", sql)
 	}
 }
+
+// The package contract is that a parameter is never silently ignored. Apply
+// cannot join, so an accepted ?expand has to fail the builder rather than
+// compile to SQL that quietly lacks the relation.
+func TestApplyRefusesToDropAnExpand(t *testing.T) {
+	values, _ := url.ParseQuery("expand=author")
+	q, err := filter.Parse(values, opts())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(q.Expand) != 1 || q.Expand[0] != "author" {
+		t.Fatalf("Expand = %v, want [author]: parsing is unchanged", q.Expand)
+	}
+
+	b := filter.Apply(sqlb.Query[Article](), q)
+	if err := b.Err(); err == nil {
+		t.Fatal("Apply dropped ?expand and reported success")
+	}
+	sql, _, err := b.SQL()
+	if err == nil {
+		t.Errorf("SQL() succeeded for a query whose expansion was never applied: %s", sql)
+	}
+	if !strings.Contains(err.Error(), "author") {
+		t.Errorf("error = %v, want it to name the relation that was asked for", err)
+	}
+}
