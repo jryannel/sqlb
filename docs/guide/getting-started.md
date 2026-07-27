@@ -275,6 +275,23 @@ lists the ones that do.
 Call it from `init`. It mutates the cached model and does not lock, so it is
 only safe before any query has been built against that model.
 
+`?expand` works here too. A relation is a field the expanded row lands in, plus
+the column it joins on:
+
+```go
+type Invoice struct {
+    CustomerID string
+    Customer   *Customer `db:"-"`   // not a column
+}
+
+sqlb.Describe[Invoice]().Relation("Customer", "customer_id")
+```
+
+One call, because there is one fact. Declaring the relation is what makes
+`customer_id` expandable — with struct tags the two halves are written
+separately and can disagree, which is why the tagged form is checked and this
+one has nothing to check.
+
 ## Where to next
 
 - [Schema](schema.md) — the full column vocabulary, references, linting

@@ -33,6 +33,11 @@ sqlb.Describe[Invoice]().
 Descriptions merge onto struct tags, so a partly tagged model can be completed.
 Naming a column that does not exist panics at startup, listing the ones that do.
 
+Every capability the generator can emit has a runtime form, including relations:
+`Relation("Customer", "customer_id")` is the no-codegen half of `?expand`. That
+is the test this decision has to keep passing — a capability reachable only from
+generated tags would quietly make the generator mandatory again.
+
 ## Consequences
 
 **What this buys.** sqlb can be layered over structs another generator already

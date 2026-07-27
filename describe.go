@@ -143,6 +143,63 @@ func (d *Description[T]) Hidden(columns ...string) *Description[T] {
 	return d.each("Hidden", columns, func(c *ColumnInfo) { c.Hidden = true })
 }
 
+// Relation declares an expandable reference: field is the Go field an expanded
+// row lands in, and fkColumn is the local column joined on.
+//
+//	sqlb.Describe[Task]().
+//	    Table("tasks").
+//	    PrimaryKey("id").
+//	    Relation("List", "list_id")
+//
+// It is the runtime form of the two-field declaration codegen writes, and it
+// says in one call what the tags say in two:
+//
+//	ListID string `db:"list_id" sqlb:"expand"`
+//	List   *List  `db:"-"       sqlb:"expands=list_id"`
+//
+// Which is the reason it needs no agreement check. Split across two tags the
+// halves can disagree — a field expanding a column that never declared the
+// capability — and the model build refuses that. Here there is one statement of
+// one fact, so declaring the relation is what makes the column expandable.
+//
+// The relation is named by field's json tag, falling back to the snake-cased
+// field name, because `?expand` names the relation the way the response spells
+// it. The field itself must not be a mapped column: an expanded row is not a
+// value of the row it hangs off, and a field cannot be both.
+//
+// The target's own model — its columns, and which of them are Hidden — comes
+// from the Go type, and is resolved on first expansion rather than here, so two
+// models expandable to each other do not recurse at startup.
+func (d *Description[T]) Relation(field, fkColumn string) *Description[T] {
+	sf, ok := d.m.Type.FieldByName(field)
+	if !ok {
+		panic(fmt.Sprintf("sqlb: Relation(%q, %q): %s has no such field (fields: %s)",
+			field, fkColumn, d.m.Type, strings.Join(d.fieldNames(), ", ")))
+	}
+	for _, col := range d.m.Columns {
+		if col.Field == field {
+			panic(fmt.Sprintf(
+				"sqlb: Relation(%q, %q): %s.%s is mapped to column %q; "+
+					"a relation field holds an expanded row, not a value of its own — tag it `db:\"-\"`",
+				field, fkColumn, d.m.Type, field, col.Name))
+		}
+	}
+
+	rel, err := newRelation(sf, sf.Index, fkColumn)
+	if err != nil {
+		panic(err.Error())
+	}
+	if prev := d.m.Relation(rel.Name); prev != nil {
+		panic(fmt.Sprintf("sqlb: Relation(%q, %q): %s already expands %q, from field %s",
+			field, fkColumn, d.m.Type, rel.Name, prev.Field))
+	}
+
+	rel.FK = d.column("Relation", fkColumn)
+	rel.FK.Expandable = true
+	d.m.Relations = append(d.m.Relations, rel)
+	return d
+}
+
 // Timestamps is shorthand for the common created_at / updated_at pair:
 // database-defaulted, read-only and sortable.
 func (d *Description[T]) Timestamps(columns ...string) *Description[T] {

@@ -200,3 +200,146 @@ func TestDescribeMergesOntoTags(t *testing.T) {
 		t.Error("the tag's primary key was lost")
 	}
 }
+
+// Relation is the no-codegen path for ?expand. Codegen is optional
+// (ADR-0010), so a feature reachable only from generated tags would be a
+// feature half the intended users cannot have.
+
+// descList and descTask carry no sqlb tags at all — the relation is declared
+// entirely at runtime, the way a caller layering over someone else's structs
+// has to.
+type descList struct {
+	ID     string
+	Name   string
+	Secret string
+}
+
+func (descList) TableName() string { return "lists" }
+
+type descTask struct {
+	ID     string
+	ListID string
+	Title  string
+
+	List *descList `db:"-"`
+}
+
+func (descTask) TableName() string { return "tasks" }
+
+func init() {
+	sqlb.Describe[descList]().PrimaryKey("id").Hidden("secret")
+	sqlb.Describe[descTask]().PrimaryKey("id").Relation("List", "list_id")
+}
+
+func TestDescribeRelationCompilesTheSameJoinAsTheTags(t *testing.T) {
+	sql, _, err := sqlb.Query[descTask]().Expand("list").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	for _, want := range []string{
+		`LEFT JOIN "lists" AS "__ex_list" ON "__ex_list"."id" = "tasks"."list_id"`,
+		`json_build_object('id', "__ex_list"."id", 'name', "__ex_list"."name")`,
+		`AS "__expand_list"`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("statement missing %q:\n%s", want, sql)
+		}
+	}
+	// Hidden on the target was declared through Describe too, and has to hold
+	// across the join for the same reason it does with tags: expanding must not
+	// become a way to read a column the target refuses to serve.
+	if strings.Contains(sql, "secret") {
+		t.Errorf("a hidden column of the expanded target reached the statement:\n%s", sql)
+	}
+}
+
+// Declaring the relation is what makes the key expandable. There is no second
+// place to say it, so there is nothing to disagree with.
+func TestDescribeRelationMakesTheKeyExpandable(t *testing.T) {
+	col := sqlb.ModelOf[descTask]().Column("list_id")
+	if col == nil || !col.Expandable {
+		t.Fatalf("list_id should carry the expand capability: %+v", col)
+	}
+	if names := sqlb.ModelOf[descTask]().RelationNames(); len(names) != 1 || names[0] != "list" {
+		t.Errorf("relations = %v, want [list]", names)
+	}
+}
+
+// A described relation has to reach the request path, not just the builder:
+// ?expand=list parsed from a URL and applied produces the same join. This is
+// the whole point of the no-codegen path — the REST layer is what most callers
+// want the relation for.
+func TestDescribeRelationIsReachableFromAQueryString(t *testing.T) {
+	q, err := filter.Parse(url.Values{"expand": {"list"}}, filter.Options{
+		Model:      sqlb.ModelOf[descTask](),
+		Expandable: []string{"list"},
+	})
+	if err != nil {
+		t.Fatalf("parsing ?expand=list against a described relation: %v", err)
+	}
+
+	sql, _, err := filter.Apply(sqlb.Query[descTask](), q).SQL()
+	if err != nil {
+		t.Fatalf("applying the parsed query: %v", err)
+	}
+	if !strings.Contains(sql, `LEFT JOIN "lists" AS "__ex_list"`) {
+		t.Errorf("?expand=list did not reach the join:\n%s", sql)
+	}
+	// Hidden survives the whole path, not only a hand-built query.
+	if strings.Contains(sql, "secret") {
+		t.Errorf("a hidden column of the target reached the request path:\n%s", sql)
+	}
+}
+
+func TestDescribeRelationRejectsAFieldThatIsAColumn(t *testing.T) {
+	type Bad struct {
+		ID     string
+		ListID string
+		List   string // a column, not a relation
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("a mapped column cannot also hold an expanded row")
+		}
+		if msg, _ := r.(string); !strings.Contains(msg, `mapped to column "list"`) {
+			t.Errorf("panic should say the field is already a column: %v", r)
+		}
+	}()
+	sqlb.Describe[Bad]().Relation("List", "list_id")
+}
+
+func TestDescribeRelationRejectsAnUnknownForeignKey(t *testing.T) {
+	type Bad struct {
+		ID   string
+		List *descList `db:"-"`
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expanding on a column that does not exist should panic")
+		}
+		if msg, _ := r.(string); !strings.Contains(msg, "list_id") {
+			t.Errorf("panic should quote the missing column: %v", r)
+		}
+	}()
+	sqlb.Describe[Bad]().Relation("List", "list_id")
+}
+
+func TestDescribeRelationRejectsANonStructField(t *testing.T) {
+	type Bad struct {
+		ID     string
+		ListID string
+		Extra  []byte `db:"-"`
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("a relation field has to be a struct or a pointer to one")
+		}
+		if msg, _ := r.(string); !strings.Contains(msg, "want a struct") {
+			t.Errorf("panic should say what the field should have been: %v", r)
+		}
+	}()
+	sqlb.Describe[Bad]().Relation("Extra", "list_id")
+}
