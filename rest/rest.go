@@ -140,9 +140,13 @@ type Options struct {
 	MaxFilters      int
 	MaxSortTerms    int
 
-	// Expandable lists the relation names ?expand may name. Parsing validates
-	// against it. Performing the join is not implemented yet, so leaving this
-	// empty is currently the honest setting.
+	// Expandable lists the relation names ?expand may name.
+	//
+	// Performing the join is not implemented yet, and a resource cannot
+	// advertise a parameter it will then ignore: the OpenAPI document would
+	// offer ?expand, the parser would accept it, and the response would come
+	// back unexpanded with a 200. So a non-empty Expandable is rejected at
+	// startup until expansion lands, rather than left to convention.
 	Expandable []string
 
 	// DisableSearch rejects ?search even when columns are searchable.
@@ -171,6 +175,12 @@ func (o Options) validate() error {
 		return fmt.Errorf("rest: Options.Path %q must start with a slash", o.Path)
 	case o.Ops == 0:
 		return fmt.Errorf("rest: Options.Ops is empty for %s; a resource that exposes nothing should not be mounted", o.Path)
+	case len(o.Expandable) != 0:
+		// Startup is the only place this can be caught. At request time the
+		// parameter parses cleanly, so the failure would be a correct-looking
+		// 200 with the relation missing.
+		return fmt.Errorf("rest: %s declares Expandable %v, but ?expand does not perform the join yet; "+
+			"leave it empty until expansion is implemented", o.Path, o.Expandable)
 	}
 	return nil
 }

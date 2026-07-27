@@ -50,6 +50,21 @@ func (b *Builder[T]) Model() *Model { return b.model }
 // methods return it too, so checking it explicitly is optional.
 func (b *Builder[T]) Err() error { return b.err }
 
+// Fail records err and returns the builder, so a package outside sqlb can put
+// a query into the same error state the builder uses internally rather than
+// having to break the fluent chain with its own error return. Only the first
+// error is kept, matching fail.
+//
+// filter.Apply is the motivating caller: it assembles a builder from a parsed
+// request and needs somewhere to put "this request is valid but I cannot
+// express it".
+func (b *Builder[T]) Fail(err error) *Builder[T] {
+	if b.err == nil {
+		b.err = err
+	}
+	return b
+}
+
 func (b *Builder[T]) fail(format string, args ...any) *Builder[T] {
 	if b.err == nil {
 		b.err = fmt.Errorf(format, args...)

@@ -370,6 +370,25 @@ func TestResourceRefusesSingleRowOpsWithoutAPrimaryKey(t *testing.T) {
 	}
 }
 
+// ?expand parses cleanly and performs no join, so a resource that advertised it
+// would answer 200 with the relation missing — a failure no client can detect.
+// Startup is the last point that can see the discrepancy, so it fails there.
+func TestResourceRefusesExpandableUntilExpansionIsImplemented(t *testing.T) {
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+
+	opts := postOptions()
+	opts.Expandable = []string{"author"}
+
+	err := rest.Resource[Post, PostCreate, PostUpdate](api, db.db, opts)
+	if err == nil {
+		t.Fatal("expected mounting to fail: ?expand would be advertised but never performed")
+	}
+	if !strings.Contains(err.Error(), "expand") {
+		t.Errorf("error = %v, want it to name the unimplemented parameter", err)
+	}
+}
+
 func TestResourceRefusesAHiddenColumnThatWouldSerialise(t *testing.T) {
 	db := newFakeDB(t)
 	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))

@@ -37,9 +37,12 @@ func TestListHandler(t *testing.T) {
 	})
 
 	// The handler. This is the whole thing.
+	//
+	// Expandable is left empty on purpose: this handler applies the parsed
+	// query with filter.Apply, which performs no join, so declaring a relation
+	// expandable here would accept ?expand and answer without it.
 	opts := filter.Options{
-		Model:      sqlb.ModelOf[blog.Post](),
-		Expandable: []string{"author"},
+		Model: sqlb.ModelOf[blog.Post](),
 	}
 	var lastSQL string
 	handler := func(w http.ResponseWriter, r *http.Request) {

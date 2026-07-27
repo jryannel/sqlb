@@ -19,9 +19,6 @@
           "name": "org_id",
           "type": "uuid",
           "goType": "string",
-          "capabilities": [
-            "expand"
-          ],
           "references": {
             "relation": "org",
             "table": "orgs",
@@ -102,9 +99,6 @@
         "searchable": [
           "email",
           "name"
-        ],
-        "expandable": [
-          "org"
         ],
         "examples": [
           "GET /authors?id=eq.VALUE",
@@ -228,9 +222,6 @@
           "name": "author_id",
           "type": "uuid",
           "goType": "string",
-          "capabilities": [
-            "expand"
-          ],
           "references": {
             "relation": "author",
             "table": "authors",
@@ -369,9 +360,6 @@
           "title",
           "body"
         ],
-        "expandable": [
-          "author"
-        ],
         "examples": [
           "GET /posts?id=eq.VALUE",
           "GET /posts?sort=-title\u0026page=2\u0026per_page=20",
@@ -475,10 +463,6 @@
     {
       "name": "search",
       "form": "search=TERM — fans out over searchable columns"
-    },
-    {
-      "name": "expand",
-      "form": "expand=author — inlines an expandable relation"
     },
     {
       "name": "page",
