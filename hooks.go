@@ -37,19 +37,42 @@ type Hooks[T any] struct {
 	afterDelete  []func(context.Context, int64) error
 }
 
-var hookRegistry sync.Map // reflect.Type -> *Hooks[T]
+// Registry holds the hook sets for a set of models, keyed by type.
+//
+// Most programs never name one: On[T]() reaches a process default, and
+// registering at startup is the intended use. A registry becomes worth holding
+// when two of them need to differ — a test that wants isolation without Reset,
+// or a handle whose domain rules are not the process-wide ones. Attach it with
+// DB.WithHooks.
+type Registry struct {
+	m sync.Map // reflect.Type -> *Hooks[T]
+}
 
-// On returns the hook set for model T, creating it on first use.
+// NewRegistry returns an empty registry.
+func NewRegistry() *Registry { return &Registry{} }
+
+// defaultRegistry is what On[T]() reaches, and what New gives a handle unless
+// WithHooks says otherwise. It exists so that hooks registered before any
+// handle was built still apply to every handle.
+var defaultRegistry = NewRegistry()
+
+// On returns the hook set for model T in the process-default registry,
+// creating it on first use.
 func On[T any]() *Hooks[T] {
+	return OnIn[T](defaultRegistry)
+}
+
+// OnIn returns the hook set for model T in r, creating it on first use.
+func OnIn[T any](r *Registry) *Hooks[T] {
 	t := reflect.TypeOf((*T)(nil)).Elem()
-	if v, found := hookRegistry.Load(t); found {
+	if v, found := r.m.Load(t); found {
 		h, ok := v.(*Hooks[T])
 		if !ok {
 			panic(fmt.Sprintf("sqlb: hook registry holds %T for model %s", v, t))
 		}
 		return h
 	}
-	actual, _ := hookRegistry.LoadOrStore(t, &Hooks[T]{})
+	actual, _ := r.m.LoadOrStore(t, &Hooks[T]{})
 	h, ok := actual.(*Hooks[T])
 	if !ok {
 		panic(fmt.Sprintf("sqlb: hook registry holds %T for model %s", actual, t))
@@ -118,8 +141,10 @@ func (h *Hooks[T]) AfterDelete(fn func(context.Context, int64) error) *Hooks[T] 
 	return h
 }
 
-// Reset removes every registered hook for T. It exists for tests, which
-// otherwise leak registrations between cases.
+// Reset removes every registered hook for T. It exists for tests against the
+// process-default registry, which otherwise leak registrations between cases.
+// A test that can afford to name its own registry — NewRegistry, then
+// DB.WithHooks — gets the same isolation without the teardown.
 func (h *Hooks[T]) Reset() {
 	h.mu.Lock()
 	defer h.mu.Unlock()

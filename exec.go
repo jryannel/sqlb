@@ -28,7 +28,7 @@ type Executor interface {
 // builder twice does not accumulate their predicates.
 func (b *Builder[T]) All(ctx context.Context, db Executor) ([]T, error) {
 	q := b.Clone()
-	if err := On[T]().runBeforeQuery(ctx, q); err != nil {
+	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
 		return nil, err
 	}
 	query, args, err := q.SQL()
@@ -82,7 +82,7 @@ func (b *Builder[T]) First(ctx context.Context, db Executor) (T, error) {
 // grouped query it counts groups.
 func (b *Builder[T]) Count(ctx context.Context, db Executor) (int64, error) {
 	q := b.Clone()
-	if err := On[T]().runBeforeQuery(ctx, q); err != nil {
+	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
 		return 0, err
 	}
 	query, args, err := q.countSQL()
@@ -114,7 +114,7 @@ func (b *Builder[T]) Exists(ctx context.Context, db Executor) (bool, error) {
 	probe.orders = nil
 	probe.Limit(1)
 
-	if err := On[T]().runBeforeQuery(ctx, probe); err != nil {
+	if err := hooksFor[T](db).runBeforeQuery(ctx, probe); err != nil {
 		return false, err
 	}
 	query, args, err := probe.SQL()
@@ -146,7 +146,7 @@ func (b *Builder[T]) Exists(ctx context.Context, db Executor) (bool, error) {
 // Query hooks still run, so tenant scoping applies to aggregates too.
 func Collect[R, T any](ctx context.Context, db Executor, b *Builder[T]) ([]R, error) {
 	q := b.Clone()
-	if err := On[T]().runBeforeQuery(ctx, q); err != nil {
+	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
 		return nil, err
 	}
 	query, args, err := q.SQL()

@@ -79,6 +79,9 @@ guard ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
 
 `Executor` is the two-method subset of `*sql.DB` that the engine needs, so pgx
 works through its stdlib adapter and any instrumenting wrapper works unchanged.
+`sqlb.DB` is a handle over one, adding `WithTx` and a scoped hook registry; it
+satisfies `Executor` itself, which is what lets it be adopted without touching
+call sites ([ADR-0020](adr/0020-transaction-scoped-handle.md)).
 `rest` takes a `huma.API`, not a router, so the choice of chi, gin, echo or
 `net/http` — and all of that router's middleware — stays the application's.
 
@@ -98,7 +101,9 @@ A list request through `rest.Resource`:
    Cloning is what stops a hook's predicates accumulating when the same query
    value runs twice. A hook that returns an error aborts before any SQL is
    issued, so a missing tenant fails closed
-   ([ADR-0008](adr/0008-hooks-as-domain-seam.md)).
+   ([ADR-0008](adr/0008-hooks-as-domain-seam.md)). Which registry the hooks come
+   from is read off the executor: a `*sqlb.DB` carries one, anything else uses
+   the process default.
 4. **Compile.** The AST renders to SQL with `$N` placeholders. Values are always
    bind parameters. Identifiers are validated against the model and quoted.
    `LIMIT`/`OFFSET` are literals so the planner can see them — safe because both
@@ -164,8 +169,8 @@ check, and they exist because the module is `v0`:
 
 | Tier | What | Promise |
 |---|---|---|
-| **Stable** | `Query`/`Builder`, `F`/`Pred`/`And`/`Or`/`Not`/`If`, `Field` and its operators, `Col`/`TextCol`/`Typed`/`TextColumn`, `Order`, the aggregates, `InsertRows`/`UpdateRows`/`DeleteRows`, `On`/`Hooks`, `Describe`, `Collect`, `Executor`, `ErrNotFound`/`ErrUnscoped`, all of `filter` and `schema` | Changes are breaking changes and are treated as such |
-| **Provisional** | `Model`, `ColumnInfo`, `ModelOf`, `Selectable`, `Selection`, `Dialect`, `Postgres` | Public because `filter` and generated code need them across a package boundary. Expect movement |
+| **Stable** | `Query`/`Builder`, `F`/`Pred`/`And`/`Or`/`Not`/`If`, `Field` and its operators, `Col`/`TextCol`/`Typed`/`TextColumn`, `Order`, the aggregates, `InsertRows`/`UpdateRows`/`DeleteRows`, `On`/`Hooks`, `Describe`, `Collect`, `Executor`, `DB`/`New`/`WithTx`, `ErrNotFound`/`ErrUnscoped`, all of `filter` and `schema` | Changes are breaking changes and are treated as such |
+| **Provisional** | `Model`, `ColumnInfo`, `ModelOf`, `Selectable`, `Selection`, `Dialect`, `Postgres`, `Registry`/`OnIn`/`WithHooks`, `Beginner`, `TxFrom` | Public because `filter` and generated code need them across a package boundary, or — for the registry surface — because they are new enough that no one has used them in anger yet |
 | **Escape hatch** | `Expr` and the node types: `Raw`, `Binary`, `Unary`, `Call`, `Cast`, `BetweenExpr`, `List`, `Param`, `Column` | Use `Raw`, `RawPred`, `RawSel`. The rest is the compiler's vocabulary and will change without ceremony |
 
 The tiers exist because the obvious extraction does not work: `Expr` and `Raw`

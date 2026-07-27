@@ -281,7 +281,13 @@ Working and tested:
   document built from each column's capabilities
 - Insert (with default-omission and upsert), Update, Delete, all with a guard
   against unscoped mutations
-- Hooks: BeforeQuery / Before+AfterCreate / Before+AfterUpdate / Before+AfterDelete
+- Hooks: BeforeQuery / Before+AfterCreate / Before+AfterUpdate / Before+AfterDelete,
+  registered process-wide with `On[T]()` or scoped to a handle with `OnIn[T]`
+- `sqlb.DB` — a handle carrying an executor and a hook registry, with `WithTx`
+  for multi-statement units of work. It satisfies `Executor`, so it goes
+  wherever a `*sql.DB` went; `TxFrom(ctx)` is how a hook reads rows the same
+  transaction has written but not yet committed
+  ([ADR-0020](docs/adr/0020-transaction-scoped-handle.md))
 - Filter grammar with capability enforcement, type coercion and cost limits
 - Schema manifest (JSON), schema linting, and `Explain` with plan diagnostics
 - `sqlb.Describe[T]()` for runtime-only use: the schema DSL and codegen are
@@ -385,9 +391,11 @@ call site breaks:
 | `filter.Apply(b, q)` | `q.ApplyTo(b)` |
 | `sqlb.Query[T]()` + `db` on every terminal call | `db.Query[T]().…All(ctx)` |
 
-The third is the substantial one: a concrete `*sqlb.DB` handle can carry the
-executor, the dialect and a scoped hook registry, which removes both the `db`
-threading and the process-global `sqlb.On[T]()`.
+The third looked like the substantial one, and turned out to be two separate
+things. The *object graph* — a handle carrying the executor and a scoped hook
+registry — needed no new language feature and is built:
+[`sqlb.DB`](docs/adr/0020-transaction-scoped-handle.md). What 1.27 adds is only
+the call syntax, so `db` stops being threaded through every terminal.
 
 Interface methods still cannot declare type parameters, so `Executor` stays a
 plain interface and anything generic hangs off the concrete `*DB`.

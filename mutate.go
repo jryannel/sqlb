@@ -194,7 +194,7 @@ func (i *Insert[T]) allZero(col *ColumnInfo) bool {
 // Exec runs the insert, returning the stored rows with database defaults
 // applied. The caller's structs are updated in place as well.
 func (i *Insert[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
-	hooks := On[T]()
+	hooks := hooksFor[T](db)
 	for _, row := range i.rows {
 		if err := hooks.runBeforeCreate(ctx, row); err != nil {
 			return nil, err
@@ -345,7 +345,7 @@ func (u *Update[T]) SQL() (string, []any, error) {
 
 // Exec runs the update and returns the updated rows.
 func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
-	hooks := On[T]()
+	hooks := hooksFor[T](db)
 	if err := hooks.runBeforeUpdate(ctx, u); err != nil {
 		return nil, err
 	}
@@ -442,7 +442,7 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 
 // Exec runs the delete and returns the number of rows removed.
 func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
-	hooks := On[T]()
+	hooks := hooksFor[T](db)
 	if err := hooks.runBeforeDelete(ctx, d); err != nil {
 		return 0, err
 	}

@@ -545,6 +545,12 @@ type harness struct {
 	cols []string
 	rows [][]driver.Value
 	err  error
+	// Transaction control, used by db_test.go. BEGIN, COMMIT and ROLLBACK are
+	// appended to log alongside statements so a test can assert on the shape
+	// of a whole unit of work.
+	txErr      error
+	commitErr  error
+	lastTxOpts driver.TxOptions
 }
 
 var harnessSeq struct {

@@ -34,12 +34,14 @@ or deployed clients, not just call sites.
 
 Named in advance, so the break is a documented plan rather than a surprise.
 
-- **Hook registration.** `sqlb.On[T]()` reaches a process-global registry
-  ([ADR-0008](adr/0008-hooks-as-domain-seam.md)). When the transaction-scoped
-  handle lands it becomes a wrapper over a default registry, and hooks gain a
-  way to be scoped to a unit of work. Registrations written today keep
-  compiling; what changes is that a second registry becomes possible, and
-  `Reset`-based test isolation stops being the only option.
+- ~~**Hook registration.**~~ Landed after `v0.1.0`, and it broke nothing:
+  `sqlb.On[T]()` is now a wrapper over a process-default `Registry`, and
+  `OnIn[T](r)` reaches a scoped one
+  ([ADR-0020](adr/0020-transaction-scoped-handle.md)). Registrations written
+  against `v0.1.0` compile and behave identically. The one behavioural subtlety
+  worth knowing: which registry a statement uses is decided by the *dynamic
+  type* of the executor passed to it, so passing a raw `*sql.DB` where a scoped
+  `*sqlb.DB` was meant silently uses the default.
 - **Terminal call signatures**, when Go 1.27 arrives. `sqlb.Collect[R](ctx, db,
   b)`, `filter.Apply(b, q)` and the `db` threaded through every terminal call
   all gain method forms. The README's *Go 1.27 generic methods* section has the

@@ -55,7 +55,16 @@ Stated because it calibrates the rest, not as praise.
 
 ## Findings
 
-### 1. There is no transaction story above `Executor` — **blocking**
+### 1. There is no transaction story above `Executor` — **FIXED 2026-07-27**
+
+> Resolved after this review was written, and along the lines it recommended:
+> `sqlb.DB` carries an executor and a hook registry, `WithTx` runs a unit of
+> work with rollback on error and on panic, and `TxFrom(ctx)` lets a hook read
+> what its own transaction has written. One thing came out better than the
+> recommendation predicted — because `*DB` satisfies `Executor`, no call site
+> changed and `rest.Resource` needed no `*DB` parameter at all.
+> [ADR-0020](adr/0020-transaction-scoped-handle.md) records the decision and
+> what it costs. The finding is kept below as the argument that motivated it.
 
 `Executor` ([exec.go:17](../exec.go)) is `QueryContext` + `ExecContext`, which
 `*sql.Tx` satisfies, so the plumbing works. Nothing sits on top of it. There is
@@ -217,16 +226,21 @@ common objection — "why not just use sqlc" — into a compatibility story.
 
 | # | Finding | Severity | Effort |
 |---|---|---|---|
-| 5 | No release tag | Adoption | Trivial |
+| 5 | ~~No release tag~~ | Adoption | **Fixed** — `v0.1.0`, with [compatibility.md](compatibility.md) |
 | 3 | ~~`?expand` accepted, advertised, inert~~ | Correctness | **Fixed** |
 | 4 | Promote `Explain` to documented practice | Perception | Low, docs only |
-| 2 | No `AfterCommit` | Blocking | Low, after #1 |
+| 2 | No `AfterCommit` | Blocking | Low, and now unblocked |
 | 6 | No sqlc pairing story | Adoption | Low, docs only |
-| 1 | No transaction-scoped handle | Blocking | Moderate |
+| 1 | ~~No transaction-scoped handle~~ | Blocking | **Fixed** — [ADR-0020](adr/0020-transaction-scoped-handle.md) |
 
 Ordered by leverage per unit of effort, which is not the order they will
 naturally get done in — 1 is the one that matters most and 2 depends on it, so
 the remaining sequence is 5, 1, 2, then the two documents.
+
+**Where that sequence stands:** 5, 3 and 1 are done. 2 is next and is now a
+small change rather than a blocked one — `WithTx` is the only code that knows a
+commit succeeded, so the deferred-callback list has an obvious home. 4 and 6
+remain, and both are documentation.
 
 ## What would change the verdict
 
