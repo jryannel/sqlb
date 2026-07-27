@@ -7,6 +7,8 @@
 // both be called Post.
 package blogschema
 
+//go:generate go run ../gen
+
 import "github.com/jryannel/sqlb/schema"
 
 // Org is a tenant. Everything else hangs off it.

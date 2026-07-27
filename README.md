@@ -207,8 +207,10 @@ Working and tested:
 - Expression AST and Postgres compiler — predicates, groups, joins, aggregates,
   ordering, pagination, locking, raw-SQL escape hatch with placeholder renumbering
 - Generic query builder over struct tags; `Collect[R]` for aggregate shapes
-- Typed column facade (`Col[T]`, `TextCol[T]`) and a typed update wrapper,
-  hand-written in `example/blog` to the exact shape codegen must produce
+- Typed column facade (`Col[T]`, `TextCol[T]`) and a typed update wrapper
+- Code generation for models, the typed facade and the manifest (`codegen`).
+  The blog example is generated from its schema, so every behaviour test in it
+  is a test of the generator's output
 - Insert (with default-omission and upsert), Update, Delete, all with a guard
   against unscoped mutations
 - Hooks: BeforeQuery / Before+AfterCreate / Before+AfterUpdate / Before+AfterDelete
@@ -219,11 +221,10 @@ Working and tested:
 
 Not built yet, in the order they matter:
 
-1. **Codegen** — `sqlb generate` emitting models, typed column sets, migrations,
-   per-resource REST handlers, OpenAPI and a TypeScript client from the schema
-   package. Everything in `example/blog` is hand-written to the exact shape the
-   generator must produce, so it doubles as the generator's fixture.
-2. **Migrations** — DDL emission plus a diff against the live database.
+1. **Migrations** — DDL emission plus a diff against the live database. The file
+   rendering exists (`migrate`); the diff engine does not.
+2. **REST handlers and OpenAPI** — the generator emits models and the typed
+   facade today, not handlers.
 3. **`?expand`** — the grammar validates relation names; the joins are not
    performed yet.
 4. **Change feed** — transactional outbox written in the same transaction as
