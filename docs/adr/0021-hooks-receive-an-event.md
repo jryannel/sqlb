@@ -1,7 +1,9 @@
 # ADR-0021: A hook is handed an event, not a bare row
 
-- **Status:** Exploring, except the transaction, which is Working
-- **Confidence:** Low for the events; High for the transaction, which is built
+- **Status:** Working for the transaction; Revisiting for the events, which the
+  transaction largely pre-empted
+- **Confidence:** High for the transaction, which is built and in use; Low for
+  the events, whose motivating evidence has shrunk from three rules to one
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 
@@ -10,37 +12,66 @@
 [ADR-0008](0008-hooks-as-domain-seam.md) decided that hooks are where domain
 logic lives, and gave `BeforeQuery` the thing that makes that work: the builder
 itself. That half has held. `example/tasks` scopes six tables across
-twenty-five endpoints in one file of about 180 lines, most of it comment, and
-no handler in it mentions a tenant.
+twenty-five endpoints in one file, and no handler in it mentions a tenant.
 
 The write hooks did not get the same treatment, and building that example is
 what made the difference visible. Three domain rules could not be written as
-hooks, each for a different reason:
+hooks, each for a different reason. **Two of the three have since been resolved
+by the transaction this record proposed**; the list below is the evidence that
+motivated the record, and the section after it is the state today.
 
 - **"A task's list must be in the caller's workspace."** Needs one query.
   `BeforeCreate(ctx, *T)` receives the row and nothing else — no executor, no
-  handle — so it cannot ask the database anything. Pushed into a composite
+  handle — so it could not ask the database anything. Pushed into a composite
   foreign key in a hand-written migration.
 - **"`completed_at` follows `status`."** Needs to know what `status` is
   becoming. `BeforeUpdate` receives `*Update[T]` and can add assignments to it
   but cannot read the ones already there; there is no accessor. Pushed into a
   `BEFORE` trigger.
 - **"Creating a comment bumps the task's `comment_count`."** Needs both writes
-  in one transaction. `AfterCreate` has no executor either, and — the sharper
-  half — nothing in `rest/` or `mutate.go` opens a transaction, so every
-  generated create, update and delete runs under autocommit. `AfterCommit`,
-  which this project documents as the place for work that must not happen if the
-  write aborts, is therefore unreachable from any generated write. Pushed into a
-  hand-written endpoint, and `comments` is not exposed for create at all.
+  in one transaction. `AfterCreate` had no executor either, and — the sharper
+  half — nothing in `rest/` or `mutate.go` opened a transaction, so every
+  generated create, update and delete ran under autocommit. `AfterCommit`, which
+  this project documents as the place for work that must not happen if the write
+  aborts, was therefore unreachable from any generated write. Pushed into a
+  hand-written endpoint, and `comments` was not exposed for create at all.
 
-The third is the one that matters most, because it is not a missing convenience
-but a documented feature that no generated handler can reach.
+### What the transaction changed
 
-Two constraints make the fix less obvious than it looks. sqlb does not own the
-write path the way a framework does — there is no place it can unilaterally
-decide a transaction exists. And `Update[T]` is a *statement* over however many
-rows match, not a hydrated record, which is a real capability: a set-based
-update that never reads a row.
+The transaction shipped first, and its consequence was larger than this record
+predicted. Wrapping a generated write means the hook's context carries that
+transaction, so `sqlb.TxFrom` finds one — which answers the *executor* half of
+the complaint above wherever a generated write is running, without any of the
+event types this record proposes.
+
+Of the three rules:
+
+- The **first** could now be a hook. It is still a composite foreign key, and
+  that was always the better answer for a reason unrelated to this record: a
+  constraint also binds the migration, the repair script and the psql session,
+  none of which run this application's hooks.
+- The **second is unchanged.** A hook still cannot read the statement it is
+  handed. This is the rule the remaining proposal is for.
+- The **third is now a hook.** `BeforeCreate` reads the task on the transaction
+  and `AfterCreate` moves the counter and registers the `AfterCommit`.
+  `example/tasks/app/comments.go` is deleted and `comments` is exposed for
+  create again — the invariant moved from a route to the model, which is a
+  stronger guarantee than the endpoint gave rather than a tidier one.
+
+So what remains of the original complaint is narrower than it was, and worth
+stating precisely rather than leaving the list above to imply more:
+
+- an executor is available **only where a transaction is**. A `BeforeQuery` hook
+  on an ordinary read still has none, and reads are deliberately not wrapped.
+- `BeforeUpdate` still cannot read its own assignments.
+
+One constraint remains, and one turned out to be wrong. `Update[T]` is still a
+*statement* over however many rows match, not a hydrated record, and that is a
+real capability: a set-based update that never reads a row. But the claim that
+sqlb "does not own the write path, so there is no place it can unilaterally
+decide a transaction exists" was false — `rest` is exactly such a place, because
+it owns the handler. The mistake was reading a property of the *engine* as a
+property of the whole project.
 
 [PocketBase's event hooks](https://pocketbase.io/docs/go-event-hooks/) are the
 closest prior art. Every handler receives an event carrying `e.App`, so a hook
@@ -106,11 +137,16 @@ hooks, string-keyed registration, or error hooks. Reasons in the alternatives.
 
 ## Consequences
 
-**What this buys.** The three rules above become choices rather than
-workarounds. `AfterCommit` becomes reachable from generated CRUD, which is the
-difference between a documented feature and a decorative one. Validation against
-the database — the single most common thing a `BeforeCreate` wants — stops
-requiring a hand-written endpoint.
+**What this buys.** The transaction half has already bought most of it, and
+saying so is the point of keeping this section honest. `AfterCommit` is
+reachable from generated CRUD, which is the difference between a documented
+feature and a decorative one; and validation against the database — the single
+most common thing a `BeforeCreate` wants — no longer needs a hand-written
+endpoint, because `TxFrom` finds the transaction the handler opened.
+
+What the **events** would still buy is narrower: an executor a hook can rely on
+without first asking whether one exists, and — the only remaining rule with
+evidence behind it — a `BeforeUpdate` that can read its own assignments.
 
 **What this costs.** An event struct per operation is public API that has to
 stay stable, and it is the kind of type that accretes fields.
@@ -128,11 +164,16 @@ latency figure ([ADR-0019](0019-pgbouncer-in-the-path.md)).
 `Changes()` exposes a statement's internals, so a hook can come to depend on the
 shape of an update some other package writes.
 
-And there will be two places to write the same rule. `example/tasks` keeps its
-`completed_at` trigger deliberately even though a hook could do it, because a
-trigger also covers the backfill migration and the psql session at 3am. Making
-the hook capable does not make it the right answer, and the documentation will
-have to say so.
+And there are now two places to write the same rule. `example/tasks` keeps the
+composite foreign key binding a task's list to its workspace, even though the
+transaction has made that expressible as a hook — because a constraint also
+binds the backfill migration and the psql session at 3am, neither of which runs
+this application's hooks. Making a hook capable does not make it the right
+answer, and the documentation has to say so or the capability becomes a trap.
+
+(The `completed_at` trigger is *not* an instance of this. A hook cannot express
+that rule at all today, which is the one gap the events proposal still has
+evidence for.)
 
 ## What would change our mind
 
@@ -192,11 +233,17 @@ because `Update[T]` is set-based: hydrating means reading the matching rows
 first, which gives up updating N rows without reading any of them. `Changes()`
 answers the same question at a fraction of the cost.
 
-**Pass the executor through the context instead.** Closest to today, and it needs
-no new types — `TxFrom(ctx)` already does exactly this. Rejected because a lookup
-that returns nothing most of the time *is* the present problem, and because the
-prior art warns against the closure-captured equivalent for deadlock reasons a
-context value shares.
+**Pass the executor through the context instead.** Closest to today, needing no
+new types — `TxFrom(ctx)` already does exactly this. It was rejected on the
+grounds that a lookup returning nothing most of the time *is* the problem.
+
+**That rejection has been overtaken, and this is now what happens.** Wrapping
+generated writes made the lookup succeed on the path that matters, so the
+alternative won on the ground rather than on the argument. What the argument got
+right is narrower and still true: the lookup returns nothing on a read, and a
+hook cannot tell "no transaction" from "not wrapped" without checking. That is a
+worse interface than a field on an event, and it is the residual case the events
+would tidy — a much smaller prize than the one this record was written for.
 
 **Leave it, and narrow the claim instead.** Document hooks as being for scoping
 and stamping only, and say plainly that domain rules belong in triggers and
@@ -217,3 +264,20 @@ honest version of this alternative is an edit to ADR-0008, not a smaller change.
   5xx. The events and `Changes()` remain unbuilt and Exploring — nothing here
   gives a hook a way to read the database, which is what the first two rules
   needed.
+- 2026-07-27 — **Corrected the entry above, and the Context with it.** The
+  transaction *does* give a hook a way to read the database: it wraps the write,
+  so the hook's context carries the transaction and `TxFrom` finds one. That was
+  a consequence nobody noticed while building it, and this record spent a day
+  arguing for an executor it had already been handed on the path that matters.
+  The first rule is therefore solvable as a hook, and the second never needed
+  database access at all — it needs to read a *statement*, which is a different
+  gap the previous entry conflated with this one.
+
+  Consequences recorded: `example/tasks/app/comments.go` is deleted and the
+  invariant moved to hooks on the model; the "pass the executor through the
+  context" alternative is marked as having won on the ground rather than on the
+  argument; and the claim that sqlb "does not own the write path" is marked
+  wrong — `rest` does own it. Status moved to Revisiting for the events half,
+  because two of its three motivating cases are gone and the remaining one
+  (`BeforeUpdate` cannot read its own assignments) is a smaller prize than the
+  record was written for.
