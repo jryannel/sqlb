@@ -473,6 +473,8 @@ func (t tracer) QueryContext(ctx context.Context, q string, args ...any) (*sql.R
 |---|---|
 | [docs/vision.md](docs/vision.md) | What this is for, non-goals, and where it goes next |
 | [docs/architecture.md](docs/architecture.md) | How the pieces fit, the request path, where safety lives, API tiers |
+| [docs/compatibility.md](docs/compatibility.md) | What the current tag freezes, and which surfaces are expected to move |
+| [docs/review-adoption-readiness.md](docs/review-adoption-readiness.md) | An outside read on what blocks adoption, and what would change the verdict |
 | [docs/adr/](docs/adr/) | Decision records — what was decided, why, and what would change our mind |
 
 The decision records are living documents: they describe current understanding,
