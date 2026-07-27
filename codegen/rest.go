@@ -260,6 +260,16 @@ func renderRegister(b *bytes.Buffer, exposed []*schema.TableDef) {
 		if r.MaxFilters > 0 {
 			fmt.Fprintf(b, "\t\tMaxFilters: %d,\n", r.MaxFilters)
 		}
+		// Expandable comes from the columns rather than from REST, because
+		// .Expandable() is already the opt-in and a second one on the resource
+		// would only be a way to disagree with the first.
+		if rel := expandableRelations(t); len(rel) > 0 {
+			quoted := make([]string, len(rel))
+			for i, name := range rel {
+				quoted[i] = fmt.Sprintf("%q", name)
+			}
+			fmt.Fprintf(b, "\t\tExpandable: []string{%s},\n", strings.Join(quoted, ", "))
+		}
 		fmt.Fprintf(b, "\t}); err != nil {\n\t\treturn err\n\t}\n")
 	}
 	fmt.Fprintln(b, "\treturn nil\n}")

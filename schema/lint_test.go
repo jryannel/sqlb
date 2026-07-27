@@ -152,17 +152,17 @@ func TestManifestDescribesTheQueryableSurface(t *testing.T) {
 	if !contains(posts.REST.Filterable, "status") || !contains(posts.REST.Searchable, "title") {
 		t.Errorf("capabilities not reported: %+v", posts.REST)
 	}
-	// The manifest reports what a caller can actually ask for. "org" is
-	// declared Expandable above, but ?expand performs no join yet, so
-	// advertising it would send a client into a request that returns 200 with
-	// the relation missing. This assertion inverts when expansion lands.
-	if len(posts.REST.Expandable) != 0 {
-		t.Errorf("manifest advertises expansion, which is not implemented: %+v", posts.REST.Expandable)
+	// The manifest reports what a caller can actually ask for, and expansion
+	// now performs the join. It is reported under the *relation* name: the
+	// column is "org_id", but the request is ?expand=org.
+	if !contains(posts.REST.Expandable, "org") {
+		t.Errorf("manifest does not advertise the expandable relation: %+v", posts.REST.Expandable)
 	}
-	for _, c := range posts.Columns {
-		if contains(c.Capabilities, "expand") {
-			t.Errorf("column %s advertises the expand capability, which is not implemented", c.Name)
-		}
+	if contains(posts.REST.Expandable, "org_id") {
+		t.Errorf("manifest advertises the foreign key column, not the relation: %+v", posts.REST.Expandable)
+	}
+	if !contains(columnByName(posts, "org_id").Capabilities, "expand") {
+		t.Error("org_id does not carry the expand capability")
 	}
 	if len(posts.REST.Examples) == 0 {
 		t.Error("no worked examples emitted")
@@ -188,6 +188,18 @@ func TestManifestDescribesTheQueryableSurface(t *testing.T) {
 	if !strings.Contains(string(b), "filterOperators") {
 		t.Error("the operator vocabulary should be in the manifest")
 	}
+}
+
+// columnByName panics rather than returning a zero value, so an assertion
+// about a column that vanished reads as a missing column instead of a
+// capability that mysteriously stopped being reported.
+func columnByName(t *schema.TableManifest, name string) schema.ColumnManifest {
+	for _, c := range t.Columns {
+		if c.Name == name {
+			return c
+		}
+	}
+	panic("no column " + name + " in " + t.Name)
 }
 
 func contains(s []string, v string) bool {

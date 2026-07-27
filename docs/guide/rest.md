@@ -194,19 +194,49 @@ bounds the cost of a single query. Both default to the `filter` package's values
 when left zero, and both are worth setting per resource in the schema's
 `Expose`.
 
-## What is not built
+## Expanding a relation
 
-`?expand` validates relation names but does not perform the join yet. Rather
-than accepting the parameter and answering without it, every surface refuses:
-`rest.Resource` rejects a non-empty `Options.Expandable` at startup,
-`filter.Apply` fails the builder rather than dropping a parsed `?expand`, and
-the manifest reports neither the capability nor the relation names.
-`schema.Ref(…).Expandable()` still parses, so schemas can declare the intent;
-nothing acts on it.
+`schema.Ref("list", List).Expandable()` makes a reference reachable inline:
 
-A startup rejection is the only place this can be caught — at request time the
-parameter parses cleanly, so the failure would be a correct-looking 200 with the
-relation missing.
+```
+GET /tasks?expand=list
+```
+
+```json
+{
+  "id": "01937...",
+  "list_id": "01936...",
+  "list": { "id": "01936...", "name": "Backlog", "color": "#6b7280" }
+}
+```
+
+The key stays where it was — expansion adds the row, it does not replace the
+reference — and the relation is named `list`, not `list_id`: the parameter names
+the relation, the column keeps its own name.
+
+It is one statement, a `LEFT JOIN` and a `json_build_object` over the target's
+columns. Not two queries: the batched `WHERE id IN (…)` alternative runs at a
+later snapshot, so a row can vanish between the two and a caller gets a null
+expansion for a reference the database still holds.
+
+`Hidden` survives the join. The target's columns are listed explicitly rather
+than taken with `row_to_json`, so a hidden column of the expanded table is as
+absent from an expansion as it is from the table's own responses — otherwise
+`?expand` would be a way to read a column the resource refuses to serve.
+
+Codegen wires all of it: the relation field on the model, and the resource's
+`Expandable` list. Nothing here is hand-written.
+
+A relation the schema did not mark expandable is refused with the list of the
+ones that would have worked, and an unexpanded request pays for no join at all.
+
+### Hooks do not follow the join
+
+A `BeforeQuery` hook registered on the target model does not run for an
+expansion — the target arrives as a joined subexpression, not as a query of its
+own. Where a hook enforces a boundary the expansion has to respect, the schema
+has to enforce it too: `example/tasks` keeps a task and its list in the same
+workspace with a composite foreign key, not with the hook.
 
 ## Next
 

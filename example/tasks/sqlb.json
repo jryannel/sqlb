@@ -466,7 +466,8 @@
           "type": "uuid",
           "goType": "string",
           "capabilities": [
-            "filter"
+            "filter",
+            "expand"
           ],
           "references": {
             "relation": "list",
@@ -700,10 +701,14 @@
           "title",
           "description"
         ],
+        "expandable": [
+          "list"
+        ],
         "examples": [
           "GET /tasks?id=eq.VALUE",
           "GET /tasks?sort=-title\u0026page=2\u0026per_page=20",
           "GET /tasks?search=TERM",
+          "GET /tasks?expand=list",
           "GET /tasks?or=(id.eq.A,workspace_id.eq.B)"
         ]
       }

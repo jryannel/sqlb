@@ -48,6 +48,11 @@ type compiler struct {
 	args []any
 	d    Dialect
 	err  error
+
+	// base is the table an unqualified column belongs to. Empty while the
+	// statement names one table, which is the common case and the one whose
+	// SQL should stay readable. See qualifyTo.
+	base string
 }
 
 func newCompiler(d Dialect) *compiler {
@@ -98,11 +103,36 @@ func (c *compiler) table(name string) {
 	c.ident(name)
 }
 
+// qualifyTo makes base the table unqualified columns resolve to, and returns a
+// function restoring the previous setting.
+//
+// Only a statement that joins needs this, and only a statement that joins gets
+// it: single-table SQL keeps its bare column names, which is what a person
+// reading a log wants to see. The restore matters because compilation nests —
+// a grouped Count wraps the whole query in a subselect, and the outer statement
+// must not inherit the inner one's base.
+func (c *compiler) qualifyTo(base string) func() {
+	prev := c.base
+	c.base = base
+	return func() { c.base = prev }
+}
+
 // column renders an optionally qualified column reference. The qualifier may
 // itself be schema-qualified.
+//
+// A column with no qualifier of its own takes the statement's base table, if it
+// has one. This is not cosmetic: `?sort=name&expand=list` puts two tables with
+// a `name` in one statement, and Postgres refuses an ambiguous reference
+// outright (SQLSTATE 42702) rather than picking. Resolving to the base table is
+// what the caller meant — every unqualified name it can write, from ?select,
+// ?sort or a filter, names a column of the model being queried.
 func (c *compiler) column(col Column) {
-	if col.Table != "" {
-		c.table(col.Table)
+	table := col.Table
+	if table == "" {
+		table = c.base
+	}
+	if table != "" {
+		c.table(table)
 		c.write(".")
 	}
 	c.ident(col.Name)

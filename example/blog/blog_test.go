@@ -38,9 +38,10 @@ func TestListHandler(t *testing.T) {
 
 	// The handler. This is the whole thing.
 	//
-	// Expandable is left empty on purpose: this handler applies the parsed
-	// query with filter.Apply, which performs no join, so declaring a relation
-	// expandable here would accept ?expand and answer without it.
+	// Expandable is left empty on purpose. filter.Apply would perform the join
+	// — blog.Post declares author expandable — but this test is about the
+	// filter grammar reaching a hand-written handler, and an expansion here
+	// would only add a column to every assertion below.
 	opts := filter.Options{
 		Model: sqlb.ModelOf[blog.Post](),
 	}

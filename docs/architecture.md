@@ -245,8 +245,7 @@ working is worse than no test, so those are exercised as real build attempts.
   production wherever one was uncommented by hand.
 - No change feed, and no generated TypeScript client. See the
   [vision](vision.md).
-- `?expand` validates relation names but does not perform the join, so
-  `rest.Options.Expandable` should stay empty until it exists. Every surface
-  that would promise expansion refuses rather than answering without it:
-  `rest.Resource` rejects a non-empty `Options.Expandable` at startup, and
-  `filter.Apply` fails the builder rather than dropping a parsed `?expand`.
+- `?expand` resolves one level. A relation expands to its row; that row's own
+  relations do not expand in turn, and there is no `?expand=list.workspace`.
+  One level is a join per relation and a bounded statement; nesting is where a
+  depth limit and a cost model have to be argued for, and neither has been.

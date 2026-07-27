@@ -13,11 +13,11 @@ const ManifestVersion = "1"
 
 // Manifest is a machine-readable description of a schema: every table, every
 // column, and — the part that matters most — exactly what a client may filter,
-// sort and search on each exposed resource.
+// sort, search and expand on each exposed resource.
 //
 // It reports capabilities that work, not capabilities that are declared. The
-// two differ today only for ?expand, which the DSL accepts and no request can
-// yet use; see RESTManifest.Expandable.
+// two coincide today; where they ever diverge again, this file is what has to
+// keep telling the truth.
 //
 // It exists because reading a Go DSL to answer "what can I query here?" is a
 // poor interface for a program. The manifest answers it directly, in one file,
@@ -94,11 +94,11 @@ type RESTManifest struct {
 	Sortable   []string `json:"sortable"`
 	Searchable []string `json:"searchable"`
 
-	// Expandable stays declared but is deliberately left empty: ?expand does
-	// not perform the join yet, and the manifest describes what a caller can
-	// actually ask for. Populating it would send an agent reading this document
-	// straight into a request that returns 200 with the relation missing.
-	// Filling it in is part of implementing expansion, not a separate change.
+	// Expandable names the relations ?expand may pull in. Each is the relation
+	// name, not the foreign key column: ?expand=list, not ?expand=list_id.
+	//
+	// Only internal references appear. An ExternalRef crosses a module
+	// boundary, which is exactly the join this schema will not perform.
 	Expandable []string `json:"expandable,omitempty"`
 
 	Examples []string `json:"examples,omitempty"`
@@ -164,9 +164,7 @@ func (t *TableDef) manifest() TableManifest {
 			name string
 		}{
 			{d.Filterable, "filter"}, {d.Sortable, "sort"},
-			{d.Searchable, "search"},
-			// "expand" is omitted: the capability can be declared on a Ref, but
-			// no request can currently use it. See RESTManifest.Expandable.
+			{d.Searchable, "search"}, {d.Expandable, "expand"},
 		} {
 			if c.on {
 				cm.Capabilities = append(cm.Capabilities, c.name)
@@ -229,8 +227,11 @@ func (t *TableDef) restManifest() *RESTManifest {
 		if d.Searchable {
 			rm.Searchable = append(rm.Searchable, d.Name)
 		}
-		// d.Expandable is intentionally not reported here; see
-		// RESTManifest.Expandable for why.
+		// The relation name, not the column: ?expand names the relation, and a
+		// caller reading this should not have to strip an "_id" to guess it.
+		if d.Expandable && d.Ref != nil && !d.Ref.External {
+			rm.Expandable = append(rm.Expandable, d.Ref.Name)
+		}
 	}
 	rm.Examples = t.examples(rm)
 	return rm
@@ -249,6 +250,9 @@ func (t *TableDef) examples(rm *RESTManifest) []string {
 	}
 	if len(rm.Searchable) > 0 {
 		out = append(out, fmt.Sprintf("GET %s?search=TERM", rm.Path))
+	}
+	if len(rm.Expandable) > 0 {
+		out = append(out, fmt.Sprintf("GET %s?expand=%s", rm.Path, rm.Expandable[0]))
 	}
 	if len(rm.Filterable) > 1 {
 		out = append(out, fmt.Sprintf("GET %s?or=(%s.eq.A,%s.eq.B)",

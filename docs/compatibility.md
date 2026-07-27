@@ -46,9 +46,9 @@ Named in advance, so the break is a documented plan rather than a surprise.
   b)`, `filter.Apply(b, q)` and the `db` threaded through every terminal call
   all gain method forms. The README's *Go 1.27 generic methods* section has the
   table. These are additive — the functions stay.
-- **`?expand`.** Declaring it is currently refused at startup rather than
-  accepted and ignored. When the joins land, the refusal is removed and the
-  capability starts working. Nothing that compiles today stops compiling.
+- **Nested `?expand`.** One level resolves today. If nesting lands it arrives as
+  a longer name — `?expand=list.workspace` — under a depth limit, so nothing a
+  request can send today changes meaning.
 
 ## Not covered
 

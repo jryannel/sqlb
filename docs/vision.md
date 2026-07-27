@@ -122,10 +122,11 @@ hardest correctness problem in the project, because a wrong diff is
 destructive. Expect this to need a review-before-apply workflow and a way to
 express what cannot be inferred, such as a column rename.
 
-**3. Relation expansion.** `?expand=author` currently validates the relation
-name but does not join, which is why `rest.Options.Expandable` should stay empty. Doing it well means jsonb aggregation and a depth limit,
-and it is what makes the REST layer competitive with hand-written endpoints for
-real screens.
+**3. Relation expansion.** One level of `?expand=author` is built: a LEFT JOIN
+and a `json_build_object` in the same statement, wired end to end by codegen.
+What is left is what makes it competitive with hand-written endpoints on a real
+screen — nesting under a depth limit, and the reverse direction, a collection of
+children rather than a single parent.
 
 **4. The change feed.** A transactional outbox, a dispatcher woken by
 `LISTEN/NOTIFY`, and fan-out to `AfterCommit` hooks and live subscribers

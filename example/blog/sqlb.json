@@ -19,6 +19,9 @@
           "name": "org_id",
           "type": "uuid",
           "goType": "string",
+          "capabilities": [
+            "expand"
+          ],
           "references": {
             "relation": "org",
             "table": "orgs",
@@ -100,10 +103,14 @@
           "email",
           "name"
         ],
+        "expandable": [
+          "org"
+        ],
         "examples": [
           "GET /authors?id=eq.VALUE",
           "GET /authors?sort=-name\u0026page=2\u0026per_page=20",
           "GET /authors?search=TERM",
+          "GET /authors?expand=org",
           "GET /authors?or=(id.eq.A,email.eq.B)"
         ]
       }
@@ -222,6 +229,9 @@
           "name": "author_id",
           "type": "uuid",
           "goType": "string",
+          "capabilities": [
+            "expand"
+          ],
           "references": {
             "relation": "author",
             "table": "authors",
@@ -359,10 +369,14 @@
           "title",
           "body"
         ],
+        "expandable": [
+          "author"
+        ],
         "examples": [
           "GET /posts?id=eq.VALUE",
           "GET /posts?sort=-title\u0026page=2\u0026per_page=20",
           "GET /posts?search=TERM",
+          "GET /posts?expand=author",
           "GET /posts?or=(id.eq.A,title.eq.B)"
         ]
       }

@@ -252,6 +252,14 @@ func (b *Builder[T]) SQL() (string, []any, error) {
 }
 
 func (b *Builder[T]) compile(c *compiler) {
+	// Once a second table is in the statement, an unqualified column is a
+	// coin toss Postgres refuses to make. Everything a caller can name — the
+	// projection, a filter, a sort — is a column of T, so T's table is the
+	// answer.
+	if b.joined() {
+		defer c.qualifyTo(b.from())()
+	}
+
 	c.write("SELECT ")
 	if b.distinct {
 		c.write("DISTINCT ")
@@ -365,6 +373,11 @@ func (b *Builder[T]) countSQL() (string, []any, error) {
 	counted.limit, counted.offset = nil, nil
 	counted.lock = ""
 	counted.distinct = false
+	// Expansions join on the target's primary key, so they never change how
+	// many rows match — and counting is the one place the joined row is not
+	// read at all. Dropping them keeps ?count=exact from paying for a join
+	// whose result is discarded.
+	counted.expand = nil
 	counted.compile(c)
 	return c.result()
 }
@@ -381,3 +394,8 @@ func (b *Builder[T]) from() string {
 	}
 	return b.model.Table
 }
+
+// joined reports whether the statement brings in a second table, by an explicit
+// join or by an expansion. It is what decides whether the default projection
+// has to be qualified.
+func (b *Builder[T]) joined() bool { return len(b.joins) > 0 || len(b.expand) > 0 }

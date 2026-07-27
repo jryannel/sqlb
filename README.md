@@ -91,9 +91,7 @@ Postgres only. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING` are all
 load-bearing; multi-dialect support would cost the best features.
 
 Not built yet, in the order they matter: a TypeScript client from the generated
-OpenAPI document; `?expand` — the grammar validates relation names, but every
-surface refuses the parameter rather than accepting it and answering without it;
-a durable change feed; and a command-line entry point.
+OpenAPI document; a durable change feed; and a command-line entry point.
 [Vision](https://jryannel.github.io/sqlb/project/vision/) has the detail.
 
 ## Documentation

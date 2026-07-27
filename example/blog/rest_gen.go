@@ -208,6 +208,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 		Ops:             rest.OpCreate | rest.OpRead | rest.OpUpdate | rest.OpDelete | rest.OpList,
 		DefaultPageSize: 25,
 		MaxPageSize:     100,
+		Expandable:      []string{"org"},
 	}); err != nil {
 		return err
 	}
@@ -229,6 +230,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 		DefaultPageSize: 20,
 		MaxPageSize:     100,
 		MaxFilters:      12,
+		Expandable:      []string{"author"},
 	}); err != nil {
 		return err
 	}

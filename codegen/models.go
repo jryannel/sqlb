@@ -57,6 +57,11 @@ func renderModels(opts Options) ([]byte, error) {
 		} else {
 			fmt.Fprintf(b, "// %s is a row of %s.\n", typeName, t.Name())
 		}
+		rels, err := relationsOf(t)
+		if err != nil {
+			return nil, err
+		}
+
 		fmt.Fprintf(b, "type %s struct {\n", typeName)
 		for _, f := range t.Fields() {
 			d := f.Desc()
@@ -66,6 +71,14 @@ func renderModels(opts Options) ([]byte, error) {
 				fmt.Fprintf(b, " // %s", c)
 			}
 			fmt.Fprintln(b)
+
+			// The relation sits directly under the key it expands, because the
+			// two are one declaration split across two fields and reading them
+			// apart is how they come to disagree.
+			if rel, ok := rels[d.Name]; ok {
+				fmt.Fprintf(b, "\t%s *%s `db:\"-\" json:%q sqlb:%q` // filled in by ?expand=%s\n",
+					rel.field, rel.target, rel.relation+",omitempty", "expands="+d.Name, rel.relation)
+			}
 		}
 		fmt.Fprintln(b, "}")
 
@@ -76,6 +89,80 @@ func renderModels(opts Options) ([]byte, error) {
 	}
 
 	return gofmt(opts.modelsFile(), b.Bytes())
+}
+
+// relation is the second half of an expandable reference: the typed field an
+// expanded row lands in.
+type relation struct {
+	field    string // Go field name, e.g. "List"
+	target   string // Go type of the expanded model, e.g. "List"
+	relation string // name on the wire, e.g. "list"
+}
+
+// relationsOf returns the relation field to emit after each expandable
+// reference column, keyed by that column's name.
+//
+// An expandable reference is two struct fields working together. The foreign
+// key stays an ordinary column carrying the `expand` capability, and beside it
+// sits a `db:"-"` field the joined row is scanned into — no projection selects
+// it, no insert writes it, no update sets it. The runtime links the two through
+// the `expands=` tag; sqlb's relation.go is where that is read.
+//
+// Only internal references qualify. An ExternalRef names a table this module
+// does not own, and the schema already refuses to mark one Expandable.
+//
+// Note what this does *not* check: whether the target table is itself exposed
+// over REST. Expanding a relation into an unexposed table is a legitimate
+// design — the row is reachable inline without the table acquiring a collection
+// endpoint of its own — and `.Expandable()` is the explicit opt-in that says so.
+// Hidden columns of the target are stripped by the join either way.
+func relationsOf(t *schema.TableDef) (map[string]relation, error) {
+	// Every column already owns its Go name, and a relation that collided with
+	// one would emit a struct with two identical fields — which go/format
+	// accepts, because it parses without type-checking, so the break would
+	// surface at the consumer's next build instead of here.
+	taken := map[string]string{}
+	for _, f := range t.Fields() {
+		taken[GoName(f.Desc().Name)] = "column " + f.Desc().Name
+	}
+
+	out := map[string]relation{}
+	for _, f := range t.Fields() {
+		d := f.Desc()
+		// A nil Ref.Table on an internal reference is already refused by
+		// Registry.Validate, which render runs first.
+		if !d.Expandable || d.Ref == nil || d.Ref.External || d.Ref.Table == nil {
+			continue
+		}
+		name := GoName(d.Ref.Name)
+		if by, dup := taken[name]; dup {
+			return nil, fmt.Errorf(
+				"codegen: table %s: relation %q wants the Go field %s, which %s already uses; "+
+					"rename one of them, or drop .Expandable()",
+				t.Name(), d.Ref.Name, name, by)
+		}
+		taken[name] = "relation " + d.Ref.Name
+
+		out[d.Name] = relation{
+			field:    name,
+			target:   TypeName(d.Ref.Table.LocalName()),
+			relation: d.Ref.Name,
+		}
+	}
+	return out, nil
+}
+
+// expandableRelations names the relations a resource may expand, in
+// declaration order. It drives both the generated rest.Options and the
+// manifest, so the two cannot drift apart.
+func expandableRelations(t *schema.TableDef) []string {
+	var out []string
+	for _, f := range t.Fields() {
+		if d := f.Desc(); d.Expandable && d.Ref != nil && !d.Ref.External {
+			out = append(out, d.Ref.Name)
+		}
+	}
+	return out
 }
 
 // goType is the Go type for a column, using the generated enum type where the

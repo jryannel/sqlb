@@ -83,6 +83,7 @@ type Task struct {
 	ID           string       `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
 	WorkspaceID  string       `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly"`
 	ListID       string       `db:"list_id" json:"list_id" sqlb:"filter,expand"`
+	List         *List        `db:"-" json:"list,omitempty" sqlb:"expands=list_id"` // filled in by ?expand=list
 	AssigneeID   *string      `db:"assignee_id" json:"assignee_id" sqlb:"filter"`
 	AuthorID     string       `db:"author_id" json:"author_id" sqlb:"readonly"`
 	Title        string       `db:"title" json:"title" sqlb:"filter,sort,search"`

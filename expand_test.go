@@ -174,3 +174,51 @@ func toString(v any) string {
 	}
 	return ""
 }
+
+// TestExpandQualifiesEveryColumnOfTheBaseTable is the regression for the one
+// mistake here that the fake driver could not see.
+//
+// Both tables have an `id` and a `name`. Unqualified, `SELECT "id" … LEFT JOIN
+// "lists"` is not a query that returns the wrong row — it is not a query at
+// all: Postgres rejects it with `column reference "id" is ambiguous`
+// (SQLSTATE 42702). The in-memory driver accepts any string, so this held green
+// for a whole feature before a real database saw it.
+//
+// Every column a caller can name — the projection, a filter, a sort — is a
+// column of T, so T's table is what an unqualified name resolves to.
+func TestExpandQualifiesEveryColumnOfTheBaseTable(t *testing.T) {
+	sql, _, err := sqlb.Query[expTask]().
+		Expand("list").
+		Select(sqlb.F("id"), sqlb.F("title")).
+		Where(sqlb.F("title").Eq("x")).
+		OrderBy(sqlb.F("id").Asc()).
+		SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+
+	for _, want := range []string{
+		`SELECT "tasks"."id", "tasks"."title"`,
+		`WHERE "tasks"."title" = $1`,
+		`ORDER BY "tasks"."id" ASC`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("statement missing %q:\n%s", want, sql)
+		}
+	}
+}
+
+// The qualification is bought by the join, not paid for by every query. With
+// nothing joined, a predicate keeps the bare column name it was written with,
+// which is most of what anyone ever reads in a log. (The default projection is
+// qualified either way — it always was, which is exactly why the ambiguity
+// surfaced only once ?select replaced it.)
+func TestASingleTableQueryLeavesPredicatesUnqualified(t *testing.T) {
+	sql, _, err := sqlb.Query[expTask]().Where(sqlb.F("title").Eq("x")).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, `WHERE "title" = $1`) {
+		t.Errorf("a query with nothing joined should not qualify its predicates:\n%s", sql)
+	}
+}

@@ -324,6 +324,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 		DefaultPageSize: 20,
 		MaxPageSize:     100,
 		MaxFilters:      12,
+		Expandable:      []string{"list"},
 	}); err != nil {
 		return err
 	}

@@ -282,3 +282,100 @@ func TestNoRestFileWhenNothingIsExposed(t *testing.T) {
 		t.Errorf("rest_gen.go should not be written for an unexposed schema:\n%s", src)
 	}
 }
+
+// expandFixture declares one expandable reference and one that is not, so the
+// tests can tell "emits a relation field" from "emits one per reference".
+func expandFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	org := r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+	author := r.Table("authors", schema.UUIDv7("id").PrimaryKey(), schema.Text("email"))
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("org", org).OnDelete(schema.Cascade),
+		schema.Ref("author", author).OnDelete(schema.Restrict).Expandable(),
+		schema.Text("title"),
+	).Expose(schema.REST{Ops: schema.OpList})
+	return r
+}
+
+// An expandable reference is two struct fields: the key stays a column, and a
+// db:"-" field beside it is what the joined row is scanned into.
+func TestExpandableReferenceEmitsARelationField(t *testing.T) {
+	models := generate(t, expandFixture())["models_gen.go"]
+
+	want := "Author *Author `db:\"-\" json:\"author,omitempty\" sqlb:\"expands=author_id\"`"
+	if !contains(models, want) {
+		t.Errorf("relation field missing:\nwant %s\ngot:\n%s", want, models)
+	}
+	// The key itself is untouched — it is still a column, and still the thing
+	// a filter names.
+	if !contains(models, "AuthorID string `db:\"author_id\" json:\"author_id\" sqlb:\"expand\"`") {
+		t.Errorf("the foreign key column should be unchanged:\n%s", models)
+	}
+	// A reference nobody marked Expandable gets no relation field: the join is
+	// opt-in, and a struct field is a promise the engine would have to keep.
+	if contains(models, "Org *Org") {
+		t.Errorf("a reference that is not Expandable should not get a relation field:\n%s", models)
+	}
+}
+
+// The resource's Expandable list comes from the columns, so a schema cannot
+// declare a relation expandable and serve a resource that refuses it.
+func TestGeneratedRegisterCarriesTheExpandableRelations(t *testing.T) {
+	src := generate(t, expandFixture())["rest_gen.go"]
+
+	if !contains(src, `Expandable: []string{"author"}`) {
+		t.Errorf("registration should list the expandable relation:\n%s", src)
+	}
+	// The relation name, not the column: ?expand=author, not ?expand=author_id.
+	if contains(src, `"author_id"`) {
+		t.Errorf("Expandable should name the relation, not the key column:\n%s", src)
+	}
+}
+
+// A relation and a column competing for the same Go field would emit a struct
+// with two identical field names. go/format parses without type-checking, so
+// it would accept the file and the break would surface at the consumer's next
+// build instead of here.
+func TestRelationCollidingWithAColumnIsRefused(t *testing.T) {
+	r := schema.NewRegistry()
+	org := r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("org", org).Expandable(),
+		schema.Text("org"), // would also be Go field Org
+	)
+
+	_, err := codegen.Generate(codegen.Options{Registry: r, Dir: t.TempDir(), Package: "gen"})
+	if err == nil {
+		t.Fatal("a relation colliding with a column should be refused")
+	}
+	if !strings.Contains(err.Error(), `relation "org" wants the Go field Org`) {
+		t.Errorf("the error should name the field in contention: %v", err)
+	}
+}
+
+// An ExternalRef points at a table this module does not own. The schema
+// already refuses to mark one Expandable; this checks the generator does not
+// invent a relation field for one anyway, which would name a Go type that
+// does not exist in the package.
+func TestExternalReferenceGetsNoRelationField(t *testing.T) {
+	m := schema.NewModule("billing")
+	m.Table("invoices",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.ExternalRef("tenant", "tenants.id").Filterable(),
+	).Expose(schema.REST{Ops: schema.OpList})
+
+	files := generate(t, m)
+	// The reference is there as a column; what follows is about the relation
+	// field it must not also grow, not about the schema failing to compile.
+	if !contains(files["models_gen.go"], `db:"tenant_id"`) {
+		t.Fatalf("the external reference should still be a column:\n%s", files["models_gen.go"])
+	}
+	if contains(files["models_gen.go"], `sqlb:"expands=tenant_id"`) {
+		t.Errorf("an external reference should not become a relation:\n%s", files["models_gen.go"])
+	}
+	if contains(files["rest_gen.go"], "Expandable:") {
+		t.Errorf("an external reference should not be advertised as expandable:\n%s", files["rest_gen.go"])
+	}
+}
