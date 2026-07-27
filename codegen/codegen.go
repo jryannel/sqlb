@@ -84,6 +84,54 @@ func (o Options) validate() error {
 // authoring error would produce plausible-looking Go that encodes the mistake,
 // which is harder to debug than refusing.
 func Generate(opts Options) ([]string, error) {
+	files, err := render(opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
+		return nil, err
+	}
+	var written []string
+	for _, name := range sortedKeys(files) {
+		path := filepath.Join(opts.Dir, name)
+		if err := os.WriteFile(path, files[name], 0o644); err != nil {
+			return nil, err
+		}
+		written = append(written, path)
+	}
+	return written, nil
+}
+
+// Check reports which generated files are missing or out of date, without
+// writing anything.
+//
+// Generated code is committed, so it drifts: someone edits the schema, forgets
+// to regenerate, and the committed models silently describe a table that no
+// longer exists. Run it as a CI gate — an empty result means the tree is
+// current.
+func Check(opts Options) ([]string, error) {
+	files, err := render(opts)
+	if err != nil {
+		return nil, err
+	}
+	var stale []string
+	for _, name := range sortedKeys(files) {
+		path := filepath.Join(opts.Dir, name)
+		existing, err := os.ReadFile(path)
+		switch {
+		case os.IsNotExist(err):
+			stale = append(stale, path+" (missing)")
+		case err != nil:
+			return nil, err
+		case !bytes.Equal(existing, files[name]):
+			stale = append(stale, path+" (out of date)")
+		}
+	}
+	return stale, nil
+}
+
+// render produces the generated files in memory.
+func render(opts Options) (map[string][]byte, error) {
 	if err := opts.validate(); err != nil {
 		return nil, err
 	}
@@ -117,19 +165,7 @@ func Generate(opts Options) ([]string, error) {
 		}
 		files[name] = src
 	}
-
-	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
-		return nil, err
-	}
-	var written []string
-	for _, name := range sortedKeys(files) {
-		path := filepath.Join(opts.Dir, name)
-		if err := os.WriteFile(path, files[name], 0o644); err != nil {
-			return nil, err
-		}
-		written = append(written, path)
-	}
-	return written, nil
+	return files, nil
 }
 
 // Must panics if generation failed, for use in a generator main where there is

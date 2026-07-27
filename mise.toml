@@ -98,6 +98,14 @@ fi
 echo "deps-check: standard library only"
 '''
 
+[tasks.generate]
+description = "Regenerate models, the typed column facade and the manifest from every schema package."
+run = "go generate ./..."
+
+[tasks.generate-check]
+description = "Fail if committed generated code does not match what the schema would produce now. Generated code is committed, so it drifts: someone edits a schema, forgets to regenerate, and the models silently describe a table that no longer exists. Part of `ci`, in the same spirit as the sqlc-check gate in studio-apps."
+run = "go run ./example/blog/gen -check"
+
 [tasks.bisect-check]
 description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
@@ -138,7 +146,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: fmt-check, vet, lint, tidy-check, deps-check, test-race. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: fmt-check, vet, lint, tidy-check, deps-check, generate-check, test-race. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run fmt-check
@@ -146,6 +154,7 @@ mise run vet
 mise run lint
 mise run tidy-check
 mise run deps-check
+mise run generate-check
 mise run test-race
 echo
 echo "ci: all gates passed"

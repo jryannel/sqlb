@@ -297,6 +297,39 @@ if d := plan.Diagnostics(); len(d) > 0 {
 `ExplainAnalyze` gives real timings but *executes* the statement — on a
 mutation that means it writes. Use it inside a transaction you roll back.
 
+## Dry run and tracing
+
+Nothing writes or executes without being asked, and every artefact can be
+inspected first:
+
+| | Inspect | Commit |
+|---|---|---|
+| Query | `q.SQL()` — text and args, nothing executed | `q.All(ctx, db)` |
+| Query against the live schema | `sqlb.Explain(ctx, db, q)` — plans it, does not run it | `q.All(ctx, db)` |
+| Migration | `migrate.Render(m, opts)` — files in memory | `migrate.Write(dir, m, opts)` |
+| Generated code | `codegen.Check(opts)` — what is stale | `codegen.Generate(opts)` |
+
+`codegen.Check` is the one worth wiring into CI. Generated code is committed, so
+it drifts: someone edits a schema, forgets to regenerate, and the committed
+models describe a table that no longer exists. `mise run generate-check` fails
+when they disagree.
+
+**Tracing needs no API from sqlb.** `Executor` is two methods, so wrapping it
+observes every statement — and reaches OpenTelemetry, slog or a test double
+without sqlb depending on any of them:
+
+```go
+type tracer struct{ inner sqlb.Executor }
+
+func (t tracer) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+    start := time.Now()
+    rows, err := t.inner.QueryContext(ctx, q, args...)
+    slog.InfoContext(ctx, "sqlb", "sql", q, "args", len(args), "dur", time.Since(start), "err", err)
+    return rows, err
+}
+// ExecContext likewise, then pass the wrapper wherever you pass the *sql.DB.
+```
+
 ## Documentation
 
 | Document | Contents |

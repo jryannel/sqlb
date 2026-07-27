@@ -26,6 +26,7 @@ jobs:
       - run: mise run lint
       - run: mise run tidy-check
       - run: mise run deps-check
+      - run: mise run generate-check
       - run: mise run test-race
 
   bisect:
