@@ -42,7 +42,7 @@ func (f gooseFormat) Render(m Migration, opts Options) (map[string]string, error
 	// file needing it contains nothing that wanted a transaction.
 	concurrent := false
 	for _, c := range m.Changes {
-		if c.Concurrent {
+		if c.Stage == StageConcurrent {
 			concurrent = true
 			break
 		}

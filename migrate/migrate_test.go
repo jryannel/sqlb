@@ -20,9 +20,9 @@ func addColumn() migrate.Change {
 
 func addIndex() migrate.Change {
 	return migrate.Change{
-		Up:         `CREATE INDEX CONCURRENTLY "posts_org_id_idx" ON "posts" ("org_id");`,
-		Down:       `DROP INDEX CONCURRENTLY "posts_org_id_idx";`,
-		Concurrent: true,
+		Up:    `CREATE INDEX CONCURRENTLY "posts_org_id_idx" ON "posts" ("org_id");`,
+		Down:  `DROP INDEX CONCURRENTLY "posts_org_id_idx";`,
+		Stage: migrate.StageConcurrent,
 	}
 }
 

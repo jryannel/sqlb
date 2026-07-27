@@ -42,7 +42,7 @@ func TestDiffRenameColumn(t *testing.T) {
 	if c.Destructive {
 		t.Error("a rename loses nothing and must not be marked destructive")
 	}
-	if c.Concurrent {
+	if c.Stage != migrate.StageMain {
 		t.Error("a rename is a catalog write and must not force a file split")
 	}
 }

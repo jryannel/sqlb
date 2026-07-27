@@ -59,7 +59,10 @@ func render(changes []migrate.Change) string {
 		if c.Destructive {
 			b.WriteString("   [destructive: " + c.Reason + "]")
 		}
-		if c.Concurrent {
+		switch c.Stage {
+		case migrate.StageValidate:
+			b.WriteString("   [validate]")
+		case migrate.StageConcurrent:
 			b.WriteString("   [concurrent]")
 		}
 		if i < len(changes)-1 {
@@ -245,7 +248,7 @@ func TestDiffNewTableIndexIsNotConcurrent(t *testing.T) {
 	})
 
 	idx := find(t, diff(t, nil, target), "CREATE INDEX")
-	if idx.Concurrent {
+	if idx.Stage == migrate.StageConcurrent {
 		t.Fatal("index on a newly created table should not be concurrent")
 	}
 	if strings.Contains(idx.Up, "CONCURRENTLY") {
@@ -267,7 +270,7 @@ func TestDiffExistingTableIndexIsConcurrent(t *testing.T) {
 	})
 
 	idx := only(t, diff(t, current, target))
-	if !idx.Concurrent {
+	if idx.Stage != migrate.StageConcurrent {
 		t.Fatal("index on an existing table must be concurrent")
 	}
 	if idx.Up != `CREATE INDEX CONCURRENTLY "posts_slug_idx" ON "posts" ("slug");` {
@@ -741,7 +744,7 @@ func TestDiffIndexOverADroppedColumnStaysInTheSameFile(t *testing.T) {
 	changes := diff(t, current, target)
 
 	legacy := find(t, changes, `"posts_legacy_idx"`)
-	if legacy.Concurrent {
+	if legacy.Stage == migrate.StageConcurrent {
 		t.Fatalf("this drop must stay with the column drop:\n%s", render(changes))
 	}
 	if legacy.Up != `DROP INDEX "posts_legacy_idx";` {
@@ -756,7 +759,7 @@ func TestDiffIndexOverADroppedColumnStaysInTheSameFile(t *testing.T) {
 	// The other direction: an index whose columns all survive keeps
 	// CONCURRENTLY, because nothing else is locking that table.
 	kept := find(t, changes, `"posts_kept_idx"`)
-	if !kept.Concurrent {
+	if kept.Stage != migrate.StageConcurrent {
 		t.Fatalf("an ordinary index drop should stay concurrent:\n%s", render(changes))
 	}
 

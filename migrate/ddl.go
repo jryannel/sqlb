@@ -113,10 +113,10 @@ func widens(from, to *schema.FieldDesc) bool {
 // ones that turn a routine migration into an outage.
 //
 // Knowing which is which is Postgres knowledge, so it lives here with the rest
-// of it. The remedies named are all real sequences a person or an agent can
-// author; none of them is generated, because each needs a decision the schema
-// does not contain — how large the batches are, when the cutover happens, or
-// whether the validation can wait for a later release (ADR-0014).
+// of it. Where the remedy is a fixed rewrite, Unblock performs it and the note
+// says so. Where it needs a decision the schema does not contain — how large a
+// backfill batch should be, when a cutover can happen — the note is all there
+// is, and authoring the rest is a person's job (ADR-0014).
 
 // Lock modes, spelled as Postgres spells them.
 const (
@@ -128,9 +128,10 @@ const (
 // CONSTRAINT into a brief lock and a slow check that lets writes through. It
 // applies to CHECK and FOREIGN KEY alike, which is why it is written once.
 const notValidRemedy = "Add it NOT VALID first, then VALIDATE CONSTRAINT in a " +
-	"later statement. The NOT VALID add still takes a lock of its own, but holds " +
+	"later migration. The NOT VALID add still takes a lock of its own, but holds " +
 	"it only for as long as the catalog write takes; the validation that follows " +
-	"takes SHARE UPDATE EXCLUSIVE, which readers and writers pass through."
+	"takes SHARE UPDATE EXCLUSIVE, which readers and writers pass through. " +
+	"migrate.Unblock writes that sequence for you."
 
 // rewrites reports whether changing a column from one type to the other makes
 // Postgres rewrite every row, rather than accepting the new type over the bytes
@@ -176,7 +177,8 @@ func setNotNullHazard(table, column string) (lock, hazard string) {
 		" scans the whole table with all access blocked. On a large table, add " +
 		"CHECK (" + quoteIdent(column) + " IS NOT NULL) NOT VALID, VALIDATE CONSTRAINT " +
 		"it, and only then SET NOT NULL: Postgres 12 and later find the validated " +
-		"check and skip the scan entirely."
+		"check and skip the scan entirely. migrate.Unblock writes that sequence " +
+		"for you."
 }
 
 // constraintHazard describes what adding a constraint to a table that already
@@ -640,6 +642,42 @@ func addConstraint(table string, c constraint) string {
 
 func dropConstraint(table, name string) string {
 	return "ALTER TABLE " + quoteIdent(table) + " DROP CONSTRAINT " + quoteIdent(name) + ";"
+}
+
+// addConstraintNotValid adds a constraint without checking the rows already
+// there. New and updated rows are enforced from this moment; the existing ones
+// are proven separately by validateConstraint.
+//
+// Postgres accepts NOT VALID for CHECK and FOREIGN KEY only. A UNIQUE or a
+// PRIMARY KEY is enforced by an index, and there is no way to build one without
+// reading every row, so those have no lock-brief form of this shape.
+func addConstraintNotValid(table string, c constraint) string {
+	return strings.TrimSuffix(addConstraint(table, c), ";") + " NOT VALID;"
+}
+
+func validateConstraint(table, name string) string {
+	return "ALTER TABLE " + quoteIdent(table) + " VALIDATE CONSTRAINT " + quoteIdent(name) + ";"
+}
+
+// notNullCheckName names the temporary constraint that carries the scan for a
+// SET NOT NULL out from under the ACCESS EXCLUSIVE lock.
+//
+// It deliberately does not end in _not_null: Postgres 18 gives a column's real
+// NOT NULL constraint exactly that name, and the SET NOT NULL this sequence
+// exists to serve would collide with it.
+func notNullCheckName(table, column string) string {
+	return table + "_" + column + "_notnull_check"
+}
+
+// notNullCheck is the constraint that proves a column holds no NULLs. It is
+// added NOT VALID, validated under a weak lock, and dropped once SET NOT NULL
+// has used it — so that the table ends up exactly as the single statement would
+// have left it, with no constraint of this package's invention left behind.
+func notNullCheck(table, column string) constraint {
+	return constraint{
+		name: notNullCheckName(table, column),
+		def:  "CHECK (" + quoteIdent(column) + " IS NOT NULL)",
+	}
 }
 
 // indexDef reduces an index to a comparable string, so that a changed index is

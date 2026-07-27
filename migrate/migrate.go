@@ -28,6 +28,62 @@ import (
 	"time"
 )
 
+// Stage says which file a change belongs in.
+//
+// Transaction control is per file in every runner this package targets, so
+// "a different transaction" and "a different file" are the same thing here —
+// which is why this is a property of a change rather than of a statement.
+type Stage int
+
+const (
+	// StageMain is an ordinary change, applied in the migration's own
+	// transaction along with everything else. Almost everything is this.
+	StageMain Stage = iota
+
+	// StageValidate is the second half of a NOT VALID sequence: the statement
+	// that scans the table to prove a constraint holds. It has to run in a
+	// later transaction than the ADD CONSTRAINT it validates, because the brief
+	// ACCESS EXCLUSIVE that the add takes is held until its transaction
+	// commits — validating inside that transaction would hold the strong lock
+	// for the length of the scan, which is the thing the sequence exists to
+	// avoid.
+	StageValidate
+
+	// StageFinish is the cheap remainder of a sequence whose scanning is done:
+	// the SET NOT NULL that a validated check has made instant, and the drop of
+	// that check afterwards.
+	//
+	// It shares a file with StageValidate and must come after everything in it.
+	// Both of these take ACCESS EXCLUSIVE, and a lock is held until the
+	// transaction commits rather than until the statement ends — so a
+	// validation scheduled after one of them would do its scan underneath it,
+	// which is exactly what the sequence exists to prevent. They are cheap, so
+	// running last costs nothing.
+	StageFinish
+
+	// StageConcurrent cannot run inside a transaction at all: CREATE INDEX
+	// CONCURRENTLY and DROP INDEX CONCURRENTLY. Building an index without
+	// CONCURRENTLY takes a lock that blocks writes for the duration, so on a
+	// live table this is not optional.
+	StageConcurrent
+)
+
+// stages are the change groups in the order they are applied, and the file each
+// lands in. Order and file are separate because they answer different
+// questions: what must run before what, and what must not share a transaction.
+// Two stages sharing a file share a transaction, and the order between them is
+// what keeps that safe.
+var stages = []struct {
+	stage  Stage
+	file   int
+	suffix string
+}{
+	{StageMain, 0, ""},
+	{StageValidate, 1, "_validate"},
+	{StageFinish, 1, "_validate"},
+	{StageConcurrent, 2, "_indexes"},
+}
+
 // Change is one schema alteration, with the SQL to apply and reverse it.
 type Change struct {
 	// Up is the forward SQL. Required.
@@ -47,11 +103,9 @@ type Change struct {
 	// Reason explains the danger, and is required when Destructive is set.
 	Reason string
 
-	// Concurrent marks SQL that cannot run inside a transaction, which in
-	// practice means CREATE INDEX CONCURRENTLY and DROP INDEX CONCURRENTLY.
-	// Building an index without CONCURRENTLY takes a lock that blocks writes
-	// for the duration, so on a live table this is not optional.
-	Concurrent bool
+	// Stage says which file the change belongs in, for the changes that
+	// cannot share one with the changes around them.
+	Stage Stage
 
 	// Lock names the lock the statement takes when holding it costs
 	// something — when the time it is held grows with the number of rows in
@@ -71,6 +125,56 @@ type Change struct {
 	// Hazard explains what the lock costs and what to do on a table too large
 	// to hold it, and is required when Lock is set.
 	Hazard string
+
+	// unblocked is the sequence that reaches the same state without holding
+	// the lock for the length of a scan, for the changes that have one. Unblock
+	// substitutes it and nothing else reads it.
+	//
+	// It is unexported because only Diff can build one: it takes the table, the
+	// constraint and the column that produced the change, none of which survive
+	// into the SQL. A Change assembled by hand simply has no alternative form,
+	// and Unblock leaves it alone.
+	unblocked []Change
+}
+
+// Unblock replaces the changes that hold a long lock with the sequences that do
+// not, where such a sequence exists: an ADD CONSTRAINT that would scan the table
+// becomes an ADD ... NOT VALID and a VALIDATE CONSTRAINT in a later migration,
+// and a SET NOT NULL becomes the same pair with the column requirement set
+// between them.
+//
+// It is a deliberate act rather than the default, for two reasons. The sequence
+// is longer, splits the migration across files, and buys nothing on a table
+// small enough that the scan is instant — which most tables are. And it is not
+// equivalent under failure: a plain ADD CONSTRAINT that finds a bad row leaves
+// nothing behind, while this one leaves the constraint in place, unvalidated
+// and enforcing from that moment on. That is usually what you want on a large
+// table and it is still a different outcome, so it is chosen rather than
+// assumed.
+//
+// The end state on success is identical, which is what makes the substitution
+// safe: the temporary constraint a SET NOT NULL needs is dropped by the same
+// sequence that created it.
+//
+// The usual shape is to look before deciding:
+//
+//	changes, err := migrate.Diff(current, target)
+//	if len(migrate.Migration{Changes: changes}.Blocking()) > 0 {
+//		changes = migrate.Unblock(changes)
+//	}
+//
+// Changes with no alternative — a type change, a UNIQUE constraint — are passed
+// through untouched and still report themselves through Blocking.
+func Unblock(changes []Change) []Change {
+	out := make([]Change, 0, len(changes))
+	for _, c := range changes {
+		if len(c.unblocked) == 0 {
+			out = append(out, c)
+			continue
+		}
+		out = append(out, c.unblocked...)
+	}
+	return out
 }
 
 // Migration is an ordered set of changes released together.
@@ -107,36 +211,58 @@ func (o Options) format() Format {
 // Split separates changes that cannot share a file.
 //
 // Transaction control in both goose and golang-migrate is per file, not per
-// statement. A migration containing CREATE INDEX CONCURRENTLY must therefore
-// disable transactions for everything in it — which would silently remove the
-// rollback guarantee from every other change that happened to be generated at
-// the same time. Splitting them keeps the ordinary changes transactional.
+// statement, so a change needing a transaction of its own needs a file of its
+// own. A migration containing CREATE INDEX CONCURRENTLY must disable
+// transactions for everything in it — which would silently remove the rollback
+// guarantee from every other change generated at the same time — and a
+// VALIDATE CONSTRAINT must land after the transaction holding the ADD
+// CONSTRAINT it validates has committed. Splitting keeps the ordinary changes
+// transactional and gives each of the others what it needs.
 //
-// Concurrent changes come last, so the tables and columns they index exist by
-// the time they run.
+// Files come out in stage order, so the tables, columns and constraints each
+// one depends on exist by the time it runs.
 func Split(m Migration) []Migration {
-	var ordinary, concurrent []Change
+	byStage := make(map[Stage][]Change, len(stages))
 	for _, c := range m.Changes {
-		if c.Concurrent {
-			concurrent = append(concurrent, c)
+		byStage[c.Stage] = append(byStage[c.Stage], c)
+	}
+
+	var out []Migration
+	version := m.Version
+	for _, s := range stages {
+		changes := byStage[s.stage]
+		if len(changes) == 0 {
 			continue
 		}
-		ordinary = append(ordinary, c)
+		// A stage sharing the previous one's file appends to it, in stage
+		// order, which is the ordering that makes sharing safe.
+		if n := len(out); n > 0 && s.file == fileOf(out[n-1].Changes[0].Stage) {
+			out[n-1].Changes = append(out[n-1].Changes, changes...)
+			continue
+		}
+		// Each file's version must sort after the last, and all of them must
+		// be stable across runs, so they are derived rather than taken from a
+		// clock.
+		if len(out) > 0 {
+			version = bumpVersion(version)
+		}
+		out = append(out, Migration{Version: version, Name: m.Name + s.suffix, Changes: changes})
 	}
-
-	switch {
-	case len(concurrent) == 0:
+	if len(out) == 1 {
+		// One file: keep the migration exactly as it was given, rather than
+		// renaming it after whichever stage happened to fill it.
 		return []Migration{m}
-	case len(ordinary) == 0:
-		return []Migration{m}
 	}
+	return out
+}
 
-	// The second file's version must sort after the first, and both must be
-	// stable across runs, so it is derived rather than taken from a clock.
-	return []Migration{
-		{Version: m.Version, Name: m.Name, Changes: ordinary},
-		{Version: bumpVersion(m.Version), Name: m.Name + "_indexes", Changes: concurrent},
+func fileOf(s Stage) int {
+	for _, e := range stages {
+		if e.stage == s {
+			return e.file
+		}
 	}
+	return 0
 }
 
 // bumpVersion increments the last digit so the follow-up file sorts after its

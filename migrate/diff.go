@@ -42,6 +42,13 @@ import (
 // would stop working too. Migration.Blocking is the hook for a project that
 // does know which of its tables are big.
 //
+// For the changes whose remedy is a fixed rewrite — adding a CHECK or a
+// FOREIGN KEY, requiring a column — Unblock performs it, moving the scan out
+// from under the lock. It is called rather than applied automatically, for the
+// same reason the hazard is a note: the sequence is longer, splits the
+// migration across files, and buys nothing on a table small enough that the
+// scan is instant.
+//
 // # What is not inferred
 //
 // A rename is indistinguishable from a drop and an add when only the before
@@ -432,7 +439,7 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 		// Two separate problems, so two separate flags: rows holding NULL make
 		// this fail, and proving that none do makes it slow.
 		lock, hazard := setNotNullHazard(t.Name(), td.Name)
-		d.alterColumns = append(d.alterColumns, Change{
+		c := Change{
 			Comment:     "require " + t.Name() + "." + td.Name,
 			Up:          alterColumn(t.Name(), td.Name, "SET NOT NULL"),
 			Down:        alterColumn(t.Name(), td.Name, "DROP NOT NULL"),
@@ -441,7 +448,9 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 				" will fail this constraint. Backfill them before applying",
 			Lock:   lock,
 			Hazard: hazard,
-		})
+		}
+		c.unblocked = notNullSequence(t.Name(), td.Name, c)
+		d.alterColumns = append(d.alterColumns, c)
 	case !cd.Nullable && td.Nullable:
 		// The Up is a catalog write, so this is not flagged — but reversing it
 		// is the scan above, which is a surprising way to find that out during
@@ -605,11 +614,113 @@ func (d *differ) addConstraintChange(table string, c constraint, prev *constrain
 	case prev == nil:
 		ch.Comment += " (existing rows must already satisfy it or this fails)"
 	}
+	// A unique constraint is enforced by an index and has no NOT VALID form —
+	// there is no way to build an index without reading every row — so it keeps
+	// its hazard and no alternative.
+	if lock != "" && !c.unique {
+		ch.unblocked = notValidSequence(table, c, ch)
+	}
 	if c.fk {
 		d.addForeignKey = append(d.addForeignKey, ch)
 		return
 	}
 	d.addOther = append(d.addOther, ch)
+}
+
+// The lock-brief sequences.
+//
+// Each replaces one statement that scans a table under a lock nothing else can
+// work through, with two or more that do the scanning under a lock everything
+// can. They are built here, where the table and the constraint are still
+// known, and substituted by Unblock — which is the caller's decision, since
+// the reason to prefer them is a row count this package cannot see.
+//
+// The rule they all follow: the statement that scans must not share a
+// transaction with one that took a strong lock, because a lock is held until
+// the transaction commits and not until the statement ends. That is what
+// StageValidate is for.
+
+// notValidSequence is the two-part form of an ADD CONSTRAINT: add it without
+// checking the rows already there, then prove them separately.
+func notValidSequence(table string, c constraint, orig Change) []Change {
+	return []Change{{
+		Comment: orig.Comment + " — NOT VALID, so it binds new and updated rows " +
+			"from here while the rows already there are proven separately",
+		Up:   addConstraintNotValid(table, c),
+		Down: dropConstraint(table, c.name),
+	}, {
+		Stage:   StageValidate,
+		Comment: validateComment(table, c.name),
+		Up:      validateConstraint(table, c.name),
+		Down:    nothingToUndo(c.name),
+	}}
+}
+
+// notNullSequence is the lock-brief form of SET NOT NULL. Postgres 12 and later
+// accept a validated CHECK as proof that a column holds no NULLs, so the scan
+// can be done under a weak lock and the statement that takes the strong one has
+// nothing left to look at.
+//
+// The check is dropped again at the end, so the table finishes exactly as the
+// single statement would have left it. Anything else would be a constraint of
+// this package's invention sitting in a schema that does not declare it, which
+// the next diff would propose dropping.
+//
+// On a Postgres older than 12 every statement here still does the right thing;
+// the SET NOT NULL simply scans again, and the sequence is a slower way to
+// reach the same place rather than a broken one.
+func notNullSequence(table, column string, orig Change) []Change {
+	c := notNullCheck(table, column)
+	out := []Change{{
+		Comment: "prove " + table + "." + column + " holds no NULL before requiring it, " +
+			"so that the requirement itself takes no scan — NOT VALID here, validated next",
+		Up:   addConstraintNotValid(table, c),
+		Down: dropConstraint(table, c.name),
+	}, {
+		Stage:   StageValidate,
+		Comment: validateComment(table, c.name),
+		Up:      validateConstraint(table, c.name),
+		Down:    nothingToUndo(c.name),
+	}, {
+		// StageFinish, not StageValidate: this takes ACCESS EXCLUSIVE and holds
+		// it until the transaction commits, so anything still scanning would
+		// end up doing it underneath.
+		Stage: StageFinish,
+		Comment: "require " + table + "." + column +
+			" (instant: Postgres finds the validated check and skips its own scan)",
+		Up:   alterColumn(table, column, "SET NOT NULL"),
+		Down: alterColumn(table, column, "DROP NOT NULL"),
+	}, {
+		Stage: StageFinish,
+		Comment: "drop the check now the column carries the requirement itself, " +
+			"leaving the table exactly as a plain SET NOT NULL would have",
+		Up: dropConstraint(table, c.name),
+		// Re-added NOT VALID rather than validated: on the way back the check
+		// exists only so the migration that created it has something to drop,
+		// and proving it again would be the scan this sequence avoided.
+		Down: addConstraintNotValid(table, c),
+	}}
+
+	// Every step inherits the reason the original needed review. A sequence
+	// with half its statements commented out is worse than either whole.
+	for i := range out {
+		out[i].Destructive = orig.Destructive
+		out[i].Reason = orig.Reason
+	}
+	return out
+}
+
+func validateComment(table, name string) string {
+	return "prove the rows already in " + table + " satisfy " + name +
+		" — scans the table, under a lock readers and writers pass through"
+}
+
+// nothingToUndo is the Down of a validation. There is no statement that
+// un-proves a constraint, and none is needed: the migration that added it drops
+// it, and this says so rather than rendering as an unexplained gap.
+func nothingToUndo(name string) string {
+	return "-- a validation cannot be undone, and needs no undoing: " + name +
+		" is dropped by the migration that added it"
 }
 
 // removedEnumValues reports which permitted values a replaced enum CHECK no
@@ -706,10 +817,10 @@ func (d *differ) indexDropped(cur, tgt *schema.TableDef, orig, renamed schema.In
 	// lock this takes is one the migration was going to take anyway.
 	concurrent := !coversDroppedColumn(renamed, tgt)
 	d.dropIndexes = append(d.dropIndexes, Change{
-		Comment:    "drop index " + orig.Name,
-		Up:         dropIndex(orig.Name, concurrent),
-		Down:       createIndex(cur, orig, concurrent),
-		Concurrent: concurrent,
+		Comment: "drop index " + orig.Name,
+		Up:      dropIndex(orig.Name, concurrent),
+		Down:    createIndex(cur, orig, concurrent),
+		Stage:   concurrentStage(concurrent),
 	})
 }
 
@@ -717,10 +828,10 @@ func (d *differ) indexCreated(tgt *schema.TableDef, idx schema.Index) {
 	// The table already holds rows, so building the index without
 	// CONCURRENTLY would lock it against writes for the duration.
 	d.createIndexes = append(d.createIndexes, Change{
-		Comment:    "index " + idx.Name,
-		Up:         createIndex(tgt, idx, true),
-		Down:       dropIndex(idx.Name, true),
-		Concurrent: true,
+		Comment: "index " + idx.Name,
+		Up:      createIndex(tgt, idx, true),
+		Down:    dropIndex(idx.Name, true),
+		Stage:   StageConcurrent,
 	})
 }
 
@@ -793,4 +904,13 @@ func joinWithAnd(vs []string) string {
 		s += v
 	}
 	return s + " and " + vs[len(vs)-1]
+}
+
+// concurrentStage maps the decision an index change already made — whether to
+// use CONCURRENTLY — onto the file it therefore belongs in.
+func concurrentStage(concurrent bool) Stage {
+	if concurrent {
+		return StageConcurrent
+	}
+	return StageMain
 }
