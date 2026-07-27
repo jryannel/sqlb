@@ -64,41 +64,41 @@ act on. Nothing writes outside the tracked set, so the formatter cannot damage
 a neighbouring worktree. And the rule holds regardless of where sessions put
 their checkouts or what lands in the exclude file next.
 
-**What this costs.** A new file that has not been `git add`ed is invisible to
-`fmt-check`. Its author sees the complaint only once it is staged, and CI —
-which checks out a tree where everything is tracked — was never affected either
-way. That gap is the one genuine surprise this creates, and it is the price of
-using git's answer rather than the filesystem's.
-
-The gap is observed, not hypothetical: while this record was being written, an
+**What this costs.** A file that has not been `git add`ed is outside the set, so
+`mise run fmt` will not format it and any future tracked-files *check* would not
+see it either. That is the price of using git's answer rather than the
+filesystem's, and it is not theoretical: while this record was being written, an
 untracked `introspect/` directory in the main worktree held a misformatted
-`types.go`. `fmt-check` passed over it and `lint` reported it, because a file
-can be outside git's index and still inside a package `./...` reaches. That is
-the shape of the exposure — and note it runs the *opposite* way to the failure
-this record exists to fix, where the file was inside the filesystem walk and
-outside the module.
+`types.go`, which `lint` reported and a tracked-files scan passed over.
 
-A tracked file deleted from the working tree now makes `gofmt` error, which
-fails the gate loudly. That is the intended direction, but it is a failure mode
-that did not exist before.
+Note that exposure runs the *opposite* way to the failure this record exists to
+fix — that file was inside the module and outside the index, where the original
+was inside the filesystem walk and outside the module. The two together are the
+argument for the rule rather than against it: neither the filesystem nor the
+index is automatically the right set, so a tool's idea of the tree has to be
+chosen deliberately and stated. It is also the reason formatting is gated by
+`lint` and not by a tracked-files check; see Alternatives.
 
-Each such task grows from one line to about ten, because the empty-list and
+A tracked file deleted from the working tree makes the underlying command error,
+failing loudly rather than passing on an empty list. That is the intended
+direction, but it is a failure mode that did not exist before.
+
+Each such task grows from one line to several, because the empty-list and
 command-failure branches have to be written and exercised.
 
 ## What would change our mind
 
 - **If a tracked Go file appears that `./...` does not cover** — a `testdata/`
-  fixture, a `//go:build ignore` helper — then `lint` stops being a backstop for
-  formatting and `fmt-check` becomes load-bearing rather than redundant. Today
-  all 59 tracked Go files sit in packages `go list ./...` reports, so what lint
-  sees is a strict superset of what `fmt-check` sees. That was measured, not
-  assumed, and it needs re-measuring whenever the package layout moves: the
-  count was 47 a few hours before this record was committed.
-- **If the untracked-new-file gap actually bites** — someone pushes a
-  misformatted new file that CI catches and the local gate did not — the fix is
-  to add `git ls-files --others --exclude-standard`, which covers untracked but
-  not ignored. Not done now because it widens the set for a cost nobody has paid
-  yet.
+  fixture, a `//go:build ignore` helper — its formatting is checked by nothing
+  at all, since `lint` is now the only formatting gate. That is the condition
+  that brings a tracked-files check back. Today all 59 tracked Go files sit in
+  packages `go list ./...` reports, so lint's set is a strict superset; that was
+  measured, not assumed, and it needs re-measuring whenever the package layout
+  moves — the count was 47 a few hours before this record was committed.
+- **If the `gofmt` formatter is ever disabled in `.golangci.yml`**, formatting
+  silently stops being checked. There is no longer a second gate to notice. The
+  file says so at the point of the edit, which is the cheapest place to put the
+  warning, but this is the accepted cost of collapsing to one gate.
 - **If worktrees move outside the repository directory**, the original
   motivation disappears. The rule should stay anyway: matching git's definition
   is what makes the local gate and CI agree, and that was true before worktrees
@@ -129,19 +129,34 @@ repository that is only correct under one harness configuration is worse than
 one that is correct regardless. `.git/info/exclude` already commits to them
 living inside.
 
-**Delete `fmt-check` and rely on `lint`.** The strongest alternative, and it was
-measured rather than argued: `.golangci.yml` enables the `gofmt` formatter,
-`golangci-lint run` does report a misformatted tracked file, and every tracked
-Go file is in a package it sees. `fmt-check` is therefore fully redundant
-today, and strictly narrower — `lint` also catches the untracked in-package
-case that `fmt-check` cannot. Kept for three reasons: it takes seconds where a full lint run does not,
-so it is the one people actually run before pushing; its failure names the fix
-(`mise run fmt`) instead of reporting a diff; and it does not depend on the
-pinned golangci-lint version keeping that formatter enabled, so a config edit
-cannot quietly remove the only formatting check in the gate. A fast specific
-guard alongside a slow general one is redundancy worth paying for.
+**Keep `fmt-check` alongside `lint`.** This is what the first version of this
+record decided, and it was reversed the same day. The argument for keeping it
+was that it runs in seconds where a full lint run does not, that its failure
+names the fix rather than printing a diff, and that it does not depend on the
+lint config keeping the `gofmt` formatter enabled.
+
+The first two are ergonomics, not gating, and the third is an argument for
+noting that the formatter is load-bearing — which `.golangci.yml` now does —
+rather than for a second gate. What settled it is that `fmt-check` was not
+merely redundant but strictly narrower: it saw tracked files, `lint` sees every
+file in a package, and the difference is real rather than theoretical, since an
+untracked misformatted file was sitting in the tree at the time and only `lint`
+reported it. Two gates where the smaller one is a subset of the larger is not
+redundancy worth paying for; it is a second thing to keep in step.
+
+Formatting is therefore checked by the `gofmt` formatter inside `golangci-lint`
+and nowhere else. That it fails on a formatting-only defect — a whitespace
+misindent with no other finding in the file — was demonstrated before the gate
+was removed, not assumed, per [ADR-0016](0016-guards-proven-both-ways.md).
+`mise run fmt` remains, as the fix rather than the check.
 
 ## Revisions
 
+- 2026-07-27 — `fmt-check` removed; formatting is now checked only by the
+  `gofmt` formatter inside `golangci-lint`, which was demonstrated to fail on a
+  formatting-only defect first. The record had argued for keeping it hours
+  earlier, on grounds that turned out to be ergonomics rather than gating. The
+  scoping rule itself is unchanged and still applies to `fmt`, which rewrites
+  what it walks and so is the task where the original bug did real damage.
 - 2026-07-27 — Written, after `gofmt -l .` walked into a parallel agent
   worktree and failed the gate naming a file from another session.

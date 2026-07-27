@@ -46,12 +46,19 @@ description = "golangci-lint --fix (applies autofixes; review the diff)"
 run = "golangci-lint run --fix"
 
 [tasks.fmt]
-description = "gofmt -w across the files git tracks. Run `mise run fmt-check` to see what it would change."
+description = "gofmt -w across the files git tracks. `mise run lint` is what reports bad formatting; this is the fix for it."
 run = '''
-# Scoped to tracked files for the reason spelled out under fmt-check, and more
-# urgently here: `gofmt -w .` *rewrites* what it walks, so an unrelated checkout
-# under .claude/worktrees/ would be reformatted underneath whoever is working in
-# it.
+# There is deliberately no fmt-check gate. golangci-lint has the gofmt formatter
+# enabled and fails on a formatting-only defect, and what it sees is a strict
+# superset of the tracked Go files, so a separate check gated nothing that lint
+# did not already gate. ADR-0018 records the reasoning and what would bring it
+# back.
+#
+# Still scoped to the files git tracks rather than `gofmt -w .`: the unscoped
+# walk descends into .claude/worktrees/, which .git/info/exclude ignores and
+# which holds unrelated parallel checkouts. This task *rewrites* what it walks,
+# so that version reformatted another session's checkout underneath whoever was
+# working in it.
 files=$(git ls-files '*.go')
 if [ -z "$files" ]; then
   echo "fmt: no tracked Go files"; exit 1
@@ -59,29 +66,51 @@ fi
 printf '%s\n' "$files" | xargs gofmt -w
 '''
 
-[tasks.fmt-check]
-description = "Fail if anything needs gofmt. Run `mise run fmt` to fix."
+[tasks.heal]
+description = "Apply every fix the tooling can make on its own — formatting, lint autofixes, go.mod tidying, regenerated code — then report what changed. Run this before `ci`, which gates and never rewrites."
 run = '''
-# Scoped to the files git tracks, not `gofmt -l .`. The recursive walk descends
-# into .claude/worktrees/, which .git/info/exclude ignores and which holds
-# unrelated parallel checkouts, so the gate failed naming a file that is not
-# part of this repository at all. `fmt-check` was the only gate with that
-# exposure: vet, lint, test-race, generate-check and bisect-check all reach the
-# tree through the go tool's `./...`, which skips directories whose name begins
-# with a dot. ADR-0018 has the rule this follows and why fmt-check is kept even
-# though golangci-lint's gofmt formatter currently covers the same ground.
-files=$(git ls-files '*.go')
-if [ -z "$files" ]; then
-  echo "fmt-check: no tracked Go files, so nothing was checked"; exit 1
+set -e
+# Healing and gating are deliberately separate tasks. A gate that rewrote the
+# tree and then reported green would certify code that was never clean, and on
+# a CI runner the rewrite is discarded anyway — the failure mode ADR-0016 is
+# about. So `ci` reports and this fixes; nothing does both.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# Snapshot content hashes first, so the report names what *this run* changed
+# rather than everything that differs from HEAD. `git diff` cannot answer that
+# question — it compares against the last commit, not against the tree as it
+# stood a moment ago, so on a dirty tree it would credit heal with every edit
+# the author had already made. The first version of this task did exactly that
+# and reported "nothing to fix" while having just reformatted a file.
+git ls-files > "$tmp/names"
+if ! git hash-object --stdin-paths < "$tmp/names" > "$tmp/before" 2>"$tmp/err"; then
+  echo "heal: could not read the tree, so nothing was run:"; sed 's/^/  /' "$tmp/err"; exit 1
 fi
-# gofmt's own failure (a parse error, a tracked file deleted from the worktree)
-# empties the list and would otherwise read as clean — ADR-0016.
-if ! unformatted=$(printf '%s\n' "$files" | xargs gofmt -l); then
-  echo "fmt-check: gofmt failed, so nothing was verified"; exit 1
+
+mise run fmt
+# lint-fix exits non-zero when findings remain that it cannot fix by itself.
+# That is not a failure of healing, and must not abort the report below.
+mise run lint-fix || remaining=1
+mise run tidy
+mise run generate
+
+if ! git hash-object --stdin-paths < "$tmp/names" > "$tmp/after" 2>"$tmp/err"; then
+  echo "heal: the fixers ran but the result could not be compared:"; sed 's/^/  /' "$tmp/err"; exit 1
 fi
-if [ -n "$unformatted" ]; then
-  echo "needs gofmt:"; echo "$unformatted"; exit 1
+
+echo
+healed=$(paste -d' ' "$tmp/before" "$tmp/after" "$tmp/names" | awk '$1 != $2 { print "  " $3 }')
+if [ -n "$healed" ]; then
+  echo "healed:"; echo "$healed"
+else
+  echo "heal: nothing to fix"
 fi
+if [ -n "${remaining:-}" ]; then
+  echo
+  echo "lint still reports findings it cannot fix on its own; run: mise run lint"
+fi
+exit 0
 '''
 
 [tasks.tidy]
@@ -203,10 +232,9 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: fmt-check, vet, lint, tidy-check, deps-check, generate-check, test-race. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
-mise run fmt-check
 mise run vet
 mise run lint
 mise run tidy-check

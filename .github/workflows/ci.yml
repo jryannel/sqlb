@@ -21,7 +21,9 @@ jobs:
           experimental: true
       # Individually rather than via `mise run ci`, so a failure names the gate
       # that failed in the job summary instead of one opaque step.
-      - run: mise run fmt-check
+      # No fmt-check step: formatting is reported by the gofmt formatter inside
+      # `lint`, which sees strictly more than a tracked-files check could
+      # (ADR-0018).
       - run: mise run vet
       - run: mise run lint
       - run: mise run tidy-check

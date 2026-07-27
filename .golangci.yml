@@ -36,5 +36,10 @@ linters:
           - errcheck
 
 formatters:
+  # Load-bearing: this is the *only* formatting gate in the build. There was a
+  # separate `fmt-check` mise task and it was removed as redundant with this
+  # (ADR-0018), so disabling this line does not fall back to anything — it
+  # leaves formatting unchecked. Proven to fail on a formatting-only defect
+  # rather than assumed to, per ADR-0016.
   enable:
     - gofmt
