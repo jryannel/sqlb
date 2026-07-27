@@ -85,7 +85,7 @@ func New(cfg Config) (*Server, error) {
 	// set of callers that may pass it is the whole point. Two values, one of
 	// which never leaves this file's neighbours, is harder to misuse.
 	sys := sqlb.New(cfg.DB).WithHooks(sqlb.NewRegistry())
-	hooked := sys.WithHooks(Register())
+	hooked := sys.WithHooks(Register(cfg.Log))
 
 	router := chi.NewRouter()
 	router.Use(
@@ -127,7 +127,6 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	registerAuthRoutes(api, &authAPI{sys: sys, hooks: hooked.Hooks(), signer: signer})
-	registerCommentRoutes(api, &commentAPI{db: hooked, log: cfg.Log})
 	registerSoftDeleteRoutes(api, hooked)
 
 	return &Server{Handler: router, API: api, Signer: signer}, nil

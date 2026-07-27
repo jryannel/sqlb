@@ -49,7 +49,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | [`app/hooks.go`](app/hooks.go) | The workspace boundary. One registration per model, and no handler that knows about tenants. |
 | [`auth/jwt.go`](auth/jwt.go) | HS256 in the standard library, with the three checks that make a verifier safe rather than merely working. |
 | [`app/auth_routes.go`](app/auth_routes.go) | Register and login: the endpoints that establish the identity everything else is scoped by. |
-| [`app/comments.go`](app/comments.go) | Two writes in one transaction, and `AfterCommit` for the side effect. |
+| [`app/hooks.go`](app/hooks.go) | Also where the comment invariant lives: two writes in one transaction, and `AfterCommit` for the side effect. |
 | [`cmd/migrate/main.go`](cmd/migrate/main.go) | The generated baseline, plus three things the DSL cannot express. |
 | [`app/server_test.go`](app/server_test.go) | Every claim above, asserted against a real Postgres. |
 
@@ -76,18 +76,23 @@ back to "no restriction", which is the shape most tenancy bugs take.
 
 ## Where the generated layer stops
 
-Three endpoints are hand-written, and each marks a real boundary rather than a
-gap in the generator:
+Six endpoints are hand-written, in two groups, and each group marks a real
+boundary rather than a gap in the generator:
 
 - **`POST /auth/register`, `POST /auth/login`** — they establish the identity
   everything else is scoped by, so they run on a handle with no hooks attached.
   One deliberate exception, created in one place.
-- **`POST /tasks/{id}/comments`** — inserting the comment and incrementing
-  `tasks.comment_count` must land together. A generated create is one INSERT
-  under autocommit and cannot promise that, so `comments` is not exposed for
-  create at all. Two ways to create a comment, one of which leaves the counter
-  wrong, is worse than one way.
 - **`DELETE /tasks/{id}`, `/lists/{id}`, `/comments/{id}`** — see below.
+
+One used to be here and is not any more, which is the more interesting entry.
+`POST /tasks/{id}/comments` existed because inserting a comment and
+incrementing `tasks.comment_count` have to land together, and a generated
+create under autocommit could not promise that. `rest` now wraps a generated
+write in a transaction, so a hook receives a context carrying it — and the rule
+moved to `BeforeCreate` and `AfterCreate` on the model. That is a stronger
+guarantee than the endpoint gave, not merely a shorter one: the invariant now
+holds for *every* path that creates a comment, including one written later by
+someone who never read this file.
 
 ## Two things sqlb does not do that this example works around
 

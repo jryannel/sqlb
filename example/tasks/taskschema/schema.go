@@ -235,21 +235,30 @@ var Comment = schema.Table("comments",
 ).
 	Index("task_id", "created_at").
 	Describe("A comment on a task.").
-	// No OpCreate, and this is the interesting omission in the file.
+	// OpCreate is exposed, and it was not always.
 	//
 	// Creating a comment has an invariant attached: the task's comment_count
 	// must move with it, and the two writes must land together or not at all.
-	// A generated handler issues one INSERT under autocommit, which cannot
-	// carry that. So the create lives in app/comments.go, where it can open a
-	// transaction — and it is *only* there, because exposing both would leave
-	// two ways to create a comment, one of which quietly leaves the counter
-	// wrong.
+	// While generated writes ran under autocommit a generated handler could not
+	// carry that, so the create was a hand-written endpoint and this table was
+	// deliberately not exposed for it — exposing both would have left two ways
+	// to create a comment, one of which quietly left the counter wrong.
 	//
-	// This is the boundary the generated layer is meant to have: it covers
-	// what is mechanical, and stops where a domain rule starts.
+	// `rest` now wraps a generated write in a transaction, which changes where
+	// the invariant can live rather than merely making the old endpoint
+	// shorter. A hook receives a context carrying that transaction, so
+	// `BeforeCreate` can check the task and `AfterCreate` can move the counter,
+	// both inside the unit of work that writes the row. The invariant belongs to
+	// the *model* now, not to one route — so every path that creates a comment
+	// maintains it, including one written later by someone who has not read
+	// this comment. That is a stronger guarantee than the endpoint ever gave,
+	// and app/comments.go is gone.
+	//
+	// Still no OpUpdate: editing a comment is a domain question this example
+	// does not answer, not a mechanical one.
 	Expose(schema.REST{
 		Path:            "/comments",
-		Ops:             schema.OpRead | schema.OpList,
+		Ops:             schema.OpCreate | schema.OpRead | schema.OpList,
 		DefaultPageSize: 50,
 		MaxPageSize:     100,
 	})

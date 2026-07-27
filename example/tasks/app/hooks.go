@@ -2,6 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/tasks"
@@ -38,7 +43,7 @@ import (
 // one's Register would stack a duplicate set of predicates onto the first.
 // Handing the registry to the handle with WithHooks keeps each server's rules
 // its own.
-func Register() *sqlb.Registry {
+func Register(log *slog.Logger) *sqlb.Registry {
 	reg := sqlb.NewRegistry()
 
 	// Reads. Every workspace-scoped model gets the same treatment, and the
@@ -120,14 +125,80 @@ func Register() *sqlb.Registry {
 		return nil
 	})
 
-	sqlb.OnIn[tasks.Comment](reg).BeforeCreate(func(ctx context.Context, cm *tasks.Comment) error {
+	// Comments carry an invariant the other models do not: the task's
+	// comment_count has to move with them. Both halves live here, in hooks, and
+	// that is only possible because rest wraps a generated write in a
+	// transaction — so the context a hook receives carries one, and TxFrom finds
+	// it. Before that change this had to be a hand-written endpoint.
+	comments := sqlb.OnIn[tasks.Comment](reg)
+
+	comments.BeforeCreate(func(ctx context.Context, cm *tasks.Comment) error {
 		c, err := claimsOrError(ctx)
 		if err != nil {
 			return err
 		}
 		cm.WorkspaceID = c.Workspace
 		cm.AuthorID = c.Subject
+
+		// Check the task exists in this workspace, rather than letting the
+		// composite foreign key catch it.
+		//
+		// Both refuse the write; they differ in what the caller is told. The
+		// constraint raises a Postgres error rest cannot classify, so a client
+		// naming a task in another workspace would get a 500 for what is
+		// squarely its own mistake. Reading first turns that into the 404 it
+		// should have been — the same answer an id that never existed gets.
+		//
+		// The read runs on the transaction, so it sees the same snapshot the
+		// insert will, and the BeforeQuery hook scopes it to the workspace.
+		tx, ok := sqlb.TxFrom(ctx)
+		if !ok {
+			// Fail closed. Without a transaction the counter below cannot move
+			// atomically with the insert, and a comment that silently does not
+			// count is worse than one that is refused.
+			return fmt.Errorf("app: a comment must be created inside a transaction")
+		}
+		switch _, err := sqlb.Query[tasks.Task]().
+			Where(tasks.TaskCols.ID.Eq(cm.TaskID)).
+			One(ctx, tx); {
+		case errors.Is(err, sqlb.ErrNotFound):
+			return huma.Error404NotFound("no task matched")
+		case err != nil:
+			return fmt.Errorf("reading the task: %w", err)
+		}
 		return nil
+	})
+
+	comments.AfterCreate(func(ctx context.Context, cm *tasks.Comment) error {
+		tx, ok := sqlb.TxFrom(ctx)
+		if !ok {
+			return fmt.Errorf("app: a comment must be created inside a transaction")
+		}
+
+		// comment_count + 1 computed by the database, not read into Go and
+		// written back: two comments posted in the same second both count.
+		if _, err := tasks.UpdateTask().
+			AddCommentCount(1).
+			Where(tasks.TaskCols.ID.Eq(cm.TaskID)).
+			Stmt().
+			Exec(ctx, tx); err != nil {
+			return fmt.Errorf("bumping the comment count: %w", err)
+		}
+
+		// The side effect goes after the commit. Announcing it from here would
+		// announce a comment a later rollback un-writes; doing it in the handler
+		// would announce one that was never committed.
+		//
+		// At-most-once and in-process: if the machine dies between the commit
+		// and the callback, nothing records that the callback was owed. That is
+		// AfterCommit's documented limit and the reason a durable change feed
+		// wants an outbox row written in this same transaction instead.
+		id, task, workspace := cm.ID, cm.TaskID, cm.WorkspaceID
+		return sqlb.AfterCommit(ctx, func(context.Context) error {
+			log.Info("comment posted",
+				"comment_id", id, "task_id", task, "workspace_id", workspace)
+			return nil
+		})
 	})
 
 	sqlb.OnIn[tasks.Membership](reg).BeforeCreate(func(ctx context.Context, m *tasks.Membership) error {

@@ -12,6 +12,24 @@ import (
 	"github.com/jryannel/sqlb/rest"
 )
 
+// CommentCreate is the request body for creating a Comment.
+//
+// Read-only columns are absent: the database or a BeforeCreate hook owns them.
+// A column with a default is optional, so leaving it out means the database
+// supplies the value rather than the zero value overwriting it.
+type CommentCreate struct {
+	TaskID string `json:"task_id"`
+	Body   string `json:"body"`
+}
+
+// Row builds the row to insert. It satisfies rest.CreateBody.
+func (c CommentCreate) Row() (*Comment, error) {
+	row := &Comment{}
+	row.TaskID = c.TaskID
+	row.Body = c.Body
+	return row, nil
+}
+
 // ListCreate is the request body for creating a List.
 //
 // Read-only columns are absent: the database or a BeforeCreate hook owns them.
@@ -264,11 +282,11 @@ func (u TaskPatch) Changes() (map[string]any, error) {
 // BeforeQuery hook registered on a model applies to its REST reads too, which
 // is how tenant scoping stops being something each handler must remember.
 func Register(api huma.API, db sqlb.Executor) error {
-	if err := rest.Resource[Comment, rest.None[Comment], rest.None[Comment]](api, db, rest.Options{
+	if err := rest.Resource[Comment, CommentCreate, rest.None[Comment]](api, db, rest.Options{
 		Path:            "/comments",
 		Name:            "comment",
 		Tag:             "comments",
-		Ops:             rest.OpRead | rest.OpList,
+		Ops:             rest.OpCreate | rest.OpRead | rest.OpList,
 		Description:     "A comment on a task.",
 		DefaultPageSize: 50,
 		MaxPageSize:     100,

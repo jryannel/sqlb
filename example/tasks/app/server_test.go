@@ -185,8 +185,13 @@ func TestRejectionsSayWhatWouldHaveWorked(t *testing.T) {
 	}
 }
 
-// TestCommentIsOneUnitOfWork covers the hand-written endpoint: two writes, one
-// transaction, and a counter the database computes.
+// TestCommentIsOneUnitOfWork covers the generated create and the two hooks that
+// give it an invariant: the comment and the task's counter move together, and
+// neither moves if the other cannot.
+//
+// There is no hand-written handler behind this any more. `rest` wraps a
+// generated write in a transaction, so the hooks receive a context carrying it
+// — which is what lets the rule live on the model rather than on a route.
 func TestCommentIsOneUnitOfWork(t *testing.T) {
 	server := newServer(t, freshDB(t))
 	alice := account(t, server, "alice@example.com", "Acme")
@@ -194,8 +199,9 @@ func TestCommentIsOneUnitOfWork(t *testing.T) {
 	task := alice.taskID(list, "Needs discussion", nil)
 
 	for i := range 3 {
-		alice.post("/tasks/"+task+"/comments", map[string]any{
-			"body": "comment " + string(rune('a'+i)),
+		alice.post("/comments", map[string]any{
+			"task_id": task,
+			"body":    "comment " + string(rune('a'+i)),
 		}).expect(http.StatusCreated)
 	}
 
@@ -216,11 +222,12 @@ func TestCommentIsOneUnitOfWork(t *testing.T) {
 		t.Errorf("author_id = %v, want the caller %v", comments.Items[0]["author_id"], user["id"])
 	}
 
-	// A comment on a task in another workspace is a 404 and leaves nothing
-	// behind — the read and the two writes are one unit, so a failure at the
-	// first means the other two never happened.
+	// A comment on a task in another workspace is a 404 rather than the 500 the
+	// composite foreign key alone would produce, and it leaves nothing behind:
+	// the check and the two writes are one unit, so a failure at the first means
+	// the other two never happened.
 	bob := account(t, server, "bob@example.com", "Globex")
-	bob.post("/tasks/"+task+"/comments", map[string]any{"body": "nope"}).
+	bob.post("/comments", map[string]any{"task_id": task, "body": "nope"}).
 		expect(http.StatusNotFound)
 
 	still := alice.get("/tasks/" + task).expect(http.StatusOK).item()

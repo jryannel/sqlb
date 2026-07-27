@@ -43,7 +43,7 @@ built from each column's capabilities.
 
 [`example/tasks/app/app.go`](../../example/tasks/app/app.go) is this assembled
 for real: authentication middleware, six generated resources mounted in one
-call, and seven hand-written endpoints on the same router and in the same
+call, and six hand-written endpoints on the same router and in the same
 OpenAPI document. The thing to notice is what the generated half does *not*
 contain — no mention of tenants, tokens or roles anywhere in it, because the
 hooks cover those for every read the handlers issue.
