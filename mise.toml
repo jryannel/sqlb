@@ -46,13 +46,38 @@ description = "golangci-lint --fix (applies autofixes; review the diff)"
 run = "golangci-lint run --fix"
 
 [tasks.fmt]
-description = "gofmt -w across the module"
-run = "gofmt -w ."
+description = "gofmt -w across the files git tracks. Run `mise run fmt-check` to see what it would change."
+run = '''
+# Scoped to tracked files for the reason spelled out under fmt-check, and more
+# urgently here: `gofmt -w .` *rewrites* what it walks, so an unrelated checkout
+# under .claude/worktrees/ would be reformatted underneath whoever is working in
+# it.
+files=$(git ls-files '*.go')
+if [ -z "$files" ]; then
+  echo "fmt: no tracked Go files"; exit 1
+fi
+printf '%s\n' "$files" | xargs gofmt -w
+'''
 
 [tasks.fmt-check]
 description = "Fail if anything needs gofmt. Run `mise run fmt` to fix."
 run = '''
-unformatted=$(gofmt -l .)
+# Scoped to the files git tracks, not `gofmt -l .`. The recursive walk descends
+# into .claude/worktrees/, which .git/info/exclude ignores and which holds
+# unrelated parallel checkouts, so the gate failed naming a file that is not
+# part of this repository at all. `fmt-check` was the only gate with that
+# exposure: vet, lint, test-race, generate-check and bisect-check all reach the
+# tree through the go tool's `./...`, which skips directories whose name begins
+# with a dot.
+files=$(git ls-files '*.go')
+if [ -z "$files" ]; then
+  echo "fmt-check: no tracked Go files, so nothing was checked"; exit 1
+fi
+# gofmt's own failure (a parse error, a tracked file deleted from the worktree)
+# empties the list and would otherwise read as clean — ADR-0016.
+if ! unformatted=$(printf '%s\n' "$files" | xargs gofmt -l); then
+  echo "fmt-check: gofmt failed, so nothing was verified"; exit 1
+fi
 if [ -n "$unformatted" ]; then
   echo "needs gofmt:"; echo "$unformatted"; exit 1
 fi
