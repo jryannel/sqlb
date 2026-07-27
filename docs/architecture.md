@@ -45,6 +45,7 @@ Almost everything else follows from those two.
 | `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`. | stdlib only |
 | `filter` | URL grammar → predicates, validated against model capabilities. | `sqlb` |
 | `migrate` | Diffs two schemas into changes, renders them as Postgres DDL, and writes migration files for goose, golang-migrate or plain SQL. Does not apply them. | `schema` |
+| `introspect` | Reads `pg_catalog` back into a `*schema.Registry`, and reports every construct the DSL cannot express. Design-time; connects through `*sql.DB`, so the driver is the caller's. | `schema`, stdlib |
 | `codegen` | Generates models, the typed column facade, the REST request bodies and the manifest. `Check` is the dry-run mode wired into CI. | `schema` |
 | `rest` | Mounts a model on a Huma API: handlers, and an OpenAPI operation built from the model's capabilities. | `sqlb`, `filter`, huma |
 | `example/blog` | A worked schema plus the artefacts codegen must produce. | all of the above |
@@ -56,12 +57,18 @@ cannot quietly grow a dependency on the schema DSL, because it cannot see it.
 Capabilities reach the runtime as struct tags or `Describe` calls, never as a
 schema import.
 
-`migrate` and `codegen` sit on the other side of that line: both are design-time
-tools that read `schema` and emit text, and neither is reachable from the
-request path. `migrate` is the only package that renders DDL, which is why the
-Postgres type mapping lives there rather than beside the query compiler — a
-`Format` decides what a *runner* wants a file to look like, and the DDL layer
-decides what the *database* wants a statement to look like.
+`migrate`, `introspect` and `codegen` sit on the other side of that line: all
+three are design-time tools that read or write `schema`, and none is reachable
+from the request path. `migrate` is the only package that renders DDL, which is
+why the Postgres type mapping lives there rather than beside the query compiler
+— a `Format` decides what a *runner* wants a file to look like, and the DDL
+layer decides what the *database* wants a statement to look like.
+
+`introspect` is the same mapping pointed backwards, and it is a separate package
+because it connects to a database and `migrate` deliberately does not. That
+separation is what keeps `migrate` a pure function over two data structures, and
+it is why the two can be checked against each other: render a schema, apply it,
+read it back, and the diff between what went in and what came out must be empty.
 
 `sqlb` has no third-party dependencies, and neither does anything else on the
 request path. `rest` is the single exception: it depends on huma, and nothing
@@ -211,10 +218,10 @@ working is worse than no test, so those are exercised as real build attempts.
 ## Known gaps
 
 - `?expand` validates relation names but does not perform the join.
-- The diff has no way to learn the current schema. It compares two registries,
-  and nothing yet produces one from a database — neither `sqlb import` nor the
-  shadow database that would replay the existing migration history. Both sides
-  have to be hand-written until one exists.
+- `introspect` produces a registry from a live database, but nothing yet renders
+  one back as `schema.go` source, and there is no shadow database replaying a
+  migration history. Adoption today means calling `introspect.Registry` and
+  writing the schema file yourself.
 - No change feed, and no generated TypeScript client. See the
   [vision](vision.md).
 - The REST layer does not implement `?expand`, so `rest.Options.Expandable`

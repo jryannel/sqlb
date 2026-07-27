@@ -299,10 +299,11 @@ Not built yet, in the order they matter:
    `UNIQUE` becomes a concurrent index build plus an `ADD CONSTRAINT … USING
    INDEX` that adopts it. What it cannot rewrite is a type change, which stays
    flagged.
-   What is missing is where the *current* schema comes from: `sqlb import`
-   reading `pg_catalog`, or a shadow database replaying the existing history.
-   Until one of those exists, both sides of a diff have to be hand-written
-   registries.
+   `introspect.Registry` reads `pg_catalog` back into a registry, so the current
+   side of a diff can come from a live database, and it reports every construct
+   the DSL cannot express rather than dropping it. What is missing is rendering
+   an imported registry back as `schema.go` source, and a shadow database that
+   replays an existing migration history instead of reading a live schema.
 2. **TypeScript client** — the OpenAPI document is generated and precise; the
    client derived from it is not written yet.
 3. **`?expand`** — the grammar validates relation names; the joins are not

@@ -108,7 +108,22 @@ REST. Widening is then a deliberate, reviewable edit.
 For this to round-trip, generated names must be overridable, which is why
 `Named`, `ConstraintNamed` and `PrimaryKeyNamed` exist. An imported schema whose
 constraint names do not match the database would produce a diff that drops and
-recreates every constraint on the first run.
+recreates every constraint on the first run. Only the names that *differ* from
+what the DDL layer would generate are pinned, so an imported schema is not
+littered with restatements of the convention it already follows.
+
+**Reading the catalog is a separate package from writing DDL.** `introspect`
+connects to a database; `migrate` does not, and says so in its own
+documentation. Keeping them apart is what lets `migrate` stay a pure function
+over two data structures. `introspect` works through `*sql.DB`, so the driver
+comes from the caller and importing the engine still costs a consumer nothing.
+
+**What import cannot represent, it reports.** The DSL is narrower than Postgres,
+and the failure that matters is the quiet one: a schema missing a construct
+still validates, still compiles, and still produces a migration — one proposing
+to undo whatever it failed to see. So every construct that does not survive goes
+into a `Report` with its definition, and an empty `Report` is the claim that the
+registry describes the database completely.
 
 **Formats are rendered in code, not translated by an agent.** The tempting
 alternative is to emit one canonical output and let an AI coding agent convert
@@ -153,12 +168,32 @@ easy to forget, and forgetting one is data loss unless the destructive guard
 catches it.
 
 **What is built.** `migrate.Diff(current, target *schema.Registry) ([]Change,
-error)`, the Postgres DDL under it, rename hints, and lock-hazard detection.
-The symmetry claim held:
-the diff is a pure function, tested exhaustively without a database. Still
-unbuilt: the shadow database that produces `current`, and `sqlb import` — so in
-practice `Diff` has no way to learn the current state except from another
-hand-written registry.
+error)`, the Postgres DDL under it, rename hints, lock-hazard detection, and
+`introspect.Registry`, which reads `pg_catalog` back into a registry. The
+symmetry claim held twice over: the diff is a pure function tested exhaustively
+without a database, and introspection produces a registry the diff accepts as
+its current state without knowing where it came from.
+
+Still unbuilt: emitting a `schema.go` from an imported registry — the registry
+is the useful intermediate and rendering it as Go source is a separate
+generator — and the shadow database that would replay a migration history rather
+than reading a live schema.
+
+The import round trip was measured rather than assumed. A schema exercising
+every construct the DSL can express was rendered to DDL, applied to a real
+Postgres 18, read back, and diffed against what went in. The difference was two
+changes, both the same thing: Postgres normalises a hand-written `CHECK ("views"
+>= 0)` to `CHECK (views >= 0)`, and closing that would need a SQL expression
+parser. Everything else — types, defaults, enum recovery, referential actions,
+pinned names, comments, GIN, partial and composite indexes — came back
+unchanged.
+
+So the property that decides whether adoption works is not that one, but the
+**fixpoint**: import a database, render the imported schema back to DDL, apply
+it to a second database, import that, and diff the two. That is empty. An
+imported schema is stable under its own output, which makes the check-expression
+difference a one-time reconciliation at the moment of adoption rather than
+recurring noise.
 
 The generated DDL has been applied to a real Postgres and reversed twice, by
 hand: once on 17 for the blog schema and an incremental migration exercising
@@ -382,6 +417,17 @@ sqlb to own DDL.
 
 ## Revisions
 
+- 2026-07-27 — Built `introspect`, the reading half of this record: `pg_catalog`
+  into a `*schema.Registry`, in a package of its own because it connects to a
+  database and `migrate` must not. The catalog was surveyed before any mapping
+  was written, which was necessary rather than thorough — almost every spelling
+  differs from the one the DDL layer emits, a `varchar(200)` reports as
+  `character varying(200)`, an enum's `IN ()` normalises to `= ANY (ARRAY[…])`,
+  and every stored literal carries a cast. Recorded the round-trip result and
+  the fixpoint that makes adoption usable despite it. Confidence stays Medium:
+  the mapping is covered by tests over rows written by hand, but that a query
+  returns the *right* rows is still shown by a manual run against a real
+  database. Emitting `schema.go` source is deliberately not done yet.
 - 2026-07-27 — Generated the unique-constraint sequence too — `CREATE UNIQUE
   INDEX CONCURRENTLY` plus `ADD CONSTRAINT … USING INDEX` — which the entry
   below listed as the one mechanical remedy still unwritten. Every remedy this
