@@ -121,3 +121,4 @@ nobody finishes reading has failed at its only job.
 | [0019](0019-pgbouncer-in-the-path.md) | Connections go through PgBouncer, except the ones that cannot | Exploring | Low |
 | [0020](0020-transaction-scoped-handle.md) | The transaction handle is built now, not with Go 1.27 | Working | Medium |
 | [0021](0021-hooks-receive-an-event.md) | A hook is handed an event, not a bare row | Working / Revisiting | High / Low |
+| [0022](0022-references-declare-their-inverse.md) | A reference declares the name its target knows it by | Exploring | Medium |
