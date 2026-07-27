@@ -29,8 +29,14 @@ export default defineConfig({
         {
           label: "Guide",
           // autogenerate reads the sidebar.order the sync script writes, which
-          // keeps page order in one place: the ORDER list in that script.
+          // keeps page order in one place: the SOURCES list in that script.
           items: [{ autogenerate: { directory: "guide" } }],
+        },
+        {
+          label: "Project",
+          // What it is for, how it is built, what it promises. Above the records
+          // because it is the shorter read and the one that frames them.
+          items: [{ autogenerate: { directory: "project" } }],
         },
         {
           label: "Decision records",

@@ -1,19 +1,28 @@
 // Derive the Starlight content collection from the markdown in docs/.
 //
-// docs/guide and docs/adr are the source of truth: plain markdown, no
-// frontmatter, rendering on GitHub, which is where most people meet them. This
-// turns them into what Starlight wants — frontmatter, web paths instead of file
-// paths — without a second copy for anyone to edit. Nothing written here is
-// committed; it is regenerated on every build, so there is no drift to gate.
+// The files under docs/ are the source of truth: plain markdown, no frontmatter,
+// rendering on GitHub, which is where most people meet them. This turns them
+// into what Starlight wants — frontmatter, web paths instead of file paths —
+// without a second copy for anyone to edit. Nothing written here is committed;
+// it is regenerated on every build, so there is no drift to gate.
 //
-// What it does gate is links. A relative link points at a file in the
-// repository, and only some of those have a page on the site: a sibling ADR
-// does, ../review-adoption-readiness.md does not. So every relative link must
-// match a rule, and one that does not is a hard error rather than a link that
-// 404s after deploy. `--check` runs the transform and reports without writing.
+// What it does gate is links, and it does so by resolving them rather than by
+// matching patterns. A relative link means something different depending on
+// which directory the file sits in — `adr/0011-x.md` from docs/, `../adr/0011-x.md`
+// from docs/guide/, `0011-x.md` from docs/adr/ all name the same record — so each
+// link is resolved against the repository and then looked up:
+//
+//   published here    → an internal route
+//   exists in the repo → a GitHub URL, since the site has no page for it
+//   neither            → a hard error
+//
+// The last case is the one worth having. It catches a link that 404s after
+// deploy, and also a link to a repository file that simply is not there.
+// `--check` runs the transform and reports without writing.
 
+import { existsSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { base } from "../site.config.mjs";
@@ -30,11 +39,12 @@ const BLOB = `${GITHUB}/blob/main`;
 const TREE = `${GITHUB}/tree/main`;
 
 /**
- * Each source directory becomes one route on the site.
+ * Each source becomes one route on the site.
  *
- * `order` returns a sidebar position and `label` the sidebar text when it should
- * differ from the page's H1. Both take the page's slug — the filename without
- * .md, or "index" for a README.
+ * `files` restricts a directory to named files, for docs/ where only some of the
+ * loose markdown is published. `order` returns a sidebar position and `label`
+ * the sidebar text when it should differ from the page's H1; both take the
+ * page's slug — the filename without .md, or "index" for a README.
  */
 const SOURCES = [
   {
@@ -72,6 +82,20 @@ const SOURCES = [
       return m[1] === "NNNN" ? "Template" : `${m[1]} · ${m[2]}`;
     },
   },
+  {
+    dir: "docs",
+    route: "project",
+    // Named rather than globbed: docs/ also holds review-adoption-readiness.md,
+    // a dated snapshot of one reviewer's judgement, and with-sqlc.md, which
+    // reads as reference for a specific pairing. Both stay on GitHub until
+    // someone decides otherwise, and globbing would decide for them.
+    //
+    // Read in this order: what it is for, how it is built, what it promises.
+    files: ["vision.md", "architecture.md", "compatibility.md"],
+    order(slug) {
+      return this.files.indexOf(`${slug}.md`);
+    },
+  },
 ];
 
 const check = process.argv.includes("--check");
@@ -80,8 +104,8 @@ const check = process.argv.includes("--check");
  * Split markdown into code and prose runs, so rewrites never touch code.
  *
  * Both fenced blocks and inline spans count. The inline case is not
- * hypothetical: ADR-0020 contains `sqlb.QueryIn[T](tx)`, which is Go generics
- * and looks exactly like a markdown link to a pass that only skips fences.
+ * hypothetical: ADR-0020 contains `sqlb.QueryIn[T](tx)` and compatibility.md
+ * contains `OnIn[T](r)` — Go generics that a link-shaped regex reads as links.
  */
 function splitCode(md) {
   const parts = [];
@@ -122,56 +146,53 @@ function routeFor(source, slug) {
   return slug === "index" ? `${prefix}/${source.route}/` : `${prefix}/${source.route}/${slug}/`;
 }
 
+/** List the markdown a source publishes, honouring an explicit file list. */
+async function filesOf(source) {
+  if (source.files) return source.files;
+  return (await readdir(join(repo, source.dir))).filter((f) => f.endsWith(".md")).sort();
+}
+
 /**
- * Map one repo-relative link onto its web form, seen from `source`.
- * Returns null when no rule matches, which is the error case.
+ * Map every published file to its route, keyed by repo-relative path. A
+ * directory holding a README maps too, so a link to the directory reaches its
+ * index.
  */
-function rewrite(link, source) {
+async function buildRouteIndex() {
+  const routes = new Map();
+  for (const source of SOURCES) {
+    for (const file of await filesOf(source)) {
+      const slug = file === "README.md" ? "index" : file.replace(/\.md$/, "");
+      routes.set(posix.join(source.dir, file), routeFor(source, slug));
+      if (slug === "index") routes.set(source.dir, routeFor(source, "index"));
+    }
+  }
+  return routes;
+}
+
+/**
+ * Resolve one link as written, from a file in `fromDir`, to its web form.
+ * Returns null when the target cannot be found at all, which is the error case.
+ */
+function rewrite(link, fromDir, routes) {
   if (link.startsWith("#")) return link;
   if (/^(https?:|mailto:)/.test(link)) return link;
 
-  const [path, fragment] = link.split("#");
+  const [rawPath, fragment] = link.split("#");
   const hash = fragment ? `#${fragment}` : "";
 
-  // "." addresses the directory the file sits in — its own index.
-  if (path === "." || path === "./") return routeFor(source, "index") + hash;
+  // Resolve against the containing directory, then key on the repo-relative
+  // path — the same target written three different ways lands on one key.
+  const resolved = posix.normalize(posix.join(fromDir, rawPath)).replace(/\/$/, "");
+  if (resolved.startsWith("..")) return null; // outside the repository
 
-  // A sibling page in the same source directory.
-  const sibling = /^([A-Za-z0-9-]+)\.md$/.exec(path);
-  if (sibling) {
-    const slug = sibling[1] === "README" ? "index" : sibling[1];
-    return routeFor(source, slug) + hash;
-  }
+  const route = routes.get(resolved);
+  if (route) return route + hash;
 
-  // A page in another source directory: ../adr/0011-....md from the guide, which
-  // is an internal link now that the records are published rather than a trip
-  // out to GitHub.
-  const crossSource = /^\.\.\/([a-z]+)\/(?:([A-Za-z0-9-]+)\.md)?$/.exec(path);
-  if (crossSource) {
-    const other = SOURCES.find((s) => s.dir === `docs/${crossSource[1]}`);
-    if (other) {
-      const slug = !crossSource[2] || crossSource[2] === "README" ? "index" : crossSource[2];
-      return routeFor(other, slug) + hash;
-    }
-  }
-
-  // Everything else lives in the repository and has no page here, so it leaves
-  // the site. A trailing slash means a directory.
-  const known = {
-    "../../README.md": `${BLOB}/README.md`,
-    "../README.md": `${BLOB}/README.md`,
-    "../with-sqlc.md": `${BLOB}/docs/with-sqlc.md`,
-    "../review-adoption-readiness.md": `${BLOB}/docs/review-adoption-readiness.md`,
-    "../architecture.md": `${BLOB}/docs/architecture.md`,
-    "../vision.md": `${BLOB}/docs/vision.md`,
-    "../compatibility.md": `${BLOB}/docs/compatibility.md`,
-  };
-  if (known[path]) return known[path] + hash;
-
-  const example = /^\.\.\/\.\.\/(example\/.+)$/.exec(path);
-  if (example) {
-    const root = example[1].endsWith("/") ? TREE : BLOB;
-    return `${root}/${example[1].replace(/\/$/, "")}${hash}`;
+  // Not published, but real: link out to the repository.
+  const onDisk = join(repo, resolved);
+  if (existsSync(onDisk)) {
+    const root = statSync(onDisk).isDirectory() ? TREE : BLOB;
+    return `${root}/${resolved}${hash}`;
   }
 
   return null;
@@ -199,14 +220,18 @@ function extractDescription(body) {
   return null;
 }
 
-async function transform(source, problems) {
-  const dir = join(repo, source.dir);
-  const files = (await readdir(dir)).filter((f) => f.endsWith(".md")).sort();
-  if (files.length === 0) throw new Error(`sync-docs: no markdown found in ${dir}`);
+async function transform(source, routes, problems) {
+  const files = await filesOf(source);
+  if (files.length === 0) throw new Error(`sync-docs: no markdown found in ${source.dir}`);
 
   const pages = [];
   for (const file of files) {
-    const raw = await readFile(join(dir, file), "utf8");
+    const path = join(repo, source.dir, file);
+    if (!existsSync(path)) {
+      problems.push(`${source.dir}/${file}: listed in SOURCES but not on disk`);
+      continue;
+    }
+    const raw = await readFile(path, "utf8");
     const extracted = extractTitle(raw);
     if (!extracted) {
       problems.push(`${source.dir}/${file}: no H1, so the page has no title`);
@@ -222,9 +247,9 @@ async function transform(source, problems) {
         continue;
       }
       rewritten += part.text.replace(/\]\(([^)\s]+)\)/g, (whole, link) => {
-        const next = rewrite(link, source);
+        const next = rewrite(link, source.dir, routes);
         if (next === null) {
-          problems.push(`${source.dir}/${file}: no rule for link ${link}`);
+          problems.push(`${source.dir}/${file}: ${link} resolves to nothing in the repository`);
           return whole;
         }
         return `](${next})`;
@@ -266,16 +291,17 @@ async function transform(source, problems) {
 }
 
 async function main() {
+  const routes = await buildRouteIndex();
   const problems = [];
   const bySource = [];
   for (const source of SOURCES) {
-    bySource.push({ source, pages: await transform(source, problems) });
+    bySource.push({ source, pages: await transform(source, routes, problems) });
   }
 
   if (problems.length > 0) {
     console.error("sync-docs: the docs cannot be published as they stand:");
     for (const p of problems) console.error(`  ${p}`);
-    console.error("\nAdd a rule to rewrite() in site/scripts/sync-docs.mjs, or fix the link.");
+    console.error("\nFix the link, or publish its target by adding it to SOURCES.");
     process.exit(1);
   }
 
@@ -284,7 +310,7 @@ async function main() {
     for (const { source, pages } of bySource) {
       console.log(`  ${source.dir} → /${source.route}/  ${pages.length} pages`);
     }
-    console.log(`sync-docs: ${total} pages transform cleanly, every link has a rule`);
+    console.log(`sync-docs: ${total} pages transform cleanly, every link resolves`);
     return;
   }
 

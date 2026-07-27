@@ -11,14 +11,24 @@ mise run site-check    # can the docs be published as they stand? (no npm instal
 
 ## Where the content lives
 
-**`docs/guide/` and `docs/adr/` are the source of truth.** Both are plain
-markdown with no frontmatter, so they render on GitHub and are readable in a
-checkout — which is where most people will meet them. `scripts/sync-docs.mjs`
-derives the Starlight collection from them on every build, one route per source
-directory: `/guide/` and `/adr/`.
+**The markdown under `docs/` is the source of truth.** It is plain markdown with
+no frontmatter, so it renders on GitHub and is readable in a checkout — which is
+where most people will meet it. `scripts/sync-docs.mjs` derives the Starlight
+collection from it on every build, one route per source:
 
-Adding another section is an entry in the `SOURCES` array in that script plus a
-sidebar group in `astro.config.mjs`.
+| Source | Route | Contents |
+|---|---|---|
+| `docs/guide/` | `/guide/` | Every file, in the reading order named in `SOURCES` |
+| `docs/adr/` | `/adr/` | Every file, ordered by the number in its filename |
+| `docs/` | `/project/` | Only `vision.md`, `architecture.md`, `compatibility.md` |
+
+The third is a named list rather than a glob, because `docs/` also holds
+`review-adoption-readiness.md` — a dated snapshot of one reviewer's judgement —
+and `with-sqlc.md`. Both stay on GitHub until someone decides otherwise, and a
+glob would decide for them.
+
+Adding another section is an entry in `SOURCES` plus a sidebar group in
+`astro.config.mjs`.
 
 That means:
 
@@ -36,13 +46,20 @@ That means:
 Neither script is a formality; each one has a failure it exists to catch, and
 both were checked to fail before being relied on.
 
-**`sync-docs.mjs`** rewrites repo-relative links into web links. A sibling page
-becomes a route; so does a page in the other source directory, which is why the
-guide's `../adr/0011-...md` links now stay on the site instead of leaving for
-GitHub. Anything with no page here — `../review-adoption-readiness.md`,
-`../../example/tasks/` — becomes a GitHub URL. A link matching no rule is a
-**hard error**, not a link that quietly 404s after deploy. It also fails on a
-page with no H1 to take a title from, and on a guide page missing from the
+**`sync-docs.mjs`** rewrites repo-relative links into web links by *resolving*
+them, not by matching patterns. The same target is written differently depending
+on where the file sits — `adr/0011-x.md` from `docs/`, `../adr/0011-x.md` from
+`docs/guide/`, `0011-x.md` from `docs/adr/` — so each link is resolved against
+the repository and then looked up:
+
+- **published here** → an internal route, which is why the guide's ADR
+  references stay on the site instead of leaving for GitHub;
+- **exists in the repo** → a GitHub URL, file or directory as appropriate;
+- **neither** → a **hard error**.
+
+That last case earns its keep twice: it catches a link that would 404 after
+deploy, and a link to a repository file that is simply not there. It also fails
+on a page with no H1 to take a title from, and on a guide page missing from the
 `sequence` list, so adding one is a deliberate act here too.
 
 It skips inline code as well as fenced blocks, which is not fussiness: ADR-0020
