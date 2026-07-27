@@ -50,6 +50,7 @@ Almost everything else follows from those two.
 | `rest` | Mounts a model on a Huma API: handlers, and an OpenAPI operation built from the model's capabilities. | `sqlb`, `filter`, huma |
 | `example/blog` | A worked schema plus the artefacts codegen must produce. | all of the above |
 | `example/tasks` | A multi-tenant task manager: hooks as the authorisation seam, JWT middleware feeding the context hooks read, and a migration history applied by goose. A separate module, like `pgtest`. | all of the above, `migrate` |
+| `example/withsqlc` | The same schema rendered as DDL for sqlc, and a test that sqlb reads sqlc's structs. Proves [docs/with-sqlc.md](with-sqlc.md) rather than leaving it asserted. | `sqlb`, `filter`, stdlib |
 
 The dependency direction matters: `schema` is a leaf that nothing imports at
 runtime, and `sqlb` has no dependency on `schema`. That is deliberate. It is
@@ -82,7 +83,9 @@ guard ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
 works through its stdlib adapter and any instrumenting wrapper works unchanged.
 `sqlb.DB` is a handle over one, adding `WithTx` and a scoped hook registry; it
 satisfies `Executor` itself, which is what lets it be adopted without touching
-call sites ([ADR-0020](adr/0020-transaction-scoped-handle.md)).
+call sites ([ADR-0020](adr/0020-transaction-scoped-handle.md)). `DB.Tx` reaches
+the underlying `*sql.Tx`, which is how a unit of work is shared with a library
+wanting more than two methods — sqlc's generated `DBTX` wants four.
 `rest` takes a `huma.API`, not a router, so the choice of chi, gin, echo or
 `net/http` — and all of that router's middleware — stays the application's.
 

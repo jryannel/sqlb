@@ -303,7 +303,10 @@ Working and tested:
 - Filter grammar with capability enforcement, type coercion and cost limits
 - Schema manifest (JSON), schema linting, and `Explain` with plan diagnostics
 - `sqlb.Describe[T]()` for runtime-only use: the schema DSL and codegen are
-  optional, and sqlb can be layered over structs it did not generate
+  optional, and sqlb can be layered over structs it did not generate — including
+  stock sqlc output with no `db` tags, which
+  [example/withsqlc](example/withsqlc) tests against real generated code rather
+  than asserting. [docs/with-sqlc.md](docs/with-sqlc.md) is the pairing story
 - Migrations (`migrate`): `Diff` computes the changes between two schemas and
   renders them as Postgres DDL; `Render` and `Write` emit the files for goose,
   golang-migrate or plain SQL. Renames are declared with `.RenamedFrom("old")`
@@ -434,12 +437,43 @@ below is reachable from a test.
 | Is my schema well-formed? | `schema.Validate()` — every authoring error at once |
 | Will my schema behave badly in production? | `schema.Lint()` — unindexed filters, search without a trigram index, list endpoints with no stable sort order |
 | What SQL does this query produce? | `q.SQL()` — text and args, without executing |
-| Is this query still valid against the real database? | `sqlb.Explain(ctx, db, q)` — fails with the database's own complaint, without executing |
+| Is this query still valid against the real database? | `sqlb.Explain(ctx, db, q)` — fails with the database's own complaint, without executing. This is the practice, not an option; see below |
 | Does it still use the index? | `plan.UsesIndex(…)`, `plan.UsesSeqScan(…)`, `plan.Diagnostics()` |
 | Did the plan regress? | Assert on `plan.Diagnostics()` in a test |
 
-`Explain` is the load-bearing one, because it answers both halves of "did I
-break something" — correctness and performance — without running the statement:
+### Explain is the practice, not an optional nicety
+
+Predicates are deliberately untyped, so `sqlb.F("titel")` compiles and fails at
+runtime ([ADR-0009](docs/adr/0009-typed-column-facade.md)). That is a real gap
+next to a tool that checks columns at build time, and the answer is not that it
+rarely happens.
+
+**The answer is a test that plans every query shape a resource can produce.**
+Treat it the way you would treat compiling: something the gate does, not
+something you remember to do.
+
+```go
+func TestEveryQueryShapePlans(t *testing.T) {
+    for name, q := range shapes {   // the shapes filter.Parse can produce
+        if _, err := sqlb.Explain(ctx, db, q); err != nil {
+            t.Errorf("%s does not plan against the live schema: %v", name, err)
+        }
+    }
+}
+```
+
+[pgtest/explain_test.go](pgtest/explain_test.go) does exactly this for the blog
+example's three resources — every list filter, sort, projection and page, plus
+read, insert, update and delete — and ends by pointing the same check at a
+misspelled column to prove it fires. It runs in `mise run ci`.
+
+This catches strictly more than a compile-time column check: it validates
+against the *live schema*, so it also fails on the migration that was written
+and never applied. What it costs is a database at test time, and a failure that
+arrives at test time rather than compile time. See
+[docs/with-sqlc.md](docs/with-sqlc.md) for the honest comparison.
+
+`Explain` answers the performance half too, without running the statement:
 
 ```go
 plan, err := sqlb.Explain(ctx, db, q)
@@ -503,6 +537,7 @@ func (t tracer) QueryContext(ctx context.Context, q string, args ...any) (*sql.R
 | [docs/vision.md](docs/vision.md) | What this is for, non-goals, and where it goes next |
 | [docs/architecture.md](docs/architecture.md) | How the pieces fit, the request path, where safety lives, API tiers |
 | [docs/compatibility.md](docs/compatibility.md) | What the current tag freezes, and which surfaces are expected to move |
+| [docs/with-sqlc.md](docs/with-sqlc.md) | Using both: who owns the schema, which queries go where, and sharing a transaction |
 | [docs/review-adoption-readiness.md](docs/review-adoption-readiness.md) | An outside read on what blocks adoption, and what would change the verdict |
 | [docs/adr/](docs/adr/) | Decision records — what was decided, why, and what would change our mind |
 

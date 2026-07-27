@@ -183,6 +183,34 @@ func (d *DB) Hooks() *Registry { return d.hooks }
 // check it.
 func (d *DB) InTx() bool { return d.inTx }
 
+// Tx returns the underlying *sql.Tx, if this handle runs on one.
+//
+// It exists so that a unit of work can be shared with a library that wants more
+// than Executor's two methods. sqlc's generated DBTX wants four, so this is how
+// both sides land on one transaction without giving up WithTx's rollback and
+// panic handling:
+//
+//	err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
+//	    post, err := sqlb.InsertRows(&p).One(ctx, tx)
+//	    if err != nil {
+//	        return err
+//	    }
+//	    sqlTx, ok := tx.Tx()
+//	    if !ok {
+//	        return errors.New("expected a transaction")
+//	    }
+//	    return sqlcgen.New(sqlTx).RecordPublication(ctx, post.ID)
+//	})
+//
+// It reports false when the executor is a pool, or a wrapper that does not
+// expose the transaction it holds. Committing or rolling back the returned
+// *sql.Tx directly is a mistake: WithTx owns that boundary, and doing it here
+// leaves the after-commit callbacks unrun.
+func (d *DB) Tx() (*sql.Tx, bool) {
+	tx, ok := d.exec.(*sql.Tx)
+	return tx, ok
+}
+
 // QueryContext satisfies Executor.
 func (d *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return d.exec.QueryContext(ctx, query, args...)

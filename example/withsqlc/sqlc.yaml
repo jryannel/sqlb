@@ -1,0 +1,26 @@
+# sqlc reads the schema sqlb generated. There is one schema declaration in this
+# repository — example/blog/blogschema — and this is downstream of it.
+#
+#   go generate ./example/withsqlc/...   regenerate schema.sql, then run sqlc
+version: "2"
+sql:
+  - engine: postgresql
+    schema: schema.sql
+    queries: query.sql
+    gen:
+      go:
+        package: sqlcgen
+        out: sqlcgen
+        sql_package: database/sql
+        # Left off deliberately. The claim under test is that sqlb.Describe
+        # reads *stock* sqlc output, mapping Go field names to columns by
+        # snake_case when there is no db tag. Turning this on would make the
+        # test pass for an easier reason than the one that matters.
+        emit_db_tags: false
+        overrides:
+          # sqlb declares these as UUIDv7 primary keys. Mapping them to string
+          # rather than a uuid package keeps this example dependency-free,
+          # which the repository's deps-check gate requires of everything
+          # outside `rest` and the blog example.
+          - db_type: "uuid"
+            go_type: "string"

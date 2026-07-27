@@ -179,7 +179,18 @@ though the feature is on.
 **Cost of change.** Trivial now. It rises once someone has `Expandable` in a
 schema and has concluded, reasonably, that it works.
 
-### 4. The compile-time gap is real, and `Explain` is the answer — **document, don't build**
+### 4. The compile-time gap is real, and `Explain` is the answer — **FIXED 2026-07-27**
+
+> Resolved. The README now presents `Explain` as the practice rather than as an
+> inspection tool, and [pgtest/explain_test.go](../pgtest/explain_test.go) plans
+> every shape the blog example's three resources can produce — list filters,
+> sorts, projections and pages, plus read, insert, update and delete — inside
+> `mise run ci`. It ends by pointing the same check at a misspelled column, so
+> the guard is proven to fire ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+>
+> One thing this finding understated: `Explain` catches *strictly more* than a
+> compile-time column check, because it validates against the live schema and so
+> also fails on a migration that was written and never applied.
 
 `sqlb.F("titel")` fails at runtime ([expr.go:176](../expr.go)); scanning is
 reflective ([exec.go:189](../exec.go)); predicates are deliberately untyped, so
@@ -215,7 +226,22 @@ and the filter grammar are the surfaces worth freezing early; hook registration
 is the one that will move when finding 1 lands, and saying so in advance turns a
 future break into a documented plan.
 
-### 6. Say what pairing with sqlc looks like — **highest-leverage doc**
+### 6. Say what pairing with sqlc looks like — **FIXED 2026-07-27**
+
+> Resolved: [docs/with-sqlc.md](with-sqlc.md), with
+> [example/withsqlc](../example/withsqlc) as the worked version. All three
+> questions below are answered, and the two that can be tested are tested
+> against real sqlc v1.31.1 output rather than against structs written to agree.
+>
+> Two things the finding did not anticipate. `sqlb.Describe` does read stock
+> sqlc output — the snake_case fallback covers sqlc's default naming, including
+> `OrgID` → `org_id` — so the example leaves `emit_db_tags` off deliberately,
+> since turning it on would pass for a reason that does not generalise. And the
+> transaction-sharing claim turned out to be false as first written: sqlc's
+> `DBTX` wants four methods where `Executor` has two, so `*sqlb.DB` cannot be
+> handed to `sqlcgen.New`. That gap is now closed by `DB.Tx`, which is a small
+> API addition this finding did not scope — the document would otherwise have
+> had to say the two cannot share a unit of work.
 
 [vision.md:91](vision.md) states that sqlb should stay useful alongside sqlc.
 Nothing shows how, and the three questions a reader will have are all
@@ -238,17 +264,17 @@ common objection — "why not just use sqlc" — into a compatibility story.
 |---|---|---|---|
 | 5 | ~~No release tag~~ | Adoption | **Fixed** — `v0.1.0`, with [compatibility.md](compatibility.md) |
 | 3 | ~~`?expand` accepted, advertised, inert~~ | Correctness | **Fixed** |
-| 4 | Promote `Explain` to documented practice | Perception | Low, docs only |
+| 4 | ~~Promote `Explain` to documented practice~~ | Perception | **Fixed** |
 | 2 | ~~No `AfterCommit`~~ | Blocking | **Fixed** |
-| 6 | No sqlc pairing story | Adoption | Low, docs only |
+| 6 | ~~No sqlc pairing story~~ | Adoption | **Fixed** — [with-sqlc.md](with-sqlc.md) |
 | 1 | ~~No transaction-scoped handle~~ | Blocking | **Fixed** — [ADR-0020](adr/0020-transaction-scoped-handle.md) |
 
 Ordered by leverage per unit of effort, which is not the order they will
 naturally get done in — 1 is the one that matters most and 2 depends on it, so
 the remaining sequence is 5, 1, 2, then the two documents.
 
-**Where that sequence stands:** 5, 3, 1 and 2 are done, which is both blocking
-findings closed. What remains is 4 and 6, and both are documentation.
+**Where that sequence stands: all six are closed**, in that order, on the day
+the review was written.
 
 That does not make the verdict "yes" — see below. The clock is what is left.
 
@@ -264,7 +290,14 @@ The design is not what is holding this back. The clock is.
 
 **Half of that condition is now met**, on the same day the review was written,
 which should be read as evidence about the code's malleability rather than
-about its maturity. Both blocking findings closed cheaply because the design
-they landed on was already close to right — but the other half of the condition
-has not moved at all, and cannot be made to. Nothing above substitutes for
-elapsed time under someone else's traffic.
+about its maturity. Every finding closed cheaply because the design they landed
+on was already close to right — but the other half of the condition has not
+moved at all, and cannot be made to. Nothing above substitutes for elapsed time
+under someone else's traffic.
+
+Two of the closures found something the review had wrong, which is worth
+recording because it is the argument for reviews being cheap to act on rather
+than for this one being right: finding 1's fix needed no change to
+`rest.Resource`, and finding 6's transaction-sharing claim was false until
+`DB.Tx` was added. A document that had shipped without the worked example would
+have asserted something that did not compile.

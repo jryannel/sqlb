@@ -91,7 +91,9 @@ Being explicit about these is as useful as the goals.
 - **Not a replacement for hand-written SQL.** Reporting queries, recursive CTEs
   and window functions belong in SQL. `Raw` is a supported escape hatch, not an
   admission of failure, and sqlb should stay useful alongside sqlc rather than
-  demanding all of a codebase.
+  demanding all of a codebase. [with-sqlc.md](with-sqlc.md) says what that looks
+  like concretely, and [example/withsqlc](../example/withsqlc) tests the half of
+  it that can be tested.
 - **Not a way to expose your database.** The opt-in capability model is the
   whole difference between this and putting PostgREST in front of production.
 - **Not a framework.** No router, no dependency injection, no opinion about how
