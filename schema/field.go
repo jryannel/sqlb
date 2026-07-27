@@ -41,6 +41,11 @@ type FieldDesc struct {
 	Immutable bool // settable at create, rejected on update
 	Hidden    bool // never serialised into a REST response
 
+	// indexWanted marks a column that should carry an index even though the
+	// declaration does not name one — currently only external references,
+	// which exist to be joined on.
+	indexWanted bool
+
 	// ConstraintName pins the name of the constraint this column declares —
 	// its unique constraint, or its foreign key if it is a reference. Set it
 	// when adopting an existing database, so that a generated migration
@@ -51,13 +56,29 @@ type FieldDesc struct {
 	Ref *Reference
 }
 
-// Reference describes a foreign key.
+// Reference describes a relationship to another table.
+//
+// A reference is either internal — a real foreign key to a table in the same
+// registry — or external, which is a column holding another module's identifier
+// with no database-level constraint behind it.
 type Reference struct {
 	Name     string // relation name, e.g. "org" for column "org_id"
 	Table    *TableDef
 	Column   string // referenced column; defaults to the target primary key
 	OnDelete Action
 	OnUpdate Action
+
+	// External marks a reference across a module boundary. No FOREIGN KEY is
+	// emitted for one, so the modules stay independently deployable and
+	// independently migratable. Referential integrity becomes the
+	// application's responsibility, which is the trade a module architecture
+	// is already making everywhere else.
+	External bool
+	// Target names what is referenced, for documentation and for the
+	// manifest: "tenants.id", or "platform/users.users.id". It is free text,
+	// deliberately — resolving it would require the dependency this is
+	// designed to avoid.
+	Target string
 }
 
 // Desc returns the column description. The pointer aliases the field's own
@@ -136,6 +157,36 @@ func Ref(name string, target *TableDef) *Field {
 			f.d.Ref.Column = pk.Desc().Name
 		}
 	}
+	return f
+}
+
+// ExternalRef declares a reference to a table this module does not own.
+//
+// It produces a column named relation+"_id" holding the other side's
+// identifier, and an index to join on — but no FOREIGN KEY, so the two modules
+// can be migrated and deployed independently, and either can be moved to its
+// own database without dropping a constraint:
+//
+//	// in the billing module, with no import of the tenants module
+//	schema.ExternalRef("tenant", "tenants.id").Filterable()
+//
+// The target is free text. Resolving it to a real table would require exactly
+// the dependency this exists to avoid, so it is recorded for the manifest and
+// for whoever reads the schema, and not checked.
+//
+// Such a reference cannot be Expandable: expanding it would join a table this
+// module does not own. Fetch the other side through that module's own API.
+func ExternalRef(relation, target string) *Field {
+	f := newField(relation+"_id", TypeUUID)
+	f.d.Ref = &Reference{Name: relation, Target: target, External: true}
+	f.d.indexWanted = true
+	return f
+}
+
+// OfType overrides the column type, for an external reference whose target is
+// not the conventional UUID.
+func (f *Field) OfType(t Type) *Field {
+	f.d.Type = t
 	return f
 }
 
@@ -303,3 +354,8 @@ func (d *FieldDesc) Capabilities() string {
 	add(d.Hidden, "hidden")
 	return strings.Join(out, ",")
 }
+
+// IndexWanted reports whether this column implicitly asked for an index. An
+// external reference does, since a soft foreign key exists to be joined on and
+// one without an index scans the table.
+func (d *FieldDesc) IndexWanted() bool { return d.indexWanted }

@@ -132,6 +132,16 @@ func (r *Registry) Lint() Diagnostics {
 			}
 		}
 
+		// A table outside any module in a codebase that uses them is usually
+		// an oversight, and it is the one that will collide later.
+		if t.module == "" && r.module != "" {
+			add(Diagnostic{
+				Rule: "unnamespaced-table", Table: t.name,
+				Severity: SeverityInfo,
+				Message:  "table is not in a module, so its name is not namespaced",
+			})
+		}
+
 		if t.rest == nil {
 			continue
 		}

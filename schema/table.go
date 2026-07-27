@@ -78,7 +78,9 @@ type Check struct {
 // TableDef is a table declaration. Build one with Table, which also registers
 // it in the default registry.
 type TableDef struct {
-	name    string
+	name    string // storage name, including any module prefix
+	local   string // name as declared, without the prefix
+	module  string
 	comment string
 	pkName  string
 	fields  []*Field
@@ -96,19 +98,54 @@ func Table(name string, specs ...FieldSpec) *TableDef {
 // Table declares a table in a specific registry. Use it to keep a schema
 // isolated from the default one, which is mainly what tests want.
 func (r *Registry) Table(name string, specs ...FieldSpec) *TableDef {
-	t := &TableDef{name: name}
+	t := &TableDef{name: r.Qualify(name), local: name, module: r.module}
 	for _, s := range specs {
 		if s == nil {
 			continue
 		}
 		t.fields = append(t.fields, s.fields()...)
 	}
+	// An external reference exists to be joined on, so it carries an index
+	// whether or not the declaration named one. The index is added to the
+	// table's own list rather than applied invisibly at render time, so it
+	// shows up in Indexes, the manifest and the generated DDL like any other.
+	for _, f := range t.fields {
+		if f.d.indexWanted && !t.hasLeadingIndex(f.d.Name) {
+			t.indexes = append(t.indexes, Index{
+				Name:    indexName(t.name, []string{f.d.Name}, false),
+				Columns: []string{f.d.Name},
+			})
+		}
+	}
 	r.Add(t)
 	return t
 }
 
-// Name is the table name.
+// hasLeadingIndex reports whether a column already leads an index, is unique,
+// or is the primary key — the cases Postgres can seek on directly.
+func (t *TableDef) hasLeadingIndex(column string) bool {
+	for _, f := range t.fields {
+		if f.d.Name == column && (f.d.PrimaryKey || f.d.Unique) {
+			return true
+		}
+	}
+	for _, idx := range t.indexes {
+		if len(idx.Columns) > 0 && idx.Columns[0] == column {
+			return true
+		}
+	}
+	return false
+}
+
+// Name is the table's storage name, including any module prefix. This is the
+// name that reaches SQL.
 func (t *TableDef) Name() string { return t.name }
+
+// LocalName is the name as declared, without the module prefix.
+func (t *TableDef) LocalName() string { return t.local }
+
+// Module is the owning module name, or "" if the table is not in one.
+func (t *TableDef) Module() string { return t.module }
 
 // Fields returns the table's columns in declaration order.
 func (t *TableDef) Fields() []*Field { return t.fields }
@@ -211,10 +248,13 @@ func (t *TableDef) Describe(s string) *TableDef {
 // reachable from Go code but has no REST surface at all.
 func (t *TableDef) Expose(r REST) *TableDef {
 	if r.Path == "" {
-		r.Path = "/" + t.name
+		// The URL uses the local name: a module prefix is a storage concern,
+		// and leaking it into the API would make moving a table between
+		// modules a breaking API change.
+		r.Path = "/" + t.local
 	}
 	if r.Tag == "" {
-		r.Tag = t.name
+		r.Tag = t.local
 	}
 	t.rest = &r
 	return t

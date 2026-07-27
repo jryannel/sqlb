@@ -21,6 +21,7 @@ const ManifestVersion = "1"
 // tooling at it.
 type Manifest struct {
 	Version   string          `json:"version"`
+	Module    string          `json:"module,omitempty"`
 	Tables    []TableManifest `json:"tables"`
 	Operators []OperatorDoc   `json:"filterOperators"`
 	Params    []ParamDoc      `json:"reservedParams"`
@@ -29,6 +30,8 @@ type Manifest struct {
 // TableManifest describes one table.
 type TableManifest struct {
 	Name       string           `json:"name"`
+	Module     string           `json:"module,omitempty"`
+	LocalName  string           `json:"localName,omitempty"`
 	Comment    string           `json:"comment,omitempty"`
 	PrimaryKey string           `json:"primaryKey,omitempty"`
 	Columns    []ColumnManifest `json:"columns"`
@@ -53,12 +56,17 @@ type ColumnManifest struct {
 	References   *RefManifest `json:"references,omitempty"`
 }
 
-// RefManifest describes a foreign key.
+// RefManifest describes a relationship. External references carry a target
+// string and no enforced constraint, so a reader can see the relationship even
+// though the database does not.
 type RefManifest struct {
 	Relation string `json:"relation"`
-	Table    string `json:"table"`
-	Column   string `json:"column"`
+	Table    string `json:"table,omitempty"`
+	Column   string `json:"column,omitempty"`
 	OnDelete string `json:"onDelete,omitempty"`
+	External bool   `json:"external,omitempty"`
+	Target   string `json:"target,omitempty"`
+	Enforced bool   `json:"enforced"`
 }
 
 // IndexManifest describes a secondary index.
@@ -103,6 +111,7 @@ type ParamDoc struct {
 func (r *Registry) BuildManifest() *Manifest {
 	m := &Manifest{
 		Version:   ManifestVersion,
+		Module:    r.module,
 		Operators: operatorDocs(),
 		Params:    paramDocs(),
 	}
@@ -117,6 +126,9 @@ func BuildManifest() *Manifest { return defaultRegistry.BuildManifest() }
 
 func (t *TableDef) manifest() TableManifest {
 	tm := TableManifest{Name: t.name, Comment: t.comment}
+	if t.module != "" {
+		tm.Module, tm.LocalName = t.module, t.local
+	}
 	if pk := t.PrimaryKey(); pk != nil {
 		tm.PrimaryKey = pk.Desc().Name
 	}
@@ -148,12 +160,21 @@ func (t *TableDef) manifest() TableManifest {
 				cm.Capabilities = append(cm.Capabilities, c.name)
 			}
 		}
-		if d.Ref != nil && d.Ref.Table != nil {
+		switch {
+		case d.Ref != nil && d.Ref.External:
+			cm.References = &RefManifest{
+				Relation: d.Ref.Name,
+				External: true,
+				Target:   d.Ref.Target,
+				Enforced: false,
+			}
+		case d.Ref != nil && d.Ref.Table != nil:
 			cm.References = &RefManifest{
 				Relation: d.Ref.Name,
 				Table:    d.Ref.Table.name,
 				Column:   d.Ref.Column,
 				OnDelete: string(d.Ref.OnDelete),
+				Enforced: true,
 			}
 		}
 		tm.Columns = append(tm.Columns, cm)

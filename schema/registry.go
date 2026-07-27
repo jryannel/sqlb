@@ -9,8 +9,14 @@ import (
 )
 
 // Registry holds a set of table declarations.
+//
+// A registry is also the unit of module isolation. Independent modules — fx
+// modules, or any other arrangement where one package must not import another —
+// each declare into their own registry, so two modules may both own a table
+// called "events" without colliding.
 type Registry struct {
 	mu     sync.RWMutex
+	module string
 	tables []*TableDef
 	byName map[string]*TableDef
 }
@@ -19,6 +25,39 @@ type Registry struct {
 // the package-level functions.
 func NewRegistry() *Registry {
 	return &Registry{byName: make(map[string]*TableDef)}
+}
+
+// NewModule returns a registry whose tables are all prefixed with the module
+// name, so that table ownership is visible in the database and cannot be
+// forgotten:
+//
+//	var Billing = schema.NewModule("billing")
+//	var Invoice = Billing.Table("invoices", …)   // → billing_invoices
+//
+// The prefix is applied by the registry rather than written into each
+// declaration, which is the point: a convention that has to be repeated at
+// every call site is a convention that drifts.
+//
+// Declarations still use the local name, so a table moving between modules
+// changes one line.
+func NewModule(name string) *Registry {
+	if !isIdent(name) {
+		panic(fmt.Sprintf("sqlb/schema: module name %q is not a valid SQL identifier prefix", name))
+	}
+	r := NewRegistry()
+	r.module = name
+	return r
+}
+
+// Module returns the module name, or "" for a registry that is not a module.
+func (r *Registry) Module() string { return r.module }
+
+// Qualify renders a local table name as this registry would store it.
+func (r *Registry) Qualify(local string) string {
+	if r.module == "" {
+		return local
+	}
+	return r.module + "_" + local
 }
 
 var defaultRegistry = NewRegistry()
@@ -132,7 +171,15 @@ func (r *Registry) Validate() error {
 			if d.Hidden && d.Filterable {
 				report(t.name, d.Name, "column is both Hidden and Filterable, which leaks its contents through filter probing")
 			}
-			if d.Ref != nil {
+			if d.Ref != nil && d.Ref.External {
+				if d.Expandable {
+					report(t.name, d.Name, "a reference across a module boundary cannot be Expandable: expanding it would join a table this module does not own")
+				}
+				if d.Ref.Target == "" {
+					report(t.name, d.Name, "ExternalRef declares no target")
+				}
+			}
+			if d.Ref != nil && !d.Ref.External {
 				switch {
 				case d.Ref.Table == nil:
 					report(t.name, d.Name, "Ref target is nil (declaration order: the target table var must be initialised first)")
