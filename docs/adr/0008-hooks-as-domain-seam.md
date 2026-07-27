@@ -44,6 +44,15 @@ handle, so a `Registry` can be scoped and `TxFrom` tells a hook it is inside a
 transaction. `On[T]()` still reaches a process default, so the
 action-at-a-distance remains for anyone who does not scope one.
 
+The larger remaining cost is that this record's claim is wider than what the
+write hooks can actually do. `BeforeQuery` receives the builder and is a genuine
+seam; `BeforeCreate` receives a bare row, `BeforeUpdate` cannot read the
+statement it is given, and neither can reach the database. Building
+`example/tasks` found three domain rules that had to leave the hook layer as a
+result. [ADR-0021](0021-hooks-receive-an-event.md) is the proposal to close
+that; until it lands, "hooks are the domain-logic seam" is true of reads and
+only partly true of writes.
+
 ## What would change our mind
 
 - ~~If global registration causes test bleed or surprises in practice, move the
@@ -57,6 +66,12 @@ action-at-a-distance remains for anyone who does not scope one.
   disable hooks globally.
 - If hook order ever matters and registration order is not enough, add explicit
   priorities.
+- This record did not anticipate that a domain rule might need to *read* the
+  database from inside a hook, and that turned out to be the common case rather
+  than an exotic one — `example/tasks` hit it three times. The gap is in what a
+  hook is handed, not in the idea, and it is tracked in
+  [ADR-0021](0021-hooks-receive-an-event.md). Recorded here as a miss, because a
+  revisit trigger nobody wrote is the kind this list exists to catch.
 
 ## Cost of change
 
@@ -86,3 +101,7 @@ normalise input or reject a request with a useful error.
 - 2026-07-27 — Registry scoping landed ([ADR-0020](0020-transaction-scoped-handle.md)).
   Revised the costs, the revisit trigger and the cost-of-change estimate, which
   was too high.
+- 2026-07-27 — Narrowed the claim. `example/tasks` showed the write hooks are a
+  much thinner seam than this record implied, because they cannot read the
+  database and cannot inspect the statement they are given.
+  [ADR-0021](0021-hooks-receive-an-event.md) proposes the fix.
