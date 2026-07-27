@@ -183,6 +183,25 @@ func (d *DB) Hooks() *Registry { return d.hooks }
 // check it.
 func (d *DB) InTx() bool { return d.inTx }
 
+// CanBeginTx reports whether WithTx would be able to open a transaction on this
+// handle.
+//
+// It exists so that a caller who *requires* transactions can say so at startup
+// rather than on the first write. `rest` uses it for exactly that: a resource
+// that wraps its generated writes refuses to mount over an executor that cannot
+// begin one, because discovering it at request time would mean the first POST
+// is the error report.
+//
+// It reports true inside a transaction as well, where WithTx joins rather than
+// begins.
+func (d *DB) CanBeginTx() bool {
+	if d.inTx {
+		return true
+	}
+	_, ok := d.exec.(Beginner)
+	return ok
+}
+
 // Tx returns the underlying *sql.Tx, if this handle runs on one.
 //
 // It exists so that a unit of work can be shared with a library that wants more

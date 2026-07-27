@@ -2,6 +2,7 @@ package rest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -99,7 +100,7 @@ func registerRead[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 	})
 }
 
-func registerCreate[T any, C CreateBody[T]](api huma.API, db sqlb.Executor, b *binding[T]) {
+func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T]) {
 	reg := api.OpenAPI().Components.Schemas
 	opts := b.opts
 
@@ -138,7 +139,9 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, db sqlb.Executor, b *b
 		// holding its zero value is omitted by Insert itself, so id, created_at
 		// and anything else the database owns still comes from the database.
 		b.clearReadOnly(value)
-		created, err := sqlb.InsertRows(value).One(ctx, db)
+		created, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
+			return sqlb.InsertRows(value).One(ctx, db)
+		})
 		if err != nil {
 			return nil, asHumaError(err, opts.name())
 		}
@@ -146,7 +149,7 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, db sqlb.Executor, b *b
 	})
 }
 
-func registerUpdate[T any, U UpdateBody](api huma.API, db sqlb.Executor, b *binding[T]) {
+func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) {
 	reg := api.OpenAPI().Components.Schemas
 	opts := b.opts
 
@@ -194,11 +197,13 @@ func registerUpdate[T any, U UpdateBody](api huma.API, db sqlb.Executor, b *bind
 			return nil, problem
 		}
 
-		stmt := sqlb.UpdateRows[T]().Where(sqlb.F(b.model.PK.Name).Eq(key))
-		for _, name := range names {
-			stmt.Set(name, changes[name])
-		}
-		updated, err := stmt.One(ctx, db)
+		updated, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
+			stmt := sqlb.UpdateRows[T]().Where(sqlb.F(b.model.PK.Name).Eq(key))
+			for _, name := range names {
+				stmt.Set(name, changes[name])
+			}
+			return stmt.One(ctx, db)
+		})
 		if err != nil {
 			return nil, asHumaError(err, opts.name())
 		}
@@ -206,7 +211,7 @@ func registerUpdate[T any, U UpdateBody](api huma.API, db sqlb.Executor, b *bind
 	})
 }
 
-func registerDelete[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
+func registerDelete[T any](api huma.API, w writer, b *binding[T]) {
 	reg := api.OpenAPI().Components.Schemas
 	opts := b.opts
 
@@ -225,12 +230,25 @@ func registerDelete[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		if err != nil {
 			return nil, err
 		}
-		n, err := sqlb.DeleteRows[T]().Where(sqlb.F(b.model.PK.Name).Eq(key)).Exec(ctx, db)
-		if err != nil {
-			return nil, asHumaError(err, opts.name())
-		}
-		if n == 0 {
+		_, err = write(ctx, w, func(ctx context.Context, db sqlb.Executor) (int64, error) {
+			n, err := sqlb.DeleteRows[T]().Where(sqlb.F(b.model.PK.Name).Eq(key)).Exec(ctx, db)
+			if err != nil {
+				return 0, err
+			}
+			// Reported from inside the unit of work, so that a delete matching
+			// nothing rolls back rather than committing an empty transaction
+			// whose AfterCommit callbacks would then announce a deletion that
+			// did not happen.
+			if n == 0 {
+				return 0, errNoRowsAffected
+			}
+			return n, nil
+		})
+		switch {
+		case errors.Is(err, errNoRowsAffected):
 			return nil, newError(http.StatusNotFound, "no "+opts.name()+" matched")
+		case err != nil:
+			return nil, asHumaError(err, opts.name())
 		}
 		return nil, nil
 	})

@@ -264,12 +264,19 @@ func (s *stubDB) statements() []string {
 	return append([]string(nil), s.log...)
 }
 
+// last is the most recent statement, skipping the transaction markers a write
+// is wrapped in — the assertions here are about the SQL, not the wrapping.
 func (s *stubDB) last() string {
-	stmts := s.statements()
-	if len(stmts) == 0 {
-		return ""
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.log) - 1; i >= 0; i-- {
+		switch s.log[i] {
+		case "BEGIN", "COMMIT", "ROLLBACK":
+		default:
+			return s.log[i]
+		}
 	}
-	return stmts[len(stmts)-1]
+	return ""
 }
 
 type stubDriver struct{ s *stubDB }
@@ -281,8 +288,25 @@ type stubConn struct{ s *stubDB }
 func (c stubConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("stub driver: prepared statements are not used")
 }
-func (c stubConn) Close() error              { return nil }
-func (c stubConn) Begin() (driver.Tx, error) { return nil, errors.New("stub driver: no transactions") }
+func (c stubConn) Close() error { return nil }
+
+// The generated handlers wrap each write in a transaction so that a hook can
+// register AfterCommit work, so the stub has to be able to open one. The
+// markers go into the same statement log as everything else; lastStatement
+// skips them, since no assertion here is about the transaction itself.
+func (c stubConn) Begin() (driver.Tx, error) {
+	c.s.record("BEGIN")
+	return stubTx(c), nil
+}
+
+func (c stubConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return c.Begin()
+}
+
+type stubTx struct{ s *stubDB }
+
+func (t stubTx) Commit() error   { t.s.record("COMMIT"); return nil }
+func (t stubTx) Rollback() error { t.s.record("ROLLBACK"); return nil }
 
 func (c stubConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	c.s.record(query)

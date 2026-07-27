@@ -294,7 +294,10 @@ Working and tested:
   Those all run *inside* the transaction; `AfterCommit` registers work that must
   not happen if it aborts — publishing an event, enqueuing a job, invalidating a
   cache. It is in-process and at-most-once, so it is not a change feed
-  ([ADR-0012](docs/adr/0012-change-feed-outbox.md))
+  ([ADR-0012](docs/adr/0012-change-feed-outbox.md)). `rest.Resource` wraps each
+  generated write in a transaction so hooks can reach it; set
+  `Options.DisableTransactions` to opt a resource out
+  ([ADR-0021](docs/adr/0021-hooks-receive-an-event.md))
 - `sqlb.DB` — a handle carrying an executor and a hook registry, with `WithTx`
   for multi-statement units of work. It satisfies `Executor`, so it goes
   wherever a `*sql.DB` went; `TxFrom(ctx)` is how a hook reads rows the same

@@ -273,11 +273,17 @@ validation — an error rolls the write back — and wrong for anything the outs
 world can observe.
 
 The write hooks are narrower than `BeforeQuery`: they receive the row or the
-statement, not a way to reach the database, and nothing in `rest` or `mutate`
-opens a transaction, so `AfterCommit` is unreachable from a generated write.
+statement, not a way to reach the database, so a rule that has to *ask* the
+database something cannot be written as one.
 [ADR-0021](../adr/0021-hooks-receive-an-event.md) proposes handing them an event
-instead. It is exploratory — the evidence there is for the problem, not yet for
-the answer — so what this page describes is what the code does today.
+carrying an executor. That part is exploratory — the evidence there is for the
+problem, not yet for the answer — so what this page describes is what the code
+does today.
+
+What has landed from that record is the transaction: `rest.Resource` wraps every
+generated create, update and delete in one, so `AfterCommit` is reachable from a
+generated write. Set `Options.DisableTransactions` to opt out, and read the next
+section before you do.
 
 ### AfterCommit, for side effects
 
@@ -317,6 +323,14 @@ if err := db.WithTx(ctx, placeOrder); err != nil {
 Outside a transaction, `AfterCommit` is an error rather than an immediate call:
 under autocommit sqlb cannot say when the commit happened, so the callback would
 fire before the insert or after it depending on which hook called it.
+
+**From a generated handler there is always a transaction**, because
+`rest.Resource` opens one per write. The two ways to end up without one are a
+write you issue yourself outside `WithTx`, and a resource that set
+`Options.DisableTransactions`. The second is worth stating plainly: turning it on
+does not disable `AfterCommit`, it makes every registration fail at request time.
+That is loud rather than silent, which is the point — but it means the option is
+a decision about the resource's hooks, not only about its latency.
 
 This is in-process and at-most-once. A callback that never ran because the
 process died leaves no trace — that is what a transactional outbox is for, and

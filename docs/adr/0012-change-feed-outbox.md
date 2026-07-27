@@ -76,7 +76,11 @@ record's Context names, and it is fine for the things people actually reach for
 first — invalidating a local cache, logging, enqueuing to a broker that is
 itself allowed to lose work.
 
-It is not a change feed, and using it as one silently loses events.
+It is not a change feed, and using it as one silently loses events. That warning
+matters more now than when it was written: generated CRUD wraps its writes
+([ADR-0021](0021-hooks-receive-an-event.md)), so `AfterCommit` is reachable from
+every REST write rather than only from a hand-written `WithTx`. It is easier to
+reach for and no more durable than it was.
 
 What it changes here is the outbox's shape. The dispatcher fans out *to*
 `AfterCommit` callbacks was the original phrasing; the accurate version is that

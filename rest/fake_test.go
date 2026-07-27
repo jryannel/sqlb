@@ -155,6 +155,15 @@ func (f *fakeDB) answer(query string, args []driver.NamedValue) (reply, bool) {
 	return reply{}, false
 }
 
+// record logs a statement that carries no bind parameters, keeping the args
+// slice aligned with the log so lastArgs stays meaningful.
+func (f *fakeDB) record(stmt string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.log = append(f.log, stmt)
+	f.args = append(f.args, nil)
+}
+
 // statements returns every statement the handler issued, in order.
 func (f *fakeDB) statements() []string {
 	f.mu.Lock()
@@ -163,22 +172,41 @@ func (f *fakeDB) statements() []string {
 }
 
 // lastStatement is the most recent statement, for asserting on compiled SQL.
+//
+// Transaction markers are skipped: a write is wrapped by default, so the raw
+// last entry is COMMIT and no assertion here has ever been about that. Tests
+// that care whether a write was wrapped read statements() instead.
 func (f *fakeDB) lastStatement() string {
-	stmts := f.statements()
-	if len(stmts) == 0 {
-		return ""
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i := f.lastRealLocked(); i >= 0 {
+		return f.log[i]
 	}
-	return stmts[len(stmts)-1]
+	return ""
 }
 
-// lastArgs is the bind parameters of the most recent statement.
+// lastArgs is the bind parameters of the most recent statement, skipping the
+// transaction markers for the same reason lastStatement does.
 func (f *fakeDB) lastArgs() []any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.args) == 0 {
-		return nil
+	if i := f.lastRealLocked(); i >= 0 {
+		return append([]any(nil), f.args[i]...)
 	}
-	return append([]any(nil), f.args[len(f.args)-1]...)
+	return nil
+}
+
+// lastRealLocked is the index of the most recent statement that is not a
+// transaction marker, or -1. Callers hold f.mu.
+func (f *fakeDB) lastRealLocked() int {
+	for i := len(f.log) - 1; i >= 0; i-- {
+		switch f.log[i] {
+		case "BEGIN", "COMMIT", "ROLLBACK":
+		default:
+			return i
+		}
+	}
+	return -1
 }
 
 type fakeDriver struct{ f *fakeDB }
@@ -190,8 +218,25 @@ type fakeConn struct{ f *fakeDB }
 func (c *fakeConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("fake driver: prepared statements are not used")
 }
-func (c *fakeConn) Close() error              { return nil }
-func (c *fakeConn) Begin() (driver.Tx, error) { return nil, errors.New("fake driver: no transactions") }
+func (c *fakeConn) Close() error { return nil }
+
+// Generated writes run in a transaction by default, so the fake has to be able
+// to open one. BEGIN, COMMIT and ROLLBACK go into the same statement log as
+// everything else, which is what lets a test assert that a write was wrapped —
+// and, for a failing write, that it rolled back rather than committing.
+func (c *fakeConn) Begin() (driver.Tx, error) {
+	c.f.record("BEGIN")
+	return &fakeTx{f: c.f}, nil
+}
+
+func (c *fakeConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return c.Begin()
+}
+
+type fakeTx struct{ f *fakeDB }
+
+func (t *fakeTx) Commit() error   { t.f.record("COMMIT"); return nil }
+func (t *fakeTx) Rollback() error { t.f.record("ROLLBACK"); return nil }
 
 func (c *fakeConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	r, ok := c.f.answer(query, args)

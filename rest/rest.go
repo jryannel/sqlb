@@ -151,6 +151,25 @@ type Options struct {
 
 	// DisableSearch rejects ?search even when columns are searchable.
 	DisableSearch bool
+
+	// DisableTransactions runs generated writes under autocommit.
+	//
+	// The default — wrapping each create, update and delete in a transaction —
+	// is what makes sqlb.AfterCommit reachable from a generated write. Without
+	// it there is no commit for a hook to be after, so a documented feature is
+	// unreachable from the writes most applications actually issue
+	// ([ADR-0021](../docs/adr/0021-hooks-receive-an-event.md)).
+	//
+	// The cost is a BEGIN/COMMIT round trip per write, and a server-side
+	// connection held for longer. Behind PgBouncer in transaction pooling mode
+	// that is a change in occupancy rather than only in latency
+	// ([ADR-0019](../docs/adr/0019-pgbouncer-in-the-path.md)), so this exists
+	// for anyone who measures it and decides against.
+	//
+	// Turning it on silently stops any AfterCommit callback the resource's
+	// hooks register. Read that as the reason it is phrased as a disable rather
+	// than as an enable: the safe value is the zero value.
+	DisableTransactions bool
 }
 
 func (o Options) name() string {
@@ -215,6 +234,13 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 			opts.Path, opts.Ops&(OpRead|OpUpdate|OpDelete), b.model.Type)
 	}
 
+	// Resolved once, at startup, so that an executor which cannot begin a
+	// transaction is reported here rather than by the first write.
+	w, err := newWriter(db, opts)
+	if err != nil {
+		return err
+	}
+
 	if opts.Ops.Has(OpList) {
 		registerList(api, db, b)
 	}
@@ -222,13 +248,13 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 		registerRead(api, db, b)
 	}
 	if opts.Ops.Has(OpCreate) {
-		registerCreate[T, C](api, db, b)
+		registerCreate[T, C](api, w, b)
 	}
 	if opts.Ops.Has(OpUpdate) {
-		registerUpdate[T, U](api, db, b)
+		registerUpdate[T, U](api, w, b)
 	}
 	if opts.Ops.Has(OpDelete) {
-		registerDelete(api, db, b)
+		registerDelete(api, w, b)
 	}
 	return nil
 }

@@ -87,7 +87,10 @@ call sites ([ADR-0020](adr/0020-transaction-scoped-handle.md)). `DB.Tx` reaches
 the underlying `*sql.Tx`, which is how a unit of work is shared with a library
 wanting more than two methods — sqlc's generated `DBTX` wants four.
 `rest` takes a `huma.API`, not a router, so the choice of chi, gin, echo or
-`net/http` — and all of that router's middleware — stays the application's.
+`net/http` — and all of that router's middleware — stays the application's. It
+wraps each generated write in a transaction, which is what gives a hook a commit
+to be after; reads are left alone, since one `SELECT` is atomic already
+([ADR-0021](adr/0021-hooks-receive-an-event.md)).
 
 ## Request path
 
@@ -115,6 +118,12 @@ A list request through `rest.Resource`:
 5. **Scan.** Result columns are matched to struct fields by name. Unmatched
    columns are read and discarded, so a query selecting extra expressions still
    scans into the model.
+
+A write takes the same path with a transaction around it: `BEGIN`, the hooks and
+the statement, `COMMIT`, then the `AfterCommit` callbacks — outside the
+transaction, since there is nothing left to join. A callback that fails does not
+fail the request, because the row is already durable and a retry would write it
+twice; `rest` logs it and returns the success it achieved.
 
 ## Where safety lives
 

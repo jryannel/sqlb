@@ -1,7 +1,7 @@
 # ADR-0021: A hook is handed an event, not a bare row
 
-- **Status:** Exploring
-- **Confidence:** Low
+- **Status:** Exploring, except the transaction, which is Working
+- **Confidence:** Low for the events; High for the transaction, which is built
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 
@@ -72,9 +72,31 @@ a second connection.
 the statement will set, alongside the existing `Set` and `SetExpr`. Not the
 resulting row — see the alternatives.
 
-**`rest.Resource` wraps every generated write in a transaction**, controlled by
-`Options.Transactional` and defaulting to on. This is what makes `AfterCommit`
-mean something for the writes most applications actually issue.
+**`rest.Resource` wraps every generated write in a transaction.** This is what
+makes `AfterCommit` mean something for the writes most applications actually
+issue. **Built** — the rest of this record is not.
+
+Two details settled in the building, both departures from what this record first
+proposed:
+
+- The option is `Options.DisableTransactions`, not `Options.Transactional`.
+  Default-on was the requirement; a plain `bool` whose zero value is the safe
+  one expresses that without a `*bool`, and `Options.DisableSearch` already set
+  the precedent in the same struct.
+- **An executor that cannot begin a transaction is refused at mount**, naming
+  three ways out. Falling back to autocommit was the obvious alternative and is
+  wrong: it restores this exact gap, silently, in the callback that was supposed
+  to be the durable half. `sqlb.DB.CanBeginTx` exists so the refusal happens at
+  startup rather than on the first POST.
+
+A third detail was not anticipated at all: `ErrAfterCommit` must not become a
+5xx. The row is durable, so reporting failure invites a retry that writes it
+twice. `rest` logs it through `slog` and returns the success it actually
+achieved.
+
+Reads are not wrapped. A single `SELECT` is already atomic, and wrapping one
+would hold a connection across a `BEGIN`/`COMMIT` round trip for a guarantee it
+already had.
 
 **The existing signatures stay, as wrappers.** `BeforeCreate(func(ctx, *T)
 error)` keeps working, so this is additive and no call site breaks.
@@ -119,8 +141,12 @@ have to say so.
   should come off the query event. That is the half most likely to be a mistake.
 - **If wrapping generated writes measurably raises connection-hold time** under
   PgBouncer transaction pooling — the thing to watch is `pgbouncer`'s
-  `avg_xact_time` against `avg_query_time` — make `Transactional` opt-in
-  instead of default.
+  `avg_xact_time` against `avg_query_time` — the escape hatch already exists per
+  resource (`DisableTransactions`). Flipping the *default* is the change this
+  record would not make lightly: it breaks anyone whose `AfterCommit` was
+  working, and the Cost of change section says why that direction is the
+  expensive one. Nothing has measured this yet; the number is unknown, not
+  known-small.
 - **If `Changes()` is not used by two independent applications**, drop it. It is
   the most speculative piece here, justified by exactly one rule in one example.
 - **If people start writing rules in hooks that also need to hold for
@@ -140,10 +166,12 @@ is also free. Changing an event's shape once applications have written hooks
 against it is not — that is every hook in every consumer, and hooks are exactly
 the code that has no compiler-checked call site to grep for.
 
-`Transactional` is the expensive one and should ship default-on or not at all.
-Flipping it from off to on later is harmless; flipping it from on to off breaks
-anyone whose `AfterCommit` callback quietly stopped running, and it breaks them
+The transaction was the expensive one and shipped default-on, which was the
+whole point: flipping it from off to on later is harmless, and flipping it from
+on to off breaks anyone whose `AfterCommit` callback quietly stopped running —
 silently, at runtime, in the callback that was supposed to be the durable half.
+Per resource that risk is the caller's to take explicitly; as a default it would
+be taken on their behalf.
 
 Reverting to bare rows means rewriting every hook that was written against an
 event. Cheap while `example/tasks` is the only consumer; not cheap after that.
@@ -182,3 +210,10 @@ honest version of this alternative is an edit to ADR-0008, not a smaller change.
 - 2026-07-27 — Written, after building `example/tasks` and finding three domain
   rules that had to leave the hook layer. Evidence is for the problem; the
   solution is unbuilt, hence Exploring / Low.
+- 2026-07-27 — The transaction shipped, closing the third rule's sharper half:
+  `AfterCommit` is now reachable from generated CRUD. Renamed the option to
+  `DisableTransactions`, made a non-transactional executor a mount-time refusal
+  rather than a fallback, and recorded that `ErrAfterCommit` must not become a
+  5xx. The events and `Changes()` remain unbuilt and Exploring — nothing here
+  gives a hook a way to read the database, which is what the first two rules
+  needed.

@@ -125,6 +125,13 @@ single-Postgres gate would have been.
 - **A second component turns out to need session state.** Two named exceptions
   is a list; four is a missing abstraction, and the answer would then be a real
   seam rather than more prose.
+- **Generated writes now open a transaction**
+  ([ADR-0021](0021-hooks-receive-an-event.md)), which changes what this record is
+  about for the write path: in transaction pooling a server connection is held
+  for the whole `BEGIN`…`COMMIT` rather than for one statement. That is a change
+  in occupancy, and it is unmeasured. If `avg_xact_time` diverges from
+  `avg_query_time` under load, this is the first place to look, and
+  `rest.Options.DisableTransactions` is the per-resource lever.
 - **Someone points the dispatcher at the pooler and nobody notices for a week.**
   That means the fallback poll is masking a misconfiguration rather than
   tolerating a fault, and the dispatcher needs a startup assertion that its
