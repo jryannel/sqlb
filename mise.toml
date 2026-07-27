@@ -99,30 +99,42 @@ echo "deps-check: standard library only"
 '''
 
 [tasks.bisect-check]
-description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing."
+description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+# mise runs tasks under `set -e`, so a command whose failure is expected must
+# be guarded by `if`, not by reading $? afterwards — an earlier version died on
+# the very first commit (which legitimately has no Go packages yet) and printed
+# nothing at all, reporting a broken history that was in fact fine.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 fail=0
-for sha in $(git rev-list --reverse ${BASE:-HEAD}); do
+
+for sha in $(git rev-list --reverse "${BASE:-HEAD}"); do
+  short=$(git log -1 --format=%h "$sha")
   subject=$(git log -1 --format=%s "$sha")
-  rm -rf "$tmp/wt"; mkdir -p "$tmp/wt"
+  rm -rf "$tmp/wt"
+  mkdir -p "$tmp/wt"
   git archive "$sha" | tar -x -C "$tmp/wt"
-  out=$(cd "$tmp/wt" && go build ./... 2>&1 && go vet ./... 2>&1 && go test ./... 2>&1); rc=$?
-  note=""
-  # A commit that has not introduced any Go package yet is legitimately empty.
-  if [ $rc -ne 0 ] && echo "$out" | grep -qE "no packages to (test|vet)|matched no packages"; then
-    rc=0; note="  (no packages yet)"
-  fi
-  if [ $rc -eq 0 ]; then
-    printf "  %-9s PASS  %s%s\\n" "${sha:0:7}" "$subject" "$note"
+
+  if out=$(cd "$tmp/wt" && go build ./... 2>&1 && go vet ./... 2>&1 && go test ./... 2>&1); then
+    printf "  %-9s PASS  %s\n" "$short" "$subject"
+  elif printf "%s" "$out" | grep -qE "no packages to (test|vet)|matched no packages"; then
+    # A commit before any Go package exists is legitimately empty, not broken.
+    printf "  %-9s PASS  %s  (no packages yet)\n" "$short" "$subject"
   else
-    printf "  %-9s FAIL  %s\\n" "${sha:0:7}" "$subject"
-    echo "$out" | tail -5 | sed 's/^/             /'
+    printf "  %-9s FAIL  %s\n" "$short" "$subject"
+    printf "%s" "$out" | tail -5 | sed 's/^/             /'
     fail=1
   fi
 done
-[ $fail -eq 0 ] || { echo; echo "history is not bisectable"; exit 1; }
-echo; echo "every commit builds, vets and tests green in isolation"
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "history is not bisectable"
+  exit 1
+fi
+echo
+echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
