@@ -12,6 +12,24 @@ only if you use it.
 go get github.com/jryannel/sqlb
 ```
 
+## See it running first
+
+Before building one, run one. [`example/tasks`](../../example/tasks/) is
+everything on this page and the next four assembled into a multi-tenant task
+manager:
+
+```bash
+cd example/tasks
+docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:18
+TASKS_DATABASE_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
+  TASKS_JWT_SECRET="$(head -c 32 /dev/urandom | base64)" go run ./cmd/server
+```
+
+Migrations apply at startup, so an empty database is enough.
+<http://localhost:8080/docs> is then the API generated from its schema — with
+per-column filter operators, enumerated sort values and pagination, none of it
+hand-written. That document is the thing this guide is teaching you to produce.
+
 ## Two ways in
 
 sqlb works in either direction, and you can start with one and move to the
@@ -58,6 +76,20 @@ var Post = schema.Table("posts",
     Index("author_id").
     Expose(schema.REST{Ops: schema.CRUD | schema.OpList, MaxPageSize: 100})
 ```
+
+**Before you run this against your own database:** `UUIDv7` defaults to
+`uuid_generate_v7()`, which is the [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7)
+extension's spelling, so the generated DDL will *not* apply to a stock install.
+Three ways out, and you have to pick one:
+
+| Your Postgres | Do this |
+|---|---|
+| 18 or newer | Pass `migrate.MinPostgres(18)` to `Diff` — it emits the built-in `uuidv7()` |
+| 13–17 | `schema.UUID("id").PrimaryKey().Default(schema.GenUUIDv4())` — `gen_random_uuid()`, built in since 13 |
+| Any, with the extension installed | Nothing; the default is already correct |
+
+This is the one place the guide will hand you DDL your server rejects, which is
+why it is called out here rather than in [Migrations](migrations.md).
 
 Two things are doing the work here.
 
@@ -250,15 +282,8 @@ only safe before any query has been built against that model.
 - [REST](rest.md) — the filter grammar and what the OpenAPI document says
 - [Migrations](migrations.md) — turning a schema edit into files your runner applies
 
-Or read a finished one. [`example/tasks`](../../example/tasks/) is everything on
-these four pages assembled into a multi-tenant task manager you can run:
-
-```bash
-cd example/tasks
-docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:18
-TASKS_DATABASE_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
-  TASKS_JWT_SECRET="$(head -c 32 /dev/urandom | base64)" go run ./cmd/server
-```
-
-Migrations apply at startup, so an empty database is enough, and
-<http://localhost:8080/docs> is the API generated from its schema.
+Or read the finished one whose server you ran at the top of this page:
+[`example/tasks`](../../example/tasks/) is these four pages assembled, with
+authentication, a migration history and a workspace boundary held entirely by
+hooks. It also documents the two places it had to work around sqlb rather than
+use it, which is the part worth reading before you meet them yourself.

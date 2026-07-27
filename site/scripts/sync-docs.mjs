@@ -85,13 +85,20 @@ const SOURCES = [
   {
     dir: "docs",
     route: "project",
-    // Named rather than globbed: docs/ also holds review-adoption-readiness.md,
-    // a dated snapshot of one reviewer's judgement, and with-sqlc.md, which
-    // reads as reference for a specific pairing. Both stay on GitHub until
-    // someone decides otherwise, and globbing would decide for them.
+    // Named rather than globbed, so a new file in docs/ is not published by
+    // accident — what belongs on the site is a decision each time.
     //
-    // Read in this order: what it is for, how it is built, what it promises.
-    files: ["vision.md", "architecture.md", "compatibility.md"],
+    // Read in this order: what it is for, how it is built, what it promises,
+    // how it sits beside sqlc, and what an outside reader made of it. The
+    // review is a dated snapshot and says so in its own first paragraph, which
+    // is what makes it publishable rather than misleading.
+    files: [
+      "vision.md",
+      "architecture.md",
+      "compatibility.md",
+      "with-sqlc.md",
+      "review-adoption-readiness.md",
+    ],
     order(slug) {
       return this.files.indexOf(`${slug}.md`);
     },

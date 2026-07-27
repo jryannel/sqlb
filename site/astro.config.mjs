@@ -54,8 +54,8 @@ export default defineConfig({
               attrs: { target: "_blank" },
             },
             {
-              label: "Using sqlb with sqlc",
-              link: "https://github.com/jryannel/sqlb/blob/main/docs/with-sqlc.md",
+              label: "Source on GitHub",
+              link: "https://github.com/jryannel/sqlb",
               attrs: { target: "_blank" },
             },
           ],
