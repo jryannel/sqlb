@@ -49,7 +49,12 @@ var Post = schema.Table("posts",
     schema.SoftDelete(),
 ).
     Index("org_id", "status").
-    Expose(schema.REST{Ops: schema.CRUD | schema.OpList, MaxPageSize: 100})
+    // Delete is left out because this table soft-deletes: the generated delete
+    // is a real DELETE. See "Hooks are where domain logic lives" below.
+    Expose(schema.REST{
+        Ops:         schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList,
+        MaxPageSize: 100,
+    })
 ```
 
 **Capabilities are opt-in per column.** `Filterable`, `Sortable`, `Searchable`,
@@ -82,7 +87,15 @@ sqlb.On[Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) err
 ```
 
 Multi-tenancy and soft deletes stop being something each call site has to
-remember.
+remember — but not something *someone* has to write. `schema.SoftDelete()` adds
+the `deleted_at` column and nothing else; the registration above is what makes a
+row with a non-null value disappear from every read, generated handlers
+included. Nothing in the runtime reads the column's name.
+
+The same goes the other way: a resource exposing `OpDelete` hard-deletes, and
+`BeforeDelete` receives a `*Delete` it cannot turn into an `UPDATE`. A table
+whose deletes are meant to be soft should leave `OpDelete` out of its `Expose`
+and serve the endpoint itself.
 
 ## Without code generation
 
@@ -197,9 +210,11 @@ router := chi.NewRouter()
 router.Use(middleware.RequestID, middleware.Recoverer, yourAuth)
 
 api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
+blog.RegisterHooks()                             // hand-written: the domain rules
 if err := blog.Register(api, db); err != nil {   // generated from the schema
     return err
 }
+blog.RegisterPostSoftDelete(api, db)             // hand-written: DELETE as an UPDATE
 http.ListenAndServe(":8080", router)
 ```
 

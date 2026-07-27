@@ -203,8 +203,25 @@ func Timestamps() Group {
 	}
 }
 
-// SoftDelete adds a nullable deleted_at column. The REST layer filters rows
-// with a non-null value out of list responses by default.
+// SoftDelete adds a nullable deleted_at column, and nothing else. Nothing in
+// the runtime reads the column: the name is not load-bearing anywhere below
+// this line, and declaring the group changes no query.
+//
+// Filtering the deleted rows out is a BeforeQuery registration, which is the
+// seam that reaches generated REST handlers as well as queries written by hand
+// ([ADR-0008]):
+//
+//	sqlb.On[Post]().BeforeQuery(func(_ context.Context, q *sqlb.Builder[Post]) error {
+//	    q.Where(sqlb.F("deleted_at").IsNull())
+//	    return nil
+//	})
+//
+// Serving DELETE as an update to the column is the caller's too, and BeforeDelete
+// cannot do it — that hook receives a *Delete and can abort or amend the
+// statement, not turn it into an UPDATE. A table that means deletes to be soft
+// should leave OpDelete out of its Expose and route the endpoint itself.
+//
+// [ADR-0008]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0008-hooks-as-domain-seam.md
 func SoftDelete() Group {
 	return Group{Timestamp("deleted_at").Nullable().ReadOnly()}
 }

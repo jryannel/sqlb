@@ -69,9 +69,12 @@ var Post = schema.Table("posts",
 	Check("published_posts_have_a_date",
 		"status <> 'published' OR published_at IS NOT NULL").
 	Describe("A blog post.").
+	// OpDelete is deliberately absent. The generated delete is a real DELETE,
+	// and this table declares SoftDelete — blog.RegisterPostSoftDelete serves
+	// DELETE /posts/{id} as an update to deleted_at instead.
 	Expose(schema.REST{
 		Path:            "/posts",
-		Ops:             schema.CRUD | schema.OpList,
+		Ops:             schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList,
 		DefaultPageSize: 20,
 		MaxPageSize:     100,
 		MaxFilters:      12,

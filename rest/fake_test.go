@@ -91,6 +91,16 @@ type Leaky struct {
 
 func (Leaky) TableName() string { return "leaky" }
 
+// Archived is what schema.SoftDelete produces: a nullable, read-only deleted_at
+// column and nothing else. It exists to hold the runtime to that "nothing else".
+type Archived struct {
+	ID        string     `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	Title     string     `db:"title" json:"title" sqlb:"filter,sort"`
+	DeletedAt *time.Time `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
+}
+
+func (Archived) TableName() string { return "archived" }
+
 // reply is one canned result, matched against the statement text.
 type reply struct {
 	match string
@@ -328,4 +338,14 @@ func tenantedCols() []string { return []string{"id", "tenant_id", "title"} }
 
 func tenantedRow(id, tenant, title string) []driver.Value {
 	return []driver.Value{id, tenant, title}
+}
+
+func archivedCols() []string {
+	return []string{"id", "title", "deleted_at"}
+}
+
+// archivedRow carries a non-null deleted_at, which is the row an unfiltered
+// read is expected to return.
+func archivedRow(id, title string) []driver.Value {
+	return []driver.Value{id, title, time.Unix(0, 0).UTC()}
 }
