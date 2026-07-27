@@ -198,6 +198,35 @@ needs them yet.
 `WithTxOptions` takes an isolation level. Asking for stricter isolation than an
 enclosing transaction already has is an error rather than a silent downgrade.
 
+### Sharing the transaction with another library
+
+`Executor` is deliberately two methods, which is what keeps every wrapper and
+pool adapter valid — but it means a library wanting more than that cannot be
+handed a `*sqlb.DB`. sqlc's generated `DBTX` wants four. `DB.Tx()` reaches the
+underlying `*sql.Tx` so both sides land on one unit of work:
+
+```go
+err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
+    post, err := sqlb.InsertRows(&p).One(ctx, tx)
+    if err != nil {
+        return err
+    }
+    sqlTx, ok := tx.Tx()
+    if !ok {
+        return errors.New("expected a transaction")
+    }
+    return sqlcgen.New(sqlTx).RecordPublication(ctx, post.ID)
+})
+```
+
+It reports false when the executor is a pool, or a wrapper that does not expose
+the transaction it holds.
+
+**Do not commit or roll back the returned `*sql.Tx` yourself.** `WithTx` owns
+that boundary, and taking it over leaves the after-commit callbacks unrun — the
+one failure mode that looks like success. [docs/with-sqlc.md](../with-sqlc.md)
+covers the pairing in full: who owns the schema, and which queries go where.
+
 ## Hooks
 
 Hooks are where domain logic lives. Register once at startup, typically from
