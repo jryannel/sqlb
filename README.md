@@ -227,9 +227,11 @@ Not built yet, in the order they matter:
    rename cannot be told from a drop and an add by looking at the two states. A
    change that rewrites or scans a table carries the lock it takes and the
    sequence to use instead; `Migration.Blocking` lists them, and
-   `migrate.Unblock` rewrites the ones whose remedy is mechanical — an
-   `ADD CONSTRAINT` that would scan becomes `NOT VALID` plus a `VALIDATE` in a
-   later file, moving the scan out from under the lock.
+   `migrate.Unblock` rewrites the ones whose remedy is mechanical: a scanning
+   `ADD CONSTRAINT` becomes `NOT VALID` plus a `VALIDATE` in a later file, and a
+   `UNIQUE` becomes a concurrent index build plus an `ADD CONSTRAINT … USING
+   INDEX` that adopts it. What it cannot rewrite is a type change, which stays
+   flagged.
    What is missing is where the *current* schema comes from: `sqlb import`
    reading `pg_catalog`, or a shadow database replaying the existing history.
    Until one of those exists, both sides of a diff have to be hand-written

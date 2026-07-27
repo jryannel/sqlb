@@ -198,7 +198,8 @@ func constraintHazard(table string, c constraint) (lock, hazard string) {
 			"and building it over every row of " + table + " blocks all access " +
 			"until it finishes. Build the index first with CREATE UNIQUE INDEX " +
 			"CONCURRENTLY, then adopt it with ADD CONSTRAINT ... USING INDEX, which " +
-			"holds the lock only for as long as the catalog write takes."
+			"holds the lock only for as long as the catalog write takes. " +
+			"migrate.Unblock writes that sequence for you."
 	}
 	return lockAccessExclusive, "checking that every row of " + table +
 		" already satisfies the constraint scans the whole table with all access " +
@@ -332,8 +333,15 @@ type constraint struct {
 
 	// unique marks a PRIMARY KEY or UNIQUE, the two Postgres enforces by
 	// building an index rather than by scanning. They cost differently enough
-	// to be worth telling apart when saying what adding one locks.
+	// to be worth telling apart when saying what adding one locks, and the
+	// index is something a migration can build for itself beforehand.
 	unique bool
+	// pk narrows that to a PRIMARY KEY, which is spelled differently when
+	// adopting an index and carries a NOT NULL the plain UNIQUE does not.
+	pk bool
+	// cols are the columns a unique constraint covers, which is what the index
+	// backing it has to be built over.
+	cols []string
 
 	// enum holds the permitted values when this is an enum column's CHECK,
 	// so that removing a value can be told from adding one.
@@ -389,6 +397,13 @@ func (c constraint) renamed(cols, tables map[string]string) constraint {
 		return c
 	}
 	c.def = rewriteIdents(c.def, cols)
+	if len(c.cols) > 0 {
+		mapped := make([]string, len(c.cols))
+		for i, col := range c.cols {
+			mapped[i] = rename(cols, col)
+		}
+		c.cols = mapped
+	}
 	return c
 }
 
@@ -463,6 +478,8 @@ func constraints(t *schema.TableDef) []constraint {
 			name:   primaryKeyName(t),
 			def:    "PRIMARY KEY (" + quoteIdent(pk.Name()) + ")",
 			unique: true,
+			pk:     true,
+			cols:   []string{pk.Name()},
 		})
 	}
 
@@ -473,6 +490,7 @@ func constraints(t *schema.TableDef) []constraint {
 				name:   uniqueConstraintName(t, d),
 				def:    "UNIQUE (" + quoteIdent(d.Name) + ")",
 				unique: true,
+				cols:   []string{d.Name},
 			})
 		}
 		if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
@@ -738,4 +756,43 @@ func dropIndex(name string, concurrent bool) string {
 		return "DROP INDEX CONCURRENTLY " + quoteIdent(name) + ";"
 	}
 	return "DROP INDEX " + quoteIdent(name) + ";"
+}
+
+// createUniqueIndexConcurrently builds the index that will back a unique
+// constraint, under the lock a concurrent build takes rather than the one
+// ADD CONSTRAINT would take to build the same index itself.
+//
+// The index is given the constraint's own name, because ADD CONSTRAINT ...
+// USING INDEX renames the index to match the constraint — giving it the right
+// name up front means nothing is renamed and the end state is exactly what a
+// plain ADD CONSTRAINT would have produced.
+func createUniqueIndexConcurrently(table, name string, columns []string) string {
+	cols := make([]string, len(columns))
+	for i, c := range columns {
+		cols[i] = quoteIdent(c)
+	}
+	return "CREATE UNIQUE INDEX CONCURRENTLY " + quoteIdent(name) + " ON " +
+		quoteIdent(table) + " (" + strings.Join(cols, ", ") + ");"
+}
+
+// dropIndexConcurrentlyIfExists reverses a concurrent build.
+//
+// IF EXISTS because the index may not be there to drop: reversing the migration
+// that adopted it as a constraint has already taken it, since dropping a unique
+// constraint drops the index enforcing it. Both orders have to work — rolling
+// back one file, or rolling back both.
+func dropIndexConcurrentlyIfExists(name string) string {
+	return "DROP INDEX CONCURRENTLY IF EXISTS " + quoteIdent(name) + ";"
+}
+
+// addConstraintUsingIndex adopts an already-built unique index as the
+// constraint it enforces. This is a catalog write: the index exists, and
+// nothing is read to make the constraint out of it.
+func addConstraintUsingIndex(table string, c constraint) string {
+	kind := "UNIQUE"
+	if c.pk {
+		kind = "PRIMARY KEY"
+	}
+	return "ALTER TABLE " + quoteIdent(table) + " ADD CONSTRAINT " + quoteIdent(c.name) +
+		" " + kind + " USING INDEX " + quoteIdent(c.name) + ";"
 }

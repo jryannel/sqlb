@@ -61,6 +61,13 @@ const (
 	// running last costs nothing.
 	StageFinish
 
+	// StageAdopt is the catalog write that takes over what a concurrent index
+	// build produced: ADD CONSTRAINT ... USING INDEX. It has to follow the
+	// build, and it needs a transaction, so it cannot be in the file that has
+	// none. Like StageFinish it takes ACCESS EXCLUSIVE and so goes after every
+	// scan sharing its transaction.
+	StageAdopt
+
 	// StageConcurrent cannot run inside a transaction at all: CREATE INDEX
 	// CONCURRENTLY and DROP INDEX CONCURRENTLY. Building an index without
 	// CONCURRENTLY takes a lock that blocks writes for the duration, so on a
@@ -73,15 +80,21 @@ const (
 // questions: what must run before what, and what must not share a transaction.
 // Two stages sharing a file share a transaction, and the order between them is
 // what keeps that safe.
+//
+// The shape is: change the catalog, then do the expensive work under the
+// weakest lock that will carry it, then take a short strong lock to adopt the
+// results. A file takes the suffix of the first stage in it, so its name
+// describes what it leads with.
 var stages = []struct {
 	stage  Stage
 	file   int
 	suffix string
 }{
 	{StageMain, 0, ""},
-	{StageValidate, 1, "_validate"},
-	{StageFinish, 1, "_validate"},
-	{StageConcurrent, 2, "_indexes"},
+	{StageConcurrent, 1, "_indexes"},
+	{StageValidate, 2, "_validate"},
+	{StageFinish, 2, "_validate"},
+	{StageAdopt, 2, "_constraints"},
 }
 
 // Change is one schema alteration, with the SQL to apply and reverse it.
@@ -138,23 +151,36 @@ type Change struct {
 }
 
 // Unblock replaces the changes that hold a long lock with the sequences that do
-// not, where such a sequence exists: an ADD CONSTRAINT that would scan the table
-// becomes an ADD ... NOT VALID and a VALIDATE CONSTRAINT in a later migration,
-// and a SET NOT NULL becomes the same pair with the column requirement set
-// between them.
+// not, where such a sequence exists. There are three:
+//
+//   - An ADD CONSTRAINT that would scan the table — a CHECK or a FOREIGN KEY —
+//     becomes an ADD ... NOT VALID and a VALIDATE CONSTRAINT in a later
+//     migration, moving the scan under a lock writers pass through.
+//   - A SET NOT NULL becomes the same pair with the requirement set between
+//     them, since Postgres accepts a validated check as proof and skips its own
+//     scan.
+//   - A UNIQUE or PRIMARY KEY, which has no NOT VALID form because there is no
+//     way to build an index without reading every row, becomes a CREATE UNIQUE
+//     INDEX CONCURRENTLY and an ADD CONSTRAINT ... USING INDEX that adopts it.
+//
+// A type change is left alone. Rewriting a table has no in-place form at all:
+// the alternative is a second column, a batched backfill and a cutover, and
+// only the person doing it knows what a batch costs or when the cutover can
+// happen.
 //
 // It is a deliberate act rather than the default, for two reasons. The sequence
 // is longer, splits the migration across files, and buys nothing on a table
-// small enough that the scan is instant — which most tables are. And it is not
-// equivalent under failure: a plain ADD CONSTRAINT that finds a bad row leaves
-// nothing behind, while this one leaves the constraint in place, unvalidated
-// and enforcing from that moment on. That is usually what you want on a large
-// table and it is still a different outcome, so it is chosen rather than
-// assumed.
+// small enough that the scan is instant — which most tables are. And none of
+// them is equivalent under failure. A plain statement that meets a bad row
+// leaves nothing behind; these leave a constraint in place unvalidated and
+// binding, or an invalid index that has to be dropped before the migration can
+// be retried. That is usually the right trade on a large table and it is still
+// a different outcome, so it is chosen rather than assumed.
 //
 // The end state on success is identical, which is what makes the substitution
-// safe: the temporary constraint a SET NOT NULL needs is dropped by the same
-// sequence that created it.
+// safe: the temporary check a SET NOT NULL needs is dropped by the same
+// sequence that created it, and the index a unique constraint adopts is built
+// under the name the constraint will take.
 //
 // The usual shape is to look before deciding:
 //
@@ -163,8 +189,8 @@ type Change struct {
 //		changes = migrate.Unblock(changes)
 //	}
 //
-// Changes with no alternative — a type change, a UNIQUE constraint — are passed
-// through untouched and still report themselves through Blocking.
+// Changes with no alternative are passed through untouched and still report
+// themselves through Blocking.
 func Unblock(changes []Change) []Change {
 	out := make([]Change, 0, len(changes))
 	for _, c := range changes {
@@ -219,8 +245,8 @@ func (o Options) format() Format {
 // CONSTRAINT it validates has committed. Splitting keeps the ordinary changes
 // transactional and gives each of the others what it needs.
 //
-// Files come out in stage order, so the tables, columns and constraints each
-// one depends on exist by the time it runs.
+// Files come out in stage order, so the tables, columns and indexes each one
+// depends on exist by the time it runs.
 func Split(m Migration) []Migration {
 	byStage := make(map[Stage][]Change, len(stages))
 	for _, c := range m.Changes {

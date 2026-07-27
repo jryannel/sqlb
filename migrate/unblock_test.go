@@ -17,6 +17,8 @@ func stageOf(c migrate.Change) string {
 		return "validate"
 	case migrate.StageFinish:
 		return "finish"
+	case migrate.StageAdopt:
+		return "adopt"
 	case migrate.StageConcurrent:
 		return "concurrent"
 	}
@@ -174,34 +176,85 @@ func TestUnblockRemovesTheHazardItReplaces(t *testing.T) {
 }
 
 func TestUnblockLeavesWhatItCannotFix(t *testing.T) {
-	// A unique constraint is enforced by an index and there is no way to build
-	// one without reading every row, so NOT VALID does not apply. A type change
-	// rewrites the table and has no in-place form at all. Both keep their
-	// hazard, and Blocking still reports them — which is the honest answer.
+	// A type change rewrites every row and has no in-place form, concurrent
+	// form, or any other form: the alternative is a second column, a batched
+	// backfill and a cutover, and only the person doing it knows what a batch
+	// costs or when the cutover can happen. So it keeps its hazard and Blocking
+	// still reports it, which is the honest answer.
 	current := build(func(r *schema.Registry) {
-		r.Table("posts",
-			schema.UUIDv7("id").PrimaryKey(),
-			schema.Text("slug"),
-			schema.Int("views"),
-		)
+		r.Table("posts", schema.UUIDv7("id").PrimaryKey(), schema.Int("views"))
 	})
 	target := build(func(r *schema.Registry) {
-		r.Table("posts",
-			schema.UUIDv7("id").PrimaryKey(),
-			schema.Text("slug").Unique(),
-			schema.BigInt("views"),
-		)
+		r.Table("posts", schema.UUIDv7("id").PrimaryKey(), schema.BigInt("views"))
 	})
 
 	changes := migrate.Unblock(diff(t, current, target))
 	m := migrate.Migration{Version: "1", Name: "x", Changes: changes}
-	if len(m.Blocking()) != 2 {
-		t.Fatalf("want both still blocking, got %d:\n%s", len(m.Blocking()), render(changes))
+	if len(m.Blocking()) != 1 {
+		t.Fatalf("want it still blocking, got %d:\n%s", len(m.Blocking()), render(changes))
 	}
-	for _, c := range changes {
-		if strings.Contains(c.Up, "NOT VALID") {
-			t.Errorf("neither of these has a NOT VALID form: %q", c.Up)
-		}
+	if c := only(t, changes); c.Up != `ALTER TABLE "posts" ALTER COLUMN "views" TYPE bigint;` {
+		t.Fatalf("Unblock invented a sequence for a table rewrite: %q", c.Up)
+	}
+}
+
+func TestUnblockUniqueConstraint(t *testing.T) {
+	// A unique constraint has no NOT VALID form — Postgres has no way to build
+	// an index without reading every row — but the index can be built
+	// beforehand under a lock that lets writes through, and then adopted.
+	current := build(func(r *schema.Registry) {
+		r.Table("posts", schema.UUIDv7("id").PrimaryKey(), schema.Text("slug"))
+	})
+	target := build(func(r *schema.Registry) {
+		r.Table("posts", schema.UUIDv7("id").PrimaryKey(), schema.Text("slug").Unique())
+	})
+
+	changes := migrate.Unblock(diff(t, current, target))
+	want := []string{
+		`concurrent: CREATE UNIQUE INDEX CONCURRENTLY "posts_slug_key" ON "posts" ("slug");`,
+		`adopt: ALTER TABLE "posts" ADD CONSTRAINT "posts_slug_key" UNIQUE USING INDEX "posts_slug_key";`,
+	}
+	if got := staged(changes); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unique sequence\n got: %#v\nwant: %#v", got, want)
+	}
+
+	// The index is built under the constraint's own name. ADD CONSTRAINT ...
+	// USING INDEX renames the index to match the constraint, so naming it
+	// correctly up front is what makes the end state identical to the plain
+	// statement's rather than merely equivalent.
+	if strings.Count(changes[1].Up, `"posts_slug_key"`) != 2 {
+		t.Errorf("the index and the constraint should share a name: %q", changes[1].Up)
+	}
+
+	// Dropping a unique constraint drops the index enforcing it, so reversing
+	// both files would otherwise try to drop an index that is already gone.
+	if changes[0].Down != `DROP INDEX CONCURRENTLY IF EXISTS "posts_slug_key";` {
+		t.Errorf("Down = %q", changes[0].Down)
+	}
+	if changes[1].Down != `ALTER TABLE "posts" DROP CONSTRAINT "posts_slug_key";` {
+		t.Errorf("Down = %q", changes[1].Down)
+	}
+
+	if m := (migrate.Migration{Version: "1", Name: "x", Changes: changes}); len(m.Blocking()) != 0 {
+		t.Errorf("the hazard should be gone, got %d", len(m.Blocking()))
+	}
+}
+
+func TestUnblockPrimaryKeyIsSpelledDifferently(t *testing.T) {
+	// A primary key is adopted the same way and named differently, and carries
+	// a NOT NULL that a plain unique constraint does not — which is free here
+	// only because a primary key column cannot be nullable in the first place.
+	current := build(func(r *schema.Registry) {
+		r.Table("events", schema.UUID("id"), schema.Text("kind"))
+	})
+	target := build(func(r *schema.Registry) {
+		r.Table("events", schema.UUID("id").PrimaryKey(), schema.Text("kind"))
+	})
+
+	changes := migrate.Unblock(diff(t, current, target))
+	adopt := find(t, changes, "USING INDEX")
+	if adopt.Up != `ALTER TABLE "events" ADD CONSTRAINT "events_pkey" PRIMARY KEY USING INDEX "events_pkey";` {
+		t.Fatalf("Up = %q", adopt.Up)
 	}
 }
 
@@ -291,10 +344,12 @@ func TestUnblockRendersIntoTwoFiles(t *testing.T) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	// The expensive work happens in the middle, under the weakest lock that
+	// will carry it, and the short strong-lock statements come last.
 	want := []string{
 		"20260727140000_require_email.sql",
-		"20260727140001_require_email_validate.sql",
-		"20260727140002_require_email_indexes.sql",
+		"20260727140001_require_email_indexes.sql",
+		"20260727140002_require_email_validate.sql",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("files\n got: %#v\nwant: %#v", names, want)
@@ -302,11 +357,46 @@ func TestUnblockRendersIntoTwoFiles(t *testing.T) {
 
 	// Only the index file gives up its transaction. The validate file needs a
 	// transaction of its own, not the absence of one.
-	if strings.Contains(files[want[1]], "NO TRANSACTION") {
-		t.Errorf("the validate file must stay transactional:\n%s", files[want[1]])
+	if !strings.Contains(files[want[1]], "NO TRANSACTION") {
+		t.Errorf("the index file still needs its directive:\n%s", files[want[1]])
 	}
-	if !strings.Contains(files[want[2]], "NO TRANSACTION") {
-		t.Errorf("the index file still needs its directive:\n%s", files[want[2]])
+	if strings.Contains(files[want[2]], "NO TRANSACTION") {
+		t.Errorf("the validate file must stay transactional:\n%s", files[want[2]])
+	}
+}
+
+func TestUnblockAdoptionSharesTheValidateTransaction(t *testing.T) {
+	// The adoption needs a transaction, so it cannot join the index file that
+	// has none — and it takes ACCESS EXCLUSIVE, so within the file it shares it
+	// has to come after every scan, for the same reason StageFinish does.
+	current := build(func(r *schema.Registry) {
+		r.Table("users",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.Text("email"),
+			schema.Text("note"),
+		)
+	})
+	target := build(func(r *schema.Registry) {
+		r.Table("users",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.Text("email").Unique(),
+			schema.Text("note"),
+		).Check("note_set", `"note" <> ''`)
+	})
+
+	parts := migrate.Split(migrate.Migration{
+		Version: "1", Name: "tighten",
+		Changes: migrate.Unblock(diff(t, current, target)),
+	})
+	if len(parts) != 3 {
+		t.Fatalf("want three files, got %d", len(parts))
+	}
+
+	last := parts[2].Changes
+	if got := staged(last); len(got) != 2 ||
+		!strings.Contains(got[0], "VALIDATE CONSTRAINT") ||
+		!strings.Contains(got[1], "USING INDEX") {
+		t.Fatalf("the scan must come before the adoption:\n%#v", got)
 	}
 }
 

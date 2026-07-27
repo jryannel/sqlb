@@ -42,12 +42,13 @@ import (
 // would stop working too. Migration.Blocking is the hook for a project that
 // does know which of its tables are big.
 //
-// For the changes whose remedy is a fixed rewrite — adding a CHECK or a
-// FOREIGN KEY, requiring a column — Unblock performs it, moving the scan out
-// from under the lock. It is called rather than applied automatically, for the
-// same reason the hazard is a note: the sequence is longer, splits the
-// migration across files, and buys nothing on a table small enough that the
-// scan is instant.
+// For the changes whose remedy is a fixed rewrite — adding a CHECK, a FOREIGN
+// KEY or a UNIQUE, requiring a column — Unblock performs it, moving the scan or
+// the index build out from under the lock. It is called rather than applied
+// automatically, for the same reason the hazard is a note: the sequence is
+// longer, splits the migration across files, and buys nothing on a table small
+// enough that the scan is instant. What is left after Unblock is the type
+// change, which has no mechanical alternative at all.
 //
 // # What is not inferred
 //
@@ -614,11 +615,15 @@ func (d *differ) addConstraintChange(table string, c constraint, prev *constrain
 	case prev == nil:
 		ch.Comment += " (existing rows must already satisfy it or this fails)"
 	}
-	// A unique constraint is enforced by an index and has no NOT VALID form —
-	// there is no way to build an index without reading every row — so it keeps
-	// its hazard and no alternative.
-	if lock != "" && !c.unique {
-		ch.unblocked = notValidSequence(table, c, ch)
+	if lock != "" {
+		// A unique constraint has no NOT VALID form — there is no way to build
+		// an index without reading every row — but the index can be built
+		// beforehand under a weaker lock and then adopted.
+		if c.unique {
+			ch.unblocked = usingIndexSequence(table, c, ch)
+		} else {
+			ch.unblocked = notValidSequence(table, c, ch)
+		}
 	}
 	if c.fk {
 		d.addForeignKey = append(d.addForeignKey, ch)
@@ -653,6 +658,33 @@ func notValidSequence(table string, c constraint, orig Change) []Change {
 		Comment: validateComment(table, c.name),
 		Up:      validateConstraint(table, c.name),
 		Down:    nothingToUndo(c.name),
+	}}
+}
+
+// usingIndexSequence is the two-part form of adding a unique constraint: build
+// the index it will be enforced by under a lock that lets writes through, then
+// adopt the finished index as the constraint.
+//
+// Adoption reads nothing — the index is already there and already unique — so
+// the ACCESS EXCLUSIVE it takes is held for a catalog write rather than for an
+// index build.
+func usingIndexSequence(table string, c constraint, orig Change) []Change {
+	return []Change{{
+		Stage: StageConcurrent,
+		Comment: orig.Comment + " — built concurrently and adopted next. " +
+			"If it fails on a duplicate, an invalid index is left behind and has " +
+			"to be dropped before this can be retried; a plain ADD CONSTRAINT " +
+			"would have left nothing. Reversing this drops the index only if the " +
+			"constraint has not already taken it",
+		Up:   createUniqueIndexConcurrently(table, c.name, c.cols),
+		Down: dropIndexConcurrentlyIfExists(c.name),
+	}, {
+		Stage:   StageAdopt,
+		Comment: "adopt " + c.name + " as the constraint it enforces (a catalog write; the index is already built)",
+		Up:      addConstraintUsingIndex(table, c),
+		// Dropping a unique constraint drops the index enforcing it, which is
+		// why the build above reverses with IF EXISTS.
+		Down: dropConstraint(table, c.name),
 	}}
 }
 
