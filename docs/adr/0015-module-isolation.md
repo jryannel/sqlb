@@ -32,11 +32,32 @@ use the local name — `Table("invoices")` — and the prefix is applied by the
 registry, so it cannot be forgotten and a table moving between modules changes
 one line.
 
-**Prefixes, not Postgres schemas.** `billing_invoices` rather than
-`billing.invoices`. Prefixing needs no `search_path` handling, no `CREATE SCHEMA`
-ordering ahead of a module's first migration, and no change to the compiler at
-all. Postgres schemas would give real isolation and per-schema grants; that was
-judged not worth the operational surface today.
+**Prefixes, not Postgres schemas, and no abstraction over the two.**
+`billing_invoices` rather than `billing.invoices`.
+
+The tempting move is a pluggable namespacing strategy so the choice can be
+deferred. We are not doing that, because Postgres schemas are not a rendering
+strategy — they are a deployment model. Only one of the four things they
+require is about how a name renders:
+
+- the compiler must emit two identifiers rather than one;
+- `search_path` must be managed in the pool, or every query fully qualified;
+- `CREATE SCHEMA IF NOT EXISTS` must run before a module's first migration, and
+  with per-module migration directories and deliberately no cross-module
+  coordination, nothing currently owns that ordering;
+- goose's version table has to be placed per schema.
+
+A strategy interface covering only the rendering would create false confidence
+that switching is a configuration change, while the parts that actually make it
+hard stay unbuilt. An abstraction whose second implementation is hypothetical
+also rots, and constrains the first for no benefit.
+
+What we did instead is make the compiler render a qualified table name
+*correctly* — `"billing"."invoices"` rather than the single mangled identifier
+`"billing.invoices"` it produced before. That was a latent bug regardless of
+this decision: a caller reaching it got a "relation does not exist" a long way
+from its cause. Fixing it happens to mean the runtime would not need changing if
+this record is ever revisited, but that is a side effect, not a strategy.
 
 **The prefix is a storage concern and does not reach the URL.** A REST path
 defaults to the local name, so moving a table between modules is not a breaking
@@ -74,7 +95,10 @@ strings that can rot silently when the other side renames a table.
   since the FK would reintroduce the coupling deliberately removed.
 - If a module ever needs to be moved to a separate database, prefixes stop
   helping and Postgres schemas become worth their operational cost. That is the
-  clearest trigger to revisit the namespacing choice.
+  clearest trigger to revisit the namespacing choice. The runtime is already
+  able to render qualified names; what would still need building is
+  `search_path` handling, schema creation ordered ahead of each module's first
+  migration, and per-schema goose version tables.
 - If `ExternalRef` targets rot often enough to matter, a lint pass could check
   them against a manifest published by each module — validation without a
   compile-time dependency.
@@ -116,3 +140,8 @@ not it is written down.
 
 - 2026-07-27 — Written, after reading the reference codebase and finding the
   no-cross-module-FK rule already documented in its migrations.
+- 2026-07-27 — Considered and rejected supporting both namespacing strategies
+  behind an abstraction. Recorded the reasoning: three of the four requirements
+  for Postgres schemas are not about rendering, so an abstraction over rendering
+  alone would mislead. Fixed the compiler to render qualified table names
+  correctly, which was a latent bug on its own terms.

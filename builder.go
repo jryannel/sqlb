@@ -241,7 +241,7 @@ func (b *Builder[T]) compile(c *compiler) {
 	b.compileProjection(c)
 
 	c.write(" FROM ")
-	c.ident(b.model.Table)
+	c.table(b.model.Table)
 	if b.alias != "" && b.alias != b.model.Table {
 		c.write(" AS ")
 		c.ident(b.alias)
@@ -249,7 +249,7 @@ func (b *Builder[T]) compile(c *compiler) {
 
 	for _, j := range b.joins {
 		c.write(" " + j.kind + " ")
-		c.ident(j.table)
+		c.table(j.table)
 		if j.alias != "" && j.alias != j.table {
 			c.write(" AS ")
 			c.ident(j.alias)

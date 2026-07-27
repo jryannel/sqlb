@@ -94,7 +94,7 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 
 	c := newCompiler(i.dialect)
 	c.write("INSERT INTO ")
-	c.ident(i.model.Table)
+	c.table(i.model.Table)
 	c.write(" (")
 	for n, col := range cols {
 		if n > 0 {
@@ -321,7 +321,7 @@ func (u *Update[T]) SQL() (string, []any, error) {
 
 	c := newCompiler(u.dialect)
 	c.write("UPDATE ")
-	c.ident(u.model.Table)
+	c.table(u.model.Table)
 	c.write(" SET ")
 	for n, a := range u.sets {
 		if n > 0 {
@@ -426,7 +426,7 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 	}
 	c := newCompiler(d.dialect)
 	c.write("DELETE FROM ")
-	c.ident(d.model.Table)
+	c.table(d.model.Table)
 	if len(d.where) > 0 {
 		c.write(" WHERE ")
 		c.predicates(d.where)

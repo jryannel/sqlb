@@ -71,10 +71,31 @@ func (c *compiler) ident(s string) {
 	c.write(c.d.QuoteIdent(s))
 }
 
-// column renders an optionally qualified column reference.
+// table renders a table reference, which may name a Postgres schema.
+//
+// "invoices" renders as one identifier; "billing.invoices" renders as two.
+// Quoting the whole thing as a single identifier would make Postgres look for a
+// table literally called "billing.invoices", which is a confusing failure a
+// long way from its cause.
+//
+// This is why sqlb itself namespaces with a name prefix rather than a Postgres
+// schema — see ADR-0015 — but a caller who has qualified names anyway, from an
+// existing database or from Describe, gets correct SQL rather than mangled SQL.
+func (c *compiler) table(name string) {
+	if ns, rel, ok := strings.Cut(name, "."); ok {
+		c.ident(ns)
+		c.write(".")
+		c.ident(rel)
+		return
+	}
+	c.ident(name)
+}
+
+// column renders an optionally qualified column reference. The qualifier may
+// itself be schema-qualified.
 func (c *compiler) column(col Column) {
 	if col.Table != "" {
-		c.ident(col.Table)
+		c.table(col.Table)
 		c.write(".")
 	}
 	c.ident(col.Name)

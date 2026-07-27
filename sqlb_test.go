@@ -674,3 +674,40 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// A table name naming a Postgres schema must render as two identifiers.
+// Quoting it as one makes Postgres look for a table literally called
+// "billing.invoices", which fails a long way from its cause.
+func TestQualifiedTableNames(t *testing.T) {
+	type Invoice struct {
+		ID     string `db:"id" sqlb:"pk"`
+		Amount int64  `db:"amount"`
+	}
+	sqlb.Describe[Invoice]().Table("billing.invoices")
+
+	sel, _, err := sqlb.Query[Invoice]().Select(sqlb.F("id")).
+		Where(sqlb.F("amount").Gt(0)).SQL()
+	if err != nil {
+		t.Fatalf("SQL(): %v", err)
+	}
+	if want := `SELECT "id" FROM "billing"."invoices" WHERE "amount" > $1`; sel != want {
+		t.Errorf("select\n got: %s\nwant: %s", sel, want)
+	}
+
+	del, _, err := sqlb.DeleteRows[Invoice]().Where(sqlb.F("id").Eq("i1")).SQL()
+	if err != nil {
+		t.Fatalf("SQL(): %v", err)
+	}
+	if want := `DELETE FROM "billing"."invoices" WHERE "id" = $1`; del != want {
+		t.Errorf("delete\n got: %s\nwant: %s", del, want)
+	}
+
+	// An unqualified name must keep rendering as exactly one identifier.
+	type Plain struct {
+		ID string `db:"id" sqlb:"pk"`
+	}
+	plain, _, _ := sqlb.Query[Plain]().Select(sqlb.F("id")).SQL()
+	if want := `SELECT "id" FROM "plains"`; plain != want {
+		t.Errorf("unqualified\n got: %s\nwant: %s", plain, want)
+	}
+}
