@@ -301,9 +301,30 @@ Not built yet, in the order they matter:
    flagged.
    `introspect.Registry` reads `pg_catalog` back into a registry, so the current
    side of a diff can come from a live database, and it reports every construct
-   the DSL cannot express rather than dropping it. What is missing is rendering
-   an imported registry back as `schema.go` source, and a shadow database that
+   the DSL cannot express rather than dropping it. `codegen.RenderSchema` turns
+   that registry into the `schema.go` you edit from then on, which closes the
+   adoption loop — CI compiles the rendered source and checks it declares the
+   database it came from. What is still missing is a shadow database that
    replays an existing migration history instead of reading a live schema.
+
+   Adopting an existing database is therefore two calls:
+
+   ```go
+   reg, report, err := introspect.Registry(ctx, db, introspect.Options{})
+   if !report.Empty() {
+       // Constructs the DSL cannot express. Read them: the schema does not
+       // describe the database completely until this is empty.
+       log.Print(report)
+   }
+   src, err := codegen.RenderSchema(reg, codegen.SchemaOptions{Package: "blogschema"})
+   os.WriteFile("blogschema/schema.go", src, 0o644)
+   ```
+
+   Everything imports with no capabilities and nothing exposed over REST,
+   because neither can be read from DDL — widening it is a deliberate edit.
+   Table names are not singularised (`orgs` becomes `var Orgs`), because
+   guessing wrongly on *status* or *address* costs more than renaming a
+   variable the compiler checks for you.
 2. **TypeScript client** — the OpenAPI document is generated and precise; the
    client derived from it is not written yet.
 3. **`?expand`** — the grammar validates relation names; the joins are not

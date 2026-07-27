@@ -174,9 +174,14 @@ symmetry claim held twice over: the diff is a pure function tested exhaustively
 without a database, and introspection produces a registry the diff accepts as
 its current state without knowing where it came from.
 
-Still unbuilt: emitting a `schema.go` from an imported registry — the registry
-is the useful intermediate and rendering it as Go source is a separate
-generator — and the shadow database that would replay a migration history rather
+Emitting the `schema.go` is `codegen.RenderSchema`, a separate generator over
+the registry rather than part of `introspect`, because rendering Go source needs
+no database and keeping it out means `introspect` stays the only thing that
+connects. The rendered file is the one artefact here that carries **no DO NOT
+EDIT header**: it is written once and then owned, which is the opposite of every
+other generated file in the project and is worth saying twice.
+
+Still unbuilt: the shadow database that would replay a migration history rather
 than reading a live schema.
 
 The import round trip was measured rather than assumed. A schema exercising
@@ -549,3 +554,24 @@ sqlb to own DDL.
   schema generated for 18 would diff against itself forever; `pgtest` asserts
   that fixpoint against a stock database, and asserts the default target still
   fails there, since a fix that fixed nothing would otherwise pass silently.
+- 2026-07-27 — Closed the adoption loop. `codegen.RenderSchema` turns an
+  imported registry into the `schema.go` a project owns from then on, so
+  "point sqlb at an existing database" ends with a file you edit rather than a
+  data structure you have to write out yourself. It is in `codegen` rather than
+  `introspect` because rendering Go source needs no database, and `introspect`
+  should stay the only thing that connects.
+  Three decisions worth keeping. The file carries **no DO NOT EDIT** and says so
+  in its own header: it is generated once and then owned, which is the opposite
+  of every other artefact this package produces, and a reader who has met those
+  will assume otherwise. Table names are **not singularised** — `orgs` renders
+  as `var Orgs` — because *status*, *address* and *series* make it a guess, and
+  a wrong identifier is worse than a rename the compiler checks. Index shorthand
+  is used only when it reproduces the index's actual name, or adoption would
+  silently rename indexes and the first migration would rebuild them.
+  Verified end to end rather than by string comparison: `pgtest` renders the
+  source, writes it into a throwaway module, **compiles it**, and asserts the
+  schema it declares produces DDL byte-identical to the registry it came from.
+  A generator emitting plausible source that does not build, or that builds into
+  a subtly different schema, passes every string assertion in `codegen`'s own
+  tests and fails this one — confirmed by dropping `.Nullable()` and watching it
+  fail.

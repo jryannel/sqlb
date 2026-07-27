@@ -218,10 +218,11 @@ working is worse than no test, so those are exercised as real build attempts.
 ## Known gaps
 
 - `?expand` validates relation names but does not perform the join.
-- `introspect` produces a registry from a live database, but nothing yet renders
-  one back as `schema.go` source, and there is no shadow database replaying a
-  migration history. Adoption today means calling `introspect.Registry` and
-  writing the schema file yourself.
+- `introspect` produces a registry from a live database and
+  `codegen.RenderSchema` renders it back as `schema.go`, so adoption is a closed
+  loop. There is still no shadow database replaying a migration history, so the
+  current state of a diff comes from reading a live schema rather than from
+  proving the migrations produce it.
 - No change feed, and no generated TypeScript client. See the
   [vision](vision.md).
 - The REST layer does not implement `?expand`, so `rest.Options.Expandable`
