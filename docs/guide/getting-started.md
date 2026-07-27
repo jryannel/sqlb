@@ -249,3 +249,16 @@ only safe before any query has been built against that model.
 - [Queries and hooks](queries-and-hooks.md) — mutations, transactions, `AfterCommit`
 - [REST](rest.md) — the filter grammar and what the OpenAPI document says
 - [Migrations](migrations.md) — turning a schema edit into files your runner applies
+
+Or read a finished one. [`example/tasks`](../../example/tasks/) is everything on
+these four pages assembled into a multi-tenant task manager you can run:
+
+```bash
+cd example/tasks
+docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:18
+TASKS_DATABASE_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
+  TASKS_JWT_SECRET="$(head -c 32 /dev/urandom | base64)" go run ./cmd/server
+```
+
+Migrations apply at startup, so an empty database is enough, and
+<http://localhost:8080/docs> is the API generated from its schema.

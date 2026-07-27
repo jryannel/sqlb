@@ -98,6 +98,13 @@ Go code going through the query engine directly is trusted and bypasses
 `ReadOnly` and `Immutable`; they are enforced at the REST boundary. `Hidden` is
 enforced at the projection, so `filter.Apply` cannot select one even by mistake.
 
+`ReadOnly` on a column a hook fills is the combination worth understanding,
+because it is how a tenant id stays out of a client's reach. The column is
+absent from both generated bodies, so no request can name it, and `BeforeCreate`
+supplies it from whatever the request authenticated as.
+[`example/tasks`](../../example/tasks/taskschema/schema.go) does this on every
+`workspace_id` in its schema and explains the alternative it rejected.
+
 The capabilities render into the `sqlb` struct tag that codegen writes onto the
 model, which is how the runtime reads them back without importing this package:
 

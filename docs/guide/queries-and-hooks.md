@@ -257,6 +257,16 @@ run them.
 Returning an error is how "no tenant in this context" becomes impossible to
 forget rather than merely documented — no statement runs at all.
 
+[`example/tasks/app/hooks.go`](../../example/tasks/app/hooks.go) is this taken
+as far as it goes: one file, a little over two hundred lines, confining six
+models across twenty-five endpoints. Two details there are worth stealing. The
+scoping is one generic function used four times rather than four near-copies,
+which is only possible because every table in that schema names the column
+`workspace_id` — a convention kept deliberately so the boundary can be written
+once. And reads and writes are scoped by *separate* registrations, because a
+`BeforeQuery` predicate constrains what a request can see and says nothing about
+what it can overwrite by id.
+
 ### The rest
 
 | Hook | Receives | Use for |
@@ -359,6 +369,14 @@ sqlb.On[Post]().BeforeCreate(func(ctx context.Context, p *Post) error {
 test needs isolation, and has two options: `Reset()` in a defer, or
 `sqlb.NewRegistry()` plus `db.WithHooks(r)`, which needs no teardown. The second
 is also how two tenants' worth of differing domain rules coexist in one process.
+
+A scoped registry earns its keep outside tests too. `example/tasks` builds two
+handles over one pool: one resolving against its hooks, and one against an empty
+registry, used by exactly the two endpoints that have to read a user *before*
+there is a tenant to scope the read to. Two values, one of which never leaves
+its own file, is harder to misuse than one handle and a "skip the hooks"
+flag — a flag is something a caller can pass, and the set of callers allowed
+to pass it is the whole question.
 
 ## Inspecting and tracing
 

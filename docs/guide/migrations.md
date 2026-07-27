@@ -116,6 +116,21 @@ An empty `Down` renders a comment explaining that the change is not
 automatically reversible, rather than a silently missing section — a `Down` that
 does nothing is worse than one that says why.
 
+[`example/tasks/cmd/migrate`](../../example/tasks/cmd/migrate/main.go) is a
+worked version of this page: a baseline diffed from an empty registry, then a
+second migration of hand-written `migrate.Change` values for what the DSL cannot
+express — trigger functions for `updated_at` and for a `completed_at` that has
+to agree with a check constraint, plus a pair of composite foreign keys.
+`Changes` is an ordinary slice, so the escape hatch is `append` rather than a
+fork, and hand-written SQL is rendered, ordered and split by the same code as
+generated SQL. A multi-statement body gets goose's
+`StatementBegin`/`StatementEnd` without being asked.
+
+It also shows the cost of `Write` refusing to overwrite — right, because a
+migration already applied somewhere must not change under the runner's feet.
+Regenerating during development means deleting first, and that example deletes
+only the files `Render` says it is about to write.
+
 ## Locks
 
 Some statements hold a lock for a time proportional to the size of the table.
@@ -227,7 +242,9 @@ for a decade. Three places are version sensitive:
   default a UUIDv7 primary key produces DDL that will *not* apply to a stock
   install. Postgres 18 has `uuidv7()` built in: pass `migrate.MinPostgres(18)`
   to `Diff` and it emits that instead. On an older server without the extension,
-  use `schema.GenUUIDv4`, built in since Postgres 13.
+  use `schema.GenUUIDv4`, built in since Postgres 13. `example/tasks` passes
+  `MinPostgres(18)` for exactly this reason, which is also why it needs 18 — a
+  demo requiring an extension before it will run is not much of a demo.
 - **`Unblock`'s `SET NOT NULL` sequence** is correct on any version but only
   *fast* from Postgres 12.
 - **`introspect`** handles the `NOT NULL` constraint rows Postgres 18

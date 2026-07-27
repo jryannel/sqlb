@@ -41,6 +41,13 @@ The handlers are **not** generated: `rest.Resource[T, C, U]` is one generic
 function serving every resource. What is per-resource is the OpenAPI document,
 built from each column's capabilities.
 
+[`example/tasks/app/app.go`](../../example/tasks/app/app.go) is this assembled
+for real: authentication middleware, six generated resources mounted in one
+call, and seven hand-written endpoints on the same router and in the same
+OpenAPI document. The thing to notice is what the generated half does *not*
+contain — no mention of tenants, tokens or roles anywhere in it, because the
+hooks cover those for every read the handlers issue.
+
 ### Request bodies
 
 Codegen emits `PostCreate` and `PostPatch` because two problems need types
@@ -51,6 +58,12 @@ owns those — and makes defaulted columns optional, so leaving one out means th
 database supplies the value rather than a zero overwriting it. Its `Row()`
 method builds the row to insert; returning an error there is a 422, which is
 where cross-field validation belongs.
+
+Both halves of "the database or a hook" are live: the handler clears every
+read-only field before inserting, so a hand-written `Row()` cannot set one, and
+a hook still can. That is what makes a tenant id expressible as a column no
+request may name — see [`example/tasks`](../../example/tasks/app/hooks.go),
+where four models are stamped that way.
 
 `PostPatch` has every field as a pointer and reports which ones the request
 actually carried. A typed struct cannot tell "absent" from "zero", which is the

@@ -24,7 +24,16 @@ example ever disagree, the example is right.
   reference, with those examples attached to the symbols they document.
 - **[`example/blog/`](../../example/blog/)** — a worked schema, everything
   codegen emits from it, and an assembled server. It is a real test suite, so it
-  cannot drift from the code.
+  cannot drift from the code. Start here: it is the smallest thing that is still
+  a whole thing.
+- **[`example/tasks/`](../../example/tasks/)** — the larger one, for when a
+  page here raises a question this size of example cannot answer. A
+  multi-tenant task manager: six tables, a workspace boundary held entirely by
+  hooks, JWT authentication, a migration history, and a runnable server. It is
+  tested against a real Postgres, so its claims about locking, triggers and
+  constraints are checked rather than asserted. It also documents the two places
+  it had to work around sqlb rather than use it, which is the part worth reading
+  before you hit them yourself.
 - **[docs/adr/](../adr/)** — why each decision was made, and what would change
   it. Read these when a design choice looks wrong; most of them have already
   been argued.
