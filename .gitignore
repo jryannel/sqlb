@@ -17,3 +17,8 @@ coverage.*
 .idea/
 .vscode/
 *.swp
+
+# Session handoff notes. Working scaffolding addressed to the next session, not
+# project documentation: they carry local paths, point-in-time commit shas and
+# live TODOs. What is durable in them belongs in docs/adr or docs/ instead.
+.handoffs/

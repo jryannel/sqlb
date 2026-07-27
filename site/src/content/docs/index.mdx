@@ -1,0 +1,79 @@
+---
+title: sqlb
+description: A schema-first data layer for Go — typed composable queries, a validated REST filter grammar, and domain hooks, without hand-writing the HTTP-to-SQL layer.
+template: splash
+hero:
+  tagline: >
+    Declare your tables once. Get typed composable queries, a validated REST
+    filter grammar and domain hooks — without hand-writing the HTTP-to-SQL layer
+    for every dynamic view.
+  actions:
+    - text: Get started
+      link: /sqlb/guide/getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/jryannel/sqlb
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## Why it exists
+
+Static query generators cannot express *"this WHERE clause exists only when the
+user typed something in the search box."* The usual workaround is string
+concatenation, which is why the HTTP layer of a filter/sort/search page is
+mostly boilerplate.
+
+PostgREST solves that by making the database the API, but there is then nowhere
+to put Go domain logic, and the whole schema sits one policy mistake away from
+being public.
+
+sqlb takes the middle path. A query is a **value**, so predicates can be added
+conditionally:
+
+```go
+q := sqlb.Query[Post]().Where(sqlb.F("status").Eq("published"))
+if search != "" {
+    q = q.Where(sqlb.F("title").Contains(search))
+}
+posts, err := q.OrderBy(sqlb.F("created_at").Desc()).Limit(50).All(ctx, db)
+```
+
+and the REST filter grammar compiles into that **same** predicate AST. One
+compiler, one bind-parameter discipline, one set of hooks — two producers.
+
+<CardGrid>
+  <Card title="Capabilities are opt-in" icon="approve-check">
+    `Filterable`, `Sortable`, `Searchable`, `Hidden`. A column that does not
+    declare a capability cannot be reached through it — ever. The failure is a
+    400 naming what would have worked, not a leak.
+  </Card>
+  <Card title="Hooks are the domain seam" icon="puzzle">
+    `BeforeQuery` receives the query itself, so one registration constrains every
+    read of a model — including the ones generated REST handlers issue. Tenant
+    scoping stops being something each call site remembers.
+  </Card>
+  <Card title="Nothing runs unasked" icon="magnifier">
+    `SQL()` renders text and args without executing. `Explain` plans against the
+    live schema without running. `Diff` returns changes as values; your runner
+    applies them.
+  </Card>
+  <Card title="No dependencies to inherit" icon="seti:go">
+    The engine depends on the standard library alone, and a check in CI enforces
+    it. Only the REST adapter pulls in Huma, and only if you use it.
+  </Card>
+</CardGrid>
+
+## Status
+
+sqlb is pre-1.0, has one author and no observed consumers. That is the honest
+starting position — see
+[compatibility](https://github.com/jryannel/sqlb/blob/main/docs/compatibility.md)
+for what the current tag freezes and which surfaces are expected to move, and
+the [adoption review](https://github.com/jryannel/sqlb/blob/main/docs/review-adoption-readiness.md)
+for an outside read on what that means in practice.
+
+Postgres only. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING` are all
+load-bearing; multi-dialect support would cost the best features.

@@ -323,3 +323,32 @@ mise run test-demo
 echo
 echo "ci: all gates passed"
 '''
+
+# ---- Documentation site ----
+#
+# Deliberately not part of `ci`. The site is Astro, so running it in the gate
+# would make Node a build dependency of a Go library whose whole argument is
+# that it imposes none — the same reasoning that keeps sqlc out of the gate in
+# example/withsqlc. The content is plain markdown in docs/guide either way, and
+# it renders on GitHub without any of this.
+
+[tasks.site-dev]
+description = "Serve the documentation site with live reload. Regenerates the guide pages from docs/guide first; edit the markdown there, not the copy under site/src."
+dir = "site"
+run = '''
+[ -d node_modules ] || npm install
+npm run dev
+'''
+
+[tasks.site-build]
+description = "Build the documentation site into site/dist, then verify every internal link in the output resolves. The link check is the load-bearing half: the guide's links are repo-relative and get rewritten for the web, so one can be valid markdown, survive the build, and still 404 after deploy."
+dir = "site"
+run = '''
+[ -d node_modules ] || npm install
+npm run build
+'''
+
+[tasks.site-check]
+description = "Report whether docs/guide can be published as it stands, without building. Fails on a link the rewriter has no rule for, on a page with no H1 to take a title from, and on a page missing from the sidebar order. Needs no npm install."
+dir = "site"
+run = "node scripts/sync-docs.mjs --check"

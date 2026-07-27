@@ -1,0 +1,8 @@
+# Build output and dependencies.
+dist/
+node_modules/
+.astro/
+
+# Generated from docs/guide by scripts/sync-docs.mjs on every build. The source
+# of truth is docs/guide; committing a second copy would invite editing it.
+src/content/docs/guide/

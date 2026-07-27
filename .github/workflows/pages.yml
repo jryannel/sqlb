@@ -1,0 +1,61 @@
+# Builds the documentation site and deploys it to GitHub Pages.
+#
+# Separate from `ci` on purpose. The site is Astro, so folding it into the gate
+# would make Node a build dependency of a Go library whose whole argument is that
+# it imposes none — the same reasoning that keeps sqlc out of the gate. A red
+# site build should not be able to say the library is broken.
+#
+# `npm run build` runs the link check, so a link that would 404 after deploy
+# fails here instead of shipping.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    # The site is generated from docs/guide, so a guide edit has to redeploy it.
+    paths:
+      - "site/**"
+      - "docs/guide/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and never cancel one midway: a cancelled deploy can
+# leave the site serving a half-published build.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      # ci rather than install: the lockfile is committed, so the runner builds
+      # what was resolved locally instead of re-resolving.
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
