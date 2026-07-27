@@ -6,13 +6,13 @@ import "time"
 
 // Author is a row of authors.
 type Author struct {
-	ID           string    `db:"id" sqlb:"pk,default,filter,readonly"`
-	OrgID        string    `db:"org_id"`
-	Email        string    `db:"email" sqlb:"filter,search"`
-	Name         string    `db:"name" sqlb:"filter,sort,search"`
-	PasswordHash string    `db:"password_hash" sqlb:"hidden"`
-	CreatedAt    time.Time `db:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt    time.Time `db:"updated_at" sqlb:"default,sort,readonly"`
+	ID           string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	OrgID        string    `db:"org_id" json:"org_id"`
+	Email        string    `db:"email" json:"email" sqlb:"filter,search"`
+	Name         string    `db:"name" json:"name" sqlb:"filter,sort,search"`
+	PasswordHash string    `db:"password_hash" json:"-" sqlb:"hidden"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
 }
 
 // TableName is the table Author maps to.
@@ -20,11 +20,11 @@ func (Author) TableName() string { return "authors" }
 
 // Org a tenant. Every other table is scoped to one.
 type Org struct {
-	ID        string    `db:"id" sqlb:"pk,default,filter,readonly"`
-	Name      string    `db:"name" sqlb:"filter,sort,search"`
-	Slug      string    `db:"slug" sqlb:"filter"`
-	CreatedAt time.Time `db:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt time.Time `db:"updated_at" sqlb:"default,sort,readonly"`
+	ID        string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	Name      string    `db:"name" json:"name" sqlb:"filter,sort,search"`
+	Slug      string    `db:"slug" json:"slug" sqlb:"filter"`
+	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
 }
 
 // TableName is the table Org maps to.
@@ -41,17 +41,17 @@ const (
 
 // Post a blog post.
 type Post struct {
-	ID          string     `db:"id" sqlb:"pk,default,filter,readonly"`
-	OrgID       string     `db:"org_id"`
-	AuthorID    string     `db:"author_id"`
-	Title       string     `db:"title" sqlb:"filter,sort,search"`
-	Body        string     `db:"body" sqlb:"filter,search"`
-	Status      PostStatus `db:"status" sqlb:"default,filter,sort"`
-	ViewCount   int64      `db:"view_count" sqlb:"default,filter,sort,readonly"`
-	PublishedAt *time.Time `db:"published_at" sqlb:"filter,sort"`
-	CreatedAt   time.Time  `db:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt   time.Time  `db:"updated_at" sqlb:"default,sort,readonly"`
-	DeletedAt   *time.Time `db:"deleted_at" sqlb:"readonly"`
+	ID          string     `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	OrgID       string     `db:"org_id" json:"org_id"`
+	AuthorID    string     `db:"author_id" json:"author_id"`
+	Title       string     `db:"title" json:"title" sqlb:"filter,sort,search"`
+	Body        string     `db:"body" json:"body" sqlb:"filter,search"`
+	Status      PostStatus `db:"status" json:"status" sqlb:"default,filter,sort"`
+	ViewCount   int64      `db:"view_count" json:"view_count" sqlb:"default,filter,sort,readonly"`
+	PublishedAt *time.Time `db:"published_at" json:"published_at" sqlb:"filter,sort"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
+	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	DeletedAt   *time.Time `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
 }
 
 // TableName is the table Post maps to.

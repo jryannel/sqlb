@@ -63,9 +63,9 @@ func TestGeneratedModels(t *testing.T) {
 		`OrgID string ` + "`" + `db:"org_id"`, // initialism: org_id → OrgID
 		`PublishedAt *time.Time`,              // nullable → pointer
 		`ViewCount int64`,
-		`db:"title" sqlb:"filter,sort,search"`, // capabilities reach the tag
-		`db:"secret" sqlb:"hidden"`,            // hidden is still in the model
-		"type BlogEntryStatus string",          // enum type
+		`db:"title" json:"title" sqlb:"filter,sort,search"`, // capabilities reach the tag
+		`db:"secret" json:"-" sqlb:"hidden"`,                // hidden is in the model but never on the wire
+		"type BlogEntryStatus string",                       // enum type
 		`BlogEntryStatusDraft BlogEntryStatus = "draft"`,
 		"Status BlogEntryStatus", // column uses the enum type
 	} {
@@ -180,5 +180,105 @@ func TestNaming(t *testing.T) {
 		if got := codegen.Singular(in); got != want {
 			t.Errorf("Singular(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// restFixture exposes a full CRUD resource, so the generated request bodies
+// have something to differ about.
+func restFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	org := r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("org", org).OnDelete(schema.Cascade).Immutable(),
+		schema.Text("title").Searchable().Sortable(),
+		schema.Enum("status", "draft", "published").Default(schema.Value("draft")).Filterable(),
+		schema.BigInt("view_count").ReadOnly(),
+		schema.Timestamp("published_at").Nullable().Sortable(),
+		schema.Text("secret").Hidden(),
+	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList, MaxPageSize: 50})
+	return r
+}
+
+func TestGeneratedCreateBodyOmitsWhatAClientMayNotSet(t *testing.T) {
+	src := generate(t, restFixture())["rest_gen.go"]
+
+	for _, want := range []string{
+		"type PostCreate struct {",
+		`Title string ` + "`" + `json:"title"`,                            // required: no default, not nullable
+		`Status *PostStatus ` + "`" + `json:"status,omitempty"`,           // defaulted → optional
+		`PublishedAt *time.Time ` + "`" + `json:"published_at,omitempty"`, // nullable → optional
+		"func (c PostCreate) Row() (*Post, error)",
+	} {
+		if !contains(src, want) {
+			t.Errorf("create body missing %q:\n%s", want, src)
+		}
+	}
+	// The primary key, a read-only column and a hidden one are all things the
+	// client does not get to supply.
+	body := src[strings.Index(src, "type PostCreate struct {"):strings.Index(src, "func (c PostCreate) Row()")]
+	for _, forbidden := range []string{`json:"id"`, "ViewCount", "Secret"} {
+		if contains(body, forbidden) {
+			t.Errorf("create body should not carry %s:\n%s", forbidden, body)
+		}
+	}
+}
+
+func TestGeneratedPatchBodyDistinguishesAbsentFromNull(t *testing.T) {
+	src := generate(t, restFixture())["rest_gen.go"]
+
+	for _, want := range []string{
+		"type PostPatch struct {",
+		"present map[string]bool",
+		"func (u *PostPatch) UnmarshalJSON(data []byte) error",
+		"func (u PostPatch) Changes() (map[string]any, error)",
+		// A nullable column that was present writes its pointer straight
+		// through, so an explicit null becomes NULL.
+		`out["published_at"] = u.PublishedAt`,
+		// A non-nullable one rejects an explicit null rather than writing a
+		// zero value that looks deliberate.
+		`errors.New("title is not nullable and cannot be set to null")`,
+	} {
+		if !contains(src, want) {
+			t.Errorf("patch body missing %q:\n%s", want, src)
+		}
+	}
+	// An immutable column is settable once, at create, so it has no place in a
+	// patch body at all.
+	patch := src[strings.Index(src, "type PostPatch struct {"):strings.Index(src, "func (u *PostPatch) UnmarshalJSON")]
+	if contains(patch, "OrgID") {
+		t.Errorf("an immutable column should be absent from the patch body:\n%s", patch)
+	}
+}
+
+func TestGeneratedRegisterMirrorsTheSchemaExposure(t *testing.T) {
+	src := generate(t, restFixture())["rest_gen.go"]
+
+	for _, want := range []string{
+		"func Register(api huma.API, db sqlb.Executor) error {",
+		"rest.Resource[Post, PostCreate, PostPatch](api, db, rest.Options{",
+		`Path: "/posts"`,
+		`Name: "post"`, // singularised, for operation IDs
+		"Ops: rest.OpCreate | rest.OpRead | rest.OpUpdate | rest.OpDelete | rest.OpList",
+		"MaxPageSize: 50",
+	} {
+		if !contains(src, want) {
+			t.Errorf("registration missing %q:\n%s", want, src)
+		}
+	}
+	// orgs is not exposed, so it is not mounted.
+	if contains(src, "rest.Resource[Org") {
+		t.Errorf("an unexposed table should not be mounted:\n%s", src)
+	}
+}
+
+// A package that exposes nothing should not acquire a dependency on huma just
+// by being generated.
+func TestNoRestFileWhenNothingIsExposed(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+
+	if src, present := generate(t, r)["rest_gen.go"]; present {
+		t.Errorf("rest_gen.go should not be written for an unexposed schema:\n%s", src)
 	}
 }
