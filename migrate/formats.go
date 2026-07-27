@@ -56,7 +56,7 @@ func (f gooseFormat) Render(m Migration, opts Options) (map[string]string, error
 
 	b.WriteString("-- +goose Up\n")
 	for _, c := range m.Changes {
-		writeSection(&b, statement(c.Up, c, opts), c.Comment, true)
+		writeSection(&b, statement(c.Up, c, opts), upComment(c), true)
 	}
 
 	b.WriteString("\n-- +goose Down\n")
@@ -82,8 +82,10 @@ func writeSection(b *strings.Builder, sql, comment string, goose bool) {
 	if sql == "" {
 		return
 	}
-	if comment != "" {
-		b.WriteString("-- " + comment + "\n")
+	for _, line := range strings.Split(comment, "\n") {
+		if line != "" {
+			b.WriteString("-- " + line + "\n")
+		}
 	}
 	if goose && needsStatementBlock(sql) {
 		b.WriteString("-- +goose StatementBegin\n")
@@ -111,7 +113,7 @@ func (golangMigrateFormat) Render(m Migration, opts Options) (map[string]string,
 	down.WriteString(header + "\n\n")
 
 	for _, c := range m.Changes {
-		writeSection(&up, statement(c.Up, c, opts), c.Comment, false)
+		writeSection(&up, statement(c.Up, c, opts), upComment(c), false)
 	}
 	for i := len(m.Changes) - 1; i >= 0; i-- {
 		c := m.Changes[i]
@@ -136,7 +138,7 @@ func (plainFormat) Render(m Migration, opts Options) (map[string]string, error) 
 	var b strings.Builder
 	b.WriteString(header + "\n\n")
 	for _, c := range m.Changes {
-		writeSection(&b, statement(c.Up, c, opts), c.Comment, false)
+		writeSection(&b, statement(c.Up, c, opts), upComment(c), false)
 	}
 	return map[string]string{
 		fmt.Sprintf("%s_%s.sql", m.Version, m.Name): b.String(),

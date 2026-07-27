@@ -224,7 +224,9 @@ Not built yet, in the order they matter:
 1. **Migrations** — `migrate.Diff` computes the changes between two schemas and
    renders them as Postgres DDL, and `migrate.Write` emits the files. Renames
    are declared with `.RenamedFrom("old")` on a column or a table, because a
-   rename cannot be told from a drop and an add by looking at the two states.
+   rename cannot be told from a drop and an add by looking at the two states. A
+   change that rewrites or scans a table carries the lock it takes and the
+   expand/contract sequence to use instead; `Migration.Blocking` lists them.
    What is missing is where the *current* schema comes from: `sqlb import`
    reading `pg_catalog`, or a shadow database replaying the existing history.
    Until one of those exists, both sides of a diff have to be hand-written

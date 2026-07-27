@@ -52,6 +52,25 @@ type Change struct {
 	// Building an index without CONCURRENTLY takes a lock that blocks writes
 	// for the duration, so on a live table this is not optional.
 	Concurrent bool
+
+	// Lock names the lock the statement takes when holding it costs
+	// something — when the time it is held grows with the number of rows in
+	// the table rather than being a catalog write. Most changes leave it "".
+	//
+	// The generator cannot know whether this matters: a full scan of a
+	// thousand rows is free and a full scan of a billion is an outage, and
+	// nothing in a schema says which table is which. So a locking change is
+	// rendered live with the lock named above it, not commented out like a
+	// destructive one. Destructive is commented out because applying it is
+	// irreversible; this is reversible, it is just occasionally very slow.
+	// Use Migration.Blocking to gate on it where the table sizes are known.
+	//
+	// The lock is held until the transaction commits, not until the statement
+	// finishes — so everything else in the same file waits behind it.
+	Lock string
+	// Hazard explains what the lock costs and what to do on a table too large
+	// to hold it, and is required when Lock is set.
+	Hazard string
 }
 
 // Migration is an ordered set of changes released together.
@@ -216,6 +235,9 @@ func (m Migration) validate() error {
 		if c.Destructive && c.Reason == "" {
 			return fmt.Errorf("migrate: destructive change %d of %s_%s gives no reason", i, m.Version, m.Name)
 		}
+		if c.Lock != "" && c.Hazard == "" {
+			return fmt.Errorf("migrate: locking change %d of %s_%s does not say what the lock costs", i, m.Version, m.Name)
+		}
 	}
 	return nil
 }
@@ -230,6 +252,23 @@ func (m Migration) Destructive() bool {
 	return false
 }
 
+// Blocking returns the changes that hold a lock for a time proportional to the
+// size of the table, in the order they are applied.
+//
+// It is the hook for a policy this package cannot have: whether a full scan is
+// acceptable depends on how many rows the table holds, which is not in the
+// schema. A project that knows its big tables can refuse a migration touching
+// one, or route it to whoever sequences an expand/contract rollout.
+func (m Migration) Blocking() []Change {
+	var out []Change
+	for _, c := range m.Changes {
+		if c.Lock != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // statement renders one change's SQL for a direction, commenting it out when
 // destructive changes are not allowed.
 func statement(sql string, c Change, opts Options) string {
@@ -241,12 +280,58 @@ func statement(sql string, c Change, opts Options) string {
 		return sql
 	}
 	var b strings.Builder
-	b.WriteString("-- DESTRUCTIVE: " + c.Reason + "\n")
+	// Wrapped to the same column as a lock hazard: these two are the notes a
+	// reviewer has to actually read, and one of them running off the screen
+	// while the other does not is a good way to have it skipped.
+	for _, line := range wrap("DESTRUCTIVE: "+c.Reason, 74, "  ") {
+		b.WriteString("-- " + line + "\n")
+	}
 	b.WriteString("-- Review, then uncomment to apply. Generated commented out on purpose.\n")
 	for _, line := range strings.Split(sql, "\n") {
 		b.WriteString("-- " + line + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// upComment renders the comment block above a change's Up: what the change is
+// for, and what its lock costs when that is worth knowing before applying it.
+//
+// The hazard is stated here rather than commenting the statement out, because
+// the fact that matters — how many rows the table holds — is not in the schema.
+// A migration nobody can apply without editing trains people to edit without
+// reading, which is how the destructive guard would stop working too.
+func upComment(c Change) string {
+	var lines []string
+	if c.Comment != "" {
+		lines = wrap(c.Comment, 74, "  ")
+	}
+	if c.Lock != "" {
+		lines = append(lines, wrap("LOCK "+c.Lock+": "+c.Hazard, 74, "  ")...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// wrap breaks text into lines of at most width characters, indenting every line
+// after the first, so that a hazard note reads as a paragraph in a file someone
+// reviews rather than as one line they scroll past.
+func wrap(s string, width int, indent string) []string {
+	var out []string
+	line := ""
+	for _, word := range strings.Fields(s) {
+		switch {
+		case line == "":
+			line = word
+		case len(line)+1+len(word) <= width:
+			line += " " + word
+		default:
+			out = append(out, line)
+			line = indent + word
+		}
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	return out
 }
 
 // needsStatementBlock reports whether SQL contains a semicolon anywhere but the

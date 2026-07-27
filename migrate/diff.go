@@ -25,6 +25,23 @@ import (
 // removing a value from an enum — are not destructive, since nothing is lost;
 // they carry a Comment saying what to check instead.
 //
+// # What Lock means here
+//
+// Most DDL is a catalog write that nobody notices. A few statements hold their
+// lock for a time proportional to the number of rows — because they rewrite the
+// table, scan it, or build an index over it — and those are the ones that turn
+// a routine migration into an outage. A change that does one carries Lock and
+// Hazard, naming the lock and the sequence to use instead on a table too large
+// to hold it.
+//
+// It is a note rather than a refusal, and unlike a destructive change it is not
+// commented out. Whether a full scan matters depends on how many rows the table
+// holds, which is not in the schema and never will be. Commenting out every
+// SET NOT NULL would make the generator useless for the ordinary case and train
+// people to uncomment without reading — which is how the destructive guard
+// would stop working too. Migration.Blocking is the hook for a project that
+// does know which of its tables are big.
+//
 // # What is not inferred
 //
 // A rename is indistinguishable from a drop and an add when only the before
@@ -389,6 +406,14 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 			Up:      alterColumn(t.Name(), td.Name, "TYPE "+tgtType),
 			Down:    alterColumn(t.Name(), td.Name, "TYPE "+curType),
 		}
+		c.Lock, c.Hazard = typeChangeHazard(t.Name(), cd, td)
+		if c.Lock == "" && rewrites(td, cd) {
+			// Widening a varchar is free and narrowing it is not, so the Up
+			// costs nothing and the rollback rewrites the table. Worth saying
+			// here, since the place it would otherwise be discovered is
+			// halfway through an incident.
+			c.Comment += " (free in this direction; reversing it rewrites the table)"
+		}
 		if !widens(cd, td) {
 			c.Destructive = true
 			c.Reason = "converting " + t.Name() + "." + td.Name + " from " + curType +
@@ -404,6 +429,9 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 
 	switch {
 	case cd.Nullable && !td.Nullable:
+		// Two separate problems, so two separate flags: rows holding NULL make
+		// this fail, and proving that none do makes it slow.
+		lock, hazard := setNotNullHazard(t.Name(), td.Name)
 		d.alterColumns = append(d.alterColumns, Change{
 			Comment:     "require " + t.Name() + "." + td.Name,
 			Up:          alterColumn(t.Name(), td.Name, "SET NOT NULL"),
@@ -411,12 +439,18 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 			Destructive: true,
 			Reason: "rows with NULL in " + t.Name() + "." + td.Name +
 				" will fail this constraint. Backfill them before applying",
+			Lock:   lock,
+			Hazard: hazard,
 		})
 	case !cd.Nullable && td.Nullable:
+		// The Up is a catalog write, so this is not flagged — but reversing it
+		// is the scan above, which is a surprising way to find that out during
+		// a rollback.
 		d.alterColumns = append(d.alterColumns, Change{
-			Comment: "allow NULL in " + t.Name() + "." + td.Name,
-			Up:      alterColumn(t.Name(), td.Name, "DROP NOT NULL"),
-			Down:    alterColumn(t.Name(), td.Name, "SET NOT NULL"),
+			Comment: "allow NULL in " + t.Name() + "." + td.Name +
+				" (reversing this scans the table to prove no row took the opportunity)",
+			Up:   alterColumn(t.Name(), td.Name, "DROP NOT NULL"),
+			Down: alterColumn(t.Name(), td.Name, "SET NOT NULL"),
 		})
 	}
 
@@ -552,10 +586,17 @@ func (d *differ) addConstraintChange(table string, c constraint, prev *constrain
 	// the drop of that definition was emitted in an earlier phase and its own
 	// Down restores it, so reversing the whole list restores the old
 	// constraint without this change having to know about it.
+	// Every caller of this is altering a table that already exists and may hold
+	// rows. A constraint on a table created by the same migration is emitted by
+	// tableCreated, which does not come through here, because a table nothing
+	// has inserted into yet costs nothing to constrain.
+	lock, hazard := constraintHazard(table, c)
 	ch := Change{
 		Comment: "add constraint " + c.name,
 		Up:      addConstraint(table, c),
 		Down:    dropConstraint(table, c.name),
+		Lock:    lock,
+		Hazard:  hazard,
 	}
 	switch removed := removedEnumValues(prev, c); {
 	case len(removed) > 0:

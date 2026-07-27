@@ -104,6 +104,105 @@ func widens(from, to *schema.FieldDesc) bool {
 	return false
 }
 
+// Lock hazards.
+//
+// Most DDL is a catalog write: it takes ACCESS EXCLUSIVE, holds it for
+// microseconds, and nobody notices. The statements below are the ones whose
+// lock is held for a time proportional to the number of rows — because they
+// rewrite the table, scan it, or build an index over it — and those are the
+// ones that turn a routine migration into an outage.
+//
+// Knowing which is which is Postgres knowledge, so it lives here with the rest
+// of it. The remedies named are all real sequences a person or an agent can
+// author; none of them is generated, because each needs a decision the schema
+// does not contain — how large the batches are, when the cutover happens, or
+// whether the validation can wait for a later release (ADR-0014).
+
+// Lock modes, spelled as Postgres spells them.
+const (
+	lockAccessExclusive   = "ACCESS EXCLUSIVE"
+	lockShareRowExclusive = "SHARE ROW EXCLUSIVE"
+)
+
+// notValidRemedy is the two-step sequence that turns a validating ADD
+// CONSTRAINT into a brief lock and a slow check that lets writes through. It
+// applies to CHECK and FOREIGN KEY alike, which is why it is written once.
+const notValidRemedy = "Add it NOT VALID first, then VALIDATE CONSTRAINT in a " +
+	"later statement. The NOT VALID add still takes a lock of its own, but holds " +
+	"it only for as long as the catalog write takes; the validation that follows " +
+	"takes SHARE UPDATE EXCLUSIVE, which readers and writers pass through."
+
+// rewrites reports whether changing a column from one type to the other makes
+// Postgres rewrite every row, rather than accepting the new type over the bytes
+// already stored.
+//
+// Only the text family is exempt, because that is the only place this package's
+// type system distinguishes types that are binary coercible: a varchar losing
+// or widening its length limit changes what is *checked*, not what is stored.
+// Everything else is treated as a rewrite, which is the safe direction — a
+// false positive is a warning nobody needed, a false negative is the outage.
+func rewrites(from, to *schema.FieldDesc) bool {
+	if from.Type != schema.TypeVarchar {
+		return true
+	}
+	switch to.Type {
+	case schema.TypeText:
+		return false
+	case schema.TypeVarchar:
+		// Zero means unbounded. A shorter limit has to be checked against
+		// every row, which is a scan rather than a rewrite, but it is not free
+		// and the distinction does not change what to do about it.
+		return to.Size != 0 && to.Size < from.Size
+	}
+	return true
+}
+
+// typeChangeHazard describes what changing a column's type costs.
+func typeChangeHazard(table string, from, to *schema.FieldDesc) (lock, hazard string) {
+	if !rewrites(from, to) {
+		return "", ""
+	}
+	return lockAccessExclusive, "rewriting " + table + "." + to.Name +
+		" reads and writes every row in the table, and blocks all access until it " +
+		"finishes. There is no in-place version and no concurrent one. On a table " +
+		"too large to lock, add a second column, backfill it in batches, and swap — " +
+		"a sequence this cannot generate, because only you know what a batch costs " +
+		"and when the cutover can happen."
+}
+
+// setNotNullHazard describes what requiring a column costs.
+func setNotNullHazard(table, column string) (lock, hazard string) {
+	return lockAccessExclusive, "proving that no row has NULL in " + table + "." + column +
+		" scans the whole table with all access blocked. On a large table, add " +
+		"CHECK (" + quoteIdent(column) + " IS NOT NULL) NOT VALID, VALIDATE CONSTRAINT " +
+		"it, and only then SET NOT NULL: Postgres 12 and later find the validated " +
+		"check and skip the scan entirely."
+}
+
+// constraintHazard describes what adding a constraint to a table that already
+// holds rows costs. A table created by the same migration is empty by
+// construction and its constraints are free — the same reason its indexes do
+// not need CONCURRENTLY.
+func constraintHazard(table string, c constraint) (lock, hazard string) {
+	switch {
+	case c.ref != nil:
+		// Both tables are locked against writes: the referencing one is
+		// scanned, and the referenced one has to hold still while it is.
+		return lockShareRowExclusive, "checking that every row of " + table +
+			" already points at a row of " + c.ref.table + " blocks writes to both " +
+			"tables until it finishes. " + notValidRemedy
+	case c.unique:
+		return lockAccessExclusive, "the unique constraint is enforced by an index, " +
+			"and building it over every row of " + table + " blocks all access " +
+			"until it finishes. Build the index first with CREATE UNIQUE INDEX " +
+			"CONCURRENTLY, then adopt it with ADD CONSTRAINT ... USING INDEX, which " +
+			"holds the lock only for as long as the catalog write takes."
+	}
+	return lockAccessExclusive, "checking that every row of " + table +
+		" already satisfies the constraint scans the whole table with all access " +
+		"blocked. " + notValidRemedy
+}
+
 // renderDefault renders a column default for a DEFAULT clause.
 func renderDefault(d *schema.Default) (string, error) {
 	if d == nil {
@@ -228,6 +327,11 @@ type constraint struct {
 	// constraints because they are the only ones that depend on another table
 	// existing.
 	fk bool
+
+	// unique marks a PRIMARY KEY or UNIQUE, the two Postgres enforces by
+	// building an index rather than by scanning. They cost differently enough
+	// to be worth telling apart when saying what adding one locks.
+	unique bool
 
 	// enum holds the permitted values when this is an enum column's CHECK,
 	// so that removing a value can be told from adding one.
@@ -354,8 +458,9 @@ func constraints(t *schema.TableDef) []constraint {
 
 	if pk := t.PrimaryKey(); pk != nil {
 		out = append(out, constraint{
-			name: primaryKeyName(t),
-			def:  "PRIMARY KEY (" + quoteIdent(pk.Name()) + ")",
+			name:   primaryKeyName(t),
+			def:    "PRIMARY KEY (" + quoteIdent(pk.Name()) + ")",
+			unique: true,
 		})
 	}
 
@@ -363,8 +468,9 @@ func constraints(t *schema.TableDef) []constraint {
 		d := f.Desc()
 		if d.Unique && !d.PrimaryKey {
 			out = append(out, constraint{
-				name: uniqueConstraintName(t, d),
-				def:  "UNIQUE (" + quoteIdent(d.Name) + ")",
+				name:   uniqueConstraintName(t, d),
+				def:    "UNIQUE (" + quoteIdent(d.Name) + ")",
+				unique: true,
 			})
 		}
 		if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {

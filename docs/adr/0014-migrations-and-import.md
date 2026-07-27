@@ -57,6 +57,18 @@ and catches drift.
 type, or adding a NOT NULL without a default is emitted commented out, with the
 reason, and requires an explicit flag to emit live.
 
+**Lock hazards are stated, not gated.** A statement that rewrites a table, scans
+it, or builds an index over it holds its lock for a time proportional to the row
+count, and is emitted with the lock named and the expand/contract sequence
+spelled out — but emitted live. Destructive is commented out because applying it
+is irreversible; this is reversible, it is just occasionally very slow, and
+whether it is slow depends on how many rows the table holds. That number is not
+in the schema and never will be. A generator that made every `SET NOT NULL`
+require an edit would be useless for the ordinary case and would teach people to
+edit without reading, which is the same failure mode that would break the
+destructive guard. `Migration.Blocking` is the hook for a project that does know
+which of its tables are big.
+
 **Renames are declared, never inferred.** A column or a table carries
 `.RenamedFrom("old")` for one release; the diff reads it and emits
 `ALTER TABLE … RENAME` instead of a drop and an add. Without the hint, a rename
@@ -120,7 +132,8 @@ easy to forget, and forgetting one is data loss unless the destructive guard
 catches it.
 
 **What is built.** `migrate.Diff(current, target *schema.Registry) ([]Change,
-error)`, the Postgres DDL under it, and rename hints. The symmetry claim held:
+error)`, the Postgres DDL under it, rename hints, and lock-hazard detection.
+The symmetry claim held:
 the diff is a pure function, tested exhaustively without a database. Still
 unbuilt: the shadow database that produces `current`, and `sqlb import` — so in
 practice `Diff` has no way to learn the current state except from another
@@ -143,6 +156,16 @@ driver is a third-party module, and this project currently depends on the
 standard library alone and has a CI gate asserting it. Automating the
 round-trip means either giving that up or moving the test into a module of its
 own.
+
+One lock hazard is deliberately not detected: `ADD COLUMN` with a *volatile*
+default rewrites the table, and a non-volatile one does not. Volatility is a
+property of the function, which lives in the database — `now()` is stable and
+`gen_random_uuid()` is not, and `schema.Expr` takes arbitrary SQL. The package
+could recognise the two generators it ships and miss every hand-written
+equivalent, which is worse than not looking: a guard that fires sometimes reads
+as coverage ([ADR-0016](0016-guards-proven-both-ways.md)). The complete answer
+is to ask the database, which is the shadow-database dependency that does not
+exist yet, so this waits for it.
 
 One thing the second round-trip surfaced, worth recording because it will look
 alarming to whoever meets it first: Postgres 18 names `NOT NULL` constraints
@@ -200,6 +223,29 @@ Renames surfaced three more:
   producing a wrong statement. A heuristic is acceptable when it cannot reach
   the output.
 
+Lock hazards surfaced two more:
+
+- **The lock modes were checked against a database, not recalled.** Every claim
+  the generated comments make was measured on a real Postgres 18 by reading
+  `pg_locks` inside the open transaction: `SET NOT NULL`, `ALTER COLUMN … TYPE`,
+  `ADD CHECK` and `ADD UNIQUE` take `ACCESS EXCLUSIVE`, `ADD FOREIGN KEY` takes
+  `SHARE ROW EXCLUSIVE`, and `VALIDATE CONSTRAINT` takes `SHARE UPDATE
+  EXCLUSIVE`. The rewrite exemptions were checked by watching `relfilenode`, and
+  the claim that a validated `IS NOT NULL` check lets `SET NOT NULL` skip its
+  scan was checked by timing it on three million rows: 1.7 ms against 108 ms.
+  One claim was wrong and is now corrected — the `NOT VALID` add still takes the
+  strong lock, briefly, so the remedy is not lock-free, only lock-*brief*.
+  Advice in a generated file is read as authoritative, which is a reason to
+  measure it rather than a reason to hedge it.
+- **The remedies are mechanical enough to generate, and are not generated.**
+  `NOT VALID` plus `VALIDATE CONSTRAINT`, and `CREATE UNIQUE INDEX
+  CONCURRENTLY` plus `ADD CONSTRAINT … USING INDEX`, are both fixed rewrites
+  this package could emit. What stops it is that each wants its second half in a
+  *later* migration — validating in the same transaction that took the brief
+  lock releases nothing — so generating them means deciding when the second half
+  runs. That is a release-sequencing decision, and it is the obvious next
+  increment once there is somewhere to put it.
+
 **No `USING` clause is ever generated** for a type change. Postgres refusing a
 cast it cannot make implicitly is the correct outcome; a generated `USING`
 would pick a cast nobody reviewed, and casting to a narrower type truncates
@@ -233,10 +279,12 @@ silently rather than failing.
   that is the signal it needs to become a build-tagged test rather than a
   habit. A habit that has to be remembered is a guard that will eventually not
   be ([ADR-0016](0016-guards-proven-both-ways.md)).
-- If the diff starts emitting changes that need a lock long enough to matter
-  (`SET NOT NULL` on a large table, a type narrowing), rendering them as a
-  single migration is actively harmful. They need to be flagged as requiring an
-  expand/contract sequence that a person or an agent authors.
+- If lock hazards turn out to be scrolled past — an outage caused by a statement
+  that said in the file above it exactly what it was about to do — then stating
+  them is not enough and they need to become a refusal with an opt-out, the way
+  destructive changes are. The reason not to start there is that the warning
+  fires on ordinary migrations against small tables, where it is noise; if that
+  turns out not to be true in practice, the balance changes.
 
 ## Cost of change
 
@@ -273,6 +321,18 @@ sqlb to own DDL.
 
 ## Revisions
 
+- 2026-07-27 — Built lock-hazard detection, the last thing this record named as
+  needed and did not have. A change that rewrites a table, scans it or builds an
+  index over it now carries the lock it takes and the expand/contract sequence
+  to use instead. Decided it states rather than gates, because whether a scan
+  matters depends on a row count the schema does not contain, and a warning that
+  forces an edit on every ordinary migration is a warning that stops being read.
+  Every lock mode in the generated text was measured against a real Postgres
+  rather than recalled, which caught one wrong claim. Recorded that the remedies
+  are mechanical enough to generate and are not, because each needs its second
+  half in a later migration — a release-sequencing decision. Also recorded the
+  one hazard deliberately left undetected, `ADD COLUMN` with a volatile default,
+  and why it waits for the shadow database.
 - 2026-07-27 — Built rename hints, the half of the diff this record specified
   and the previous increment left out. Confidence stays Medium: the pure
   function claim held again, and the DDL was round-tripped against a real

@@ -176,6 +176,7 @@ is that a wrong answer must never be quieter than no answer.
 | `Update`/`Delete` with no `WHERE` | `ErrUnscoped` until `Everything()` is called |
 | Destructive migration | Rendered commented out with the reason stated |
 | A column or table that was renamed | A drop and an add, unless `RenamedFrom` says otherwise — inferring a rename from a similar name would destroy data whenever the guess was wrong |
+| A migration that rewrites or scans a table | Emitted live with the lock it takes and the expand/contract sequence named above it. Not commented out: whether a scan matters depends on a row count the schema does not have |
 | A change with no `Down` | Renders an explanation, not an empty section that looks like a working rollback |
 | Filter names an unknown or uncapable column | 400 listing what would have been accepted |
 | Schema authoring mistake | Every problem reported at once, each with the fix |
