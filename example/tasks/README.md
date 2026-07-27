@@ -95,9 +95,10 @@ Both are worth knowing before copying the schema.
 
 **`schema.SoftDelete` adds a column and stops.** Nothing writes `deleted_at`,
 nothing filters it out of reads, and the generated `DELETE` handler issues a real
-`DELETE`. Its doc comment says "the REST layer filters rows with a non-null value
-out of list responses by default", which is not true of the code. So the tables
-that declare a soft delete do not expose `OpDelete`; the read hooks add
+`DELETE`. That is what its doc comment says, and `rest` has a test that fails if
+the runtime ever starts reading the column instead — so this is settled
+behaviour to build on, not a gap waiting to be closed. The tables that declare a
+soft delete therefore do not expose `OpDelete`; the read hooks add
 `deleted_at IS NULL`, and [`app/deletes.go`](app/deletes.go) serves `DELETE` as an
 `UPDATE`. Both halves are a few lines and both are visible.
 

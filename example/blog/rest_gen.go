@@ -224,7 +224,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 		Path:            "/posts",
 		Name:            "post",
 		Tag:             "posts",
-		Ops:             rest.OpCreate | rest.OpRead | rest.OpUpdate | rest.OpDelete | rest.OpList,
+		Ops:             rest.OpCreate | rest.OpRead | rest.OpUpdate | rest.OpList,
 		Description:     "A blog post.",
 		DefaultPageSize: 20,
 		MaxPageSize:     100,

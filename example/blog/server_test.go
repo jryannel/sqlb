@@ -37,6 +37,10 @@ func newServer(t *testing.T, db sqlb.Executor) http.Handler {
 	if err := blog.Register(api, db); err != nil {
 		t.Fatalf("mounting the blog resources: %v", err)
 	}
+	// The generated call mounts what the schema exposes; this one mounts the
+	// soft delete that posts expose in place of the generated DELETE. Two calls
+	// rather than a wrapper, which is how example/tasks composes the same pair.
+	blog.RegisterPostSoftDelete(api, db)
 	return router
 }
 
@@ -177,6 +181,73 @@ func TestGeneratedServerRefusesAReadOnlyColumn(t *testing.T) {
 	if len(db.statements()) != 0 {
 		t.Error("a refused patch reached the database")
 	}
+}
+
+// The two halves of the soft delete, which the schema declares and the runtime
+// does not implement: RegisterHooks supplies the read predicate, and
+// RegisterPostSoftDelete supplies the write. Neither is automatic —
+// schema.SoftDelete adds the column and stops.
+func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
+	t.Run("RegisterHooks hides the deleted rows from a generated read", func(t *testing.T) {
+		defer sqlb.On[blog.Post]().Reset()
+		blog.RegisterHooks()
+
+		db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+		server := newServer(t, db.db)
+
+		if code := do(t, server, http.MethodGet, "/posts", nil).Code; code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", code)
+		}
+		if !strings.Contains(db.last(), `"deleted_at" IS NULL`) {
+			t.Errorf("the registration did not reach the generated list query:\n%s", db.last())
+		}
+	})
+
+	t.Run("without it the deleted rows are still returned", func(t *testing.T) {
+		defer sqlb.On[blog.Post]().Reset()
+		// No RegisterHooks call. This is the state the example was in while the
+		// schema comment claimed the REST layer filtered by itself.
+		db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+		server := newServer(t, db.db)
+
+		do(t, server, http.MethodGet, "/posts", nil)
+		if strings.Contains(db.last(), `"deleted_at" IS NULL`) {
+			t.Errorf("something other than the hook filtered the query:\n%s", db.last())
+		}
+	})
+
+	t.Run("DELETE /posts/{id} stamps the column instead of removing the row", func(t *testing.T) {
+		defer sqlb.On[blog.Post]().Reset()
+		blog.RegisterHooks()
+
+		db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+		server := newServer(t, db.db)
+
+		if code := do(t, server, http.MethodDelete, "/posts/p1", nil).Code; code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204", code)
+		}
+		stmt := db.last()
+		if !strings.Contains(stmt, `UPDATE "posts" SET "deleted_at" = now()`) {
+			t.Errorf("the delete route is not a soft delete:\n%s", stmt)
+		}
+		if strings.Contains(stmt, "DELETE FROM") {
+			t.Errorf("a row was removed by an endpoint whose schema says otherwise:\n%s", stmt)
+		}
+	})
+
+	t.Run("deleting an already-deleted post is a 404", func(t *testing.T) {
+		defer sqlb.On[blog.Post]().Reset()
+		blog.RegisterHooks()
+
+		// No rows come back, which is what the deleted_at predicate produces
+		// for a post that was already stamped.
+		db := newStubDB(t, postColumns(), nil)
+		server := newServer(t, db.db)
+
+		if code := do(t, server, http.MethodDelete, "/posts/p1", nil).Code; code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", code)
+		}
+	})
 }
 
 func TestOpenAPIDocumentIsServed(t *testing.T) {

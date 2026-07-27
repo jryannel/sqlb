@@ -334,7 +334,6 @@
           "create",
           "read",
           "update",
-          "delete",
           "list"
         ],
         "defaultPageSize": 20,

@@ -354,6 +354,108 @@ func TestBeforeQueryHookAppliesToTheRESTSurface(t *testing.T) {
 	}
 }
 
+// TestSoftDeleteColumnIsInertUntilAHookUsesIt pins the half of schema.SoftDelete
+// that is easy to assume, and that this comment once claimed: the REST layer
+// does not know deleted_at exists. Lists return the soft-deleted rows and DELETE
+// removes them, until a BeforeQuery registration says otherwise.
+//
+// This test fires against the behaviour we chose not to build. If deleted_at
+// ever becomes load-bearing in the runtime, this is what fails first, and
+// ADR-0008 — which records soft-delete filtering as one hook registration — is
+// what has to change with it.
+func TestSoftDeleteColumnIsInertUntilAHookUsesIt(t *testing.T) {
+	archivedOptions := func() rest.Options {
+		return rest.Options{
+			Path:            "/archived",
+			Name:            "archived",
+			Ops:             rest.OpList | rest.OpDelete,
+			DefaultPageSize: 10,
+			MaxPageSize:     10,
+		}
+	}
+	mountArchived := func(t *testing.T, db sqlb.Executor) humatest.TestAPI {
+		t.Helper()
+		_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+		err := rest.Resource[Archived, rest.None[Archived], rest.None[Archived]](
+			api, db, archivedOptions())
+		if err != nil {
+			t.Fatalf("mounting the resource: %v", err)
+		}
+		return api
+	}
+
+	t.Run("list does not filter the deleted rows out", func(t *testing.T) {
+		sqlb.On[Archived]().Reset()
+		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
+
+		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]driver.Value{
+			archivedRow("a1", "Gone"),
+		}})
+		api := mountArchived(t, db.db)
+
+		resp := api.Get("/archived")
+		if resp.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+		}
+		// deleted_at is in the projection, where it belongs — the column is
+		// readable. What must not appear is a predicate over it, and with no
+		// filter in the request there should be no WHERE clause at all.
+		stmt := db.lastStatement()
+		if strings.Contains(stmt, `"deleted_at" IS NULL`) {
+			t.Errorf("the list query filtered on deleted_at, which nothing should:\n%s", stmt)
+		}
+		if strings.Contains(stmt, "WHERE") {
+			t.Errorf("an unfiltered request compiled a predicate:\n%s", stmt)
+		}
+
+		// The row carries a non-null deleted_at and still comes back, which is
+		// the observable half of the same fact.
+		body := decode(t, resp.Body.Bytes())
+		items, ok := body["items"].([]any)
+		if !ok || len(items) != 1 {
+			t.Fatalf("items = %v, want the soft-deleted row", body["items"])
+		}
+	})
+
+	t.Run("delete removes the row rather than stamping the column", func(t *testing.T) {
+		sqlb.On[Archived]().Reset()
+		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
+
+		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]driver.Value{
+			archivedRow("a1", "Gone"),
+		}})
+		api := mountArchived(t, db.db)
+
+		if code := api.Delete("/archived/a1").Code; code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204", code)
+		}
+		stmt := db.lastStatement()
+		if !strings.Contains(stmt, `DELETE FROM "archived"`) {
+			t.Errorf("generated DELETE is not a delete:\n%s", stmt)
+		}
+		if strings.Contains(stmt, "UPDATE") || strings.Contains(stmt, "deleted_at") {
+			t.Errorf("generated DELETE was rewritten as a soft delete:\n%s", stmt)
+		}
+	})
+
+	t.Run("a BeforeQuery registration is what filters", func(t *testing.T) {
+		sqlb.On[Archived]().Reset()
+		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
+		sqlb.On[Archived]().BeforeQuery(func(_ context.Context, q *sqlb.Builder[Archived]) error {
+			q.Where(sqlb.F("deleted_at").IsNull())
+			return nil
+		})
+
+		db := newFakeDB(t, reply{cols: archivedCols()})
+		api := mountArchived(t, db.db)
+
+		api.Get("/archived")
+		if stmt := db.lastStatement(); !strings.Contains(stmt, `"deleted_at" IS NULL`) {
+			t.Errorf("the documented path does not reach the list query:\n%s", stmt)
+		}
+	})
+}
+
 func TestResourceRefusesSingleRowOpsWithoutAPrimaryKey(t *testing.T) {
 	db := newFakeDB(t)
 	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
