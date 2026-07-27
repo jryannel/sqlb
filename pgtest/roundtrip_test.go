@@ -200,10 +200,10 @@ func TestTheRoundTripCanFail(t *testing.T) {
 // what a migration runner does per file, and CREATE INDEX CONCURRENTLY cannot
 // run inside a transaction block at all. Wrapping this would make the harness
 // unable to exercise the concurrent paths it exists to check.
-func applySchema(t *testing.T, db *sql.DB, target *schema.Registry) {
+func applySchema(t *testing.T, db *sql.DB, target *schema.Registry, opts ...migrate.Option) {
 	t.Helper()
 
-	changes := diff(t, schema.NewRegistry(), target)
+	changes := diff(t, schema.NewRegistry(), target, opts...)
 	if len(changes) == 0 {
 		t.Fatal("creating a schema from nothing produced no statements")
 	}
@@ -235,10 +235,10 @@ func importRegistry(t *testing.T, db *sql.DB) *schema.Registry {
 	return r
 }
 
-func diff(t *testing.T, current, target *schema.Registry) []migrate.Change {
+func diff(t *testing.T, current, target *schema.Registry, opts ...migrate.Option) []migrate.Change {
 	t.Helper()
 
-	changes, err := migrate.Diff(current, target)
+	changes, err := migrate.Diff(current, target, opts...)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}

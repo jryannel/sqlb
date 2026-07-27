@@ -81,8 +81,13 @@ type Default struct {
 // Now defaults the column to the statement timestamp.
 func Now() *Default { return &Default{Raw: "now()"} }
 
-// GenUUIDv7 defaults the column to a freshly generated UUIDv7. Requires the
-// pg_uuidv7 extension, or use GenUUIDv4 for a stock Postgres install.
+// GenUUIDv7 defaults the column to a freshly generated UUIDv7.
+//
+// How this renders depends on the Postgres it is generated for. By default it
+// emits uuid_generate_v7(), which needs the pg_uuidv7 extension — so the
+// generated DDL does not apply to a stock install. Postgres 18 has uuidv7()
+// built in, and migrate.MinPostgres(18) emits that instead, which needs
+// nothing. On an older server without the extension, use GenUUIDv4.
 func GenUUIDv7() *Default { return &Default{Raw: "uuid_generate_v7()"} }
 
 // GenUUIDv4 defaults the column to a random UUID using pgcrypto.

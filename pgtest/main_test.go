@@ -93,10 +93,23 @@ func run(m *testing.M) (int, error) {
 	return m.Run(), nil
 }
 
-// freshDB creates an empty database and returns a connection to it, dropped
-// when the test ends. A database per test rather than a container per test:
-// container startup dominates, and CREATE DATABASE is milliseconds.
+// freshDB creates an empty database with the uuid_generate_v7() shim installed,
+// and returns a connection to it, dropped when the test ends. A database per
+// test rather than a container per test: container startup dominates, and
+// CREATE DATABASE is milliseconds.
 func freshDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db := freshStockDB(t)
+	bootstrap(t, db)
+	return db
+}
+
+// freshStockDB is the same thing without the shim: a Postgres exactly as it
+// ships. It is what proves migrate.MinPostgres(18) produces DDL that needs no
+// extension, which is a claim the shimmed database cannot test — with
+// uuid_generate_v7() defined, both spellings work and the difference is
+// invisible.
+func freshStockDB(t *testing.T) *sql.DB {
 	t.Helper()
 
 	name := databaseName(t)
@@ -116,7 +129,6 @@ func freshDB(t *testing.T) *sql.DB {
 		_, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`)
 	})
 
-	bootstrap(t, db)
 	return db
 }
 

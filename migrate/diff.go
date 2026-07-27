@@ -88,7 +88,7 @@ import (
 // half is reversed while the names it was written against are the ones in
 // effect. Putting the renames first instead would leave every drop's Down
 // re-adding a constraint against a column that no longer answers to that name.
-func Diff(current, target *schema.Registry) ([]Change, error) {
+func Diff(current, target *schema.Registry, opts ...Option) ([]Change, error) {
 	if current == nil {
 		current = schema.NewRegistry()
 	}
@@ -105,7 +105,12 @@ func Diff(current, target *schema.Registry) ([]Change, error) {
 		return nil, fmt.Errorf("migrate: target schema is not valid: %w", err)
 	}
 
-	d := &differ{current: current, target: target}
+	var cfg diffOptions
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	d := &differ{current: current, target: target, opts: cfg}
 	if err := d.run(); err != nil {
 		return nil, err
 	}
@@ -118,6 +123,10 @@ func Diff(current, target *schema.Registry) ([]Change, error) {
 // must be applied apart.
 type differ struct {
 	current, target *schema.Registry
+
+	// opts is what the caller said about where this migration will run.
+	// It reaches the DDL layer and nothing else.
+	opts diffOptions
 
 	// tableRenames maps an old storage name to its new one. A foreign key
 	// names the table it points at, so a reference to a renamed table has to
@@ -222,7 +231,7 @@ func (d *differ) currentFor(t *schema.TableDef) *schema.TableDef {
 
 // tableCreated emits the table and everything that comes with it.
 func (d *differ) tableCreated(t *schema.TableDef) error {
-	up, err := createTable(t)
+	up, err := createTable(t, d.opts)
 	if err != nil {
 		return err
 	}
@@ -266,7 +275,7 @@ func (d *differ) tableDropped(t *schema.TableDef) error {
 	// order right in reverse is work in service of a rollback that cannot
 	// bring the rows back anyway. The Reason says so rather than the Down
 	// implying otherwise.
-	down, err := createTable(t)
+	down, err := createTable(t, d.opts)
 	if err != nil {
 		return err
 	}
@@ -354,7 +363,7 @@ func (d *differ) columns(cur, tgt *schema.TableDef, cols map[string]string) erro
 		d.dropColumns = append(d.dropColumns, Change{
 			Comment:     "drop column " + tgt.Name() + "." + cd.Name,
 			Up:          dropColumn(tgt.Name(), cd.Name),
-			Down:        mustAddColumnDown(tgt.Name(), cd),
+			Down:        mustAddColumnDown(tgt.Name(), cd, d.opts),
 			Destructive: true,
 			Reason:      "dropping " + tgt.Name() + "." + cd.Name + " deletes its contents. The Down restores the column but not the values",
 		})
@@ -365,8 +374,8 @@ func (d *differ) columns(cur, tgt *schema.TableDef, cols map[string]string) erro
 // mustAddColumnDown renders the ADD COLUMN that reverses a drop. The column
 // came from a registry that already rendered, so a failure here is impossible;
 // an empty Down would render as "not reversible", which is honest either way.
-func mustAddColumnDown(table string, d *schema.FieldDesc) string {
-	sql, err := addColumn(table, d)
+func mustAddColumnDown(table string, d *schema.FieldDesc, opts diffOptions) string {
+	sql, err := addColumn(table, d, opts)
 	if err != nil {
 		return ""
 	}
@@ -374,7 +383,7 @@ func mustAddColumnDown(table string, d *schema.FieldDesc) string {
 }
 
 func (d *differ) columnAdded(t *schema.TableDef, td *schema.FieldDesc) error {
-	up, err := addColumn(t.Name(), td)
+	up, err := addColumn(t.Name(), td, d.opts)
 	if err != nil {
 		return err
 	}
@@ -464,11 +473,11 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 		})
 	}
 
-	curDefault, err := renderDefault(cd.Default)
+	curDefault, err := renderDefault(cd.Default, d.opts)
 	if err != nil {
 		return err
 	}
-	tgtDefault, err := renderDefault(td.Default)
+	tgtDefault, err := renderDefault(td.Default, d.opts)
 	if err != nil {
 		return err
 	}

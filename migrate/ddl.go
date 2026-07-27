@@ -207,12 +207,18 @@ func constraintHazard(table string, c constraint) (lock, hazard string) {
 }
 
 // renderDefault renders a column default for a DEFAULT clause.
-func renderDefault(d *schema.Default) (string, error) {
+//
+// It has two callers with different needs: one writes the result into DDL, the
+// other compares the current and target renderings to decide whether the
+// default changed at all. Both pass the same opts, which is what keeps the
+// comparison honest — resolving one side against a different Postgres version
+// from the other would report a change that is only a change of spelling.
+func renderDefault(d *schema.Default, opts diffOptions) (string, error) {
 	if d == nil {
 		return "", nil
 	}
 	if d.Raw != "" {
-		return d.Raw, nil
+		return opts.resolve(d.Raw), nil
 	}
 	return literal(d.Value)
 }
@@ -243,7 +249,7 @@ func literal(v any) (string, error) {
 
 // columnDef renders a column's definition: everything after the name in a
 // CREATE TABLE, and the whole of an ADD COLUMN.
-func columnDef(d *schema.FieldDesc) (string, error) {
+func columnDef(d *schema.FieldDesc, opts diffOptions) (string, error) {
 	t, err := sqlType(d)
 	if err != nil {
 		return "", err
@@ -254,7 +260,7 @@ func columnDef(d *schema.FieldDesc) (string, error) {
 		b.WriteString(" NOT NULL")
 	}
 	if d.Default != nil {
-		def, err := renderDefault(d.Default)
+		def, err := renderDefault(d.Default, opts)
 		if err != nil {
 			return "", fmt.Errorf("migrate: column %q: %w", d.Name, err)
 		}
@@ -543,10 +549,10 @@ func foreignKeyRef(d *schema.FieldDesc) fkRef {
 
 // createTable renders CREATE TABLE with its columns and every constraint that
 // does not depend on another table, followed by any COMMENT statements.
-func createTable(t *schema.TableDef) (string, error) {
+func createTable(t *schema.TableDef, opts diffOptions) (string, error) {
 	var lines []string
 	for _, f := range t.Fields() {
-		def, err := columnDef(f.Desc())
+		def, err := columnDef(f.Desc(), opts)
 		if err != nil {
 			return "", err
 		}
@@ -611,8 +617,8 @@ func dropTable(t *schema.TableDef) string {
 	return "DROP TABLE " + quoteIdent(t.Name()) + ";"
 }
 
-func addColumn(table string, d *schema.FieldDesc) (string, error) {
-	def, err := columnDef(d)
+func addColumn(table string, d *schema.FieldDesc, opts diffOptions) (string, error) {
+	def, err := columnDef(d, opts)
 	if err != nil {
 		return "", err
 	}

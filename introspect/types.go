@@ -83,6 +83,14 @@ var knownDefaults = map[string]func() *schema.Default{
 	"uuid_generate_v7()": schema.GenUUIDv7,
 	"gen_random_uuid()":  schema.GenUUIDv4,
 	"CURRENT_TIMESTAMP":  schema.Now,
+
+	// Postgres 18's built-in, which migrate.MinPostgres(18) emits in place of
+	// the extension's uuid_generate_v7(). Both spellings map to the same
+	// generator on the way back in, which is what stops a schema generated for
+	// 18 from diffing against itself forever: the registry records the
+	// generator, and which spelling reaches the database is decided when the
+	// DDL is rendered.
+	"uuidv7()": schema.GenUUIDv7,
 }
 
 // columnDefault maps a stored default expression back onto a schema.Default.

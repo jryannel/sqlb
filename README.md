@@ -317,6 +317,28 @@ Not built yet, in the order they matter:
 Postgres only. `LISTEN/NOTIFY`, jsonb aggregation for expansions and `RETURNING`
 are all load-bearing; multi-dialect support would cost the best features.
 
+### Which Postgres
+
+There is no hard minimum. The query engine and almost all generated DDL are
+ordinary SQL that has been valid for a decade. Three places are version
+sensitive, and each says so where you meet it:
+
+- **`schema.GenUUIDv7`** emits `uuid_generate_v7()`, which needs the
+  [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7) extension — so by
+  default a UUIDv7 primary key produces DDL that will *not* apply to a stock
+  install. Postgres 18 has `uuidv7()` built in: pass
+  `migrate.MinPostgres(18)` to `migrate.Diff` and it emits that instead, needing
+  no extension. On an older server without the extension, use
+  `schema.GenUUIDv4`, which is built in from Postgres 13.
+- **`migrate.Unblock`'s `SET NOT NULL` sequence** is correct on any version but
+  only *fast* from Postgres 12, which is where a validated `CHECK` lets the
+  `SET NOT NULL` skip its scan.
+- **Reading a schema back** with `introspect` handles the `NOT NULL` constraint
+  rows Postgres 18 introduced, and ignores them on older versions.
+
+CI runs the round trip against Postgres 18; the generated DDL has also been
+applied and reversed by hand on 17.
+
 ### Go 1.27 generic methods
 
 Three parts of the current API are shaped around methods not being able to

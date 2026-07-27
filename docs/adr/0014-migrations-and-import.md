@@ -530,3 +530,22 @@ sqlb to own DDL.
   nothing. Also found that the generated DDL for a UUIDv7 primary key does not
   apply to a stock Postgres, since `uuid_generate_v7()` needs the `pg_uuidv7`
   extension — documented on `GenUUIDv7`, but nothing warns at generation time.
+- 2026-07-27 — Closed the UUIDv7 gap the round-trip harness exposed.
+  `schema.GenUUIDv7` emits `uuid_generate_v7()`, the `pg_uuidv7` extension's
+  spelling, so generated DDL for a UUIDv7 primary key did not apply to a stock
+  Postgres — documented on the constructor, but nothing said so at generation
+  time and the harness had to shim it. `migrate.MinPostgres(major)` now declares
+  the oldest server the output must run on, and at 18 the DDL layer emits the
+  built-in `uuidv7()` instead. Unset keeps the old spelling, because a default
+  that silently rewrote emitted DDL is precisely the mistake this record says
+  regenerating cannot undo.
+  The option is on `Diff` rather than on `Options`, which was the obvious guess
+  and is wrong: `Options` reaches `Render` and `Write`, by which point the SQL
+  is already a string. It threads to `renderDefault`, which has two callers —
+  one rendering DDL, one comparing current against target to decide whether a
+  default changed. Both resolve against the same version, or adopting the option
+  would generate a migration altering every UUIDv7 default in the database.
+  `introspect` maps both spellings onto the same generator, without which a
+  schema generated for 18 would diff against itself forever; `pgtest` asserts
+  that fixpoint against a stock database, and asserts the default target still
+  fails there, since a fix that fixed nothing would otherwise pass silently.
