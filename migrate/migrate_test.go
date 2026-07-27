@@ -125,6 +125,47 @@ func TestDestructiveChangesAreCommentedOutByDefault(t *testing.T) {
 	}
 }
 
+func TestDependentChangesAreCommentedOutWithWhatTheyWaitFor(t *testing.T) {
+	// A change that depends on a commented-out one is commented out by the same
+	// flag, so the pair is uncommented together or not at all — which is the
+	// only arrangement that leaves the file appliable in both states.
+	dependent := migrate.Change{
+		Up:        `ALTER TABLE "posts" ADD CONSTRAINT "posts_slug_key" UNIQUE ("slug");`,
+		Down:      `ALTER TABLE "posts" DROP CONSTRAINT "posts_slug_key";`,
+		DependsOn: `"posts"."slug", which an earlier change adds and is commented out`,
+	}
+	changes := []migrate.Change{dropColumn(), dependent}
+
+	files, err := migrate.Render(migrate.Migration{
+		Version: "00008", Name: "slug", Changes: changes,
+	}, migrate.Options{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := files["00008_slug.sql"]
+	if !strings.Contains(body, `-- DEPENDS ON: "posts"."slug"`) {
+		t.Errorf("the dependency must be stated:\n%s", body)
+	}
+	if !strings.Contains(body, `-- ALTER TABLE "posts" ADD CONSTRAINT "posts_slug_key"`) {
+		t.Errorf("the SQL must be commented out:\n%s", body)
+	}
+	// The Down too: dropping a constraint that was never added fails just as
+	// the add would have.
+	if !strings.Contains(body, `-- ALTER TABLE "posts" DROP CONSTRAINT "posts_slug_key";`) {
+		t.Errorf("the Down must be commented out as well:\n%s", body)
+	}
+
+	live, err := migrate.Render(migrate.Migration{
+		Version: "00008", Name: "slug", Changes: changes,
+	}, migrate.Options{AllowDestructive: true})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(live["00008_slug.sql"], "\nALTER TABLE \"posts\" ADD CONSTRAINT") {
+		t.Error("the flag that emits the change it waits for must emit this one too")
+	}
+}
+
 func TestDestructiveChangeMustGiveAReason(t *testing.T) {
 	_, err := migrate.Render(migrate.Migration{
 		Version: "1", Name: "x",

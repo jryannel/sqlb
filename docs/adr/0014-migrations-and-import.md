@@ -57,6 +57,38 @@ and catches drift.
 type, or adding a NOT NULL without a default is emitted commented out, with the
 reason, and requires an explicit flag to emit live.
 
+**A change that depends on a commented-out one is commented out too**, carrying
+`Change.DependsOn` instead of `Destructive`: it loses nothing and is not
+dangerous, it simply cannot run yet. A commented-out `ADD COLUMN` means the
+column does not exist, so the `UNIQUE`, the `CHECK` and the index over it fail
+with `column … does not exist` — the generated file stops being a reviewable
+no-op and becomes a migration that dies partway through, leaving the schema in
+neither state. The same flag uncomments both, so the pair is applied together or
+not at all, and reversing is symmetric because the `Down` of a change that never
+ran is commented out with it.
+
+**The dependency is tracked structurally in the differ, not detected when
+rendering.** By the time a change is rendered it is a string, so the alternative
+is reading SQL back out of the output to decide whether to comment it out —
+precisely the guessing this record rejects for renames and for `USING` clauses,
+and worse here because it *reaches the output*. The differ instead records what
+each change names — a constraint's columns, an index's columns — while the table
+and the column are still in hand, and matches that against the columns whose
+`ADD COLUMN` came out commented out. The match runs over the finished change
+list rather than at each emission, so it reads the `Destructive` flag that was
+actually set instead of recomputing the rule that sets it; a guard that computes
+its condition twice is one that can silently stop agreeing with itself
+([ADR-0016](0016-guards-proven-both-ways.md)).
+
+Two definitions have no column list to record, because they are SQL somebody
+else wrote: a table-level `CHECK` and a partial index's predicate. Those depend
+on their whole table — a `CHECK` cannot reference another one — so they wait
+whenever *any* column of it is pending, and the note says the statement *may*
+name the column rather than claiming it does. That over-blocks, and the trade is
+deliberate: waiting unnecessarily costs a reviewer one more uncomment in a file
+they are already reading, while parsing the expression to be exact would put a
+statement in the output that nobody checked.
+
 **Lock hazards are stated, not gated.** A statement that rewrites a table, scans
 it, or builds an index over it holds its lock for a time proportional to the row
 count, and is emitted with the lock named and the expand/contract sequence
@@ -193,13 +225,18 @@ empty database and a non-empty one is refused rather than worked around.
 **What replay cannot reproduce is a destructive change.** Those render commented
 out, so the file in the repository is not the SQL that ran: production has the
 column and the shadow does not, permanently, and that difference is
-indistinguishable from the drift this exists to detect. Worse, such a file does
-not apply at all — a change depending on the commented-out one is still emitted
-live, so a replay fails partway rather than producing a schema missing a column.
-That is a defect in the diff engine rather than in replay, and `pgtest` pins the
-current behaviour so fixing it is visible.
+indistinguishable from the drift this exists to detect. That much is inherent —
+the file records a decision nobody has taken yet, and no amount of engineering
+makes it record one that was taken outside it.
 
-Still unbuilt: nothing in this record. The gap above is the one to close next.
+What was *not* inherent, and is now fixed, is that such a file did not apply at
+all. A change depending on the commented-out one was emitted live, so a replay
+failed partway rather than producing a schema missing a column. The dependency
+rule above closes it, and `pgtest` asserts the whole of it: the history replays
+clean, the column is absent, and the diff against the declared schema still
+proposes it.
+
+Still unbuilt: nothing in this record.
 
 The import round trip was measured rather than assumed. A schema exercising
 every construct the DSL can express was rendered to DDL, applied to a real
@@ -459,6 +496,26 @@ sqlb to own DDL.
 
 ## Revisions
 
+- 2026-07-27 — Fixed the defect the shadow database found: a change depending on
+  a commented-out destructive one was emitted live, so the generated file failed
+  partway instead of being the no-op the destructive guard intends. Adding
+  `Text("slug").Unique()` to an existing table produced a commented-out
+  `ADD COLUMN` followed by a live `ADD CONSTRAINT … UNIQUE ("slug")`, which
+  fails with `column "slug" named in key does not exist`.
+  The dependency is tracked in the differ rather than sniffed out of the
+  rendered SQL, for the reason recorded above, and it is a field of its own —
+  `DependsOn`, not `Destructive` — because such a change is not dangerous, only
+  premature. Two decisions are worth keeping. The match runs over the finished
+  change list, so it reads the flag that was set rather than recomputing the
+  rule that sets it. And the two hand-written definitions, a table-level `CHECK`
+  and a partial index predicate, are treated as depending on their whole table:
+  over-blocking costs an uncomment, parsing the expression would cost
+  correctness.
+  Proven both ways ([ADR-0016](0016-guards-proven-both-ways.md)): the same
+  schema with a nullable column emits every statement live, and a change in the
+  same migration that does not name the pending column stays live too. `pgtest`
+  now asserts that the history replays clean and that the column is missing
+  afterwards, which is the limit that remains.
 - 2026-07-27 — Built `introspect`, the reading half of this record: `pg_catalog`
   into a `*schema.Registry`, in a package of its own because it connects to a
   database and `migrate` must not. The catalog was surveyed before any mapping

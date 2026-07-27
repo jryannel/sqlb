@@ -175,11 +175,13 @@ func TestReplayHandlesTheConcurrentIndexSplit(t *testing.T) {
 // does not. Every such change is permanent drift between the shadow and the
 // database, and it looks exactly like the drift this is supposed to detect.
 //
-// Worse, the file is not merely incomplete — it does not apply at all. A change
-// depending on the commented-out one is still emitted live, so replaying it
-// fails partway rather than producing a schema missing a column. That is a
-// defect in the diff engine, not in replay; this test pins the behaviour so
-// that fixing it there is visible here.
+// What the file *does* do is apply. It once did not — the unique constraint over
+// the commented-out column was emitted live and failed with `column "slug" named
+// in key does not exist` — and this test pinned that as a defect in the diff
+// engine. The engine now comments out what depends on a commented-out change, so
+// the whole migration is the reviewable no-op it was meant to be, and what is
+// left here is the limit that cannot be engineered away: replay reproduces the
+// history as written, not the database somebody uncommented it into.
 func TestADestructiveChangeIsNotReplayed(t *testing.T) {
 	dir := t.TempDir()
 
@@ -191,7 +193,8 @@ func TestADestructiveChangeIsNotReplayed(t *testing.T) {
 	writeMigration(t, dir, "1", "init", diff(t, schema.NewRegistry(), base))
 
 	// Adding a NOT NULL column with no default is destructive: it fails on any
-	// table that already has rows.
+	// table that already has rows. The unique constraint over it is not, and is
+	// commented out anyway, because it cannot run until the column exists.
 	target := schema.NewRegistry()
 	target.Table("orgs",
 		schema.UUIDv7("id").PrimaryKey(),
@@ -201,21 +204,33 @@ func TestADestructiveChangeIsNotReplayed(t *testing.T) {
 	writeMigration(t, dir, "2", "slug", diff(t, base, target))
 
 	db := freshDB(t)
-	_, _, _, err := shadow.Build(context.Background(), db, shadow.Options{Dir: dir})
+	replayed, _, res, err := shadow.Build(context.Background(), db, shadow.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("a history whose second migration is entirely commented out should "+
+			"still replay; if this names a statement from 2_slug.sql, the diff engine "+
+			"has emitted something that depends on the commented-out column: %v", err)
+	}
+	t.Logf("replayed %d file(s), %d statement(s): %s",
+		len(res.Files), res.Statements, strings.Join(res.Files, ", "))
 
-	if err == nil {
-		t.Fatal("the history replayed cleanly.\n" +
-			"If the diff engine now comments out the changes that depend on a commented-out " +
-			"one, this is the expected improvement — but replay still cannot reproduce a " +
-			"database whose destructive changes were uncommented by hand, so update this " +
-			"test to assert the missing column rather than deleting it.")
+	// The column is not there, and nothing in the history could have put it
+	// there. That is the permanent drift.
+	if orgs := replayed.Get("orgs"); orgs == nil {
+		t.Fatal("the first migration did not replay")
+	} else if orgs.Field("slug") != nil {
+		t.Fatal("a commented-out ADD COLUMN was applied, which means it was not commented out")
 	}
-	// The failure names the file and the statement, which is the whole reason
-	// Build reports per-statement rather than per-migration.
-	if !strings.Contains(err.Error(), "2_slug.sql") {
-		t.Errorf("the error should name the file it failed in, got: %v", err)
+
+	// So the shadow proposes the destructive change again, forever, against a
+	// production database that has already had it applied by hand. A caller
+	// reading drift has to recognise this rather than act on it.
+	drift := diff(t, replayed, target)
+	if len(drift) == 0 {
+		t.Fatal("the replayed schema should still differ from the one the history was generated from")
 	}
-	t.Logf("as expected, a history containing a commented-out destructive change does not replay:\n%v", err)
+	if !strings.Contains(describe(drift), "slug") {
+		t.Errorf("the outstanding change should be the commented-out column:\n%s", describe(drift))
+	}
 }
 
 // writeMigration renders changes into dir as goose files, the way a project's

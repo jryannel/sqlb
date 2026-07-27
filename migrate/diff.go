@@ -3,6 +3,7 @@ package migrate
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/jryannel/sqlb/schema"
 )
@@ -49,6 +50,16 @@ import (
 // longer, splits the migration across files, and buys nothing on a table small
 // enough that the scan is instant. What is left after Unblock is the type
 // change, which has no mechanical alternative at all.
+//
+// # What waits for what
+//
+// A commented-out change is a statement that will not run, so anything needing
+// what it would have created cannot run either. Adding a column NOT NULL with
+// no default is destructive and comes out commented out; the UNIQUE, the CHECK
+// and the index over that column would then fail with "column does not exist",
+// turning a file that was meant to be a reviewable no-op into a migration that
+// dies halfway. Those changes carry DependsOn and are commented out with it, so
+// that one decision uncomments the whole set. See markDependents.
 //
 // # What is not inferred
 //
@@ -133,6 +144,12 @@ type differ struct {
 	// be recognised as unchanged rather than dropped and re-added.
 	tableRenames map[string]string
 
+	// pendingColumns are the columns this diff adds with a change that renders
+	// commented out, keyed as quoted table."column". Until somebody uncomments
+	// that change the column does not exist, so nothing naming one of these can
+	// run either. See markDependents.
+	pendingColumns map[string]bool
+
 	createTables   []Change
 	dropIndexes    []Change
 	dropForeignKey []Change
@@ -163,11 +180,112 @@ func (d *differ) changes() []Change {
 	} {
 		out = append(out, phase...)
 	}
+	d.markDependents(out)
 	return out
+}
+
+// markDependents marks the changes that cannot run because a change they
+// depend on renders commented out.
+//
+// A destructive change is emitted commented out, to be reviewed and uncommented
+// before it is applied (ADR-0014). Until that happens the column an ADD COLUMN
+// would have introduced does not exist — so a UNIQUE, a CHECK, a foreign key or
+// an index naming it must be commented out as well. Emitting one live is how
+// the generated file stops being a reviewable no-op and becomes a migration
+// that fails partway through, leaving the schema in neither state.
+//
+// It runs over the finished list rather than at the point each change is built,
+// for two reasons. It reads the Destructive flag that was actually set, so it
+// cannot drift away from the rule that sets it — a guard recomputing the same
+// condition somewhere else is a guard that can silently stop matching
+// (ADR-0016). And it does not depend on the order the comparison happens to
+// discover things in, which is a separate concern already stated once, in the
+// phase list.
+func (d *differ) markDependents(changes []Change) {
+	if len(d.pendingColumns) == 0 {
+		return
+	}
+	for i := range changes {
+		c := &changes[i]
+		if c.Destructive || c.DependsOn != "" {
+			// Already commented out, and for a reason of its own that says
+			// more than this one would.
+			continue
+		}
+		c.DependsOn = d.dependencyOf(*c)
+		if c.DependsOn == "" {
+			continue
+		}
+		// Every step of an unblocked sequence inherits it, for the reason
+		// notNullSequence gives: a sequence with half its statements commented
+		// out is worse than either whole.
+		for j := range c.unblocked {
+			c.unblocked[j].DependsOn = c.DependsOn
+		}
+	}
+}
+
+// dependencyOf explains what a change is waiting for, or returns "" if nothing
+// it names is pending.
+//
+// The two halves answer the same question with different certainty. A column
+// list this package built is exact, and the note names the column outright. A
+// hand-written CHECK expression or a partial index predicate is arbitrary SQL,
+// and which columns it names cannot be known without parsing it — so it waits
+// whenever *any* column of its own table is pending, and the note says so
+// rather than claiming a match it did not make. Waiting unnecessarily costs a
+// reviewer one more uncomment in a file they are already reading; guessing at
+// the expression would put a wrong statement in the output, which ADR-0014
+// refuses everywhere else for the same reason.
+func (d *differ) dependencyOf(c Change) string {
+	var named []string
+	for _, key := range c.needsColumns {
+		if d.pendingColumns[key] {
+			named = append(named, key)
+		}
+	}
+	if len(named) > 0 {
+		sort.Strings(named)
+		return joinWithAnd(named) + ", which an earlier change in this migration " +
+			"adds and is commented out as destructive. Uncomment that first; " +
+			"this statement fails without it"
+	}
+	if c.needsTable == "" {
+		return ""
+	}
+	if pending := d.pendingIn(c.needsTable); len(pending) > 0 {
+		return "possibly " + joinWithAnd(pending) + ", which an earlier change in " +
+			"this migration adds and is commented out as destructive. This one is " +
+			"hand-written SQL and is not read here, so whether it names that column " +
+			"is for you to say — uncomment it alongside if it does"
+	}
+	return ""
+}
+
+// pendingIn returns the pending columns of one table, in a fixed order so that
+// the note reads the same on every run.
+func (d *differ) pendingIn(table string) []string {
+	prefix := quoteIdent(table) + "."
+	var out []string
+	for key := range d.pendingColumns {
+		if strings.HasPrefix(key, prefix) {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// columnKey identifies a column across tables, spelled the way the generated
+// SQL spells it, so that matching one and naming it in a comment need no second
+// representation.
+func columnKey(table, column string) string {
+	return quoteIdent(table) + "." + quoteIdent(column)
 }
 
 func (d *differ) run() error {
 	d.tableRenames = map[string]string{}
+	d.pendingColumns = map[string]bool{}
 	claimed := map[string]bool{}
 	for _, t := range d.target.Tables() {
 		cur := d.currentFor(t)
@@ -245,6 +363,10 @@ func (d *differ) tableCreated(t *schema.TableDef) error {
 		if !c.fk {
 			continue // already inline in CREATE TABLE
 		}
+		// No needsColumns: both ends are columns that arrive with a table
+		// rather than by an ALTER — this table's own, and the primary key of
+		// the one it points at — so neither can be pending. See
+		// constraintNeeds.
 		d.addForeignKey = append(d.addForeignKey, Change{
 			Comment: "add foreign key " + c.name,
 			Up:      addConstraint(t.Name(), c),
@@ -402,6 +524,10 @@ func (d *differ) columnAdded(t *schema.TableDef, td *schema.FieldDesc) error {
 		c.Destructive = true
 		c.Reason = "adding NOT NULL column " + t.Name() + "." + td.Name +
 			" with no default fails on a table that already has rows. Give it a default or backfill it"
+		// Commented out means the column does not exist until somebody
+		// uncomments this, and neither can anything that names it. Recorded
+		// here, in the same branch that decides it, so the two cannot disagree.
+		d.pendingColumns[columnKey(t.Name(), td.Name)] = true
 	}
 	d.alterColumns = append(d.alterColumns, c)
 	return nil
@@ -610,12 +736,15 @@ func (d *differ) addConstraintChange(table string, c constraint, prev *constrain
 	// tableCreated, which does not come through here, because a table nothing
 	// has inserted into yet costs nothing to constrain.
 	lock, hazard := constraintHazard(table, c)
+	needs, needsTable := constraintNeeds(table, c)
 	ch := Change{
-		Comment: "add constraint " + c.name,
-		Up:      addConstraint(table, c),
-		Down:    dropConstraint(table, c.name),
-		Lock:    lock,
-		Hazard:  hazard,
+		Comment:      "add constraint " + c.name,
+		Up:           addConstraint(table, c),
+		Down:         dropConstraint(table, c.name),
+		Lock:         lock,
+		Hazard:       hazard,
+		needsColumns: needs,
+		needsTable:   needsTable,
 	}
 	switch removed := removedEnumValues(prev, c); {
 	case len(removed) > 0:
@@ -639,6 +768,38 @@ func (d *differ) addConstraintChange(table string, c constraint, prev *constrain
 		return
 	}
 	d.addOther = append(d.addOther, ch)
+}
+
+// constraintNeeds reports the columns an ADD CONSTRAINT cannot run without,
+// which are the ones it covers in its own table. A hand-written CHECK reports
+// its table instead; see dependencyOf.
+//
+// The far side of a foreign key is deliberately not included. schema.Ref points
+// at the target table's primary key, which arrives with the table rather than
+// by an ALTER, so it can never be a column this migration is still waiting to
+// add. A reference to some other unique column — which the DSL cannot express
+// today — would break that, and would have to name the referenced column here.
+func constraintNeeds(table string, c constraint) (cols []string, wholeTable string) {
+	for _, col := range c.covers {
+		cols = append(cols, columnKey(table, col))
+	}
+	if c.handWritten {
+		wholeTable = table
+	}
+	return cols, wholeTable
+}
+
+// indexNeeds reports the columns a CREATE INDEX cannot run without. A partial
+// index's predicate is hand-written SQL over the same table, so it is treated
+// the way a hand-written CHECK is.
+func indexNeeds(table string, idx schema.Index) (cols []string, wholeTable string) {
+	for _, col := range idx.Columns {
+		cols = append(cols, columnKey(table, col))
+	}
+	if idx.Where != "" {
+		wholeTable = table
+	}
+	return cols, wholeTable
 }
 
 // The lock-brief sequences.
@@ -868,11 +1029,14 @@ func (d *differ) indexDropped(cur, tgt *schema.TableDef, orig, renamed schema.In
 func (d *differ) indexCreated(tgt *schema.TableDef, idx schema.Index) {
 	// The table already holds rows, so building the index without
 	// CONCURRENTLY would lock it against writes for the duration.
+	needs, needsTable := indexNeeds(tgt.Name(), idx)
 	d.createIndexes = append(d.createIndexes, Change{
-		Comment: "index " + idx.Name,
-		Up:      createIndex(tgt, idx, true),
-		Down:    dropIndex(idx.Name, true),
-		Stage:   StageConcurrent,
+		Comment:      "index " + idx.Name,
+		Up:           createIndex(tgt, idx, true),
+		Down:         dropIndex(idx.Name, true),
+		Stage:        StageConcurrent,
+		needsColumns: needs,
+		needsTable:   needsTable,
 	})
 }
 

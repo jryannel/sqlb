@@ -116,6 +116,23 @@ type Change struct {
 	// Reason explains the danger, and is required when Destructive is set.
 	Reason string
 
+	// DependsOn names what this change cannot run without, when that is another
+	// change in the same migration which is itself commented out. It renders
+	// commented out too, and live again as soon as the change it waits on does.
+	//
+	// A destructive change is emitted commented out so that applying it is a
+	// deliberate act. Anything depending on it — a constraint or an index over
+	// a column an ADD COLUMN introduces — has to travel with it, or the file is
+	// not a reviewable no-op but a migration that fails partway through: the
+	// constraint names a column the commented-out statement never added.
+	//
+	// It is separate from Destructive because it means something different.
+	// This change loses nothing and is not dangerous; it is merely waiting on a
+	// decision nobody has taken yet, and the note it renders says that rather
+	// than calling it destructive. It is separate from Lock for a plainer
+	// reason: that is about a statement being slow, this is about it failing.
+	DependsOn string
+
 	// Stage says which file the change belongs in, for the changes that
 	// cannot share one with the changes around them.
 	Stage Stage
@@ -138,6 +155,18 @@ type Change struct {
 	// Hazard explains what the lock costs and what to do on a table too large
 	// to hold it, and is required when Lock is set.
 	Hazard string
+
+	// needsColumns are the columns this change names, as quoted
+	// table."column", and needsTable is set instead when the change's
+	// definition is hand-written SQL whose column references cannot be known
+	// without parsing it. Diff records them so it can recognise a change that
+	// depends on a column another change in the same migration adds, and
+	// nothing else reads them; see markDependents.
+	//
+	// They are unexported for the same reason unblocked is: only Diff can fill
+	// them in, since the table and the columns do not survive into the SQL.
+	needsColumns []string
+	needsTable   string
 
 	// unblocked is the sequence that reaches the same state without holding
 	// the lock for the length of a scan, for the changes that have one. Unblock
@@ -423,19 +452,31 @@ func (m Migration) Blocking() []Change {
 
 // statement renders one change's SQL for a direction, commenting it out when
 // destructive changes are not allowed.
+//
+// A change with a DependsOn is commented out by the same flag that commented
+// out the change it waits on, so the two are uncommented together or not at
+// all. Half an applied dependency is the failure this exists to prevent.
 func statement(sql string, c Change, opts Options) string {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
 		return ""
 	}
-	if !c.Destructive || opts.AllowDestructive {
+	var note string
+	switch {
+	case opts.AllowDestructive:
+		return sql
+	case c.Destructive:
+		note = "DESTRUCTIVE: " + c.Reason
+	case c.DependsOn != "":
+		note = "DEPENDS ON: " + c.DependsOn
+	default:
 		return sql
 	}
 	var b strings.Builder
 	// Wrapped to the same column as a lock hazard: these two are the notes a
 	// reviewer has to actually read, and one of them running off the screen
 	// while the other does not is a good way to have it skipped.
-	for _, line := range wrap("DESTRUCTIVE: "+c.Reason, 74, "  ") {
+	for _, line := range wrap(note, 74, "  ") {
 		b.WriteString("-- " + line + "\n")
 	}
 	b.WriteString("-- Review, then uncomment to apply. Generated commented out on purpose.\n")

@@ -349,6 +349,19 @@ type constraint struct {
 	// backing it has to be built over.
 	cols []string
 
+	// covers are the columns of its own table the constraint names, for every
+	// kind of constraint rather than only the unique ones. It answers a
+	// different question from cols — whether the constraint can be added yet,
+	// rather than what an index would be built over — and a diff uses it to
+	// recognise a constraint that depends on a column being added by the same
+	// migration.
+	covers []string
+	// handWritten marks a definition whose column references are arbitrary SQL
+	// this package did not build: a table-level CHECK. Which columns such an
+	// expression names cannot be known without parsing it, so the constraint
+	// depends on its whole table rather than on a list. See dependencyOf.
+	handWritten bool
+
 	// enum holds the permitted values when this is an enum column's CHECK,
 	// so that removing a value can be told from adding one.
 	enum []string
@@ -394,6 +407,7 @@ func (c constraint) renamed(cols, tables map[string]string) constraint {
 	if len(cols) == 0 && len(tables) == 0 {
 		return c
 	}
+	c.covers = renameAll(cols, c.covers)
 	if c.ref != nil {
 		r := *c.ref
 		r.column = rename(cols, r.column)
@@ -403,14 +417,19 @@ func (c constraint) renamed(cols, tables map[string]string) constraint {
 		return c
 	}
 	c.def = rewriteIdents(c.def, cols)
-	if len(c.cols) > 0 {
-		mapped := make([]string, len(c.cols))
-		for i, col := range c.cols {
-			mapped[i] = rename(cols, col)
-		}
-		c.cols = mapped
-	}
+	c.cols = renameAll(cols, c.cols)
 	return c
+}
+
+func renameAll(m map[string]string, names []string) []string {
+	if len(names) == 0 {
+		return names
+	}
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = rename(m, name)
+	}
+	return out
 }
 
 func rename(m map[string]string, name string) string {
@@ -486,6 +505,7 @@ func constraints(t *schema.TableDef) []constraint {
 			unique: true,
 			pk:     true,
 			cols:   []string{pk.Name()},
+			covers: []string{pk.Name()},
 		})
 	}
 
@@ -497,30 +517,36 @@ func constraints(t *schema.TableDef) []constraint {
 				def:    "UNIQUE (" + quoteIdent(d.Name) + ")",
 				unique: true,
 				cols:   []string{d.Name},
+				covers: []string{d.Name},
 			})
 		}
 		if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
+			// The expression is rendered from the column and its values, so
+			// which column it names is known here even though it is a CHECK.
 			out = append(out, constraint{
-				name: enumCheckName(t, d),
-				def:  "CHECK (" + enumCheckExpr(d) + ")",
-				enum: d.EnumValues,
+				name:   enumCheckName(t, d),
+				def:    "CHECK (" + enumCheckExpr(d) + ")",
+				enum:   d.EnumValues,
+				covers: []string{d.Name},
 			})
 		}
 		if hasForeignKey(d) {
 			ref := foreignKeyRef(d)
 			out = append(out, constraint{
-				name: foreignKeyName(t, d),
-				def:  ref.render(),
-				fk:   true,
-				ref:  &ref,
+				name:   foreignKeyName(t, d),
+				def:    ref.render(),
+				fk:     true,
+				ref:    &ref,
+				covers: []string{d.Name},
 			})
 		}
 	}
 
 	for i, c := range t.Checks() {
 		out = append(out, constraint{
-			name: checkConstraintName(t, c, i),
-			def:  "CHECK (" + c.Expr + ")",
+			name:        checkConstraintName(t, c, i),
+			def:         "CHECK (" + c.Expr + ")",
+			handWritten: true,
 		})
 	}
 

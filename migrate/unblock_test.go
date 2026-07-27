@@ -148,6 +148,32 @@ func TestUnblockCarriesTheReasonToEveryStep(t *testing.T) {
 	}
 }
 
+// TestUnblockCarriesADependencyToEveryStep is the same rule for the other
+// reason a change is commented out. A unique constraint over a column whose ADD
+// COLUMN is commented out expands into a concurrent index build and an
+// adoption — and the build is the half that would actually fail, so a sequence
+// that lost the dependency on the way through would be worse than the single
+// statement it replaced.
+func TestUnblockCarriesADependencyToEveryStep(t *testing.T) {
+	current := build(func(r *schema.Registry) {
+		r.Table("orgs", schema.UUIDv7("id").PrimaryKey())
+	})
+	target := build(func(r *schema.Registry) {
+		r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("slug").Unique())
+	})
+
+	unblocked := migrate.Unblock(diff(t, current, target))
+	if len(unblocked) != 3 {
+		t.Fatalf("want the add plus a two-step sequence, got:\n%s", render(unblocked))
+	}
+	for i, c := range unblocked {
+		if c.Destructive || c.DependsOn != "" {
+			continue
+		}
+		t.Errorf("step %d would run against a column that does not exist yet: %s", i, c.Up)
+	}
+}
+
 func TestUnblockRemovesTheHazardItReplaces(t *testing.T) {
 	current := build(func(r *schema.Registry) {
 		r.Table("users",

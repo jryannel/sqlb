@@ -72,6 +72,36 @@ func render(changes []migrate.Change) string {
 	return b.String()
 }
 
+// renderFiles renders changes the way a project would, so that a test can ask
+// what the generated files actually execute rather than what the changes say.
+func renderFiles(t *testing.T, changes []migrate.Change) map[string]string {
+	t.Helper()
+	files, err := migrate.Render(migrate.Migration{
+		Version: "20260727120000",
+		Name:    "generated",
+		Changes: changes,
+	}, migrate.Options{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	return files
+}
+
+// liveSQL returns the lines of a rendered file that a runner would execute:
+// everything neither blank nor commented out, which includes goose's own
+// annotations.
+func liveSQL(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
 func ups(changes []migrate.Change) []string {
 	out := make([]string, len(changes))
 	for i, c := range changes {
@@ -391,6 +421,113 @@ func TestDiffAddColumn(t *testing.T) {
 				t.Fatal("destructive change without a reason")
 			}
 		})
+	}
+}
+
+// slugAndItsDependents is the schema shape that produced the bug these three
+// tests cover: a column added NOT NULL with no default, carrying a unique
+// constraint, an index and a hand-written CHECK. The add renders commented out,
+// so none of the other three can run until somebody uncomments it.
+func slugAndItsDependents(slug *schema.Field) func(r *schema.Registry) {
+	return func(r *schema.Registry) {
+		r.Table("orgs",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.Text("name"),
+			slug,
+		).Index("slug").Check("slug_not_blank", `"slug" <> ''`)
+	}
+}
+
+func TestDiffDefersWhatACommentedOutColumnCarries(t *testing.T) {
+	base := build(func(r *schema.Registry) {
+		r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+	})
+	changes := diff(t, base, build(slugAndItsDependents(schema.Text("slug").Unique())))
+
+	add := find(t, changes, `ADD COLUMN "slug"`)
+	if !add.Destructive {
+		t.Fatal("adding a NOT NULL column with no default must be destructive")
+	}
+	if add.DependsOn != "" {
+		t.Errorf("the add itself waits for nothing: %q", add.DependsOn)
+	}
+
+	// Each of these names the column the commented-out statement would have
+	// added, so each has to be commented out with it. The note says how well
+	// that is known: the column list of a UNIQUE or an index is built here and
+	// is exact, while a hand-written CHECK expression is not read at all, so it
+	// waits on the possibility rather than on a match.
+	for _, tc := range []struct{ substr, prefix string }{
+		{`ADD CONSTRAINT "orgs_slug_key"`, `"orgs"."slug"`},
+		{`CREATE INDEX CONCURRENTLY "orgs_slug_idx"`, `"orgs"."slug"`},
+		{`ADD CONSTRAINT "slug_not_blank"`, `possibly "orgs"."slug"`},
+	} {
+		c := find(t, changes, tc.substr)
+		if c.DependsOn == "" {
+			t.Errorf("%s must wait for the commented-out column add", tc.substr)
+			continue
+		}
+		if !strings.HasPrefix(c.DependsOn, tc.prefix) {
+			t.Errorf("%s should say it waits for %s, got: %s", tc.substr, tc.prefix, c.DependsOn)
+		}
+	}
+
+	// The whole point: the migration is a no-op until reviewed, rather than a
+	// file that fails partway through.
+	for name, body := range renderFiles(t, changes) {
+		if live := liveSQL(body); len(live) > 0 {
+			t.Errorf("%s still executes %d statement(s) that depend on a commented-out "+
+				"column:\n%s", name, len(live), strings.Join(live, "\n"))
+		}
+	}
+}
+
+// TestDiffDefersNothingWhenTheColumnIsLive is the other direction, without
+// which the test above proves only that something is commented out (ADR-0016).
+// The same schema with a nullable column has no commented-out add, so nothing
+// waits for one and every statement is emitted live.
+func TestDiffDefersNothingWhenTheColumnIsLive(t *testing.T) {
+	base := build(func(r *schema.Registry) {
+		r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+	})
+	changes := diff(t, base, build(slugAndItsDependents(schema.Text("slug").Unique().Nullable())))
+
+	for _, c := range changes {
+		if c.DependsOn != "" {
+			t.Errorf("nothing is commented out here, so nothing waits: %s\n%s", c.Up, c.DependsOn)
+		}
+	}
+	for name, body := range renderFiles(t, changes) {
+		if len(liveSQL(body)) == 0 {
+			t.Errorf("%s should hold live SQL:\n%s", name, body)
+		}
+	}
+}
+
+// TestDiffDefersOnlyWhatNamesTheColumn. The dependency is on a column, not on a
+// table: a change made in the same migration that does not name the pending one
+// stays live, or a single destructive add would freeze everything around it.
+func TestDiffDefersOnlyWhatNamesTheColumn(t *testing.T) {
+	base := build(func(r *schema.Registry) {
+		r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+	})
+	target := build(func(r *schema.Registry) {
+		r.Table("orgs",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.Text("name"),
+			schema.Text("slug").Unique(),     // NOT NULL, no default: commented out
+			schema.Text("region").Nullable(), // ordinary, and indexed below
+		).Index("name").Index("region")
+	})
+	changes := diff(t, base, target)
+
+	if c := find(t, changes, `"orgs_slug_key"`); c.DependsOn == "" {
+		t.Error("the constraint over the pending column must wait for it")
+	}
+	for _, substr := range []string{`"orgs_name_idx"`, `"orgs_region_idx"`, `ADD COLUMN "region"`} {
+		if c := find(t, changes, substr); c.DependsOn != "" {
+			t.Errorf("%s does not name the pending column and must stay live: %s", substr, c.DependsOn)
+		}
 	}
 }
 
