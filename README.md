@@ -433,6 +433,7 @@ and the same linter.
 
 ```
 mise run test          # the inner loop; no Docker or Postgres needed
+mise run test-pg       # round trip and connection path against real containers
 mise run ci            # the full gate, same as .github/workflows/ci.yml
 mise run bisect-check  # verify every commit builds on its own
 mise tasks             # everything else
@@ -440,6 +441,20 @@ mise tasks             # everything else
 
 The engine's tests run against an in-memory `database/sql` driver, so hooks,
 scanning and the mutation paths are covered end to end without a live database.
+That is deliberate, and it is what keeps `mise run test` fast enough to sit in
+an edit loop.
 
-The engine's tests run against an in-memory `database/sql` driver, so hooks,
-scanning and the mutation paths are covered end to end without a live database.
+What it cannot answer is whether the generated SQL is *valid* rather than merely
+*expected*, since a golden test compares DDL against a string somebody wrote.
+`mise run test-pg` answers that: it applies the generated schema to a real
+Postgres, reads it back, and asserts the round trip and its fixpoint. It also
+runs the query path through a real PgBouncer, because that is the deployed
+topology ([ADR-0019](docs/adr/0019-pgbouncer-in-the-path.md)). It needs Docker,
+takes about ten seconds, and is part of `mise run ci`.
+
+It lives in `pgtest/`, which is a **separate Go module**. Everything there needs
+a Postgres driver, and the engine depends on the standard library alone —
+`deps-check` enforces that so a consumer importing sqlb inherits nothing. The
+split is not tidiness: `go list -deps` does not report test-only imports, so a
+driver added to the root module's tests would leave that gate reporting success
+while covering nothing. See `pgtest/doc.go`.

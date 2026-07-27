@@ -31,6 +31,20 @@ jobs:
       - run: mise run generate-check
       - run: mise run test-race
 
+  postgres:
+    # A job of its own rather than a step in `gate`, so that "the SQL is not
+    # valid against a real Postgres" is distinguishable at a glance from "the
+    # engine's unit tests fail" — they have completely different causes.
+    #
+    # It is also the only job needing Docker, which ubuntu-latest provides.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - run: mise run test-pg
+
   bisect:
     # Linear in the number of commits, so it runs on pull requests only. It is
     # the guard that silently rots: without it, "every commit builds" decays to

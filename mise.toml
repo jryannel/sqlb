@@ -26,6 +26,11 @@ run = "go test ./..."
 description = "Run all tests with the race detector. Worth running before touching anything that caches per-type state — the model cache, the hook registry, or Describe, which mutates a cached model on purpose and is only safe at init."
 run = "go test -race ./..."
 
+[tasks.test-pg]
+description = "Run the round-trip and connection-path tests against a real Postgres and a real PgBouncer, in containers. Needs Docker. Deliberately NOT part of `test`: the engine's suite is database-free and that is worth keeping as the inner loop. This is what answers whether the generated SQL is *valid* rather than merely *expected* — see pgtest/doc.go for why it is a module of its own."
+dir = "pgtest"
+run = "go test ./..."
+
 [tasks.cover]
 description = "Run tests with coverage and print the per-function summary. Writes coverage.out, which is gitignored."
 run = '''
@@ -34,12 +39,20 @@ go tool cover -func=coverage.out | tail -20
 '''
 
 [tasks.vet]
-description = "go vet across the module"
-run = "go vet ./..."
+description = "go vet across both modules"
+run = '''
+set -e
+go vet ./...
+cd "$MISE_PROJECT_ROOT/pgtest" && go vet ./...
+'''
 
 [tasks.lint]
-description = "golangci-lint across the module"
-run = "golangci-lint run"
+description = "golangci-lint across both modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
+run = '''
+set -e
+golangci-lint run
+cd "$MISE_PROJECT_ROOT/pgtest" && golangci-lint run
+'''
 
 [tasks.lint-fix]
 description = "golangci-lint --fix (applies autofixes; review the diff)"
@@ -118,15 +131,20 @@ description = "go mod tidy"
 run = "go mod tidy"
 
 [tasks.tidy-check]
-description = "Fail if go.mod or go.sum would change. Catches a dependency added but not tidied."
+description = "Fail if go.mod or go.sum would change, in either module. Catches a dependency added but not tidied."
 run = '''
-cp go.mod go.mod.bak
-[ -f go.sum ] && cp go.sum go.sum.bak
-go mod tidy
+# Both modules, because pgtest has a go.mod of its own and an untidied one
+# there fails in CI exactly as confusingly as an untidied one here.
 status=0
-diff -q go.mod go.mod.bak >/dev/null || { echo "go.mod is not tidy; run: mise run tidy"; status=1; }
-mv go.mod.bak go.mod
-[ -f go.sum.bak ] && mv go.sum.bak go.sum
+for mod in . pgtest; do
+  cd "$MISE_PROJECT_ROOT/$mod"
+  cp go.mod go.mod.bak
+  [ -f go.sum ] && cp go.sum go.sum.bak
+  go mod tidy
+  diff -q go.mod go.mod.bak >/dev/null || { echo "$mod/go.mod is not tidy; run: mise run tidy"; status=1; }
+  mv go.mod.bak go.mod
+  [ -f go.sum.bak ] && mv go.sum.bak go.sum
+done
 exit $status
 '''
 
@@ -181,6 +199,34 @@ if ! third_party github.com/jryannel/sqlb/rest | grep -q '^github.com/danielgtay
   exit 1
 fi
 
+# The hole the package-level check above cannot cover: `go list -deps` does not
+# report test-only imports. A test file in this module importing pgx would leave
+# every assertion above passing while go.mod grew a driver — success reported by
+# a check that had stopped covering anything, which is the ADR-0016 failure mode.
+#
+# So the root module's direct requirements are pinned by name. This is what
+# keeps the pgtest module honest: moving those tests back in here fails loudly
+# instead of silently.
+want='github.com/danielgtaylor/huma/v2 github.com/go-chi/chi/v5'
+got=$(grep -E '^\s+[a-z0-9.-]+\.[a-z]+/' go.mod | grep -v '// indirect' | awk '{print $1}' | sort)
+
+if [ "$got" != "$(printf '%s\n' $want | sort)" ]; then
+  echo "deps-check: the root module's direct dependencies changed."
+  echo "  want: $(printf '%s ' $want)"
+  echo "  got:  $(printf '%s ' $got)"
+  echo "Tests needing a driver belong in the pgtest module, which has a go.mod of"
+  echo "its own for exactly this reason. See pgtest/doc.go."
+  exit 1
+fi
+
+# The positive control for the check just above, in the spirit of the one below
+# it: prove it can see a direct requirement at all, rather than matching two
+# empty strings and calling that agreement.
+if [ -z "$got" ]; then
+  echo "deps-check: read no direct requirements from go.mod, so the comparison above compared nothing"
+  exit 1
+fi
+
 echo "deps-check: $checked packages, standard library only"
 '''
 
@@ -232,7 +278,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-pg. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run vet
@@ -241,6 +287,11 @@ mise run tidy-check
 mise run deps-check
 mise run generate-check
 mise run test-race
+# Last because it is the slowest and the only one needing Docker. It is in the
+# gate rather than beside it because a check nobody remembers to run is one this
+# project has already lost once: ADR-0014's round-trip was measured by hand, and
+# the scripts that measured it are gone.
+mise run test-pg
 echo
 echo "ci: all gates passed"
 '''

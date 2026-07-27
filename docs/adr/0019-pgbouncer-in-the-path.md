@@ -1,7 +1,7 @@
 # ADR-0019: Connections go through PgBouncer, except the ones that cannot
 
 - **Status:** Exploring
-- **Confidence:** Low
+- **Confidence:** Medium
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 
@@ -34,10 +34,31 @@ parts of this project depend on exactly that:
   incompatibility with transaction pooling below PgBouncer 1.21. This one is not
   a corner: it is the entire query path.
 
-**Nothing here has been measured.** Everything above comes from documentation
-and reasoning. In this record's company that is unusually weak evidence —
-[ADR-0014](0014-migrations-and-import.md) measured every lock claim it makes
-against a real Postgres — and it is why Confidence is Low rather than Medium.
+### What was measured
+
+The three claims above were written from documentation. They are now tested in
+`pgtest/pgbouncer_test.go`, against PgBouncer 1.24.1 in transaction pooling in
+front of Postgres 18, with pgx v5.10 at its default settings.
+
+| Claim | Result |
+|---|---|
+| The query path works through the pooler | **Yes**, at pgx's defaults — but see below |
+| `LISTEN` survives the pooler | **No.** The pooler accepts the `LISTEN` and the notification never arrives |
+| `NOTIFY` survives the pooler | **Yes**, including inside a transaction |
+
+Two of these are more useful than a bare yes/no.
+
+**The query path works for a reason that is a deployment setting, not a property
+of pgx.** PgBouncer 1.24.1 defaults `max_prepared_statements` to 200, and that
+tracking is what lets pgx's statement cache survive being multiplexed. On a
+PgBouncer older than 1.21, or any version with `max_prepared_statements = 0`,
+every query sqlb issues fails. The test asks the running pooler for that number
+rather than asserting it, so the day it changes the explanation changes with it.
+
+**A `LISTEN` through the pooler is not refused — it is accepted and silently
+useless.** That is the worse of the two possible outcomes, and it is what makes
+the misconfiguration in the Consequences section below a real risk rather than a
+theoretical one: nothing anywhere reports an error.
 
 ## Decision
 
@@ -97,6 +118,10 @@ single-Postgres gate would have been.
 - **The statement-cache setting costs measurable throughput** against exec mode.
   That is a real number, and this record should carry it rather than the current
   hand-wave.
+- **A deployment turns up on a PgBouncer that does not track prepared
+  statements**, whether by age or by configuration. Then the query path needs
+  pgx in exec mode, which is a connection-string change for every consumer and
+  belongs in the README rather than only here.
 - **A second component turns out to need session state.** Two named exceptions
   is a list; four is a missing abstraction, and the answer would then be a real
   seam rather than more prose.
@@ -104,8 +129,10 @@ single-Postgres gate would have been.
   That means the fallback poll is masking a misconfiguration rather than
   tolerating a fault, and the dispatcher needs a startup assertion that its
   connection can actually hold a `LISTEN`.
-- **Any claim in the Context section fails when measured.** They are documented,
-  not observed, and this project's standard is observation.
+- **A `LISTEN` through the pooler starts arriving.** `pgtest` asserts it does
+  not, and says in the failure message that this would be good news: the
+  dispatcher would need no carve-out and both this record and ADR-0012 would
+  shrink. The test is written so nobody deletes it to make it pass.
 
 ## Cost of change
 
@@ -152,3 +179,11 @@ curve. Worth noting it is not gone — it is the fallback, running slowly.
 
 - 2026-07-27 — Written, after PgBouncer turned out to be part of the target
   deployment and appeared nowhere in the codebase or the record.
+- 2026-07-27 — Measured. All three Context claims now have tests in `pgtest`
+  against PgBouncer 1.24.1 and Postgres 18, and the section reports results
+  rather than citations. Confidence Low → Medium: the behaviour is observed, but
+  nothing is yet *built* on it, so the carve-outs remain untested by use. Two
+  findings the documented version did not have — the query path survives only
+  because the pooler tracks prepared statements (a setting, not a property), and
+  a pooled `LISTEN` is accepted rather than refused, so the misconfiguration is
+  silent.

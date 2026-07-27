@@ -203,15 +203,35 @@ added column, a dropped one and a changed enum. Each was applied forward
 against seeded rows and then reversed, ending in the exact structure it started
 from. That is what raised confidence to Medium.
 
-It is not High because the check is manual and not in CI — the test suite
-deliberately needs no database, so the round-trip that proves the DDL is *valid*
-rather than merely *expected* has to be re-run by hand whenever the DDL layer
-changes. Automating it behind a build tag is the obvious next increment, and it
-now has a cost attached that the record did not anticipate: every Postgres
-driver is a third-party module, and this project currently depends on the
-standard library alone and has a CI gate asserting it. Automating the
-round-trip means either giving that up or moving the test into a module of its
-own.
+**That check is no longer manual.** It lives in the `pgtest` module and runs in
+CI, against Postgres 18 in a container: the schema is rendered to DDL, applied,
+read back, and diffed against what went in. The fixpoint is asserted too, and
+unconditionally — it is the property that decides whether adoption works, so
+nothing is forgiven there.
+
+The one difference this record predicted is the one that shows up, and only that
+one: two changes, dropping and re-adding the same check constraint, because
+Postgres normalises `CHECK ("views" >= 0)` to `CHECK (views >= 0)`. The test
+forgives it *narrowly* — a drop is only excused when the same constraint name is
+re-added as a `CHECK` in the same diff, so an unpaired drop, a lost index or a
+foreign key that did not survive still fails. An allowance broad enough to
+swallow a real regression would report coverage it does not have
+([ADR-0016](0016-guards-proven-both-ways.md)).
+
+The cost this record anticipated was real and was paid the second way: every
+Postgres driver is a third-party module, and the engine's stdlib-only invariant
+has a CI gate asserting it. `pgtest` is therefore a module of its own. What the
+record did not anticipate is *why* that was forced rather than merely tidy —
+`deps-check` runs `go list -deps`, which does not report test-only imports, so
+adding a driver to this module's tests would have left the gate printing
+"standard library only" while `go.mod` grew a driver. The gate now also pins
+this module's direct requirements by name, which is what makes moving those
+tests back in here fail loudly instead of silently.
+
+Confidence stays Medium rather than High: the DDL is now proven valid against a
+real Postgres on every push, but the generated migrations have still only been
+applied and reversed against seeded rows by hand, and never on a table large
+enough for the lock hazards to be more than a comment.
 
 One lock hazard is deliberately not detected: `ADD COLUMN` with a *volatile*
 default rewrites the table, and a non-volatile one does not. Volatility is a
@@ -499,3 +519,14 @@ sqlb to own DDL.
   `NO TRANSACTION` applies per file rather than per statement. The
   generate-don't-apply decision was unaffected and is now better supported: the
   project already has a runner it is happy with.
+- 2026-07-27 — Automated the round trip. It lives in the `pgtest` module and runs
+  in CI against Postgres 18, so the DDL is proven valid rather than merely
+  expected on every push, and the fixpoint is asserted unconditionally. The
+  predicted check-expression difference is the only one that appears, and is
+  forgiven only when a drop is paired with a re-added `CHECK` of the same name.
+  A module of its own was forced rather than chosen: `deps-check` runs
+  `go list -deps`, which cannot see test-only imports, so a driver added to this
+  module's tests would have left the gate reporting success while covering
+  nothing. Also found that the generated DDL for a UUIDv7 primary key does not
+  apply to a stock Postgres, since `uuid_generate_v7()` needs the `pg_uuidv7`
+  extension — documented on `GenUUIDv7`, but nothing warns at generation time.
