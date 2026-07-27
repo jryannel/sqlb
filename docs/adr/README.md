@@ -106,7 +106,7 @@ nobody finishes reading has failed at its only job.
 | [0004](0004-schema-as-go-dsl.md) | Schema is a Go DSL, and codegen flows from it | Exploring | Medium |
 | [0005](0005-runtime-query-engine.md) | The query engine is reflective, not generated | Working | Medium |
 | [0006](0006-capabilities-are-opt-in.md) | Column capabilities are opt-in | Working | High |
-| [0007](0007-generated-rest-handlers.md) | Generate per-resource REST handlers and OpenAPI | Exploring | Low |
+| [0007](0007-generated-rest-handlers.md) | One generic handler, OpenAPI generated per resource | Working | Medium |
 | [0008](0008-hooks-as-domain-seam.md) | Hooks are the domain-logic seam | Working | Medium |
 | [0009](0009-typed-column-facade.md) | A generated typed column facade; predicates stay untyped | Working | Medium |
 | [0010](0010-codegen-is-optional.md) | Code generation is optional | Working | Medium |

@@ -95,18 +95,25 @@ Being explicit about these is as useful as the goals.
 - **Not a way to expose your database.** The opt-in capability model is the
   whole difference between this and putting PostgREST in front of production.
 - **Not a framework.** No router, no dependency injection, no opinion about how
-  the rest of the application is organised. `Executor` is two methods.
+  the rest of the application is organised. `Executor` is two methods, and
+  `rest` mounts onto a `huma.API` you built on the router you chose, rather than
+  handing you one.
 
 ## Where it goes
 
 Roughly in order of leverage. Everything below the first item is honestly
 speculative and should be reordered as understanding improves.
 
-**1. The generator.** The keystone. Models, typed column sets, migrations,
-per-resource handlers, OpenAPI, TypeScript client. Everything in `example/blog`
-is hand-written to the exact shape it must emit, so the generator has a fixture
-from day one. Until this lands, the project is a good library rather than the
-thing described here.
+**1. The generator.** The keystone, and mostly landed: models, typed column
+sets, REST request bodies and the registration that mounts them. What remains is
+migrations — the generator can render DDL but nothing tells it what changed —
+and the TypeScript client the OpenAPI document exists to feed. `example/blog` is
+generated end to end, so every behaviour test in it tests the generator.
+
+The REST handlers turned out not to need generating at all: one generic function
+serves every model, while the *document* is built per resource from the model's
+capabilities. See [ADR-0007](adr/0007-generated-rest-handlers.md), which reversed
+on this after it was built.
 
 **2. Migrations.** DDL emission plus a diff against a live database. The
 hardest correctness problem in the project, because a wrong diff is
@@ -114,7 +121,7 @@ destructive. Expect this to need a review-before-apply workflow and a way to
 express what cannot be inferred, such as a column rename.
 
 **3. Relation expansion.** `?expand=author` currently validates the relation
-name but does not join. Doing it well means jsonb aggregation and a depth limit,
+name but does not join, which is why `rest.Options.Expandable` should stay empty. Doing it well means jsonb aggregation and a depth limit,
 and it is what makes the REST layer competitive with hand-written endpoints for
 real screens.
 
