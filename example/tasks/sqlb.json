@@ -1,0 +1,998 @@
+{
+  "version": "1",
+  "tables": [
+    {
+      "name": "comments",
+      "comment": "A comment on a task.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "goType": "string",
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "workspace",
+            "table": "workspaces",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "goType": "string",
+          "immutable": true,
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "task",
+            "table": "tasks",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "author_id",
+          "type": "uuid",
+          "goType": "string",
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "author",
+            "table": "users",
+            "column": "id",
+            "onDelete": "RESTRICT",
+            "enforced": true
+          }
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "search"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "goType": "*time.Time",
+          "nullable": true,
+          "readOnly": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "comments_task_id_created_at_idx",
+          "columns": [
+            "task_id",
+            "created_at"
+          ]
+        }
+      ],
+      "rest": {
+        "path": "/comments",
+        "operations": [
+          "read",
+          "list"
+        ],
+        "defaultPageSize": 50,
+        "maxPageSize": 100,
+        "filterable": [
+          "id",
+          "workspace_id",
+          "task_id",
+          "author_id",
+          "body"
+        ],
+        "sortable": [
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [
+          "body"
+        ],
+        "examples": [
+          "GET /comments?id=eq.VALUE",
+          "GET /comments?sort=-created_at\u0026page=2\u0026per_page=20",
+          "GET /comments?search=TERM",
+          "GET /comments?or=(id.eq.A,workspace_id.eq.B)"
+        ]
+      }
+    },
+    {
+      "name": "lists",
+      "comment": "A named list of tasks within a workspace.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "goType": "string",
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "workspace",
+            "table": "workspaces",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "sort",
+            "search"
+          ]
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "search"
+          ]
+        },
+        {
+          "name": "color",
+          "type": "text",
+          "goType": "string",
+          "hasDefault": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "position",
+          "type": "int",
+          "goType": "int32",
+          "hasDefault": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "archived",
+          "type": "bool",
+          "goType": "bool",
+          "hasDefault": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "goType": "*time.Time",
+          "nullable": true,
+          "readOnly": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "lists_workspace_id_archived_idx",
+          "columns": [
+            "workspace_id",
+            "archived"
+          ]
+        },
+        {
+          "name": "lists_workspace_id_name_uniq",
+          "columns": [
+            "workspace_id",
+            "name"
+          ],
+          "unique": true
+        },
+        {
+          "name": "lists_workspace_id_id_uniq",
+          "columns": [
+            "workspace_id",
+            "id"
+          ],
+          "unique": true
+        }
+      ],
+      "rest": {
+        "path": "/lists",
+        "operations": [
+          "create",
+          "read",
+          "update",
+          "list"
+        ],
+        "defaultPageSize": 25,
+        "maxPageSize": 100,
+        "filterable": [
+          "id",
+          "workspace_id",
+          "name",
+          "description",
+          "color",
+          "archived"
+        ],
+        "sortable": [
+          "name",
+          "position",
+          "archived",
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [
+          "name",
+          "description"
+        ],
+        "examples": [
+          "GET /lists?id=eq.VALUE",
+          "GET /lists?sort=-name\u0026page=2\u0026per_page=20",
+          "GET /lists?search=TERM",
+          "GET /lists?or=(id.eq.A,workspace_id.eq.B)"
+        ]
+      }
+    },
+    {
+      "name": "memberships",
+      "comment": "A user's membership of a workspace, and their role in it.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "goType": "string",
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "workspace",
+            "table": "workspaces",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "goType": "string",
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "user",
+            "table": "users",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "role",
+          "type": "enum",
+          "goType": "string",
+          "enum": [
+            "owner",
+            "admin",
+            "member"
+          ],
+          "hasDefault": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "memberships_workspace_id_user_id_uniq",
+          "columns": [
+            "workspace_id",
+            "user_id"
+          ],
+          "unique": true
+        }
+      ],
+      "rest": {
+        "path": "/memberships",
+        "operations": [
+          "create",
+          "read",
+          "delete",
+          "list"
+        ],
+        "defaultPageSize": 25,
+        "maxPageSize": 100,
+        "filterable": [
+          "id",
+          "workspace_id",
+          "user_id",
+          "role"
+        ],
+        "sortable": [
+          "role",
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [],
+        "examples": [
+          "GET /memberships?id=eq.VALUE",
+          "GET /memberships?sort=-role\u0026page=2\u0026per_page=20",
+          "GET /memberships?or=(id.eq.A,workspace_id.eq.B)"
+        ]
+      }
+    },
+    {
+      "name": "tasks",
+      "comment": "A unit of work, belonging to one list.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "goType": "string",
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "workspace",
+            "table": "workspaces",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "list_id",
+          "type": "uuid",
+          "goType": "string",
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "list",
+            "table": "lists",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "assignee_id",
+          "type": "uuid",
+          "goType": "*string",
+          "nullable": true,
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "assignee",
+            "table": "users",
+            "column": "id",
+            "onDelete": "SET NULL",
+            "enforced": true
+          }
+        },
+        {
+          "name": "author_id",
+          "type": "uuid",
+          "goType": "string",
+          "readOnly": true,
+          "references": {
+            "relation": "author",
+            "table": "users",
+            "column": "id",
+            "onDelete": "RESTRICT",
+            "enforced": true
+          }
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "sort",
+            "search"
+          ]
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "search"
+          ]
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "goType": "string",
+          "enum": [
+            "todo",
+            "in_progress",
+            "blocked",
+            "done"
+          ],
+          "hasDefault": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "priority",
+          "type": "enum",
+          "goType": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "urgent"
+          ],
+          "hasDefault": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "due_at",
+          "type": "timestamptz",
+          "goType": "*time.Time",
+          "nullable": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "goType": "*time.Time",
+          "nullable": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "position",
+          "type": "int",
+          "goType": "int32",
+          "hasDefault": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "comment_count",
+          "type": "int",
+          "goType": "int32",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "goType": "*time.Time",
+          "nullable": true,
+          "readOnly": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "tasks_workspace_id_status_idx",
+          "columns": [
+            "workspace_id",
+            "status"
+          ]
+        },
+        {
+          "name": "tasks_list_id_position_idx",
+          "columns": [
+            "list_id",
+            "position"
+          ]
+        },
+        {
+          "name": "tasks_assignee_id_idx",
+          "columns": [
+            "assignee_id"
+          ]
+        },
+        {
+          "name": "tasks_due_at_idx",
+          "columns": [
+            "due_at"
+          ]
+        },
+        {
+          "name": "tasks_workspace_id_id_uniq",
+          "columns": [
+            "workspace_id",
+            "id"
+          ],
+          "unique": true
+        }
+      ],
+      "rest": {
+        "path": "/tasks",
+        "operations": [
+          "create",
+          "read",
+          "update",
+          "list"
+        ],
+        "defaultPageSize": 20,
+        "maxPageSize": 100,
+        "maxFilters": 12,
+        "filterable": [
+          "id",
+          "workspace_id",
+          "list_id",
+          "assignee_id",
+          "title",
+          "description",
+          "status",
+          "priority",
+          "due_at",
+          "completed_at",
+          "comment_count"
+        ],
+        "sortable": [
+          "title",
+          "status",
+          "priority",
+          "due_at",
+          "completed_at",
+          "position",
+          "comment_count",
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [
+          "title",
+          "description"
+        ],
+        "examples": [
+          "GET /tasks?id=eq.VALUE",
+          "GET /tasks?sort=-title\u0026page=2\u0026per_page=20",
+          "GET /tasks?search=TERM",
+          "GET /tasks?or=(id.eq.A,workspace_id.eq.B)"
+        ]
+      }
+    },
+    {
+      "name": "users",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "search"
+          ]
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "sort",
+            "search"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        }
+      ],
+      "rest": {
+        "path": "/users",
+        "operations": [
+          "read",
+          "list"
+        ],
+        "defaultPageSize": 0,
+        "maxPageSize": 100,
+        "filterable": [
+          "id",
+          "email",
+          "name"
+        ],
+        "sortable": [
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [
+          "email",
+          "name"
+        ],
+        "examples": [
+          "GET /users?id=eq.VALUE",
+          "GET /users?sort=-name\u0026page=2\u0026per_page=20",
+          "GET /users?search=TERM",
+          "GET /users?or=(id.eq.A,email.eq.B)"
+        ]
+      }
+    },
+    {
+      "name": "workspaces",
+      "comment": "A tenant. Lists, tasks and comments all belong to exactly one.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "sort",
+            "search"
+          ]
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        }
+      ],
+      "rest": {
+        "path": "/workspaces",
+        "operations": [
+          "read",
+          "list"
+        ],
+        "defaultPageSize": 0,
+        "maxPageSize": 0,
+        "filterable": [
+          "id",
+          "name",
+          "slug"
+        ],
+        "sortable": [
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [
+          "name"
+        ],
+        "examples": [
+          "GET /workspaces?id=eq.VALUE",
+          "GET /workspaces?sort=-name\u0026page=2\u0026per_page=20",
+          "GET /workspaces?search=TERM",
+          "GET /workspaces?or=(id.eq.A,name.eq.B)"
+        ]
+      }
+    }
+  ],
+  "filterOperators": [
+    {
+      "name": "eq",
+      "form": "col=eq.VALUE (or col=VALUE)",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "ne",
+      "form": "col=ne.VALUE",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "gt",
+      "form": "col=gt.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "gte",
+      "form": "col=gte.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "lt",
+      "form": "col=lt.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "lte",
+      "form": "col=lte.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "in",
+      "form": "col=in.A,B,C",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "nin",
+      "form": "col=nin.A,B",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "between",
+      "form": "col=between.LO,HI",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "isnull",
+      "form": "col=isnull",
+      "applies": "nullable columns"
+    },
+    {
+      "name": "notnull",
+      "form": "col=notnull",
+      "applies": "nullable columns"
+    },
+    {
+      "name": "contains",
+      "form": "col=contains.TEXT",
+      "applies": "text columns; wildcards escaped"
+    },
+    {
+      "name": "startswith",
+      "form": "col=startswith.TEXT",
+      "applies": "text columns; wildcards escaped"
+    },
+    {
+      "name": "endswith",
+      "form": "col=endswith.TEXT",
+      "applies": "text columns; wildcards escaped"
+    },
+    {
+      "name": "like",
+      "form": "col=like.PATTERN",
+      "applies": "text columns; wildcards NOT escaped"
+    },
+    {
+      "name": "ilike",
+      "form": "col=ilike.PATTERN",
+      "applies": "text columns; wildcards NOT escaped"
+    }
+  ],
+  "reservedParams": [
+    {
+      "name": "select",
+      "form": "select=id,name — projection; the primary key is always included"
+    },
+    {
+      "name": "sort",
+      "form": "sort=-created_at,name — leading '-' is descending"
+    },
+    {
+      "name": "search",
+      "form": "search=TERM — fans out over searchable columns"
+    },
+    {
+      "name": "page",
+      "form": "page=2 — 1-based"
+    },
+    {
+      "name": "per_page",
+      "form": "per_page=50 — capped by maxPageSize"
+    },
+    {
+      "name": "limit",
+      "form": "limit=50 — alternative to per_page"
+    },
+    {
+      "name": "offset",
+      "form": "offset=100 — alternative to page"
+    },
+    {
+      "name": "or",
+      "form": "or=(a.eq.1,b.gt.2) — explicit disjunction, nestable"
+    },
+    {
+      "name": "and",
+      "form": "and=(a.eq.1,b.gt.2) — explicit conjunction"
+    }
+  ]
+}

@@ -4,6 +4,10 @@ A schema-first data layer for Go: declare your tables once, get typed
 composable queries, a validated REST filter grammar, and domain hooks — without
 hand-writing the HTTP-to-SQL layer for every dynamic view.
 
+New here? [**docs/guide/getting-started.md**](docs/guide/getting-started.md)
+goes from `go get` to a running server. This page explains what sqlb is and why
+it is shaped this way.
+
 ## Why
 
 Static query generators (sqlc and friends) cannot express *"this WHERE clause
@@ -178,6 +182,7 @@ and the escape hatch that would require reopens the hole anyway.
 | `shadow` | Replays a migration history into an empty database, so the current schema comes from the history rather than from production |
 | `describe.go` | Runtime column metadata, for using sqlb without the schema DSL or codegen |
 | `example/blog` | A worked schema, everything codegen emits from it, and an assembled server |
+| `example/tasks` | The larger example: a multi-tenant task manager with JWT auth, a runnable server, a generated migration history and a suite against a real Postgres. A module of its own, so its dependencies cost the engine nothing |
 
 ## The REST server
 
@@ -486,6 +491,7 @@ func (t tracer) QueryContext(ctx context.Context, q string, args ...any) (*sql.R
 
 | Document | Contents |
 |---|---|
+| [docs/guide/](docs/guide/) | How to use it, in the order you do it: install, schema, queries, REST, migrations |
 | [docs/vision.md](docs/vision.md) | What this is for, non-goals, and where it goes next |
 | [docs/architecture.md](docs/architecture.md) | How the pieces fit, the request path, where safety lives, API tiers |
 | [docs/compatibility.md](docs/compatibility.md) | What the current tag freezes, and which surfaces are expected to move |

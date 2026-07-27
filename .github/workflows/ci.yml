@@ -44,6 +44,7 @@ jobs:
         with:
           experimental: true
       - run: mise run test-pg
+      - run: mise run test-demo
 
   bisect:
     # Linear in the number of commits, so it runs on pull requests only. It is

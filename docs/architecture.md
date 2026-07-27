@@ -49,6 +49,7 @@ Almost everything else follows from those two.
 | `codegen` | Generates models, the typed column facade, the REST request bodies and the manifest. `Check` is the dry-run mode wired into CI. | `schema` |
 | `rest` | Mounts a model on a Huma API: handlers, and an OpenAPI operation built from the model's capabilities. | `sqlb`, `filter`, huma |
 | `example/blog` | A worked schema plus the artefacts codegen must produce. | all of the above |
+| `example/tasks` | A multi-tenant task manager: hooks as the authorisation seam, JWT middleware feeding the context hooks read, and a migration history applied by goose. A separate module, like `pgtest`. | all of the above, `migrate` |
 
 The dependency direction matters: `schema` is a leaf that nothing imports at
 runtime, and `sqlb` has no dependency on `schema`. That is deliberate. It is

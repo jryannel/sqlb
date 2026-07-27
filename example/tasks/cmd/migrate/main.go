@@ -1,0 +1,213 @@
+// Command migrate renders the task manager's schema into goose migrations.
+//
+//	go run ./cmd/migrate            write any migration that does not exist yet
+//	go run ./cmd/migrate -force     rewrite them, for editing the schema in development
+//
+// It does not apply anything. sqlb produces migration files and stops there —
+// the runner is goose, invoked from the migrations package at startup and in
+// tests.
+//
+// # Why the baseline is generated and the rest is written by hand
+//
+// The first migration is migrate.Diff between an empty registry and the
+// declared one: every table, column, index, foreign key and check the DSL can
+// express. The second is three things the DSL cannot express, written as
+// migrate.Change values in this file so that they stay checked in, ordered and
+// reversible like everything else:
+//
+//   - a trigger that maintains updated_at, which is otherwise only ever set by
+//     its column default and so never changes after the insert;
+//   - a trigger that keeps tasks.completed_at consistent with tasks.status, so
+//     that the check constraint the schema declares can always be satisfied
+//     without the client being trusted to set both;
+//   - two composite foreign keys, which are what actually stop a task pointing
+//     at a list in another workspace. The hooks scope what a request can name;
+//     these make the wrong reference unrepresentable.
+//
+// That split is the honest one. A generator should emit what it can derive and
+// leave a seam for what it cannot, rather than growing a DSL for every DDL
+// construct Postgres has.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/jryannel/sqlb/migrate"
+	"github.com/jryannel/sqlb/schema"
+
+	// Imported for its side effects: declaring a table registers it.
+	_ "github.com/jryannel/sqlb/example/tasks/taskschema"
+)
+
+func main() {
+	dir := flag.String("dir", "migrations", "output directory")
+	force := flag.Bool("force", false, "delete and rewrite existing migrations (development only)")
+	flag.Parse()
+
+	if err := run(*dir, *force); err != nil {
+		fmt.Fprintln(os.Stderr, "migrate:", err)
+		os.Exit(1)
+	}
+}
+
+func run(dir string, force bool) error {
+	// The current side of the diff is an empty registry: this is a baseline,
+	// building the schema from nothing.
+	//
+	// It is worth being clear that this is the *easy* case. Once a database
+	// exists, the current side should come from shadow.Build — replaying the
+	// checked-in history into a scratch database — rather than from this
+	// program's idea of what has been applied. See the note in the package
+	// documentation of shadow.
+	current := schema.NewRegistry()
+
+	// MinPostgres(18) makes UUIDv7 primary keys default to the built-in
+	// uuidv7(), so the migration applies to a stock postgres:18 with no
+	// extension installed. Without it the DDL calls uuid_generate_v7(), which
+	// needs pg_uuidv7 — a fine choice for a project that already installs it,
+	// and a bad one for an example somebody is trying to run.
+	changes, err := migrate.Diff(current, schema.DefaultRegistry(), migrate.MinPostgres(18))
+	if err != nil {
+		return fmt.Errorf("diffing the schema: %w", err)
+	}
+
+	migrations := []migrate.Migration{
+		{Version: migrate.SequentialVersion(1), Name: "initial_schema", Changes: changes},
+		{Version: migrate.SequentialVersion(2), Name: "triggers_and_tenant_constraints", Changes: custom()},
+	}
+
+	opts := migrate.Options{Format: migrate.Goose}
+
+	if force {
+		if err := clear(dir, migrations, opts); err != nil {
+			return err
+		}
+	}
+
+	for _, m := range migrations {
+		written, err := migrate.Write(dir, m, opts)
+		if err != nil {
+			return err
+		}
+		for _, f := range written {
+			fmt.Println("wrote", f)
+		}
+	}
+	return nil
+}
+
+// clear removes exactly the files the run is about to write, and nothing else.
+//
+// migrate.Write refuses to overwrite, because a migration that has already been
+// applied somewhere must not change under the runner's feet. That rule is right
+// and this flag is the development escape from it — so it deletes only what
+// Render says it would produce, rather than everything in the directory.
+func clear(dir string, migrations []migrate.Migration, opts migrate.Options) error {
+	for _, m := range migrations {
+		files, err := migrate.Render(m, opts)
+		if err != nil {
+			return err
+		}
+		for name := range files {
+			path := filepath.Join(dir, name)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// tables carrying updated_at. Listed rather than derived from the registry
+// because the trigger is hand-written anyway, and a list that has to be updated
+// when a table is added is more obvious than a loop that silently covers a new
+// one.
+var touched = []string{"workspaces", "users", "memberships", "lists", "tasks", "comments"}
+
+func custom() []migrate.Change {
+	changes := []migrate.Change{{
+		Comment: "updated_at is set by its column default at insert and by nothing at all afterwards. " +
+			"A trigger is the only place this can live where every writer is covered: an application " +
+			"that sets it in Go misses the migration that backfills a column, and the psql session " +
+			"somebody used to fix a row at 3am.",
+		Up: `CREATE OR REPLACE FUNCTION touch_updated_at() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$;`,
+		Down: `DROP FUNCTION IF EXISTS touch_updated_at();`,
+	}}
+
+	for _, table := range touched {
+		changes = append(changes, migrate.Change{
+			Up: fmt.Sprintf(
+				"CREATE TRIGGER %s_touch_updated_at BEFORE UPDATE ON %q\n"+
+					"    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();", table, table),
+			Down: fmt.Sprintf("DROP TRIGGER IF EXISTS %s_touch_updated_at ON %q;", table, table),
+		})
+	}
+
+	changes = append(changes,
+		migrate.Change{
+			Comment: "tasks.completed_at is ReadOnly in the schema, so no request can set it, and the " +
+				"check constraint done_tasks_have_a_completion_time requires it whenever status is " +
+				"'done'. Something has to reconcile the two, and it has to see the new row rather " +
+				"than the old one — which a BEFORE trigger does and a hook cannot: a BeforeUpdate " +
+				"hook is handed the statement, not the resulting row, so it cannot know what status " +
+				"is about to become.",
+			Up: `CREATE OR REPLACE FUNCTION tasks_sync_completed_at() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.status = 'done' AND NEW.completed_at IS NULL THEN
+        NEW.completed_at := now();
+    ELSIF NEW.status <> 'done' THEN
+        NEW.completed_at := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$;`,
+			Down: `DROP FUNCTION IF EXISTS tasks_sync_completed_at();`,
+		},
+		migrate.Change{
+			Up: `CREATE TRIGGER tasks_sync_completed_at BEFORE INSERT OR UPDATE ON "tasks"
+    FOR EACH ROW EXECUTE FUNCTION tasks_sync_completed_at();`,
+			Down: `DROP TRIGGER IF EXISTS tasks_sync_completed_at ON "tasks";`,
+		},
+
+		// The tenant boundary, in the database.
+		//
+		// tasks.list_id already has an ordinary foreign key to lists.id, which
+		// proves the list exists and says nothing about whose it is. The hooks
+		// stop a request from *naming* a list in another workspace, and they are
+		// the right place for that — but they are Go, and a migration, a repair
+		// script or a future endpoint is not covered by them.
+		//
+		// A composite key is. It references lists (workspace_id, id), so the row
+		// can only satisfy it when the two workspace_ids agree. The unique index
+		// it needs is declared in the schema, next to a note pointing here.
+		migrate.Change{
+			Comment: "A task may only belong to a list in its own workspace. This is the constraint " +
+				"the hooks approximate and the database can actually guarantee.",
+			Up: `ALTER TABLE "tasks"
+    ADD CONSTRAINT "tasks_list_in_same_workspace"
+    FOREIGN KEY ("workspace_id", "list_id")
+    REFERENCES "lists" ("workspace_id", "id") ON DELETE CASCADE;`,
+			Down: `ALTER TABLE "tasks" DROP CONSTRAINT IF EXISTS "tasks_list_in_same_workspace";`,
+		},
+		migrate.Change{
+			Comment: "The same, for comments and the task they hang off.",
+			Up: `ALTER TABLE "comments"
+    ADD CONSTRAINT "comments_task_in_same_workspace"
+    FOREIGN KEY ("workspace_id", "task_id")
+    REFERENCES "tasks" ("workspace_id", "id") ON DELETE CASCADE;`,
+			Down: `ALTER TABLE "comments" DROP CONSTRAINT IF EXISTS "comments_task_in_same_workspace";`,
+		},
+	)
+
+	return changes
+}
