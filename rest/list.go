@@ -17,12 +17,18 @@ import (
 // counting is a second query over the same predicate and most clients only need
 // to know whether to fetch again. HasMore answers that for the price of reading
 // one extra row.
+// NextCursor is the position to resume from, and is the paging a client should
+// prefer: it costs the same at any depth and does not skip or repeat rows when
+// the table is written to mid-walk. It is present whenever there is a next page
+// and the model has a primary key to break ties with, including on a request
+// that paged by offset — so a client can switch to cursors without a flag.
 type Page[T any] struct {
-	Items   []row[T] `json:"items" doc:"The rows on this page"`
-	Page    int      `json:"page" doc:"1-based page number"`
-	PerPage int      `json:"per_page" doc:"Rows requested per page, after the resource's ceiling was applied"`
-	HasMore bool     `json:"has_more" doc:"Whether a further page exists"`
-	Total   *int64   `json:"total,omitempty" doc:"Total matching rows; present only when ?count=exact was given"`
+	Items      []row[T] `json:"items" doc:"The rows on this page"`
+	Page       int      `json:"page" doc:"1-based page number"`
+	PerPage    int      `json:"per_page" doc:"Rows requested per page, after the resource's ceiling was applied"`
+	HasMore    bool     `json:"has_more" doc:"Whether a further page exists"`
+	NextCursor *string  `json:"next_cursor,omitempty" doc:"Position to resume from; pass it back as ?cursor="`
+	Total      *int64   `json:"total,omitempty" doc:"Total matching rows; present only when ?count=exact was given"`
 }
 
 // listInput carries the raw query string.
@@ -91,6 +97,18 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			Page:    q.Page,
 			PerPage: q.PageSize,
 			HasMore: hasMore,
+		}
+
+		// The cursor names the last row of *this* page, so it is only built
+		// when there is a page after it. filter.Apply has already made the
+		// ordering total and projected whatever it orders by, which is what
+		// makes the last row enough to name a position.
+		if hasMore && b.model.PK != nil {
+			cursor, err := query.CursorFor(rows[len(rows)-1])
+			if err != nil {
+				return nil, asHumaError(err, opts.name())
+			}
+			body.NextCursor = ptr(string(cursor))
 		}
 		// Items is marshalled as [] rather than null when empty: a client
 		// iterating the result should not have to test for it.

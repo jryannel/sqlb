@@ -128,6 +128,12 @@ What is left is what makes it competitive with hand-written endpoints on a real
 screen — nesting under a depth limit, and the reverse direction, a collection of
 children rather than a single parent.
 
+Paging, which used to sit here as the other half of "a real screen", is done:
+`?cursor=` names a position rather than a distance, so a walk costs the same at
+any depth and does not repeat rows when the table is written to underneath it
+([ADR-0027](adr/0027-keyset-pagination.md)). Backwards paging is deliberately
+not built; the record says what would change that.
+
 **4. The change feed.** A transactional outbox, a dispatcher woken by
 `LISTEN/NOTIFY`, and fan-out to `AfterCommit` hooks and live subscribers
 ([ADR-0012](adr/0012-change-feed-outbox.md)). This is what closes the loop from

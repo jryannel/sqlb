@@ -97,12 +97,25 @@ func (r *Registry) Lint() Diagnostics {
 
 			// Sorting an unindexed column forces a sort of the whole result
 			// set, which pagination makes worse by repeating it per page.
+			//
+			// The suggested index carries the primary key as a trailing column,
+			// because that is the ordering a paged list actually runs: every
+			// list ends with the key so the page boundary is unambiguous
+			// (ADR-0027), and an index on the sort column alone cannot serve
+			// the cursor's seek.
 			if d.Sortable && !indexed[d.Name] {
+				fix := fmt.Sprintf("add .Index(%q) if this table will grow", d.Name)
+				if pk := pkColumn(t); pk != "" && pk != d.Name {
+					fix = fmt.Sprintf(
+						"add .AddIndex(schema.Index{Columns: []string{%q, %q}}) if this table will grow; "+
+							"the key is the second column because a paged list orders by it to break ties",
+						d.Name, pk)
+				}
 				add(Diagnostic{
 					Rule: "unindexed-sort", Table: t.name, Column: d.Name,
 					Severity: SeverityInfo,
 					Message:  "column is sortable but not indexed, so each page re-sorts the matching rows",
-					Fix:      fmt.Sprintf("add .Index(%q) if this table will grow", d.Name),
+					Fix:      fix,
 				})
 			}
 
@@ -146,14 +159,19 @@ func (r *Registry) Lint() Diagnostics {
 			continue
 		}
 
-		// Keyset-stable pagination needs a deterministic order. Without a
-		// sortable column, page 2 may repeat or skip rows from page 1.
+		// This used to warn that paging could repeat or skip rows. It cannot
+		// any more: filter.Apply appends the primary key to every list, so the
+		// ordering is total whether or not the schema offers a way to choose
+		// it (ADR-0027). What is left is a usability point rather than a
+		// correctness one, so it is an info — a list whose order no client can
+		// influence is usually an oversight, not a decision.
 		if t.rest.Ops.Has(OpList) && len(capableColumns(t, capSortable)) == 0 {
 			add(Diagnostic{
 				Rule: "list-without-sort", Table: t.name,
-				Severity: SeverityWarn,
-				Message:  "list endpoint has no sortable column, so paging has no deterministic order and may repeat or skip rows",
-				Fix:      "mark at least one column .Sortable(), conventionally created_at or the primary key",
+				Severity: SeverityInfo,
+				Message: "list endpoint has no sortable column, so every client gets the same " +
+					"primary-key order and none can ask for another",
+				Fix: "mark at least one column .Sortable(), conventionally created_at",
 			})
 		}
 
@@ -265,4 +283,14 @@ func isLowCardinality(d *FieldDesc) bool {
 		return true
 	}
 	return d.Type == TypeEnum && len(d.EnumValues) > 0 && len(d.EnumValues) <= 4
+}
+
+// pkColumn is the primary key's column name, or empty when the table declares
+// none. Diagnostics use it to suggest the composite index a paged list wants.
+func pkColumn(t *TableDef) string {
+	pk := t.PrimaryKey()
+	if pk == nil {
+		return ""
+	}
+	return pk.Desc().Name
 }

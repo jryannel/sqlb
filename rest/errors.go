@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
@@ -109,6 +110,20 @@ func asHumaError(err error, resource string) error {
 		return nil
 	case errors.Is(err, sqlb.ErrNotFound):
 		return newError(http.StatusNotFound, fmt.Sprintf("no %s matched", resource))
+	case errors.Is(err, sqlb.ErrBadCursor):
+		// A cursor is a value the client was handed, so a bad one is a bad
+		// request. The commonest way to reach it is changing ?sort= while
+		// keeping the cursor, and the engine's message says so, so it is
+		// carried through as the detail rather than replaced.
+		return &Problem{
+			Title:  http.StatusText(http.StatusBadRequest),
+			Status: http.StatusBadRequest,
+			Detail: "the cursor cannot be used for this request",
+			Errors: []*ProblemDetail{{
+				Message:  strings.TrimPrefix(err.Error(), "sqlb: "),
+				Location: "query.cursor",
+			}},
+		}
 	}
 	if errs, ok := filter.AsErrors(err); ok {
 		return invalidQuery(errs)

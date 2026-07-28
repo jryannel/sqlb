@@ -29,6 +29,14 @@ or deployed clients, not just call sites.
 - **The generated DDL's shape** — `migrate.Diff` output for a given pair of
   schemas may improve, but a migration already written and applied is never
   reinterpreted.
+- **The cursor payload** — `?cursor=` and the `next_cursor` field are wire
+  format for the same reason the filter grammar is, and so is what a cursor
+  decodes to: a client holds one across requests, so changing the payload's
+  shape breaks a request already in flight rather than a call site. It is
+  base64url of JSON and has room for a version field, but that field has to
+  arrive before it is needed. Nothing today reads the payload, which is not a
+  reason to treat it as private. See
+  [ADR-0027](adr/0027-keyset-pagination.md).
 
 ## Will move
 
@@ -49,6 +57,18 @@ Named in advance, so the break is a documented plan rather than a surprise.
 - **Nested `?expand`.** One level resolves today. If nesting lands it arrives as
   a longer name — `?expand=list.workspace` — under a depth limit, so nothing a
   request can send today changes meaning.
+- **Backwards cursors.** Paging goes forward only. If `?before=` lands it is a
+  new parameter alongside `?cursor=`, so again nothing a request can send today
+  changes meaning. [ADR-0027](adr/0027-keyset-pagination.md) says what would
+  make it worth building.
+
+One behavioural change landed with cursors and is worth stating plainly, because
+it affects requests that do not use them: **every list is now ordered
+deterministically**, since `filter.Apply` appends the primary key when the sort
+does not already settle ties. Responses that were previously in an arbitrary
+order within a tie group now have a defined one, and paging no longer repeats or
+skips rows across pages. No request changes meaning; some get a different — and
+correct — row order.
 
 ## Not covered
 

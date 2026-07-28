@@ -84,7 +84,8 @@ means the client sent the wrong shape. Immutable columns are absent entirely.
 ?sort=-created_at,title       "-" for descending; created_at.desc also works
 ?select=id,title              projection (the primary key is always kept)
 ?search=ada                   fan-out over searchable columns
-?page=2&per_page=50           pagination, capped by the schema
+?page=2&per_page=50           offset pagination, capped by the schema
+?cursor=eyJrIjpb…            keyset pagination: resume after a position
 ```
 
 Values are always bind parameters. Identifiers are validated against the model
@@ -181,10 +182,59 @@ beyond the page, so a request for `per_page=5` reaches the database as `LIMIT 6`
 produced:
 
 ```json
-{"items": [...], "page": 1, "per_page": 20, "has_more": true}
+{"items": [...], "page": 1, "per_page": 20, "has_more": true,
+ "next_cursor": "eyJrIjpbeyJjIjoiY3JlYXRlZF9hdCIsImQiOnRydWUsInYiOiIyMDI2LTA3LTI4VDA5OjAwOjAwWiJ9XX0"}
 ```
 
-`total` costs a second query and so is opt-in, with `?count=exact`.
+`total` costs a second query and so is opt-in, with `?count=exact`. It is the
+size of the whole result set, so it does not shrink as a cursor advances.
+
+## Paging
+
+Two ways, and the response offers both without being asked.
+
+`?page=2&per_page=50` is offset paging. It is the right choice for a numbered
+page control, where a client needs to jump to page 7 and the set is small enough
+that the jump is cheap.
+
+`?cursor=` is keyset paging, and it is what anything walking a whole result set
+should use — infinite scroll, an export, a sync job. `OFFSET k` makes the
+database produce `k + n` rows and discard `k`, so page 500 costs five hundred
+times page 1; and because the page is addressed by its distance from the start,
+a row inserted while a client pages shifts every later page by one, so the client
+sees a row twice or never. A cursor names the position instead:
+
+```
+GET /posts?sort=-view_count&per_page=20
+  → {"items": [...], "has_more": true, "next_cursor": "eyJrIjpb…"}
+
+GET /posts?sort=-view_count&per_page=20&cursor=eyJrIjpb…
+```
+
+Three things are worth knowing.
+
+**`next_cursor` is on every response that has a next page**, including one that
+paged by offset, so adopting cursors needs no flag and there is no first cursor
+to obtain some other way. It is absent on the last page, which is how a walk
+knows to stop.
+
+**A cursor belongs to its sort.** Changing `?sort=` and keeping the cursor is a
+400 naming both orderings, because the cursor names a position in an ordering
+that no longer exists. Drop the cursor when the sort changes.
+
+**`?cursor=` cannot be combined with `?page=` or `?offset=`** — they are two
+answers to where the page starts — and the rejection says which to drop.
+
+Every list is ordered deterministically whichever paging is used: `filter.Apply`
+appends the primary key unless the sort already contains it. Without that, page
+two can repeat a row from page one or skip one — `schema.Lint` used to warn
+about exactly this, and no longer needs to. The cost is that the tiebreaker can
+force a sort where an index on the sort column alone would have streamed; the
+fix is a composite index on `(sort_column, id)`, which is what `unindexed-sort`
+now suggests and the index cursor paging wants anyway.
+
+[ADR-0027](../adr/0027-keyset-pagination.md) has the boundary predicate, the
+NULL handling and why the cursor is opaque by convention rather than signed.
 
 ## Limits
 

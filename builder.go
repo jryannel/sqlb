@@ -20,14 +20,18 @@ type Builder[T any] struct {
 	distinct bool
 	joins    []joinClause
 	where    []Pred
-	groups   []Expr
-	having   []Pred
-	orders   []Order
-	expand   []string
-	limit    *int
-	offset   *int
-	lock     string
-	err      error
+	// seek is the keyset boundary, held apart from where because it is
+	// pagination rather than selection: countSQL drops it, exactly as it drops
+	// LIMIT and OFFSET. See cursor.go.
+	seek   Pred
+	groups []Expr
+	having []Pred
+	orders []Order
+	expand []string
+	limit  *int
+	offset *int
+	lock   string
+	err    error
 }
 
 type joinClause struct {
@@ -188,6 +192,22 @@ func (b *Builder[T]) OrderBy(orders ...Order) *Builder[T] {
 	return b
 }
 
+// OrderColumns names the columns the query orders by, in order, skipping any
+// term that orders by an expression rather than a column.
+//
+// filter.Apply is the motivating caller: it owns the projection and has to
+// cover whatever the ordering ended up being, including the tiebreaker Stable
+// appended, so that a cursor can be read off the last row.
+func (b *Builder[T]) OrderColumns() []string {
+	out := make([]string, 0, len(b.orders))
+	for _, o := range b.orders {
+		if col, ok := o.expr.(Column); ok {
+			out = append(out, col.Name)
+		}
+	}
+	return out
+}
+
 // Limit caps the number of rows returned. A negative limit is an error rather
 // than a silent no-op, since it usually means an unchecked computed value.
 func (b *Builder[T]) Limit(n int) *Builder[T] {
@@ -286,9 +306,9 @@ func (b *Builder[T]) compile(c *compiler) {
 	}
 	b.compileExpansions(c)
 
-	if len(b.where) > 0 {
+	if preds := b.filters(); len(preds) > 0 {
 		c.write(" WHERE ")
-		c.predicates(b.where)
+		c.predicates(preds)
 	}
 
 	if len(b.groups) > 0 {
@@ -360,6 +380,7 @@ func (b *Builder[T]) countSQL() (string, []any, error) {
 		inner := b.Clone()
 		inner.orders = nil
 		inner.limit, inner.offset = nil, nil
+		inner.seek = Pred{}
 		inner.lock = ""
 		c.write("SELECT count(*) FROM (")
 		inner.compile(c)
@@ -371,6 +392,10 @@ func (b *Builder[T]) countSQL() (string, []any, error) {
 	counted.sel = []Selection{Sel(Call{Name: "count", Star: true})}
 	counted.orders = nil
 	counted.limit, counted.offset = nil, nil
+	// A count is the size of the matching set, not of what is left to page
+	// through. Keeping the boundary would make ?count=exact shrink as a client
+	// paged, which is a worse answer than no count at all.
+	counted.seek = Pred{}
 	counted.lock = ""
 	counted.distinct = false
 	// Expansions join on the target's primary key, so they never change how
@@ -385,6 +410,18 @@ func (b *Builder[T]) countSQL() (string, []any, error) {
 // ErrNotFound is returned by One when the query matches no rows. It is a
 // sentinel so that HTTP handlers can map it to 404 without inspecting text.
 var ErrNotFound = errors.New("sqlb: no rows matched")
+
+// filters is everything that reaches the WHERE clause: the caller's predicates
+// and, last, the keyset boundary. The boundary goes last so that the SQL reads
+// in the order it was asked for, with paging as a suffix.
+func (b *Builder[T]) filters() []Pred {
+	if b.seek.IsZero() {
+		return b.where
+	}
+	out := make([]Pred, 0, len(b.where)+1)
+	out = append(out, b.where...)
+	return append(out, b.seek)
+}
 
 // from is the name the base table is referenced by: its alias if it has one,
 // otherwise the table itself. Expansion joins qualify the foreign key with it.

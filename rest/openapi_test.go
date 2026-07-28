@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/jryannel/sqlb/rest"
 )
 
@@ -204,4 +205,57 @@ func keys(m map[string]*huma.Schema) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// Cursor paging is documented, because a client that cannot discover it from
+// the document will keep using ?page= on a table where that gets slower.
+func TestListDocumentsTheCursorParameter(t *testing.T) {
+	db := newFakeDB(t)
+	api := mount(t, db.db, postOptions())
+	params := paramsOf(t, api, "/posts")
+
+	cursor := params["cursor"]
+	if cursor == nil {
+		t.Fatal("no cursor parameter documented")
+	}
+	if !strings.Contains(cursor.Description, "next_cursor") {
+		t.Errorf("description does not say where a cursor comes from: %s", cursor.Description)
+	}
+
+	// The other half of the contract: the response says where the next cursor
+	// comes from, or a client has no way to obtain the first one.
+	media := api.OpenAPI().Paths["/posts"].Get.Responses["200"].Content["application/json"]
+	if media == nil || media.Schema == nil {
+		t.Fatal("the list operation documents no 200 body")
+	}
+	body := media.Schema
+	if body.Ref != "" {
+		body = api.OpenAPI().Components.Schemas.SchemaFromRef(body.Ref)
+	}
+	if body.Properties["next_cursor"] == nil {
+		t.Errorf("the list response does not document next_cursor: %v", keys(body.Properties))
+	}
+}
+
+// A model with no primary key has no tiebreaker, so cursor paging cannot work
+// for it. It is withheld from the document rather than offered and refused —
+// the failure mode ADR-0025 records for ?expand, and the same answer.
+func TestKeylessResourceDocumentsNoCursor(t *testing.T) {
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	err := rest.Resource[Ledger, rest.None[Ledger], rest.None[Ledger]](api, db.db, rest.Options{
+		Path: "/ledger",
+		Name: "entry",
+		Ops:  rest.OpList,
+	})
+	if err != nil {
+		t.Fatalf("mounting a keyless list resource: %v", err)
+	}
+
+	if params := paramsOf(t, api, "/ledger"); params["cursor"] != nil {
+		t.Error("a keyless resource should not offer a cursor it cannot honour")
+	}
+	if params := paramsOf(t, api, "/ledger"); params["page"] == nil {
+		t.Error("offset paging should still be offered")
+	}
 }

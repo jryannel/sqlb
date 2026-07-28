@@ -121,11 +121,12 @@ func (r *response) item() map[string]any {
 
 // list decodes a list response.
 type listBody struct {
-	Items   []map[string]any `json:"items"`
-	Page    int              `json:"page"`
-	PerPage int              `json:"per_page"`
-	HasMore bool             `json:"has_more"`
-	Total   *int             `json:"total"`
+	Items      []map[string]any `json:"items"`
+	Page       int              `json:"page"`
+	PerPage    int              `json:"per_page"`
+	HasMore    bool             `json:"has_more"`
+	NextCursor string           `json:"next_cursor"`
+	Total      *int             `json:"total"`
 }
 
 func (r *response) list() listBody {

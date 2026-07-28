@@ -1,6 +1,7 @@
 package filter_test
 
 import (
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -380,5 +381,78 @@ func TestApplyWithoutExpandDoesNotJoin(t *testing.T) {
 	}
 	if strings.Contains(sql, "LEFT JOIN") {
 		t.Errorf("an unexpanded query joined anyway:\n%s", sql)
+	}
+}
+
+// A cursor is read off the last row of the page, so the ordering columns have
+// to be fetched even when ?select leaves them out. Otherwise the cursor would
+// encode a zero value and the next page would start from the beginning.
+func TestApplyProjectsTheOrderingColumns(t *testing.T) {
+	values, err := url.ParseQuery("select=id,title&sort=-views")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := filter.Parse(values, filter.Options{Model: sqlb.ModelOf[Article]()})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	sql, _, err := filter.Apply(sqlb.Query[Article](), q).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.HasPrefix(sql, `SELECT "id", "title", "views" FROM`) {
+		t.Errorf("SQL = %s\nwant views fetched alongside the requested columns", sql)
+	}
+	// The request's own ?select is what the response is built from, and it is
+	// untouched — rest marshals from q.Select, not from what the statement read.
+	if got := strings.Join(q.Select, ","); got != "id,title" {
+		t.Errorf("q.Select = %q, want the request's own selection unchanged", got)
+	}
+}
+
+// A cursor names a position in an ordering, so it is only meaningful against
+// the ordering it was issued for. Changing ?sort= and keeping the cursor is the
+// ordinary way a client reaches this, so the message says so.
+func TestCursorAgainstADifferentSortIsRejected(t *testing.T) {
+	issued, err := sqlb.Query[Article]().OrderBy(sqlb.F("views").Desc()).
+		CursorFor(Article{ID: "a7", Views: 100})
+	if err != nil {
+		t.Fatalf("CursorFor: %v", err)
+	}
+
+	values, err := url.ParseQuery("sort=title&cursor=" + string(issued))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := filter.Parse(values, filter.Options{Model: sqlb.ModelOf[Article]()})
+	if err != nil {
+		t.Fatalf("Parse should accept the cursor and leave the mismatch to Apply: %v", err)
+	}
+
+	_, _, err = filter.Apply(sqlb.Query[Article](), q).SQL()
+	if err == nil {
+		t.Fatal("expected the cursor to be refused against a different sort")
+	}
+	if !errors.Is(err, sqlb.ErrBadCursor) {
+		t.Errorf("error %v does not wrap ErrBadCursor, so rest cannot map it to 400", err)
+	}
+}
+
+func TestCursorConflictsWithOffset(t *testing.T) {
+	values, err := url.ParseQuery("cursor=abc&offset=20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = filter.Parse(values, filter.Options{Model: sqlb.ModelOf[Article]()})
+	errs, ok := filter.AsErrors(err)
+	if !ok {
+		t.Fatalf("expected a parse error, got %v", err)
+	}
+	if len(errs) != 1 || errs[0].Param != "cursor" {
+		t.Fatalf("errors = %v, want one about the cursor", errs)
+	}
+	if !strings.Contains(errs[0].Reason, "offset") {
+		t.Errorf("reason = %q, want it to name the conflicting parameter", errs[0].Reason)
 	}
 }
