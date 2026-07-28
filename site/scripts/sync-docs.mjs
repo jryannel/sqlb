@@ -96,6 +96,7 @@ const SOURCES = [
       "vision.md",
       "architecture.md",
       "compatibility.md",
+      "comparisons.md",
       "with-sqlc.md",
       "review-adoption-readiness.md",
     ],
