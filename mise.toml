@@ -52,6 +52,17 @@ npm run typecheck
 npm test
 '''
 
+[tasks.test-cli]
+description = "Build the generated command-line client and run its round-trip tests. No Docker: the CLI speaks HTTP, so its tests drive the emitted command tree against an httptest server and assert what reaches the wire — that the flags compose into the filter grammar, that --all walks by cursor, and that a rejection still names what would have been accepted. Separate from `test-demo`, whose other packages need a database, so this stays in the fast half of the gate."
+dir = "example/tasks"
+run = '''
+# Built to nowhere: the gate is that the emitted package compiles, and leaving
+# a binary behind in a checked-out tree would be one more thing .gitignore has
+# to know about.
+go build -o /dev/null ./cmd/taskctl
+go test ./cli/...
+'''
+
 [tasks.demo-migrate]
 description = "Regenerate the task-manager example's migrations from its schema. Rewrites the checked-in files, which is safe only because they are a baseline nobody has applied to a database that matters."
 dir = "example/tasks"
@@ -321,7 +332,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-ts, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-ts, test-cli, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run vet
@@ -331,6 +342,7 @@ mise run deps-check
 mise run generate-check
 mise run test-race
 mise run test-ts
+mise run test-cli
 # Last because they are the slowest and the only ones needing Docker. It is in the
 # gate rather than beside it because a check nobody remembers to run is one this
 # project has already lost once: ADR-0014's round-trip was measured by hand, and

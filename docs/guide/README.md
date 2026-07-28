@@ -11,6 +11,7 @@ is; this explains how to use it.
 | [Queries and hooks](queries-and-hooks.md) | Building queries, mutations, transactions, and where domain logic goes |
 | [REST](rest.md) | Mounting resources, the filter grammar, OpenAPI, rejections |
 | [TypeScript client](typescript-client.md) | Generating a typed client for that grammar, and the transport it does not generate |
+| [Go CLI](go-cli.md) | Generating a cobra command tree over the same API, for a shell or an agent |
 | [Migrations](migrations.md) | Diffing a schema change, rendering files, adopting an existing database |
 
 Every Go snippet on these pages is also a compiled `Example` function in the

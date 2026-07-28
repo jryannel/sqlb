@@ -166,4 +166,5 @@ what would make the whole approach wrong.
 ## Next
 
 - [REST](rest.md) — the server side of the same grammar
+- [Go CLI](go-cli.md) — the same argument for a consumer with no compile step
 - [Schema](schema.md) — the capabilities these types come from

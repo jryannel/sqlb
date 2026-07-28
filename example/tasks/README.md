@@ -52,6 +52,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | [`app/hooks.go`](app/hooks.go) | Also where the comment invariant lives: two writes in one transaction, and `AfterCommit` for the side effect. |
 | [`cmd/migrate/main.go`](cmd/migrate/main.go) | The generated baseline, plus three things the DSL cannot express. |
 | [`web/`](web/) | The generated TypeScript client, and the hand-written transport it takes. The schema reaches the browser without a second declaration. |
+| [`cli/`](cli/) | The generated cobra command tree, and [`cmd/taskctl`](cmd/taskctl/) — four lines — that runs it. The same schema reaches a shell. |
 | [`app/server_test.go`](app/server_test.go) | Every claim above, asserted against a real Postgres. |
 
 ## The shape of it
@@ -130,6 +131,38 @@ produce it.
 Run `mise run test-ts` to typecheck it. [ADR-0028](../../docs/adr/0028-typescript-client.md)
 is the record.
 
+## And so is the CLI
+
+[`cli/`](cli/) holds a cobra command tree emitted in the same run, and
+[`cmd/taskctl`](cmd/taskctl/) is the four-line `main` that runs it. Same
+argument again, for a consumer that has no compile step to refuse anything at:
+the capabilities a column declares become flags, so `--help` states exactly what
+the resource accepts, without a request.
+
+```bash
+export TASKCTL_BASE_URL=http://localhost:8080
+export TASKCTL_TOKEN="$(curl -s -X POST "$TASKCTL_BASE_URL/auth/login" \
+    -H 'content-type: application/json' \
+    -d '{"email":"you@example.com","password":"..."}' | jq -r .token)"
+
+go run ./cmd/taskctl tasks list --status eq.todo --sort -priority --expand list
+go run ./cmd/taskctl tasks list --status eq.done --all | jq -r '.items[].title'
+go run ./cmd/taskctl tasks update 019... --set-null assignee_id
+```
+
+`--status` names the enum's four values in its usage; `--completed-at` offers
+`isnull` because the column is nullable and no pattern operators because it is a
+timestamp; `password_hash` has no flag on any command because it is hidden.
+`--all` walks the collection with `?cursor=` rather than counting pages, so it
+cannot read a row twice while the table is written to underneath it.
+
+The token comes from `POST /auth/login` — hand-written, not a table — which the
+CLI has no command for, the same asymmetry `web/src/api/http.ts` has.
+
+Run `mise run test-cli` to build it and exercise the wire format against an
+`httptest` server; no Docker.
+[ADR-0029](../../docs/adr/0029-go-cli.md) is the record.
+
 ## Two things sqlb does not do that this example works around
 
 Both are worth knowing before copying the schema.
@@ -190,7 +223,7 @@ refresh endpoint. Both are noted where they bite.
 ## Regenerating
 
 ```bash
-go generate ./...              # models, typed columns, REST bodies, manifest, TypeScript client
+go generate ./...              # models, typed columns, REST bodies, manifest, TS client, CLI
 go run ./cmd/migrate -force    # migrations, from the schema
 ```
 

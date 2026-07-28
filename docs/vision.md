@@ -107,10 +107,10 @@ Roughly in order of leverage. Everything below the first item is honestly
 speculative and should be reordered as understanding improves.
 
 **1. The generator.** The keystone, and mostly landed: models, typed column
-sets, REST request bodies, the registration that mounts them, and a TypeScript
-client. What remains is migrations — the generator can render DDL but nothing
-tells it what changed. `example/blog` is generated end to end, so every
-behaviour test in it tests the generator.
+sets, REST request bodies, the registration that mounts them, a TypeScript
+client, and a cobra CLI. What remains is migrations — the generator can render
+DDL but nothing tells it what changed. `example/blog` is generated end to end,
+so every behaviour test in it tests the generator.
 
 That client was described here as the thing the OpenAPI document exists to feed.
 It is not, and the correction is the whole reason it needed a generator rather
@@ -169,6 +169,15 @@ order and are worth more together than apart.
 print the SQL a query compiles to without running it. Possibly an MCP server
 over the manifest. Small work, disproportionate effect on how well the system
 can be driven by a model.
+
+Part of this is built, and arrived from the other direction. The generated CLI
+([ADR-0029](adr/0029-go-cli.md)) is introspection an agent can *act* on rather
+than only read: one flag per filterable column, the operators its type accepts
+in the usage string, so `--help` is a statement of what the resource will accept
+and it costs no request. The manifest still describes more than the CLI exposes
+— the CLI covers generated CRUD and nothing hand-written — so the MCP server is
+the piece that would close the gap, and it should read the manifest rather than
+shell out to the binary.
 
 ## How we would know it worked
 
