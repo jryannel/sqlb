@@ -59,6 +59,39 @@ import (
 // instead, so n of them compose by addition. It is still one statement, so the
 // snapshot argument above holds unchanged. ADR-0022 has the rest, including why
 // the value is an envelope rather than a bare array.
+//
+// # What an expansion does not carry: the target's query hooks
+//
+// This is the one part of expansion worth knowing before relying on it.
+//
+// A BeforeQuery hook on the target does not run. `Query[Task]().Expand("list")`
+// joins `lists` on the foreign key and nothing else, so a predicate registered
+// against List — the tenant scope, the soft-delete filter — is not in the join's
+// ON clause. Hidden columns are still honoured, because those are a property of
+// the model rather than of a hook; row-level rules are not.
+//
+// The reason is mechanical rather than considered: a hook is
+// func(context.Context, *Builder[List]) error, and the expansion code holds a
+// *Model reached through a relation, with no static type to instantiate a
+// Builder of. Running them would also mean qualifying every predicate they add
+// with the join alias, which a hook writing sqlb.F("org_id") did not do and
+// RawPred cannot be made to do.
+//
+// So the rows an expansion returns are exactly the rows the parent's own
+// foreign key points at, and their confinement is the schema's job:
+//
+//   - A composite foreign key that carries the tenant column makes a
+//     cross-tenant reference unrepresentable, so an expansion of it cannot
+//     cross a tenant either. This is the arrangement to reach for.
+//   - A plain foreign key plus a BeforeQuery hook on the target scopes the
+//     target's own endpoint and leaves the expansion scoped only by whatever
+//     the parent row references. If a row can reference a row its reader may
+//     not see, expanding it shows them that row.
+//
+// Neither is a bug in a schema where a parent can only reference rows its own
+// readers may see, which is the usual case and the one example/tasks is in.
+// It is a bug in a schema where that is not true, and nothing here will catch
+// it, which is why it is stated rather than left to be discovered.
 
 // expandPrefix marks a result column as an expanded relation. It is not a legal
 // column name in any schema this generates, so it cannot collide with one.

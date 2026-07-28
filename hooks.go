@@ -82,6 +82,13 @@ func OnIn[T any](r *Registry) *Hooks[T] {
 
 // BeforeQuery runs before every SELECT against T, including those issued by
 // generated REST handlers. The hook may add predicates, joins or ordering.
+//
+// "Every SELECT against T" means every statement whose subject is T. It does
+// not include T reached as the target of another model's expansion: joining
+// `lists` for `?expand=list` does not run List's hooks, so a scope registered
+// here constrains GET /lists and not the `list` an expanded task carries. What
+// bounds the second is the foreign key the parent row holds — see the
+// expansion notes in expand.go, which say when that is and is not enough.
 func (h *Hooks[T]) BeforeQuery(fn func(context.Context, *Builder[T]) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
