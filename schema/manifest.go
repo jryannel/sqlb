@@ -85,6 +85,13 @@ type ColumnManifest struct {
 	Immutable    bool         `json:"immutable,omitempty"`
 	Capabilities []string     `json:"capabilities,omitempty"`
 	References   *RefManifest `json:"references,omitempty"`
+
+	// Obligations, kept out of Capabilities because a capability is something
+	// a request may reach and these are things the server must have done. A
+	// client generator has no use for either; a reader auditing the boundary
+	// has.
+	Scoped     bool `json:"scoped,omitempty"`
+	SoftDelete bool `json:"softDelete,omitempty"`
 }
 
 // RefManifest describes a relationship. External references carry a target
@@ -185,6 +192,8 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 			HasDefault: d.Default != nil,
 			ReadOnly:   d.ReadOnly,
 			Immutable:  d.Immutable,
+			Scoped:     d.Scoped,
+			SoftDelete: d.SoftDelete,
 		}
 		for _, c := range []struct {
 			on   bool

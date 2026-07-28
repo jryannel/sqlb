@@ -161,7 +161,7 @@ CLI has no command for, the same asymmetry `web/src/api/http.ts` has.
 
 Run `mise run test-cli` to build it and exercise the wire format against an
 `httptest` server; no Docker.
-[ADR-0029](../../docs/adr/0029-go-cli.md) is the record.
+[ADR-0030](../../docs/adr/0029-go-cli.md) is the record.
 
 ## Two things sqlb does not do that this example works around
 
@@ -175,6 +175,13 @@ behaviour to build on, not a gap waiting to be closed. The tables that declare a
 soft delete therefore do not expose `OpDelete`; the read hooks add
 `deleted_at IS NULL`, and [`app/deletes.go`](app/deletes.go) serves `DELETE` as an
 `UPDATE`. Both halves are a few lines and both are visible.
+
+What the declaration does do is oblige the hook to exist: a resource over a
+table declaring a soft delete, or a `Scoped` column, does not mount until the
+registrations its operations need are on the registry
+([ADR-0030](../../docs/adr/0030-declared-scope-is-required.md)). The hooks in
+this example predate that check and satisfy it unchanged, which is the reason
+the check is shaped the way it is.
 
 **Composite foreign keys are not expressible in the DSL.** The hooks stop a
 request naming a list in another workspace; they cannot stop a migration, a

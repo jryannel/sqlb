@@ -59,7 +59,7 @@ type Post struct {
 	PublishedAt *time.Time `db:"published_at" json:"published_at" sqlb:"filter,sort"`
 	CreatedAt   time.Time  `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
 	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
-	DeletedAt   *time.Time `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
+	DeletedAt   *time.Time `db:"deleted_at" json:"deleted_at" sqlb:"readonly,softdelete"`
 }
 
 // TableName is the table Post maps to.

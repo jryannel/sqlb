@@ -109,7 +109,9 @@ WHERE ("status" = $1) AND ("views" >= $2) ORDER BY "views" DESC LIMIT 10 OFFSET 
 
 That is the same builder your Go code uses, so a `BeforeQuery` hook applies to
 it. Tenant scoping is a startup registration, not something each handler
-remembers.
+remembers — and a table that declared `Scoped` does not mount at all until the
+registration exists, so it is not something the *schema* has to remember
+either. See [queries and hooks](queries-and-hooks.md#say-it-in-the-schema-so-the-missing-hook-is-the-one-that-is-caught).
 
 ### Search
 

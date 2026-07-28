@@ -143,6 +143,36 @@ func (d *Description[T]) Hidden(columns ...string) *Description[T] {
 	return d.each("Hidden", columns, func(c *ColumnInfo) { c.Hidden = true })
 }
 
+// Scoped declares that the column confines the model's rows to one tenant, and
+// so that every operation a resource exposes over it must be constrained by a
+// hook. It is the runtime form of schema.Field.Scoped, for models sqlb did not
+// generate, and it writes no predicate: [rest.Resource] refuses to mount a
+// resource whose obligations no hook satisfies, and that is all it does.
+func (d *Description[T]) Scoped(column string) *Description[T] {
+	col := d.column("Scoped", column)
+	if d.m.Scope != nil && d.m.Scope != col {
+		panic(fmt.Sprintf("sqlb: %s already scopes on %q, cannot also use %q",
+			d.m.Type, d.m.Scope.Name, column))
+	}
+	col.Scoped = true
+	d.m.Scope = col
+	return d
+}
+
+// SoftDeleted declares the column a soft-delete predicate is expected to
+// filter — the runtime form of schema.SoftDelete's half that is not a column
+// definition. Like Scoped it obliges a BeforeQuery hook and nothing more.
+func (d *Description[T]) SoftDeleted(column string) *Description[T] {
+	col := d.column("SoftDeleted", column)
+	if d.m.Soft != nil && d.m.Soft != col {
+		panic(fmt.Sprintf("sqlb: %s already soft-deletes on %q, cannot also use %q",
+			d.m.Type, d.m.Soft.Name, column))
+	}
+	col.SoftDelete = true
+	d.m.Soft = col
+	return d
+}
+
 // Relation declares an expandable reference: field is the Go field an expanded
 // row lands in, and fkColumn is the local column joined on.
 //

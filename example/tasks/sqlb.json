@@ -30,7 +30,8 @@
             "column": "id",
             "onDelete": "CASCADE",
             "enforced": true
-          }
+          },
+          "scoped": true
         },
         {
           "name": "task_id",
@@ -98,7 +99,8 @@
           "type": "timestamptz",
           "goType": "*time.Time",
           "nullable": true,
-          "readOnly": true
+          "readOnly": true,
+          "softDelete": true
         }
       ],
       "indexes": [
@@ -170,7 +172,8 @@
             "column": "id",
             "onDelete": "CASCADE",
             "enforced": true
-          }
+          },
+          "scoped": true
         },
         {
           "name": "name",
@@ -244,7 +247,8 @@
           "type": "timestamptz",
           "goType": "*time.Time",
           "nullable": true,
-          "readOnly": true
+          "readOnly": true,
+          "softDelete": true
         }
       ],
       "indexes": [
@@ -352,7 +356,8 @@
             "column": "id",
             "onDelete": "CASCADE",
             "enforced": true
-          }
+          },
+          "scoped": true
         },
         {
           "name": "user_id",
@@ -473,7 +478,8 @@
             "column": "id",
             "onDelete": "CASCADE",
             "enforced": true
-          }
+          },
+          "scoped": true
         },
         {
           "name": "list_id",
@@ -637,7 +643,8 @@
           "type": "timestamptz",
           "goType": "*time.Time",
           "nullable": true,
-          "readOnly": true
+          "readOnly": true,
+          "softDelete": true
         }
       ],
       "indexes": [
@@ -739,7 +746,8 @@
           "readOnly": true,
           "capabilities": [
             "filter"
-          ]
+          ],
+          "scoped": true
         },
         {
           "name": "email",
@@ -824,7 +832,8 @@
           "readOnly": true,
           "capabilities": [
             "filter"
-          ]
+          ],
+          "scoped": true
         },
         {
           "name": "name",

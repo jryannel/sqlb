@@ -149,6 +149,48 @@ func (h *Hooks[T]) AfterDelete(fn func(context.Context, int64) error) *Hooks[T] 
 	return h
 }
 
+// RegisteredHooks reports which kinds of hook a model has, one bool per kind.
+//
+// It answers "did anyone write this" and deliberately not "does it do the right
+// thing": a hook's body is a closure, and nothing here can tell a tenant
+// predicate from a logging statement. That makes it useful for exactly one
+// thing — refusing to serve a model whose schema declared an obligation that
+// no registration could possibly be meeting, because there is no registration
+// ([ADR-0030]).
+//
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+type RegisteredHooks struct {
+	BeforeQuery  bool
+	BeforeCreate bool
+	BeforeUpdate bool
+	BeforeDelete bool
+}
+
+// Registered reports which kinds of hook are registered for T.
+func (h *Hooks[T]) Registered() RegisteredHooks {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return RegisteredHooks{
+		BeforeQuery:  len(h.beforeQuery) > 0,
+		BeforeCreate: len(h.beforeCreate) > 0,
+		BeforeUpdate: len(h.beforeUpdate) > 0,
+		BeforeDelete: len(h.beforeDelete) > 0,
+	}
+}
+
+// RegisteredFor reports which hooks are registered for T against whichever
+// registry exec resolves to — the same resolution a query would get, so a
+// handle carrying a scoped registry is asked about that registry rather than
+// about the process default.
+//
+// It reads the registry at the moment it is called, which is why the check it
+// exists for belongs where a resource is mounted: hooks registered afterwards
+// are not visible to it, and a program that mounts before it registers is a
+// program whose first request would have run unscoped anyway.
+func RegisteredFor[T any](exec Executor) RegisteredHooks {
+	return hooksFor[T](exec).Registered()
+}
+
 // Reset removes every registered hook for T. It exists for tests against the
 // process-default registry, which otherwise leak registrations between cases.
 // A test that can afford to name its own registry — NewRegistry, then

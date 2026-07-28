@@ -164,6 +164,7 @@ func (r *Registry) Validate() error {
 		seen := make(map[string]bool, len(t.fields))
 		renamedCols := make(map[string]string)
 		pks := 0
+		scoped := 0
 		for _, f := range t.fields {
 			d := f.Desc()
 			if !isIdent(d.Name) {
@@ -199,6 +200,24 @@ func (r *Registry) Validate() error {
 				}
 				if d.Hidden {
 					report(t.name, d.Name, "primary key cannot be Hidden: REST responses need it to address the row")
+				}
+			}
+			if d.Scoped {
+				scoped++
+				// A tenant column a request may write is not a tenant column:
+				// the create body would carry it, and the caller would choose
+				// which tenant to write into. ReadOnly keeps it out of the
+				// generated bodies entirely, which leaves the BeforeCreate
+				// hook as the only thing that can supply it. Immutable is not
+				// enough — it closes the update and leaves the create open.
+				if !d.ReadOnly {
+					report(t.name, d.Name, "Scoped column must be ReadOnly, or a create request gets to name the tenant it writes into")
+				}
+				// A tenant column that may be NULL is scoped by a predicate
+				// that cannot match it, so those rows are visible to nobody
+				// and, on the day someone writes IS NULL OR = $1, to everybody.
+				if d.Nullable {
+					report(t.name, d.Name, "Scoped column cannot be Nullable: a row whose tenant is NULL is outside every tenant's predicate")
 				}
 			}
 			if d.Expandable && d.Ref == nil {
@@ -241,6 +260,12 @@ func (r *Registry) Validate() error {
 
 		if pks > 1 {
 			report(t.name, "", "%d primary keys declared, expected at most one (use UniqueIndex for composite keys)", pks)
+		}
+		// Two scope columns would name one hook twice and say nothing more.
+		// There is no matching check for soft delete: the group always
+		// declares deleted_at, so a second one is already a duplicate column.
+		if scoped > 1 {
+			report(t.name, "", "%d Scoped columns declared, expected at most one", scoped)
 		}
 
 		for _, idx := range t.indexes {

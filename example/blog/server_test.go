@@ -33,6 +33,15 @@ func newServer(t *testing.T, db sqlb.Executor) http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID, middleware.Recoverer)
 
+	// posts declares SoftDelete, so the resource does not mount until something
+	// filters the column (ADR-0030). A test that registered its own hook keeps
+	// it; the rest get the example's, which is what a real program would have
+	// done in main before mounting anything.
+	if !sqlb.On[blog.Post]().Registered().BeforeQuery {
+		blog.RegisterHooks()
+		t.Cleanup(func() { sqlb.On[blog.Post]().Reset() })
+	}
+
 	api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
 	if err := blog.Register(api, db); err != nil {
 		t.Fatalf("mounting the blog resources: %v", err)
@@ -203,16 +212,26 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 		}
 	})
 
-	t.Run("without it the deleted rows are still returned", func(t *testing.T) {
+	// This subtest used to assert that a server mounted without the hook served
+	// the deleted rows — the state the example was in while the schema comment
+	// claimed the REST layer filtered by itself. It cannot be in that state any
+	// more: the declaration is an obligation now, so the failure moved from the
+	// response to the mount, and the assertion follows it.
+	t.Run("without it the resource does not mount", func(t *testing.T) {
 		defer sqlb.On[blog.Post]().Reset()
-		// No RegisterHooks call. This is the state the example was in while the
-		// schema comment claimed the REST layer filtered by itself.
-		db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
-		server := newServer(t, db.db)
 
-		do(t, server, http.MethodGet, "/posts", nil)
-		if strings.Contains(db.last(), `"deleted_at" IS NULL`) {
-			t.Errorf("something other than the hook filtered the query:\n%s", db.last())
+		db := newStubDB(t, postColumns(), nil)
+		router := chi.NewRouter()
+		api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
+
+		err := blog.Register(api, db.db)
+		if err == nil {
+			t.Fatal("expected mounting to fail: nothing filters a column the schema says is filtered")
+		}
+		for _, want := range []string{"BeforeQuery", "deleted_at"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v\nwant it to mention %q", err, want)
+			}
 		}
 	})
 

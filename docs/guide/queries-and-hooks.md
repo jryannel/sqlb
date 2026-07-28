@@ -306,6 +306,30 @@ run them.
 Returning an error is how "no tenant in this context" becomes impossible to
 forget rather than merely documented — no statement runs at all.
 
+### Say it in the schema, so the missing hook is the one that is caught
+
+The hook above cannot be forgotten at a call site. It can be forgotten
+entirely, and an unscoped model serves every tenant's rows with a `200` next to
+them. So the table declares what it expects:
+
+```go
+schema.Ref("org", Org).Filterable().ReadOnly().Scoped()
+```
+
+`Scoped` writes no predicate — it is inert in exactly the way `SoftDelete`'s
+column is. What it does is oblige the resource: `rest.Resource` refuses to
+mount a model whose declarations no hook satisfies, and names every missing
+registration at once. The obligation follows the operations, because a
+`BeforeQuery` hook says nothing about what a request can overwrite by id — an
+exposed update needs `BeforeUpdate`, a delete needs `BeforeDelete`, and a
+create needs `BeforeCreate` to supply the tenant column that `ReadOnly` kept
+out of the request body.
+
+The check proves a hook exists, not that it is right. That is worth knowing
+before relying on it, and it catches the case that actually happens: the table
+somebody added last week. [ADR-0030](../adr/0030-declared-scope-is-required.md)
+has the reasoning, including why the predicate is not generated for you.
+
 [`example/tasks/app/hooks.go`](../../example/tasks/app/hooks.go) is this taken
 as far as it goes: one file, a little over two hundred lines, confining six
 models across twenty-five endpoints. Two details there are worth stealing. The

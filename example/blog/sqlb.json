@@ -348,7 +348,8 @@
           "type": "timestamptz",
           "goType": "*time.Time",
           "nullable": true,
-          "readOnly": true
+          "readOnly": true,
+          "softDelete": true
         }
       ],
       "indexes": [
