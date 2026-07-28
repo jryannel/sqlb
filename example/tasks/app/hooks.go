@@ -30,6 +30,13 @@ import (
 //
 // # Fail closed
 //
+// The schema says the same thing from the other side. Every model below
+// declares Scoped on the column this file constrains, which means none of
+// these resources mount until the registrations their operations need are
+// here — so the file that would otherwise have to be remembered is the one the
+// server refuses to start without (ADR-0030). Nothing in it changed to satisfy
+// that; the check was shaped around what was already written.
+//
 // Every hook here returns an error when the context carries no claims. It never
 // falls back to "no restriction", which is the shape of most tenancy bugs: the
 // unauthenticated path is the one nobody tests, and an unscoped query there

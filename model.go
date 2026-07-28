@@ -43,6 +43,13 @@ type ColumnInfo struct {
 	ReadOnly   bool
 	Immutable  bool
 	Hidden     bool
+
+	// Obligations, from the same tag. Nothing on the request path reads
+	// either: they are the schema's statement that this model's rows are
+	// confined by something, and they are checked once, where a resource is
+	// mounted.
+	Scoped     bool
+	SoftDelete bool
 }
 
 // Model is the reflected mapping between a Go struct and a table.
@@ -57,6 +64,12 @@ type Model struct {
 	// own. They are not columns: a relation field is `db:"-"`, so nothing
 	// selects, inserts or updates it.
 	Relations []*RelationInfo
+
+	// Scope and Soft are the columns that declared an obligation, or nil. They
+	// are resolved here so that the check at mount time is a field read rather
+	// than a scan, and so that the error can name the column that asked.
+	Scope *ColumnInfo
+	Soft  *ColumnInfo
 
 	byName map[string]*ColumnInfo
 	// inUse is set the first time a statement is built against this model.
@@ -243,6 +256,20 @@ func collectColumns(m *Model, t reflect.Type, prefix []int) error {
 			m.PK = col
 		}
 
+		if col.Scoped {
+			if m.Scope != nil {
+				return fmt.Errorf("sqlb: model %s declares two scope columns (%s and %s)", m.Type, m.Scope.Field, sf.Name)
+			}
+			m.Scope = col
+		}
+
+		if col.SoftDelete {
+			if m.Soft != nil {
+				return fmt.Errorf("sqlb: model %s declares two soft-delete columns (%s and %s)", m.Type, m.Soft.Field, sf.Name)
+			}
+			m.Soft = col
+		}
+
 		m.Columns = append(m.Columns, col)
 		m.byName[name] = col
 	}
@@ -272,6 +299,10 @@ func applyCapabilities(c *ColumnInfo, tag string) {
 			c.Immutable = true
 		case "hidden":
 			c.Hidden = true
+		case "scope":
+			c.Scoped = true
+		case "softdelete":
+			c.SoftDelete = true
 		case "default":
 			c.HasDefault = true
 		}

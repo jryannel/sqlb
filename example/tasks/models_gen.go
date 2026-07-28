@@ -11,13 +11,13 @@ import (
 // Comment a comment on a task.
 type Comment struct {
 	ID          string     `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	WorkspaceID string     `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly"`
+	WorkspaceID string     `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly,scope"`
 	TaskID      string     `db:"task_id" json:"task_id" sqlb:"filter,immutable"`
 	AuthorID    string     `db:"author_id" json:"author_id" sqlb:"filter,readonly"`
 	Body        string     `db:"body" json:"body" sqlb:"filter,search"`
 	CreatedAt   time.Time  `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
 	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
-	DeletedAt   *time.Time `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
+	DeletedAt   *time.Time `db:"deleted_at" json:"deleted_at" sqlb:"readonly,softdelete"`
 }
 
 // TableName is the table Comment maps to.
@@ -26,7 +26,7 @@ func (Comment) TableName() string { return "comments" }
 // List a named list of tasks within a workspace.
 type List struct {
 	ID          string                 `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	WorkspaceID string                 `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly"`
+	WorkspaceID string                 `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly,scope"`
 	Name        string                 `db:"name" json:"name" sqlb:"filter,sort,search"`
 	Description string                 `db:"description" json:"description" sqlb:"filter,search"`
 	Color       string                 `db:"color" json:"color" sqlb:"default,filter"`
@@ -34,7 +34,7 @@ type List struct {
 	Archived    bool                   `db:"archived" json:"archived" sqlb:"default,filter,sort"`
 	CreatedAt   time.Time              `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
 	UpdatedAt   time.Time              `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
-	DeletedAt   *time.Time             `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
+	DeletedAt   *time.Time             `db:"deleted_at" json:"deleted_at" sqlb:"readonly,softdelete"`
 	Tasks       *sqlb.Collection[Task] `db:"-" json:"tasks,omitempty" sqlb:"expands=list_id,order=position,limit=20"` // filled in by ?expand=tasks
 }
 
@@ -53,7 +53,7 @@ const (
 // Membership a user's membership of a workspace, and their role in it.
 type Membership struct {
 	ID          string         `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	WorkspaceID string         `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly"`
+	WorkspaceID string         `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly,scope"`
 	UserID      string         `db:"user_id" json:"user_id" sqlb:"filter"`
 	Role        MembershipRole `db:"role" json:"role" sqlb:"default,filter,sort"`
 	CreatedAt   time.Time      `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
@@ -86,7 +86,7 @@ const (
 // Task a unit of work, belonging to one list.
 type Task struct {
 	ID           string       `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	WorkspaceID  string       `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly"`
+	WorkspaceID  string       `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly,scope"`
 	ListID       string       `db:"list_id" json:"list_id" sqlb:"filter,expand"`
 	List         *List        `db:"-" json:"list,omitempty" sqlb:"expands=list_id"` // filled in by ?expand=list
 	AssigneeID   *string      `db:"assignee_id" json:"assignee_id" sqlb:"filter"`
@@ -101,7 +101,7 @@ type Task struct {
 	CommentCount int32        `db:"comment_count" json:"comment_count" sqlb:"default,filter,sort,readonly"`
 	CreatedAt    time.Time    `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
 	UpdatedAt    time.Time    `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
-	DeletedAt    *time.Time   `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
+	DeletedAt    *time.Time   `db:"deleted_at" json:"deleted_at" sqlb:"readonly,softdelete"`
 }
 
 // TableName is the table Task maps to.
@@ -109,7 +109,7 @@ func (Task) TableName() string { return "tasks" }
 
 // User is a row of users.
 type User struct {
-	ID           string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	ID           string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly,scope"`
 	Email        string    `db:"email" json:"email" sqlb:"filter,search"`
 	Name         string    `db:"name" json:"name" sqlb:"filter,sort,search"`
 	PasswordHash string    `db:"password_hash" json:"-" sqlb:"hidden"`
@@ -122,7 +122,7 @@ func (User) TableName() string { return "users" }
 
 // Workspace a tenant. Lists, tasks and comments all belong to exactly one.
 type Workspace struct {
-	ID        string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	ID        string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly,scope"`
 	Name      string    `db:"name" json:"name" sqlb:"filter,sort,search"`
 	Slug      string    `db:"slug" json:"slug" sqlb:"filter"`
 	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`

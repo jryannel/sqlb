@@ -33,6 +33,16 @@ registration each instead of a rule every call site must remember. A hook
 returning an error aborts the operation, so a missing tenant fails closed.
 Generated handlers stay useful even when a resource has domain rules.
 
+That "fails closed" was true of a hook that runs and said nothing about a hook
+nobody wrote, which is the wider claim this record made and did not defend.
+Registration was default-open where row-level security — the mechanism this
+record offers hooks as an alternative to — is default-deny: an unregistered
+model served every tenant's rows with no failure signal at all.
+[ADR-0030](0030-declared-scope-is-required.md) closes that at the boundary
+where handlers are generated, by making a schema declaration an obligation the
+mount checks. It does not close it for queries written in Go, and it proves
+only that a hook exists.
+
 **What this costs.** Hooks are invisible action-at-a-distance: reading a query
 does not tell you what will actually execute. Hook order is registration order,
 which is implicit.
@@ -63,6 +73,11 @@ cannot read its own assignments.
   predicted: it turned out not to need Go 1.27, only a handle that satisfies
   `Executor`. The remaining question is whether anyone actually scopes a
   registry, which ADR-0020 tracks.
+- ~~Nothing makes a model's scoping hook compulsory, so the guarantee is that a
+  registered hook cannot be forgotten at a call site — not that the hook
+  exists.~~ Closed by [ADR-0030](0030-declared-scope-is-required.md), and
+  recorded here as a second miss: this record argued the leak case in its
+  Context and then wrote a revisit trigger for neither half of it.
 - If people need to bypass a hook for a legitimate admin path, that is a real
   gap — the answer is probably an explicit unscoped builder, not a way to
   disable hooks globally.
@@ -104,6 +119,10 @@ normalise input or reject a request with a useful error.
 - 2026-07-27 — Registry scoping landed ([ADR-0020](0020-transaction-scoped-handle.md)).
   Revised the costs, the revisit trigger and the cost-of-change estimate, which
   was too high.
+- 2026-07-28 — Narrowed the claim again, in the other direction. "A missing
+  tenant fails closed" was about the hook's body; the hook's *absence* was
+  default-open, and [ADR-0030](0030-declared-scope-is-required.md) is the
+  startup assertion that closes it where handlers are generated.
 - 2026-07-27 — Narrowed the claim. `example/tasks` showed the write hooks are a
   much thinner seam than this record implied, because they cannot read the
   database and cannot inspect the statement they are given.

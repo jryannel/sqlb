@@ -32,7 +32,12 @@ import "github.com/jryannel/sqlb/schema"
 // Workspace is the tenant. Every other table except User is scoped to one, and
 // the scoping is enforced in hooks rather than in handlers.
 var Workspace = schema.Table("workspaces",
-	schema.UUIDv7("id").PrimaryKey(),
+	// Scoped on the key, because on this table the row *is* the tenant. There
+	// is no workspace_id to point at, and a convention that only covers the
+	// tables carrying the column would leave GET /workspaces listing every
+	// tenant in the installation — which is the hole a schema-level convention
+	// silently leaves behind when one table does not follow it.
+	schema.UUIDv7("id").PrimaryKey().Scoped(),
 	schema.Text("name").Searchable().Sortable(),
 	schema.Text("slug").Unique().Filterable(),
 	schema.Timestamps(),
@@ -44,7 +49,11 @@ var Workspace = schema.Table("workspaces",
 // reaches every workspace the user is a member of — so this is the one table
 // the workspace hook does not scope.
 var User = schema.Table("users",
-	schema.UUIDv7("id").PrimaryKey(),
+	// The one table with no workspace column, and still scoped: which users a
+	// caller may see is a question about memberships, so the hook narrows the
+	// key with a subquery rather than comparing a column. The declaration goes
+	// where the predicate lands, which is here.
+	schema.UUIDv7("id").PrimaryKey().Scoped(),
 	schema.Text("email").Unique().Searchable(),
 	schema.Text("name").Searchable().Sortable(),
 
@@ -80,7 +89,7 @@ var Membership = schema.Table("memberships",
 	// The alternative, Immutable, keeps it out of the patch body only. That
 	// closes the worse hole (a task moved between workspaces after the fact)
 	// and leaves a required create field the server ignores.
-	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly(),
+	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly().Scoped(),
 
 	schema.Ref("user", User).OnDelete(schema.Cascade).Filterable(),
 	schema.Enum("role", "owner", "admin", "member").
@@ -106,7 +115,7 @@ var Membership = schema.Table("memberships",
 var List = schema.Table("lists",
 	schema.UUIDv7("id").PrimaryKey(),
 	// ReadOnly, supplied by the BeforeCreate hook; see the note on Membership.
-	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly(),
+	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly().Scoped(),
 
 	schema.Text("name").Searchable().Sortable(),
 	schema.Text("description").Searchable(),
@@ -155,7 +164,7 @@ var List = schema.Table("lists",
 var Task = schema.Table("tasks",
 	schema.UUIDv7("id").PrimaryKey(),
 	// ReadOnly, supplied by the BeforeCreate hook; see the note on Membership.
-	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly(),
+	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly().Scoped(),
 	// Expandable in both directions, which are two decisions about two
 	// endpoints: ?expand=list on a task pulls in the one list it belongs to,
 	// and ?expand=tasks on a list pulls in the tasks that point back at it.
@@ -236,7 +245,7 @@ var Task = schema.Table("tasks",
 var Comment = schema.Table("comments",
 	schema.UUIDv7("id").PrimaryKey(),
 	// ReadOnly, supplied by the BeforeCreate hook; see the note on Membership.
-	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly(),
+	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly().Scoped(),
 	schema.Ref("task", Task).OnDelete(schema.Cascade).Filterable().Immutable(),
 	schema.Ref("author", User).OnDelete(schema.Restrict).Filterable().ReadOnly(),
 

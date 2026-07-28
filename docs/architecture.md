@@ -215,6 +215,7 @@ is that a wrong answer must never be quieter than no answer.
 | A change with no `Down` | Renders an explanation, not an empty section that looks like a working rollback |
 | Filter names an unknown or uncapable column | 400 listing what would have been accepted |
 | Schema authoring mistake | Every problem reported at once, each with the fix |
+| A resource over a `Scoped` or soft-deleting model with no hook confining it | Refused at mount, listing every missing registration and the declaration that asked for it. Serving it would answer 200 with another tenant's rows, which is the quietest wrong answer in the system |
 
 Two deliberate exceptions, both documented where they happen: a page size above
 the maximum is capped rather than rejected, since a client asking for too much

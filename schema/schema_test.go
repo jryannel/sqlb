@@ -166,6 +166,31 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			want: "exceeds MaxPageSize",
 		},
 		{
+			name: "scoped column a request could write",
+			build: func(r *schema.Registry) {
+				r.Table("s1", schema.UUIDv7("id").PrimaryKey(),
+					schema.UUID("org_id").Filterable().Scoped())
+			},
+			want: "must be ReadOnly",
+		},
+		{
+			name: "scoped column that may be NULL",
+			build: func(r *schema.Registry) {
+				r.Table("s2", schema.UUIDv7("id").PrimaryKey(),
+					schema.UUID("org_id").Nullable().ReadOnly().Scoped())
+			},
+			want: "cannot be Nullable",
+		},
+		{
+			name: "two scope columns",
+			build: func(r *schema.Registry) {
+				r.Table("s3", schema.UUIDv7("id").PrimaryKey(),
+					schema.UUID("org_id").ReadOnly().Scoped(),
+					schema.UUID("team_id").ReadOnly().Scoped())
+			},
+			want: "2 Scoped columns declared",
+		},
+		{
 			name: "identifier that is not valid SQL",
 			build: func(r *schema.Registry) {
 				r.Table("k", schema.UUIDv7("id").PrimaryKey(), schema.Text("Bad Name"))

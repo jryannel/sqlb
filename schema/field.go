@@ -41,6 +41,12 @@ type FieldDesc struct {
 	Immutable bool // settable at create, rejected on update
 	Hidden    bool // never serialised into a REST response
 
+	// Obligations. Neither of these changes a query. They are read once, at
+	// startup, where rest refuses to mount a resource whose declarations have
+	// no hook behind them; nothing on the request path reads either one.
+	Scoped     bool // every exposed operation must be constrained by a hook
+	SoftDelete bool // the column a soft-delete predicate is expected to filter
+
 	// indexWanted marks a column that should carry an index even though the
 	// declaration does not name one — currently only external references,
 	// which exist to be joined on.
@@ -223,9 +229,15 @@ func Timestamps() Group {
 	}
 }
 
-// SoftDelete adds a nullable deleted_at column, and nothing else. Nothing in
-// the runtime reads the column: the name is not load-bearing anywhere below
-// this line, and declaring the group changes no query.
+// SoftDelete adds a nullable deleted_at column, and nothing else. Nothing on
+// the request path reads the column: the name is not load-bearing anywhere
+// below this line, and declaring the group changes no query.
+//
+// What it does do is oblige the table to have a BeforeQuery hook. A table that
+// declares a soft delete and filters nothing returns deleted rows from every
+// list endpoint, so [rest.Resource] refuses to mount one whose reads no hook
+// constrains ([ADR-0030]). The refusal is at startup and it checks only that a
+// hook exists — writing the predicate is still the caller's, exactly as below.
 //
 // Filtering the deleted rows out is a BeforeQuery registration, which is the
 // seam that reaches generated REST handlers as well as queries written by hand
@@ -242,8 +254,11 @@ func Timestamps() Group {
 // should leave OpDelete out of its Expose and route the endpoint itself.
 //
 // [ADR-0008]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0008-hooks-as-domain-seam.md
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
 func SoftDelete() Group {
-	return Group{Timestamp("deleted_at").Nullable().ReadOnly()}
+	f := Timestamp("deleted_at").Nullable().ReadOnly()
+	f.d.SoftDelete = true
+	return Group{f}
 }
 
 // Chainable configuration.
@@ -429,6 +444,37 @@ func (f *Field) Hidden() *Field {
 	return f
 }
 
+// Scoped declares that this column confines the table's rows to one tenant,
+// and that every operation the table exposes must be constrained by a hook.
+//
+//	schema.Ref("workspace", Workspace).Filterable().ReadOnly().Scoped()
+//
+// Like [SoftDelete], it writes no predicate and changes no query. What it
+// changes is what happens when the predicate is missing: [rest.Resource]
+// refuses to mount the resource at startup rather than serving every tenant's
+// rows with a 200 next to them ([ADR-0030]).
+//
+// The obligation follows the operations the table exposes, because a
+// BeforeQuery hook constrains what a request can see and says nothing about
+// what it can overwrite by id — a list needs BeforeQuery, an update needs
+// BeforeUpdate, a delete needs BeforeDelete, and a create needs BeforeCreate
+// when the column is ReadOnly and so has no other source than the hook.
+//
+// The row itself is the tenant on the table the others point at, so there the
+// declaration goes on the primary key:
+//
+//	schema.UUIDv7("id").PrimaryKey().Scoped()
+//
+// A table may declare one scope column. Where the confinement cannot be
+// written as a column of this table at all — a membership join, say — declare
+// it on the column the hook does constrain, which is the key it narrows.
+//
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+func (f *Field) Scoped() *Field {
+	f.d.Scoped = true
+	return f
+}
+
 // OnDelete sets the foreign key delete action. It panics if the field is not a
 // reference: that is a schema authoring bug, and failing at init is more useful
 // than failing at request time.
@@ -476,6 +522,8 @@ func (d *FieldDesc) Capabilities() string {
 	add(d.ReadOnly, "readonly")
 	add(d.Immutable, "immutable")
 	add(d.Hidden, "hidden")
+	add(d.Scoped, "scope")
+	add(d.SoftDelete, "softdelete")
 	return strings.Join(out, ",")
 }
 

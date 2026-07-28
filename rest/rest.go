@@ -229,6 +229,12 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 			opts.Path, opts.Ops&(OpRead|OpUpdate|OpDelete), b.model.Type)
 	}
 
+	// A schema that says these rows are confined has to be met by something
+	// that confines them. See scope.go for what this does and does not prove.
+	if err := checkObligations[T](b.model, db, opts); err != nil {
+		return err
+	}
+
 	// Resolved once, at startup, so that an executor which cannot begin a
 	// transaction is reported here rather than by the first write.
 	w, err := newWriter(db, opts)
