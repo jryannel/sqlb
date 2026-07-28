@@ -13,7 +13,65 @@ generated values land back in your structs without a follow-up read.
 
 `OnConflictDoNothing(target...)` and `OnConflictUpdate(target, update...)` cover
 upserts. A row skipped by do-nothing is simply absent from the result, so `One`
-returns `ErrNotFound`.
+returns `ErrNotFound`. When any row is skipped, **no** caller struct is written
+back — the returned slice is shorter than the rows that went in, so position no
+longer identifies them, and writing back by position would hand one row's
+generated id to another. The returned slice is the account of what was written.
+
+## When the database refuses a write
+
+A unique index, a foreign key or a check constraint refusing a write is usually
+the caller's mistake rather than an outage, so it arrives as a value you can
+branch on:
+
+```go
+if _, err := sqlb.InsertRows(&loan).One(ctx, tx); err != nil {
+    var c *sqlb.ConstraintError
+    if errors.As(err, &c) && c.Kind == sqlb.ConstraintUnique {
+        return "you already have a copy of that book out"
+    }
+    return err
+}
+```
+
+`errors.Is(err, sqlb.ErrConstraint)` is the cheap test for the class.
+`ConstraintError.Kind` is always set — `ConstraintUnique`, `ConstraintForeignKey`,
+`ConstraintCheck`, `ConstraintNotNull`, `ConstraintExclusion`. The generated REST
+handlers use exactly this to answer 409 for a conflict and 422 for the rest,
+instead of the 500 an unrecognised error would otherwise become.
+
+`Constraint` — the name of the index that refused — needs a driver to read it,
+because every driver exposes it as a struct field rather than as a method and
+this library depends on the standard library alone. Register a classifier once
+at startup and the field is filled in:
+
+```go
+sqlb.SetErrorClassifier(func(err error) (sqlb.ConstraintError, bool) {
+    var pg *pgconn.PgError
+    if !errors.As(err, &pg) {
+        return sqlb.ConstraintError{}, false
+    }
+    kind, ok := sqlb.ConstraintKindOf(pg.SQLState())
+    if !ok {
+        return sqlb.ConstraintError{}, false
+    }
+    return sqlb.ConstraintError{
+        Kind:       kind,
+        Constraint: pg.ConstraintName,
+        Table:      pg.TableName,
+        Column:     pg.ColumnName,
+        Detail:     pg.Detail,
+    }, true
+})
+```
+
+Then `c.Constraint == "loans_one_open_per_book_per_borrower"` is a comparison
+against a value rather than a `strings.Contains` on a message — which is what
+the same code looks like without it, and what no rename survives.
+
+This is the mechanism behind [where domain logic
+goes](../concepts/domain-logic.md): the check constraint is the guarantee, and
+the classifier is what turns its refusal into a sentence a caller can act on.
 
 ```go
 _, err := sqlb.UpdateRows[Post]().
@@ -86,6 +144,33 @@ needs them yet.
 
 `WithTxOptions` takes an isolation level. Asking for stricter isolation than an
 enclosing transaction already has is an error rather than a silent downgrade.
+
+### Row locking
+
+A transaction on its own does not stop two requests reading the same row,
+deciding the same thing and both writing. `ForUpdate` is what does:
+
+```go
+stock, err := sqlb.Query[Stock]().
+    Where(sqlb.F("sku").Eq(sku)).
+    ForUpdate().
+    One(ctx, tx)
+```
+
+The lock is held until the transaction ends. `ForShare` takes the weaker form,
+and `SkipLocked` — valid only with one of the two — steps over rows another
+transaction already holds, which is what makes a queue consumer work.
+
+Two rules make the difference between code that passes its tests and code that
+survives load.
+
+**Take locks in a consistent order.** Two transactions locking the same rows in
+opposite orders deadlock, and the test that would have found it is the one
+nobody writes.
+
+**In a hook, take the lock in `BeforeCreate`, not `AfterCreate`.** See
+[Locking order](hooks.md#locking-order) — it is invisible in the Go code and
+scales with concurrency.
 
 ## Sharing the transaction with another library
 

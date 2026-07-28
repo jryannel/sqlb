@@ -87,6 +87,37 @@ where a transaction is — `rest` wraps every generated write in one, so
 [Reading your own writes](#reading-your-own-writes) below shows. On a read, or
 under `Options.DisableTransactions`, there is nothing to find.
 
+### What fires when, and inside which transaction
+
+Four questions decide whether a domain invariant holds, and none of them is
+answerable from a signature. Stated here so they need not be answered by
+reading the source.
+
+**Every write path fires the hooks, not just the generated ones.**
+`sqlb.InsertRows(&a, &b).Exec(ctx, tx)` runs `BeforeCreate` on each row and
+`AfterCreate` on each stored row, exactly as `POST /posts` does. A hand-written
+HTML form handler and a generated REST handler enforce the same rules without
+either knowing the other exists, and that is the property the whole arrangement
+is for.
+
+**`AfterCreate` receives a pointer into the returned rows, so it can change
+the response.** Mutating `*T` there changes what the caller gets back and what
+`rest` writes to the wire — which is how a generated `POST /orders` can answer
+with the fill it just executed rather than with the order as submitted. This
+makes `AfterCreate` a good deal more than the "validation" its row in the table
+above suggests.
+
+**A defaulted column holding its zero value is omitted from the insert.** So
+the database supplies it rather than a zero overwriting it, and a `BeforeCreate`
+that copies one column into another falls out correctly in the zero case
+without a special case. This is why "has a default" and "is optional in the
+create body" are the same question.
+
+**Hooks reach the transaction.** `WithTx` hands `fn` a `*sqlb.DB` carrying the
+same registry, so hooks fire on statements issued inside it, and `TxFrom(ctx)`
+resolves *within* a hook — a `BeforeCreate` can read what earlier statements in
+the same unit of work have written but not yet committed.
+
 The gap that remains is narrower and deliberate: `BeforeUpdate` cannot read the
 assignments it was handed, so a rule that depends on what a column is *becoming*
 belongs in a `BEFORE` trigger.
@@ -190,15 +221,32 @@ check; see [where domain logic goes](../concepts/domain-logic.md).
 
 ## Locking order
 
-A hook is also where a lock is taken deliberately. Inserting a row takes a
-`FOR KEY SHARE` lock on every row its foreign keys reference — Postgres checking
-the constraints, invisible in the Go code — so two transactions that later try
-to upgrade the same row to `FOR UPDATE` deadlock. Taking the exclusive lock in
-`BeforeCreate`, before the row exists, collapses that into a queue.
+A hook is also where a lock is taken deliberately, and **it has to be taken in
+`BeforeCreate`, not `AfterCreate`**. This one is invisible in the Go code.
 
-The rule is easy to state and impossible to see, which is why it is worth being
+Inserting a row takes a `FOR KEY SHARE` lock on every row its foreign keys
+reference — Postgres checking the reference, not anything you wrote. Key-share
+locks are shared, so two concurrent inserts both get them; if each then tries to
+upgrade the same referenced row to `FOR UPDATE` inside `AfterCreate`, each waits
+for the other's share lock. That is a guaranteed deadlock, it scales with
+concurrency, and it surfaces as a 500 naming a statement you did not write:
+
+```
+ERROR: deadlock detected (SQLSTATE 40P01)
+  on: SELECT ... FROM "stocks" WHERE "id" = $1 LIMIT 2 FOR UPDATE
+```
+
+Taking the exclusive lock in `BeforeCreate` — before the row exists, so before
+the key-share lock is taken — fixes it, and costs one line of ordering.
+
+The other rule is to **take locks in a consistent order**: two transactions
+locking the same rows in opposite orders deadlock, and the test that would have
+found it is the one nobody writes.
+
+Both are easy to state and impossible to see, which is why they are worth being
 a named function with the explanation attached rather than a line inside a
-handler.
+handler. `ForUpdate`, `ForShare` and `SkipLocked` are on
+[Mutations and transactions](mutations.md#row-locking).
 
 ## Scoping and tests
 

@@ -109,7 +109,7 @@ These never name a column:
 | `select` | Projection. The primary key is always kept, even if omitted |
 | `sort`, `order` | Ordering, most significant first |
 | `search` | Substring fan-out over every `Searchable` column |
-| `expand` | Relations to resolve inline |
+| `expand` | Relations to resolve inline. `Apply` performs the join, so a parsed `?expand` is never silently dropped — a name that is not expandable is a 400 listing the ones that are |
 | `page`, `per_page` | Offset paging |
 | `limit`, `offset` | Offset paging, the explicit form |
 | `cursor` | Keyset paging |
@@ -140,16 +140,36 @@ silently matching nothing.
 
 ## Limits
 
-| Limit | Default | Set by |
+| Limit | Default | Bounds |
 |---|---|---|
-| `DefaultPageSize` | 25 | `schema.REST{DefaultPageSize}` |
-| `MaxPageSize` | 200 | `schema.REST{MaxPageSize}` |
-| `MaxFilters` | 24 | `schema.REST{MaxFilters}` |
-| `MaxGroupDepth` | 3 | package constant |
+| `DefaultPageSize` | 25 | Page size when the request does not ask |
+| `MaxPageSize` | 200 | Page size a client may request |
+| `MaxFilters` | 24 | **Leaf conditions**, counting the ones inside `or=`/`and=` groups |
+| `MaxSortTerms` | 4 | Terms in `?sort` |
+| `MaxListValues` | 100 | Values in one `in`/`nin` list |
+| `MaxValueLength` | 256 | Bytes in one filter value or search term |
+| `MaxGroupDepth` | 3 | Nesting of `or=`/`and=` groups |
+
+The first three are per-resource in `schema.REST`; the rest are package
+constants, overridable on `filter.Options`.
+
+Three of them exist because the obvious budget is the wrong one:
+
+- **`MaxFilters` counts leaf conditions, not parameters.** Counting top-level
+  parameters would leave the budget open to a single group holding as many
+  conditions as the client cared to write.
+- **`MaxListValues`** — a list is one condition against `MaxFilters` however
+  long it is, so without a separate bound `?id=in.1,2,3,…` is one parameter, one
+  predicate, and a bind parameter per member until the driver's 65535 run out.
+- **`MaxValueLength`** — the pattern operators pass their operand through
+  unescaped on purpose, so a value is a lever on how much work a scan does, and
+  a long one is a cheap way to pull it.
 
 A page size above the maximum is **capped rather than rejected** — a client
-asking for too much gets the maximum. Exceeding `MaxFilters` or the sort-term
-limit *is* a rejection, naming the count and the limit.
+asking for too much gets the maximum. The others *are* rejections, naming the
+count and the limit: `%d filters requested, the limit is %d`,
+`operator %q was given %d values, the limit is %d`,
+`value is %d bytes, the limit is %d`.
 
 `page` below 1 and a negative `offset` are both rejected.
 

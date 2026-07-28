@@ -60,8 +60,10 @@ oracle for what a resource is concealing.
 | `unknown sort direction "…", expected asc or desc` | |
 | `search is not enabled for this resource` | `?search=` where no column is searchable |
 | `no column of this resource is searchable` | The same, from the other path |
-| `N filters requested, the limit is M` | `MaxFilters` |
-| `N sort terms requested, the limit is M` | The sort-term limit |
+| `N filters requested, the limit is M` | `MaxFilters`, counted per leaf condition |
+| `N sort terms requested, the limit is M` | `MaxSortTerms` |
+| `operator "in" was given N values, the limit is M` | `MaxListValues` |
+| `value is N bytes, the limit is M` | `MaxValueLength` |
 | `must be at least 1` | `page` below 1 |
 | `must not be negative` | A negative `offset` or `limit` |
 | `not a number` | A non-numeric `page`, `per_page`, `limit` or `offset` |
@@ -92,9 +94,37 @@ always means the client sent the wrong shape.
 |---|---|
 | 400 | The query string or body could not be understood, or named something that has not opted in. Carries `errors[]` |
 | 404 | No row matched, **after** hooks applied their predicates. A row confined away by a tenant scope is indistinguishable from one that does not exist, which is the intent |
-| 409 | A constraint the application chose to state — a unique index, or a domain rule a hook turned into a refusal |
-| 422 | The body parsed but is not acceptable: cross-field validation from `Row()`, or a hook that refused |
-| 500 | Anything else. Its text is a wrapped Postgres error with table and constraint names in it, so it goes to the log rather than to the caller |
+| 409 | A unique or exclusion constraint refused the write — the request is well formed and would be valid against a different state of the database |
+| 422 | The body parsed but is not acceptable: a foreign key, check or not-null constraint, cross-field validation from `Row()`, or a hook that refused |
+| 500 | Anything the layer could not classify. The body says only that the request could not be completed; the error is logged |
+
+## Refused writes
+
+`rest` classifies a constraint violation rather than letting it become a 500,
+using the same `sqlb.ConstraintError` a Go caller branches on:
+
+| Constraint kind | SQLSTATE | Status |
+|---|---|---|
+| `ConstraintUnique` | 23505 | 409 |
+| `ConstraintExclusion` | 23P01 | 409 |
+| `ConstraintForeignKey` | 23503 | 422 |
+| `ConstraintCheck` | 23514 | 422 |
+| `ConstraintNotNull` | 23502 | 422 |
+
+**The constraint's name is deliberately not in the body.** It is available to Go
+callers on `sqlb.ConstraintError`, which is where branching on it belongs;
+putting it on the wire would publish an internal identifier to whoever provoked
+it.
+
+The same reasoning shapes the unclassified case. An error `rest` cannot
+classify answers a generic 500 and is logged, rather than reaching the client —
+an unwrapped database error names tables, columns and constraints, and can carry
+the compiled SQL with it.
+
+An error that already carries a status is passed through, so a deliberate
+refusal from a hook keeps the status it chose rather than being flattened to a
+500. Filling in `ConstraintError.Constraint` needs a driver-specific classifier
+registered once at startup; see [Mutations](/sqlb/queries/mutations/#when-the-database-refuses-a-write).
 
 ## Reading it
 
@@ -128,6 +158,7 @@ if (isProblem(body)) {
 | `sqlb.ErrUnscoped` | An update or delete with no `Where`; call `Everything()` to confirm |
 | `sqlb.ErrBadCursor` | A cursor used against a different ordering. The message names both |
 | `sqlb.ErrAfterCommit` | The write committed; one or more after-commit callbacks failed. The two cases need opposite responses — see [Hooks](/sqlb/queries/hooks/#aftercommit-for-side-effects) |
+| `sqlb.ErrConstraint` | The class of every write a database constraint refused. `errors.As` into `*sqlb.ConstraintError` for the kind and, with a classifier registered, the name |
 
 See [ADR-0011](/sqlb/adr/0011-actionable-errors/) for why rejections carry data
 rather than prose.

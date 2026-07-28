@@ -114,9 +114,17 @@ own. Where a hook enforces a boundary the expansion has to respect, **the schema
 has to enforce it too**: `example/tasks` keeps a task and its list in the same
 workspace with a composite foreign key, not with the hook.
 
-This is the sharpest edge on this page. If a tenant boundary is held only by a
-`BeforeQuery` registration, an expandable reference crossing that boundary is a
-way around it.
+This is the sharpest edge on this page, and it is sharper than it looks. A table
+that declares `Scoped` has been *proved* to have a confining hook before it
+mounts — so an author who declares it, satisfies the check and sees the resource
+mount has more reason than before to believe the rows are confined everywhere.
+An expansion joins that table from a parent, and no handler for it runs, so the
+hook the check proved exists is precisely the one the join does not call.
+
+**What confines an expansion is the foreign key, not the declaration.** A
+composite key carrying the scoping column makes a cross-tenant reference
+unrepresentable; a plain single-column key does not, and nothing at mount time
+will say so ([ADR-0030](../adr/0030-declared-scope-is-required.md#consequences)).
 
 [ADR-0025](../adr/0025-expansion-is-one-statement.md) records why it is one
 statement, why the columns are listed rather than taken wholesale, and what

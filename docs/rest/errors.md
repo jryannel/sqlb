@@ -54,13 +54,26 @@ time by an attacker who is patient about 200s and 404s.
 |---|---|
 | 400 | The query string could not be understood, or named something that has not opted in. Carries `errors[]` with allow-lists |
 | 404 | No row matched, after hooks applied their predicates. A row confined away by a tenant scope is indistinguishable from one that does not exist, which is the intent |
-| 409 | A constraint the application chose to state — a unique index, a domain rule a hook turned into a refusal |
-| 422 | The body parsed but is not acceptable: cross-field validation from `Row()`, or a hook that refused |
-| 500 | Anything else. Its text is a wrapped Postgres error with table and constraint names in it, so it goes to the log rather than to the caller |
+| 409 | A unique or exclusion constraint refused the write — the request is well formed and would be valid against a different state of the database |
+| 422 | The body parsed but is not acceptable: a foreign key, check or not-null constraint, cross-field validation from `Row()`, or a hook that refused |
+| 500 | Anything the layer could not classify. The body says only that the request could not be completed, and the error is logged |
 
-The line between 409/422 and 500 is a decision worth making explicitly:
-everything the application recognises is a rule it chose to state, so its text is
-the answer; everything else is a 500 whose text the caller does not get.
+The line between those is not left to chance. A constraint violation is
+classified from its SQLSTATE into a `sqlb.ConstraintError` and answered in the
+terms of the request — so a duplicate is a 409 rather than the 500 an
+unrecognised database error would otherwise become. The constraint's *name* is
+deliberately absent from the body: it is available to Go callers on the error
+value, which is where branching on it belongs, and putting it on the wire would
+publish an internal identifier to whoever provoked it.
+
+That is also why the unclassified case is so blunt. An unwrapped database error
+names tables, columns and constraints and can carry the compiled SQL with it, so
+it goes to the log and the caller gets a sentence. An error that already carries
+a status is passed through unchanged, so a hook's deliberate refusal keeps the
+status it chose.
+
+See [Mutations](../queries/mutations.md#when-the-database-refuses-a-write) for
+the Go side, including the driver classifier that fills in the constraint name.
 
 ## It survives to the last consumer
 
