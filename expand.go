@@ -78,20 +78,43 @@ import (
 // RawPred cannot be made to do.
 //
 // So the rows an expansion returns are exactly the rows the parent's own
-// foreign key points at, and their confinement is the schema's job:
+// foreign key points at, and what confines them is the foreign key rather than
+// anything registered against the target.
 //
-//   - A composite foreign key that carries the tenant column makes a
-//     cross-tenant reference unrepresentable, so an expansion of it cannot
-//     cross a tenant either. This is the arrangement to reach for.
-//   - A plain foreign key plus a BeforeQuery hook on the target scopes the
-//     target's own endpoint and leaves the expansion scoped only by whatever
-//     the parent row references. If a row can reference a row its reader may
-//     not see, expanding it shows them that row.
+// # Scoped does not reach an expansion, and the reason is the same one
+//
+// [ADR-0030] makes `Scoped` an obligation: a table declaring that its rows are
+// confined will not mount a REST resource until a hook exists to confine them.
+// That check is about the target's *own* endpoint. An expansion is not that
+// endpoint — no handler for the target runs, and the hook the check proved
+// exists is exactly the hook this join does not call.
+//
+// The distinction is easy to lose, because the declaration now reads as a
+// boundary and mostly is one. ADR-0030's own account of where the boundary is
+// not held names `sqlb.Query[T]()` in application code; expanding a Scoped
+// table from a parent is the second such place, and it is reachable from a
+// request rather than only from code someone wrote on purpose.
+//
+// What actually holds across the join is the shape of the key:
+//
+//   - A composite foreign key carrying the confining column — the arrangement
+//     `example/tasks` uses, where tasks reference `(workspace_id, list_id)`
+//     against `lists (workspace_id, id)` — makes a cross-tenant reference
+//     unrepresentable. The parent cannot point outside its own tenant, so the
+//     expansion cannot either, whether or not any hook runs. This is the
+//     arrangement to reach for, and declaring `Scoped` is a good reason to
+//     reach for it rather than a substitute.
+//   - A plain single-column foreign key leaves the expansion bounded only by
+//     what the parent row happens to reference. If a row can reference a row
+//     its own readers may not see, expanding it shows them that row — and the
+//     `Scoped` declaration on the target will not have stopped it.
 //
 // Neither is a bug in a schema where a parent can only reference rows its own
-// readers may see, which is the usual case and the one example/tasks is in.
-// It is a bug in a schema where that is not true, and nothing here will catch
-// it, which is why it is stated rather than left to be discovered.
+// readers may see, which is the usual case. It is a bug in a schema where that
+// is not true, nothing here or at mount time will catch it, and that is why it
+// is stated rather than left to be discovered.
+//
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
 
 // expandPrefix marks a result column as an expanded relation. It is not a legal
 // column name in any schema this generates, so it cannot collide with one.
