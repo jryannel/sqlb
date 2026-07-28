@@ -1,7 +1,7 @@
 # How sqlb compares
 
 Every evaluator builds this table silently. Better to build it here, including
-the rows where sqlb loses.
+the places where sqlb loses.
 
 Read the [status](compatibility.md) first, because it outranks everything below:
 sqlb is pre-1.0, has one author and no observed consumers. Every tool on this
@@ -10,15 +10,20 @@ here argues otherwise.
 
 ## The short version
 
-| If you need | Use | Why |
+Most of this page is not either/or. Three of the five tools below sit happily
+beside sqlb in one codebase, and one of those pairings is tested here rather
+than asserted.
+
+| Tool | Strongest at | How sqlb relates |
 |---|---|---|
-| Static queries, checked against a real schema at build time | **sqlc** | Its whole guarantee. sqlb's is weaker by design |
-| Reporting, recursive CTEs, window functions | **sqlc** | sqlb sends these to `Raw`, which is a declared non-goal |
-| A mature graph model — traversal, M2M, nested eager loading | **ent** | Years of production use and an extension ecosystem |
-| Migrations as the main event, across engines, with linting and CI | **Atlas** | A funded company doing exactly this |
-| An API with no Go code at all | **PostgREST** | Nothing to write or deploy but the database |
-| A filter/sort/search endpoint whose predicates vary per request | **sqlb** | The reason it exists |
-| The same constraint applied to every read, hand-written and HTTP alike | **sqlb** | `BeforeQuery` has no equivalent in the others |
+| **sqlb** | Filter/sort/search endpoints whose predicates vary per request, and one constraint applied to every read of a model | — |
+| **sqlc** | Static queries typed against the real schema, and anything expressible in SQL | **Complementary**, and tested that way: sqlc owns the static queries, sqlb the dynamic list endpoint, both on one transaction |
+| **Atlas** | Migrations as a product — multi-engine, declarative and versioned, linted in CI | **Complementary**: sqlb writes migration files, Atlas is a better tool for applying and linting them |
+| **Bun** | A mature multi-dialect query builder and light ORM | **Overlapping** at the builder. sqlb adds the URL grammar and the capability model above it |
+| **ent** | A mature graph model — traversal, M2M, nested eager loading — with an extension ecosystem | **Overlapping**, and the more complete answer today. sqlb layers over structs ent cannot touch |
+| **PostgREST** | An API with no Go code at all | **An alternative**: the same job with the rules in RLS rather than in Go |
+
+The sections below take each in turn, leading with what it does better.
 
 ## sqlc
 
