@@ -128,3 +128,4 @@ nobody finishes reading has failed at its only job.
 | [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation | Exploring | Low |
 | [0027](0027-keyset-pagination.md) | A page is a position, not a distance | Working | High |
 | [0028](0028-typescript-client.md) | The TypeScript client is generated from the model, and stops at the query key | Working | Medium |
+| [0029](0029-go-cli.md) | The CLI is generated too, and its help text is the type system | Working | Medium |

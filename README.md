@@ -59,17 +59,23 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   on the migration that was written and never applied — which a compile-time
   column check cannot. `Diff` returns migration changes as values; your runner
   applies them.
-- **The client is generated from the schema too.** A TypeScript client, emitted
-  into the repository that consumes it, where `where` admits only filterable
-  columns with the operators their type accepts, `select` narrows the response
-  type, and a hidden column has no spelling at all. The OpenAPI document cannot
-  say any of that — `?status=eq.published` documents as `array<string>` — so it
-  is generated from the model instead
-  ([guide](https://jryannel.github.io/sqlb/guide/typescript-client/)).
+- **The clients are generated from the schema too.** A TypeScript client,
+  emitted into the repository that consumes it, where `where` admits only
+  filterable columns with the operators their type accepts, `select` narrows the
+  response type, and a hidden column has no spelling at all. The OpenAPI
+  document cannot say any of that — `?status=eq.published` documents as
+  `array<string>` — so it is generated from the model instead
+  ([guide](https://jryannel.github.io/sqlb/guide/typescript-client/)). The same
+  vocabulary becomes a [cobra](https://github.com/spf13/cobra) command tree for
+  a shell: one flag per filterable column, its operators in the usage string, so
+  `--help` states what a resource accepts without a request — which is the form
+  the guarantee has to take for a caller with no compile step, such as an agent
+  ([guide](https://jryannel.github.io/sqlb/guide/go-cli/)).
 - **No dependencies to inherit.** The engine depends on the standard library
   alone, and a CI gate enforces it. Only the REST adapter pulls in
   [Huma](https://huma.rocks), and only if you use it. The generated TypeScript
-  is a separate toolchain and a separate opt-in.
+  and the generated CLI are separate toolchains and separate opt-ins; the
+  emitters produce text, so `codegen` itself takes nothing.
 
 ## Install
 
@@ -102,19 +108,19 @@ a test of the generator's output.
 Postgres only. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING` are all
 load-bearing; multi-dialect support would cost the best features.
 
-Not built yet, in the order they matter: a durable change feed, and a
-command-line entry point.
+Not built yet, in the order they matter: a durable change feed, and an MCP
+server over the manifest.
 [Vision](https://jryannel.github.io/sqlb/project/vision/) has the detail.
 
 ## Documentation
 
 | | |
 |---|---|
-| [Guide](https://jryannel.github.io/sqlb/guide/) | Install, schema, queries and hooks, REST, TypeScript client, migrations |
+| [Guide](https://jryannel.github.io/sqlb/guide/) | Install, schema, queries and hooks, REST, TypeScript client, Go CLI, migrations |
 | [Architecture](https://jryannel.github.io/sqlb/project/architecture/) | How the pieces fit, the request path, where safety lives |
 | [Decision records](https://jryannel.github.io/sqlb/adr/) | What was decided, why, and what would change our mind |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
-| [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client |
+| [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client and CLI |
 
 ## Development
 

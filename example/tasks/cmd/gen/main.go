@@ -37,6 +37,14 @@ func main() {
 		// server it talks to cannot be a version behind it, which is the
 		// property models_gen.go already has and a published SDK cannot.
 		TSDir: "web/src/api",
+
+		// The command-line client, for the same reason and for one more: the
+		// caller most likely to drive this API is an agent, and `taskctl tasks
+		// list --help` is a statement of what the resource accepts that costs
+		// no round trip and no 400 to read. cmd/taskctl is the four-line main
+		// that runs it.
+		CLIDir:  "cli",
+		CLIName: "taskctl",
 	}
 
 	if *check {

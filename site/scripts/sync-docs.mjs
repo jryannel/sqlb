@@ -53,7 +53,7 @@ const SOURCES = [
     // Explicit, because the guide is a reading order rather than a list: a new
     // page should be placed deliberately, and one missing from here is reported
     // rather than silently appended at the end.
-    sequence: ["index", "getting-started", "schema", "queries-and-hooks", "rest", "typescript-client", "migrations"],
+    sequence: ["index", "getting-started", "schema", "queries-and-hooks", "rest", "typescript-client", "go-cli", "migrations"],
     order(slug) {
       return this.sequence.indexOf(slug);
     },

@@ -26,6 +26,13 @@
 // Output is deterministic: tables are sorted, columns keep declaration order,
 // and every file is run through go/format, so a generator bug that produces
 // invalid Go fails here rather than at the consumer's next build.
+//
+// Two further artefacts are opt-in, and both are emitted into the repository
+// that consumes them rather than published: TSDir writes a typed TypeScript
+// client (ADR-0028), and CLIDir writes a cobra command-line client (ADR-0029).
+// Each depends on something this package does not — @tanstack/react-query,
+// spf13/cobra — which is why neither is emitted unless asked for, and why
+// asking costs the consuming module a dependency rather than this one.
 package codegen
 
 import (
@@ -69,6 +76,25 @@ type Options struct {
 	TSDir         string
 	TSClientFile  string
 	TSQueriesFile string
+
+	// CLIDir emits a cobra command-line client, into a directory relative to
+	// Dir — "cli" in a repository whose binary lives beside its server. Empty
+	// means no CLI is emitted, which is the right default for a project that
+	// has no use for one.
+	//
+	// The emitted package depends on github.com/spf13/cobra and nothing else
+	// beyond the standard library. It does not import sqlb or the generated
+	// models: it speaks to the API over HTTP, so it holds no database
+	// credential and needs no build tag to keep one out.
+	//
+	// CLIName is the binary's name, which is what appears in usage lines and,
+	// upper-cased, as the prefix of the environment variables the root command
+	// reads: "taskctl" gives TASKCTL_BASE_URL and TASKCTL_TOKEN. It defaults to
+	// Package.
+	CLIDir     string
+	CLIPackage string
+	CLIName    string
+	CLIFile    string
 }
 
 func (o Options) modelsFile() string   { return orDefault(o.ModelsFile, "models_gen.go") }
@@ -78,6 +104,23 @@ func (o Options) restFile() string     { return orDefault(o.RestFile, "rest_gen.
 
 func (o Options) tsClientFile() string  { return orDefault(o.TSClientFile, "client.gen.ts") }
 func (o Options) tsQueriesFile() string { return orDefault(o.TSQueriesFile, "queries.gen.ts") }
+
+func (o Options) cliFile() string { return orDefault(o.CLIFile, "cli_gen.go") }
+func (o Options) cliName() string { return orDefault(o.CLIName, o.Package) }
+
+// cliPackage is the package clause of the emitted CLI. It defaults to the last
+// element of CLIDir, which is what a reader would guess from the import path.
+//
+// A directory name that is not an identifier is refused rather than repaired.
+// Quietly turning "api-client" into "apiclient" would emit a package under a
+// name nothing in the project mentions, and the import that failed to compile
+// would be the first anyone heard of it.
+func (o Options) cliPackage() string {
+	if o.CLIPackage != "" {
+		return o.CLIPackage
+	}
+	return filepath.Base(o.CLIDir)
+}
 
 // tsClientImport is the specifier the queries file imports the client by: a
 // sibling module, named without its extension, which is what a bundler
@@ -101,6 +144,16 @@ func (o Options) validate() error {
 		return fmt.Errorf("codegen: Options.Dir is required")
 	case o.Package == "":
 		return fmt.Errorf("codegen: Options.Package is required")
+	}
+	// The CLI lands in a package of its own, so its clause is derived from a
+	// directory name and can fail to be an identifier — "web/api-client" reads
+	// fine as a path and does not compile as a package. Caught here, naming the
+	// option to set, rather than by go/format, which parses without checking
+	// that a package name is one.
+	if o.CLIDir != "" && !isGoIdent(o.cliPackage()) {
+		return fmt.Errorf(
+			"codegen: Options.CLIDir %q gives the package name %q, which is not a Go identifier; set Options.CLIPackage",
+			o.CLIDir, o.cliPackage())
 	}
 	return nil
 }
@@ -227,6 +280,20 @@ func render(opts Options) (map[string][]byte, error) {
 			// not an error and should not leave an empty file behind.
 			if src != nil {
 				files[filepath.Join(opts.TSDir, name)] = src
+			}
+		}
+	}
+	if opts.CLIDir != "" {
+		if name := opts.cliFile(); name != "-" {
+			src, err := renderGoCLI(opts)
+			if err != nil {
+				return nil, err
+			}
+			// A schema that exposes nothing has no commands to offer, which is
+			// not an error and should not leave behind a file that imports
+			// cobra for the sake of an empty tree.
+			if src != nil {
+				files[filepath.Join(opts.CLIDir, name)] = src
 			}
 		}
 	}
