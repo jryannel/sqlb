@@ -125,3 +125,4 @@ nobody finishes reading has failed at its only job.
 | [0023](0023-mixins-carry-behaviour.md) | A mixin contributes columns; carrying behaviour needs codegen | Exploring | Medium |
 | [0024](0024-no-annotation-slot.md) | No annotation slot until something can consume one | Working | Medium |
 | [0025](0025-expansion-is-one-statement.md) | Expansion is one statement, and Hidden survives the join | Working | Medium |
+| [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation | Exploring | Low |
