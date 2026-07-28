@@ -302,6 +302,71 @@ func TestGroupNestingIsBounded(t *testing.T) {
 	}
 }
 
+// A group is one entry in Query.Where and any number of conditions, so a
+// budget counting entries bounds the wrong thing: nesting was capped and width
+// was not, and one `or=` could carry as many conditions as a client cared to
+// write while the count of filters stayed at one.
+func TestGroupWidthIsBounded(t *testing.T) {
+	var conds []string
+	for i := 0; i < 200; i++ {
+		conds = append(conds, "status.eq.a")
+	}
+	values, _ := url.ParseQuery("or=(" + strings.Join(conds, ",") + ")")
+	_, err := filter.Parse(values, filter.Options{Model: sqlb.ModelOf[Article](), MaxFilters: 5})
+	if err == nil {
+		t.Fatal("a group wider than the filter budget should be rejected")
+	}
+	// One error, not one per condition over the limit: a pathological request
+	// must not be answered with a pathological document.
+	var errs filter.Errors
+	if errors.As(err, &errs) && len(errs) != 1 {
+		t.Errorf("reported %d errors, want 1", len(errs))
+	}
+}
+
+// An `in` list is one condition however long it is, so the filter budget never
+// bounded it. Long enough and it exhausts the driver's parameter limit, which
+// arrives as a 500 for a request that should have been refused.
+func TestListLengthIsBounded(t *testing.T) {
+	var vals []string
+	for i := 0; i < 500; i++ {
+		vals = append(vals, "a")
+	}
+	values, _ := url.ParseQuery("status=in." + strings.Join(vals, ","))
+	if _, err := filter.Parse(values, opts()); err == nil {
+		t.Error("an unbounded IN list should be rejected")
+	}
+
+	// A list within the limit still parses, so the guard is proven both ways.
+	values, _ = url.ParseQuery("status=in.a,b,c")
+	if _, err := filter.Parse(values, opts()); err != nil {
+		t.Errorf("a short list should still be accepted: %v", err)
+	}
+}
+
+// The pattern operators pass their operand through unescaped on purpose, so
+// value length is a lever on how much work a scan does.
+func TestValueLengthIsBounded(t *testing.T) {
+	long := strings.Repeat("a", 10000)
+	for _, q := range []string{
+		"title=like." + long,
+		"title=eq." + long,
+		"search=" + long,
+		"status=in.a," + long,
+	} {
+		values, _ := url.ParseQuery(q)
+		if _, err := filter.Parse(values, opts()); err == nil {
+			t.Errorf("an oversized value should be rejected: %s", q[:20])
+		}
+	}
+	// A list of many short values is not an oversized value, and must not be
+	// caught by measuring the list in aggregate.
+	values, _ := url.ParseQuery("status=in." + strings.Repeat("ab,", 60) + "z")
+	if _, err := filter.Parse(values, opts()); err != nil {
+		t.Errorf("a long list of short values should be accepted: %v", err)
+	}
+}
+
 func TestQuotedValuesKeepTheirCommas(t *testing.T) {
 	sql, args := compile(t, `status=in."a,b",c`)
 	if !strings.Contains(sql, `"status" IN ($1, $2)`) {
