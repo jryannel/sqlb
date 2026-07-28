@@ -371,13 +371,28 @@ func (u *Update[T]) SQL() (string, []any, error) {
 	return c.result()
 }
 
+// Clone returns an independent copy, so a statement can be reused as the
+// starting point for several derived ones.
+func (u *Update[T]) Clone() *Update[T] {
+	c := *u
+	c.sets = append([]assignment(nil), u.sets...)
+	c.where = append([]Pred(nil), u.where...)
+	return &c
+}
+
 // Exec runs the update and returns the updated rows.
+//
+// The statement is cloned first, for the reason Builder.All clones: a
+// BeforeUpdate hook amends what it is given, and the doc comment's own example
+// is one that calls Set. Amending the caller's statement would make a second
+// Exec assign updated_at twice and narrow a scoping predicate twice.
 func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	hooks := hooksFor[T](db)
-	if err := hooks.runBeforeUpdate(ctx, u); err != nil {
+	stmt := u.Clone()
+	if err := hooks.runBeforeUpdate(ctx, stmt); err != nil {
 		return nil, err
 	}
-	query, args, err := u.SQL()
+	query, args, err := stmt.SQL()
 	if err != nil {
 		return nil, err
 	}
@@ -468,13 +483,26 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 	return c.result()
 }
 
+// Clone returns an independent copy, so a statement can be reused as the
+// starting point for several derived ones.
+func (d *Delete[T]) Clone() *Delete[T] {
+	c := *d
+	c.where = append([]Pred(nil), d.where...)
+	return &c
+}
+
 // Exec runs the delete and returns the number of rows removed.
+//
+// The statement is cloned first, for the reason Update.Exec clones: a
+// BeforeDelete hook narrowing the statement must narrow one execution, not
+// every later one.
 func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	hooks := hooksFor[T](db)
-	if err := hooks.runBeforeDelete(ctx, d); err != nil {
+	stmt := d.Clone()
+	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
 		return 0, err
 	}
-	query, args, err := d.SQL()
+	query, args, err := stmt.SQL()
 	if err != nil {
 		return 0, err
 	}

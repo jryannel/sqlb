@@ -257,6 +257,28 @@ func TestCountSQL(t *testing.T) {
 	}
 }
 
+// A count has to agree with what All returns. Dropping the DISTINCT and
+// counting the rows underneath answers a different question, and answers it
+// too high — so ?count=exact would report more rows than the client can ever
+// page through.
+func TestCountOfADistinctQueryCountsDistinctRows(t *testing.T) {
+	h := newHarness(t, []string{"count"}, [][]driver.Value{{int64(2)}})
+	defer h.close()
+
+	q := sqlb.Query[User]().Distinct().
+		Select(sqlb.F("org_id")).
+		Where(sqlb.F("name").Eq("Ada")).
+		OrderBy(sqlb.F("org_id").Asc()).Page(2, 10)
+
+	if _, err := q.Count(context.Background(), h.db); err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	want := `SELECT count(*) FROM (SELECT DISTINCT "org_id" FROM "users" WHERE "name" = $1) AS "distinct_rows"`
+	if got := h.lastQuery(); got != want {
+		t.Errorf("count SQL\n got: %s\nwant: %s", got, want)
+	}
+}
+
 func TestInsertOmitsDefaultedZeroColumns(t *testing.T) {
 	u := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
 	sql, args, err := sqlb.InsertRows(u).SQL()
@@ -448,6 +470,59 @@ func TestHooksDoNotAccumulate(t *testing.T) {
 	}
 	if second := h.lastQuery(); second != first {
 		t.Errorf("running twice changed the SQL\nfirst:  %s\nsecond: %s", first, second)
+	}
+}
+
+// The same guard for mutations, which had the opposite behaviour: hooks ran
+// against the caller's statement rather than a copy, so a second Exec assigned
+// twice and narrowed twice. Set("updated_at", …) is the example the BeforeUpdate
+// doc comment itself gives, so accumulating was reachable from the documented
+// use rather than from an exotic one.
+func TestMutationHooksDoNotAccumulate(t *testing.T) {
+	type Doc struct {
+		ID        string `db:"id" sqlb:"pk"`
+		OrgID     string `db:"org_id"`
+		Title     string `db:"title"`
+		UpdatedAt string `db:"updated_at"`
+	}
+	hooks := sqlb.On[Doc]()
+	defer hooks.Reset()
+	hooks.BeforeUpdate(func(ctx context.Context, u *sqlb.Update[Doc]) error {
+		u.Set("updated_at", "now")
+		u.Where(sqlb.F("org_id").Eq("acme"))
+		return nil
+	})
+	hooks.BeforeDelete(func(ctx context.Context, d *sqlb.Delete[Doc]) error {
+		d.Where(sqlb.F("org_id").Eq("acme"))
+		return nil
+	})
+
+	h := newHarness(t, []string{"id", "org_id", "title", "updated_at"}, nil)
+	defer h.close()
+	ctx := context.Background()
+
+	u := sqlb.UpdateRows[Doc]().Set("title", "Hello").Where(sqlb.F("id").Eq("d1"))
+	if _, err := u.Exec(ctx, h.db); err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+	first := h.lastQuery()
+	if _, err := u.Exec(ctx, h.db); err != nil {
+		t.Fatalf("second update: %v", err)
+	}
+	if second := h.lastQuery(); second != first {
+		t.Errorf("running the update twice changed the SQL\nfirst:  %s\nsecond: %s", first, second)
+	}
+
+	d := sqlb.DeleteRows[Doc]().Where(sqlb.F("id").Eq("d1"))
+	if _, err := d.Exec(ctx, h.db); err != nil {
+		t.Fatalf("first delete: %v", err)
+	}
+	firstDel := h.lastQuery()
+	if _, err := d.Exec(ctx, h.db); err != nil {
+		t.Fatalf("second delete: %v", err)
+	}
+	if second := h.lastQuery(); second != firstDel {
+		t.Errorf("running the delete twice changed the SQL\nfirst:  %s\nsecond: %s", firstDel, second)
 	}
 }
 
