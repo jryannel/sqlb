@@ -1,5 +1,6 @@
 // Command gen regenerates the task-manager example's models, typed column
-// facade, REST bodies and manifest from its schema declaration.
+// facade, REST bodies, manifest and TypeScript client from its schema
+// declaration.
 //
 //	go generate ./...     regenerate
 //	go run ./cmd/gen -check   fail if the committed output is stale
@@ -30,6 +31,12 @@ func main() {
 		Registry: schema.DefaultRegistry(),
 		Dir:      *dir,
 		Package:  "tasks",
+
+		// The TypeScript client, emitted into the frontend that consumes it
+		// rather than published as a package. A client generated against the
+		// server it talks to cannot be a version behind it, which is the
+		// property models_gen.go already has and a published SDK cannot.
+		TSDir: "web/src/api",
 	}
 
 	if *check {

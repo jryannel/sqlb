@@ -1,7 +1,12 @@
 # ADR-0028: The TypeScript client is generated from the model, and stops at the query key
 
-- **Status:** Exploring
-- **Confidence:** Low
+- **Status:** Working — all four layers are built and emitted into
+  `example/tasks/web`, whose typecheck is a gate in `mise run ci`
+- **Confidence:** Medium — the type-level claims are asserted rather than
+  assumed, since `web/src/refusals.ts` marks twelve illegal requests
+  `@ts-expect-error` and a widened type would fail the build, and the encoder's
+  output is tested against the grammar; Low still on the key shape and on
+  `queryOptions`, because no application has yet lived with either
 - **Decided:** 2026-07-28
 - **Last reviewed:** 2026-07-28
 
@@ -198,7 +203,23 @@ a table, so its key cannot be generated, and the subscriber cannot know it
 depends on drafts. Without a way for the application to declare that dependency,
 the generated feed reproduces the observed bug for derived views.
 
-None of this is built, hence Low confidence.
+**What building it changed.** Four things the record did not anticipate, none
+of them large enough to reverse a decision:
+
+- The key factory sits in the dependency-free file rather than beside
+  `queryOptions`. A change-feed subscriber needs keys and does not need a query
+  client, and the layering claim — each usable without the one above — is only
+  true if the keys are reachable without TanStack.
+- `Where` is emitted as a type alias, not an interface, because TypeScript gives
+  an object type alias an implicit index signature and an interface none, and
+  the shared encoder takes `Record<string, unknown>`.
+- The item endpoint has no `select`. `rest` registers it with
+  `RejectUnknownQueryParameters`, so a params type offering one would generate
+  requests the server refuses; the emitter reads the same exposure the handler
+  does and offers `expand` alone.
+- The raw-parameters escape hatch was emitted from the start, as `params`. This
+  record names reaching for it as the signal that the typed layer is in the
+  wrong place, so it exists partly to make that signal observable.
 
 ## What would change our mind
 
@@ -230,7 +251,10 @@ None of this is built, hence Low confidence.
 
 ## Cost of change
 
-Free now, since nothing is built.
+Cheap, and no longer free. One consumer exists (`example/tasks/web`), it is in
+the repository, and it regenerates from the schema — so a change to the emitter
+reaches every call site in the same run that produced them, and `tsc` names the
+ones that stop compiling.
 
 The asymmetry is between the layers and the key shape.
 
@@ -291,6 +315,13 @@ is the convention most TypeScript codebases expect, so it will be asked for.
   Recorded that the reverse must not be typed as a bare array, since that
   reproduces on the client exactly the silent truncation the envelope was
   introduced to prevent on the server.
+- 2026-07-28 — Built, and the status moved from Exploring to Working. Four
+  layers in two emitted files, wired into `example/tasks/web` with a
+  hand-written transport beside them, and gated by `mise run test-ts`. The four
+  design details the implementation settled are under Consequences; the
+  layering, the snake_case wire names, the injected transport and the
+  `queryOptions` unit all survived contact unchanged. Node is now pinned in
+  `mise.toml`, which is the second toolchain this record said it would cost.
 - 2026-07-28 — Renumbered from 0026, and reconciled with keyset pagination
   ([ADR-0027](0027-keyset-pagination.md)), which landed the same day: the
   response envelope carries `next_cursor`, and an infinite-query factory became

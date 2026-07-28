@@ -359,5 +359,6 @@ would make either worth revisiting.
 
 ## Next
 
+- [TypeScript client](typescript-client.md) — the same grammar, typed for the browser
 - [Queries and hooks](queries-and-hooks.md) — the hooks these handlers run
 - [Migrations](migrations.md) — changing the schema behind the API

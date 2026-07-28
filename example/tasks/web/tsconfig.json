@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    // The tests import `./client.gen.ts` by its real name, because they run
+    // under `node --test` with type stripping rather than through a bundler.
+    "allowImportingTsExtensions": true,
+
+    // Strict, and then some. The generated client's whole claim is that a
+    // misspelled column or an operator its column type does not accept fails
+    // here rather than at runtime, and a lenient tsconfig would quietly retire
+    // that claim.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
