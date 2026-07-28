@@ -1,8 +1,10 @@
 package rest
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -100,16 +102,23 @@ func invalidQuery(errs filter.Errors) *Problem {
 
 // asHumaError maps an error from the engine onto a response.
 //
-// Only the cases the REST layer can classify are mapped. Anything else becomes
-// a 500 with its text left to Huma, because a database error that this package
-// does not recognise is a bug here or an outage there, and dressing it up as a
-// 400 would send the client looking in the wrong place.
-func asHumaError(err error, resource string) error {
+// Everything this package can classify is mapped. Anything it cannot becomes a
+// 500 whose body says only that, with the error itself logged rather than
+// returned — because an unrecognised database error is a bug here or an outage
+// there, and the engine annotates it with the statement that failed. That
+// annotation is exactly what a log needs and exactly what a response must not
+// carry: it names tables, columns and constraints to whoever provoked it, and
+// provoking it is as easy as posting a duplicate value.
+func asHumaError(ctx context.Context, err error, resource string) error {
+	var constraint *sqlb.ConstraintError
+
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, sqlb.ErrNotFound):
 		return newError(http.StatusNotFound, fmt.Sprintf("no %s matched", resource))
+	case errors.As(err, &constraint):
+		return constraintProblem(constraint, resource)
 	case errors.Is(err, sqlb.ErrBadCursor):
 		// A cursor is a value the client was handed, so a bad one is a bad
 		// request. The commonest way to reach it is changing ?sort= while
@@ -128,7 +137,42 @@ func asHumaError(err error, resource string) error {
 	if errs, ok := filter.AsErrors(err); ok {
 		return invalidQuery(errs)
 	}
-	return err
+	// An error that already carries a status is an answer application code
+	// chose — a hook returning huma.Error403Forbidden because the caller lacks
+	// a role, say. It is not an unclassified failure, and replacing it with a
+	// generic 500 would turn every deliberate refusal a hook makes into an
+	// apparent outage.
+	var status huma.StatusError
+	if errors.As(err, &status) {
+		return err
+	}
+	slog.ErrorContext(ctx, "rest: unclassified error answering as 500",
+		"resource", resource, "err", err)
+	return newError(http.StatusInternalServerError, "the request could not be completed")
+}
+
+// constraintProblem answers a refused write in the terms of the request that
+// caused it.
+//
+// A unique or exclusion violation is 409: the request is well formed and would
+// be valid against a different state of the database. The others are 422: the
+// entity itself is wrong, and no amount of waiting makes a row referencing a
+// product that does not exist into a row that does.
+//
+// The constraint's name is deliberately not in the body. It is available to Go
+// callers on sqlb.ConstraintError, which is where branching on it belongs; put
+// in a response it becomes a way to enumerate a schema's indexes by provoking
+// them, and ADR-0006's whole position is that a rejection names what the API
+// accepts rather than what the database contains.
+func constraintProblem(e *sqlb.ConstraintError, resource string) *Problem {
+	switch e.Kind {
+	case sqlb.ConstraintUnique, sqlb.ConstraintExclusion:
+		return newError(http.StatusConflict,
+			fmt.Sprintf("this %s conflicts with one that already exists", resource))
+	default:
+		return newError(http.StatusUnprocessableEntity,
+			fmt.Sprintf("this %s breaks a rule the database enforces", resource))
+	}
 }
 
 // errorResponses documents the failures an operation can produce.

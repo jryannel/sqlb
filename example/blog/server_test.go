@@ -192,6 +192,36 @@ func TestGeneratedServerRefusesAReadOnlyColumn(t *testing.T) {
 	}
 }
 
+// An enum column is a string alias on the wire, so without the enum tag codegen
+// emits, the OpenAPI document says "string", validation passes anything, and the
+// value set is enforced only by Postgres — as an error the client sees as a 500.
+// The generated TypeScript client and CLI both refuse the value locally; this is
+// the server doing the same.
+func TestGeneratedServerRefusesAValueOutsideAnEnum(t *testing.T) {
+	db := newStubDB(t, postColumns(), nil)
+	server := newServer(t, db.db)
+
+	resp := do(t, server, http.MethodPatch, "/posts/p1", strings.NewReader(`{"status":"bogus"}`))
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422: %s", resp.Code, resp.Body)
+	}
+	if len(db.statements()) != 0 {
+		t.Error("a value outside the enum reached the database")
+	}
+	// The rejection says what would have been accepted, per ADR-0011.
+	if body := resp.Body.String(); !strings.Contains(body, "draft") {
+		t.Errorf("the refusal should name the accepted values: %s", body)
+	}
+
+	// A declared value still passes, so the guard is proven both ways.
+	db2 := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+	server2 := newServer(t, db2.db)
+	resp = do(t, server2, http.MethodPatch, "/posts/p1", strings.NewReader(`{"status":"published"}`))
+	if resp.Code != http.StatusOK {
+		t.Errorf("a declared enum value should be accepted, got %d: %s", resp.Code, resp.Body)
+	}
+}
+
 // The two halves of the soft delete, which the schema declares and the runtime
 // does not implement: RegisterHooks supplies the read predicate, and
 // RegisterPostSoftDelete supplies the write. Neither is automatic —

@@ -119,6 +119,19 @@ func (r *RelationInfo) Target() (*Model, error) {
 			return
 		}
 		r.FK = col
+
+		// The order column is checked here for the same reason the foreign key
+		// is: it names a column of the target, which only exists once the
+		// target is resolved. Left unchecked, `order=craeted_at` builds fine
+		// and fails at the database on the first expansion — which is the one
+		// thing this package tries never to do with a name it could have read.
+		if r.Order != "" && r.target.Column(strings.TrimPrefix(r.Order, "-")) == nil {
+			r.err = fmt.Errorf(
+				"sqlb: field %s orders its expansion by %q, which is not a column of %s (have: %s)",
+				r.Field, r.Order, r.target.Type.Name(),
+				strings.Join(r.target.ColumnNames(), ", "))
+			return
+		}
 	})
 	return r.target, r.err
 }

@@ -45,6 +45,16 @@ const (
 	MaxFilters      = 24
 	MaxSortTerms    = 4
 	MaxGroupDepth   = 3
+	// MaxListValues bounds one `in`/`nin` list. A list is a single condition
+	// against MaxFilters however long it is, so without this the budget is
+	// bypassed by writing ?id=in.1,2,3,… — one parameter, one predicate, and a
+	// bind parameter per member until the driver's 65535 runs out.
+	MaxListValues = 100
+	// MaxValueLength bounds one filter value or search term. The pattern
+	// operators pass their operand through unescaped on purpose, so a value is
+	// a lever on how much work a scan does, and a long one is a cheap way to
+	// pull that lever.
+	MaxValueLength = 256
 )
 
 // Options configures parsing for one resource.
@@ -53,17 +63,26 @@ type Options struct {
 	Model *sqlb.Model
 
 	DefaultPageSize int
-	MaxPageSize     int
-	MaxFilters      int
-	MaxSortTerms    int
+	// MaxFilters bounds the number of leaf conditions a request may ask for,
+	// counting the ones inside `or=`/`and=` groups. Counting top-level
+	// parameters instead would leave the budget open to a single group holding
+	// as many conditions as the client cared to write.
+	MaxFilters   int
+	MaxPageSize  int
+	MaxSortTerms int
+	// MaxListValues bounds one `in`/`nin` list; MaxValueLength bounds one
+	// filter value or search term.
+	MaxListValues  int
+	MaxValueLength int
 
 	// Expandable lists the relation names ?expand may name. Parsing validates
-	// against it; performing the join is the caller's job, and Apply is not
-	// that caller — it fails rather than dropping the parameter. Setting this
-	// is therefore a commitment to reading Query.Expand and joining explicitly.
+	// against it and Apply performs the join, so a parsed ?expand is never
+	// silently dropped: a name that is not here is a 400 listing the ones that
+	// are.
 	//
-	// The rest package cannot make that commitment yet, so it rejects a
-	// non-empty Expandable at startup.
+	// The rest package validates these against the model at startup, so a
+	// relation that cannot be expanded is a mounting error rather than a
+	// request-time surprise.
 	Expandable []string
 
 	// DisableSearch rejects ?search even when columns are searchable.
@@ -96,6 +115,20 @@ func (o Options) maxSortTerms() int {
 		return o.MaxSortTerms
 	}
 	return MaxSortTerms
+}
+
+func (o Options) maxListValues() int {
+	if o.MaxListValues > 0 {
+		return o.MaxListValues
+	}
+	return MaxListValues
+}
+
+func (o Options) maxValueLength() int {
+	if o.MaxValueLength > 0 {
+		return o.MaxValueLength
+	}
+	return MaxValueLength
 }
 
 // Query is a parsed request: predicates, ordering, projection and pagination,
@@ -238,9 +271,8 @@ func Parse(values url.Values, opts Options) (*Query, error) {
 		}
 	}
 
-	if n := len(q.Where); n > opts.maxFilters() {
-		p.errf("filter", "", "%d filters requested, the limit is %d", n, opts.maxFilters())
-	}
+	// The budget is charged per leaf condition inside build, so a group full of
+	// conditions costs what the same conditions cost written out.
 
 	if s := firstValue(values, "search"); s != "" {
 		q.Search = s
@@ -264,6 +296,43 @@ type parser struct {
 	opts  Options
 	model *sqlb.Model
 	errs  Errors
+	// conditions counts every leaf condition the request asked for, wherever
+	// it was written. A group is one entry in Query.Where and any number of
+	// conditions, so counting entries would bound the wrong thing.
+	conditions int
+	// overBudget stops the count being reported once per condition after the
+	// limit, which would answer a pathological request with a pathological
+	// error document.
+	overBudget bool
+}
+
+// withinLength bounds one operand, recording an error when it is over.
+func (p *parser) withinLength(value, param, raw string) bool {
+	if len(value) <= p.opts.maxValueLength() {
+		return true
+	}
+	p.errf(param, raw, "value is %d bytes, the limit is %d",
+		len(value), p.opts.maxValueLength())
+	return false
+}
+
+// charge records one leaf condition against the budget, reporting the first
+// time it is exceeded and refusing every condition after it.
+//
+// It charges before the condition is parsed rather than after it succeeds,
+// because the work being bounded is the parsing: a request full of malformed
+// conditions costs the same as one full of valid ones.
+func (p *parser) charge() bool {
+	p.conditions++
+	if p.conditions <= p.opts.maxFilters() {
+		return true
+	}
+	if !p.overBudget {
+		p.overBudget = true
+		p.errf("filter", "", "%d filter conditions requested, the limit is %d",
+			p.conditions, p.opts.maxFilters())
+	}
+	return false
 }
 
 func (p *parser) errf(param, value, format string, args ...any) {
@@ -371,10 +440,18 @@ var operators = map[string]opKind{
 }
 
 func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb.Pred, bool) {
+	if !p.charge() {
+		return sqlb.Pred{}, false
+	}
 	f := sqlb.F(col.Name)
 	kind, known := operators[op]
 	if !known {
 		p.errAllowed(param, raw, fmt.Sprintf("unknown operator %q", op), operatorNames())
+		return sqlb.Pred{}, false
+	}
+	// Lists and ranges hold several operands in one value, so they are measured
+	// per member where they are split rather than in aggregate here.
+	if kind != opList && kind != opRange && !p.withinLength(value, param, raw) {
 		return sqlb.Pred{}, false
 	}
 
@@ -409,8 +486,18 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 			p.errf(param, raw, "operator %q needs at least one value", op)
 			return sqlb.Pred{}, false
 		}
+		// One list is one condition however long it is, so the filter budget
+		// does not bound it and this has to.
+		if len(parts) > p.opts.maxListValues() {
+			p.errf(param, raw, "operator %q was given %d values, the limit is %d",
+				op, len(parts), p.opts.maxListValues())
+			return sqlb.Pred{}, false
+		}
 		vals := make([]any, 0, len(parts))
 		for _, part := range parts {
+			if !p.withinLength(part, param, raw) {
+				return sqlb.Pred{}, false
+			}
 			v, err := Coerce(unquote(part), col.Type)
 			if err != nil {
 				p.errf(param, part, "%v", err)
@@ -428,6 +515,11 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 		if len(parts) != 2 {
 			p.errf(param, raw, "operator \"between\" needs exactly two values, got %d", len(parts))
 			return sqlb.Pred{}, false
+		}
+		for _, part := range parts {
+			if !p.withinLength(part, param, raw) {
+				return sqlb.Pred{}, false
+			}
 		}
 		lo, err := Coerce(unquote(parts[0]), col.Type)
 		if err != nil {
@@ -529,6 +621,12 @@ func (p *parser) parseGroup(param, raw string, depth int) (sqlb.Pred, bool) {
 func (p *parser) parseSearch(term string) (sqlb.Pred, bool) {
 	if p.opts.DisableSearch {
 		p.errf("search", term, "search is not enabled for this resource")
+		return sqlb.Pred{}, false
+	}
+	// A search term is substituted into one LIKE per searchable column, so its
+	// length is multiplied by the width of the fan-out before it reaches the
+	// database.
+	if !p.withinLength(term, "search", term) {
 		return sqlb.Pred{}, false
 	}
 	var preds []sqlb.Pred

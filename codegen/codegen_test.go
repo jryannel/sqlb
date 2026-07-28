@@ -106,7 +106,7 @@ func TestGeneratedColumns(t *testing.T) {
 	}
 }
 
-func TestGeneratedUpdateSkipsReadOnlyColumns(t *testing.T) {
+func TestGeneratedUpdateSkipsOnlyThePrimaryKey(t *testing.T) {
 	cols := generate(t, fixture())["columns_gen.go"]
 
 	if !contains(cols, "func (u *BlogEntryUpdate) SetTitle(v string) *BlogEntryUpdate {") {
@@ -115,11 +115,18 @@ func TestGeneratedUpdateSkipsReadOnlyColumns(t *testing.T) {
 	if !contains(cols, "SetStatus(v BlogEntryStatus)") {
 		t.Error("the enum setter should take the enum type")
 	}
-	// id and view_count are read-only, so writing them is not offered.
-	for _, unwanted := range []string{"SetID(", "SetViewCount("} {
-		if contains(cols, unwanted) {
-			t.Errorf("a read-only column must not get a setter: %s", unwanted)
-		}
+	// A ReadOnly column gets one too. ReadOnly is a REST-boundary rule, and
+	// the boundary is defended there — the column is absent from the request
+	// bodies. Go through the query engine is trusted, so leaving it out only
+	// meant that the code which is the sole writer of view_count was the one
+	// code that had to write it untyped.
+	if !contains(cols, "SetViewCount(v int64)") {
+		t.Errorf("a read-only column should still be writable typed from Go:\n%s", cols)
+	}
+	// The primary key addresses the row rather than being part of what an
+	// update writes. Stmt() is the way to mean it.
+	if contains(cols, "SetID(") {
+		t.Error("the primary key must not get a setter")
 	}
 }
 
@@ -221,6 +228,32 @@ func TestGeneratedCreateBodyOmitsWhatAClientMayNotSet(t *testing.T) {
 		if contains(body, forbidden) {
 			t.Errorf("create body should not carry %s:\n%s", forbidden, body)
 		}
+	}
+}
+
+// An enum column types as a string alias, which Huma documents as a plain
+// string — so without the tag an invalid value passed validation, reached the
+// INSERT and returned whatever the database said. The generated TypeScript
+// client and CLI both enforce the value set, which left the one participant
+// that has to as the only one that did not.
+func TestGeneratedBodiesConstrainEnumValues(t *testing.T) {
+	src := generate(t, restFixture())["rest_gen.go"]
+
+	for _, want := range []string{
+		`Status *PostStatus ` + "`" + `json:"status,omitempty" enum:"draft,published"`,
+	} {
+		if !contains(src, want) {
+			t.Errorf("body missing the enum constraint %q:\n%s", want, src)
+		}
+	}
+	// Both bodies, not just the create one: a patch can set a column too.
+	patch := src[strings.Index(src, "type PostPatch struct {"):]
+	if !contains(patch, `enum:"draft,published"`) {
+		t.Errorf("patch body does not constrain the enum:\n%s", patch)
+	}
+	// A non-enum column must not grow the tag.
+	if contains(src, `json:"title" enum:`) {
+		t.Error("a plain text column should carry no enum constraint")
 	}
 }
 

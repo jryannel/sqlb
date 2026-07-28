@@ -428,3 +428,47 @@ func TestExpandCollectionIsNotAppliedUnlessAsked(t *testing.T) {
 		t.Errorf("an unexpanded query subqueried anyway:\n%s", sql)
 	}
 }
+
+// The claim ADR-0030's Consequences section now makes, pinned so it cannot
+// drift into being false without a failure.
+//
+// A BeforeQuery hook on the *target* does not reach an expansion of it. The
+// parent's own hooks do run, because the parent is the subject of the
+// statement — so this is not "hooks are off", it is "hooks belong to the model
+// being queried" and an expanded relation is not that model.
+//
+// Written as an assertion about the compiled SQL rather than about rows,
+// because the point is what does and does not reach the join.
+func TestExpandDoesNotRunTheTargetsQueryHooks(t *testing.T) {
+	parent := sqlb.On[expTask]()
+	target := sqlb.On[expList]()
+	defer parent.Reset()
+	defer target.Reset()
+
+	parent.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expTask]) error {
+		q.Where(sqlb.F("id").Neq("hidden-task"))
+		return nil
+	})
+	target.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expList]) error {
+		q.Where(sqlb.F("name").Neq("hidden-list"))
+		return nil
+	})
+
+	h := newHarness(t, []string{"id", "list_id", "title", "__expand_list"}, nil)
+	defer h.close()
+
+	if _, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.db); err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	stmt := h.lastQuery()
+
+	// The subject's hook is applied.
+	if !contains(stmt, `"tasks"."id" <> $`) {
+		t.Errorf("the queried model's own hook should reach the statement:\n%s", stmt)
+	}
+	// The target's is not, in the ON clause or anywhere else.
+	if contains(stmt, "hidden-list") || contains(stmt, `"name" <> `) {
+		t.Errorf("the expansion target's hook reached the statement; if this now "+
+			"works, ADR-0030 and the note in expand.go both need correcting:\n%s", stmt)
+	}
+}

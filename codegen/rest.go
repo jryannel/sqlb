@@ -89,6 +89,20 @@ func bodyFields(t *schema.TableDef, kind bodyKind) []*schema.Field {
 	return out
 }
 
+// enumTag renders Huma's enum struct tag for an enum column.
+//
+// Without it the generated body types the column as a string alias, Huma
+// documents it as a plain string, and an invalid value passes validation,
+// reaches the INSERT and comes back as whatever the database said. The
+// TypeScript client and the CLI both enforce the value set already, which left
+// the server — the only one that has to — as the weakest of the three.
+func enumTag(d *schema.FieldDesc) string {
+	if d.Type != schema.TypeEnum || len(d.EnumValues) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" enum:%q", strings.Join(d.EnumValues, ","))
+}
+
 // optionalOnCreate reports whether a create body may omit the column: a
 // nullable column is absent as NULL, and a defaulted one is absent so the
 // database fills it.
@@ -111,7 +125,7 @@ func renderCreateBody(b *bytes.Buffer, t *schema.TableDef) {
 	fmt.Fprintf(b, "type %s struct {\n", name)
 	for _, f := range fields {
 		d := f.Desc()
-		fmt.Fprintf(b, "\t%s %s `json:\"%s%s\"`", GoName(d.Name), bodyType(typeName, d, forCreate), d.Name, omitEmpty(optionalOnCreate(d)))
+		fmt.Fprintf(b, "\t%s %s `json:\"%s%s\"%s`", GoName(d.Name), bodyType(typeName, d, forCreate), d.Name, omitEmpty(optionalOnCreate(d)), enumTag(d))
 		if c := d.Comment; c != "" {
 			fmt.Fprintf(b, " // %s", c)
 		}
@@ -160,7 +174,7 @@ func renderUpdateBody(b *bytes.Buffer, t *schema.TableDef) {
 	fmt.Fprintf(b, "type %s struct {\n", name)
 	for _, f := range fields {
 		d := f.Desc()
-		fmt.Fprintf(b, "\t%s %s `json:\"%s,omitempty\"`", GoName(d.Name), bodyType(typeName, d, forUpdate), d.Name)
+		fmt.Fprintf(b, "\t%s %s `json:\"%s,omitempty\"%s`", GoName(d.Name), bodyType(typeName, d, forUpdate), d.Name, enumTag(d))
 		if c := d.Comment; c != "" {
 			fmt.Fprintf(b, " // %s", c)
 		}

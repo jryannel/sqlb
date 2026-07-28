@@ -118,7 +118,7 @@ func registerRead[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			Where(sqlb.F(b.model.PK.Name).Eq(key)).
 			One(ctx, db)
 		if err != nil {
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 		return &itemOutput[T]{Body: row[T]{
 			value: found, cols: b.selectable, names: b.jsonName,
@@ -132,7 +132,7 @@ func registerRead[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 	if p := expandParam(b); p != nil {
 		op.Parameters = []*huma.Param{p}
 		huma.Register(api, op, func(ctx context.Context, in *expandableInput) (*itemOutput[T], error) {
-			expand, err := b.expansions(in.Expand)
+			expand, err := b.expansions(ctx, in.Expand)
 			if err != nil {
 				return nil, err
 			}
@@ -152,7 +152,7 @@ func registerRead[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 // list endpoint produces — same status, same message, same `allowed` list.
 // ADR-0011 makes the rejection part of the contract, and a second hand-written
 // copy of it is a second thing to drift.
-func (b *binding[T]) expansions(names []string) ([]string, error) {
+func (b *binding[T]) expansions(ctx context.Context, names []string) ([]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
@@ -161,7 +161,7 @@ func (b *binding[T]) expansions(names []string) ([]string, error) {
 		filter.Options{Model: b.model, Expandable: b.opts.Expandable},
 	)
 	if err != nil {
-		return nil, asHumaError(err, b.opts.name())
+		return nil, asHumaError(ctx, err, b.opts.name())
 	}
 	return q.Expand, nil
 }
@@ -209,7 +209,7 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T
 			return sqlb.InsertRows(value).One(ctx, db)
 		})
 		if err != nil {
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 		return &createdOutput[T]{Body: row[T]{value: created, cols: b.selectable, names: b.jsonName}}, nil
 	})
@@ -271,7 +271,7 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 			return stmt.One(ctx, db)
 		})
 		if err != nil {
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 		return &itemOutput[T]{Body: row[T]{value: updated, cols: b.selectable, names: b.jsonName}}, nil
 	})
@@ -314,7 +314,7 @@ func registerDelete[T any](api huma.API, w writer, b *binding[T]) {
 		case errors.Is(err, errNoRowsAffected):
 			return nil, newError(http.StatusNotFound, "no "+opts.name()+" matched")
 		case err != nil:
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 		return nil, nil
 	})

@@ -59,6 +59,62 @@ import (
 // instead, so n of them compose by addition. It is still one statement, so the
 // snapshot argument above holds unchanged. ADR-0022 has the rest, including why
 // the value is an envelope rather than a bare array.
+//
+// # What an expansion does not carry: the target's query hooks
+//
+// This is the one part of expansion worth knowing before relying on it.
+//
+// A BeforeQuery hook on the target does not run. `Query[Task]().Expand("list")`
+// joins `lists` on the foreign key and nothing else, so a predicate registered
+// against List — the tenant scope, the soft-delete filter — is not in the join's
+// ON clause. Hidden columns are still honoured, because those are a property of
+// the model rather than of a hook; row-level rules are not.
+//
+// The reason is mechanical rather than considered: a hook is
+// func(context.Context, *Builder[List]) error, and the expansion code holds a
+// *Model reached through a relation, with no static type to instantiate a
+// Builder of. Running them would also mean qualifying every predicate they add
+// with the join alias, which a hook writing sqlb.F("org_id") did not do and
+// RawPred cannot be made to do.
+//
+// So the rows an expansion returns are exactly the rows the parent's own
+// foreign key points at, and what confines them is the foreign key rather than
+// anything registered against the target.
+//
+// # Scoped does not reach an expansion, and the reason is the same one
+//
+// [ADR-0030] makes `Scoped` an obligation: a table declaring that its rows are
+// confined will not mount a REST resource until a hook exists to confine them.
+// That check is about the target's *own* endpoint. An expansion is not that
+// endpoint — no handler for the target runs, and the hook the check proved
+// exists is exactly the hook this join does not call.
+//
+// The distinction is easy to lose, because the declaration now reads as a
+// boundary and mostly is one. ADR-0030's own account of where the boundary is
+// not held names `sqlb.Query[T]()` in application code; expanding a Scoped
+// table from a parent is the second such place, and it is reachable from a
+// request rather than only from code someone wrote on purpose.
+//
+// What actually holds across the join is the shape of the key:
+//
+//   - A composite foreign key carrying the confining column — the arrangement
+//     `example/tasks` uses, where tasks reference `(workspace_id, list_id)`
+//     against `lists (workspace_id, id)` — makes a cross-tenant reference
+//     unrepresentable. The parent cannot point outside its own tenant, so the
+//     expansion cannot either, whether or not any hook runs. This is the
+//     arrangement to reach for, and declaring `Scoped` is a good reason to
+//     reach for it rather than a substitute.
+//   - A plain single-column foreign key leaves the expansion bounded only by
+//     what the parent row happens to reference. If a row can reference a row
+//     its own readers may not see, expanding it shows them that row — and the
+//     `Scoped` declaration on the target will not have stopped it.
+//
+// Neither is a bug in a schema where a parent can only reference rows its own
+// readers may see, which is the usual case. It is a bug in a schema where that
+// is not true, nothing here or at mount time will catch it, and that is why it
+// is stated rather than left to be discovered.
+//
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
 
 // expandPrefix marks a result column as an expanded relation. It is not a legal
 // column name in any schema this generates, so it cannot collide with one.
@@ -190,10 +246,22 @@ func writeRowObject(c *compiler, target *Model, alias string) {
 			c.write(", ")
 		}
 		first = false
-		c.write("'" + col.Name + "', ")
+		c.write(sqlStringLiteral(col.Name) + ", ")
 		c.column(Column{Table: alias, Name: col.Name})
 	}
 	c.write(")")
+}
+
+// sqlStringLiteral renders s as a single-quoted SQL string.
+//
+// The keys of the JSON object are the only place in this package where a name
+// reaches SQL as text rather than as a quoted identifier, so it is the only
+// place a quote in a name could close the literal early. Column names come from
+// struct tags or Describe and are the developer's own, so this is not a path
+// user input reaches — but "not reachable by a request" is a weaker property
+// than "cannot be malformed", and the second one costs a doubling.
+func sqlStringLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // compileCollection writes the reverse direction: the children that point back

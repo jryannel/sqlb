@@ -257,6 +257,28 @@ func TestCountSQL(t *testing.T) {
 	}
 }
 
+// A count has to agree with what All returns. Dropping the DISTINCT and
+// counting the rows underneath answers a different question, and answers it
+// too high — so ?count=exact would report more rows than the client can ever
+// page through.
+func TestCountOfADistinctQueryCountsDistinctRows(t *testing.T) {
+	h := newHarness(t, []string{"count"}, [][]driver.Value{{int64(2)}})
+	defer h.close()
+
+	q := sqlb.Query[User]().Distinct().
+		Select(sqlb.F("org_id")).
+		Where(sqlb.F("name").Eq("Ada")).
+		OrderBy(sqlb.F("org_id").Asc()).Page(2, 10)
+
+	if _, err := q.Count(context.Background(), h.db); err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	want := `SELECT count(*) FROM (SELECT DISTINCT "org_id" FROM "users" WHERE "name" = $1) AS "distinct_rows"`
+	if got := h.lastQuery(); got != want {
+		t.Errorf("count SQL\n got: %s\nwant: %s", got, want)
+	}
+}
+
 func TestInsertOmitsDefaultedZeroColumns(t *testing.T) {
 	u := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
 	sql, args, err := sqlb.InsertRows(u).SQL()
@@ -295,6 +317,75 @@ func TestUpsert(t *testing.T) {
 	if !contains(sql, `ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name"`) {
 		t.Errorf("upsert clause missing from: %s", sql)
 	}
+}
+
+// A multi-row insert writes the database's values back into the caller's
+// structs by position, which is only sound because a VALUES insert returns one
+// row per row written, in order.
+func TestInsertWritesStoredValuesBack(t *testing.T) {
+	h := newHarness(t, storedUserColumns, [][]driver.Value{
+		storedUser("gen-1", "ada@example.com"),
+		storedUser("gen-2", "bob@example.com"),
+	})
+	defer h.close()
+
+	ada := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
+	bob := &User{Email: "bob@example.com", Name: "Bob", OrgID: "acme"}
+	if _, err := sqlb.InsertRows(ada, bob).Exec(context.Background(), h.db); err != nil {
+		t.Fatalf("Exec() error: %v", err)
+	}
+	if ada.ID != "gen-1" || bob.ID != "gen-2" {
+		t.Errorf("generated ids = %q, %q; want gen-1, gen-2", ada.ID, bob.ID)
+	}
+}
+
+// ON CONFLICT DO NOTHING drops the skipped row from the result, so the rows
+// that come back no longer line up with the rows that went in. Writing them
+// back by position would hand one row's generated primary key to a different
+// row — a struct that then reads as a plausible row it is not. Nothing is
+// written back at all in that case, and the returned slice is the account.
+func TestInsertDoesNotWriteBackWhenAConflictSkippedARow(t *testing.T) {
+	// Three rows in; the middle one conflicts, so the database returns two.
+	h := newHarness(t, storedUserColumns, [][]driver.Value{
+		storedUser("gen-ada", "ada@example.com"),
+		storedUser("gen-cy", "cy@example.com"),
+	})
+	defer h.close()
+
+	ada := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
+	bob := &User{Email: "bob@example.com", Name: "Bob", OrgID: "acme"}
+	cy := &User{Email: "cy@example.com", Name: "Cy", OrgID: "acme"}
+
+	stored, err := sqlb.InsertRows(ada, bob, cy).
+		OnConflictDoNothing("email").Exec(context.Background(), h.db)
+	if err != nil {
+		t.Fatalf("Exec() error: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("returned %d rows, want 2", len(stored))
+	}
+	// The returned slice is complete and correct.
+	if stored[0].ID != "gen-ada" || stored[1].ID != "gen-cy" {
+		t.Errorf("returned ids = %q, %q; want gen-ada, gen-cy", stored[0].ID, stored[1].ID)
+	}
+	// Before the fix, bob took gen-cy and cy kept nothing: the skipped row
+	// carried away its successor's identity.
+	for _, row := range []struct {
+		name string
+		u    *User
+	}{{"ada", ada}, {"bob", bob}, {"cy", cy}} {
+		if row.u.ID != "" {
+			t.Errorf("%s.ID = %q; a skipped row makes position meaningless, so no struct may be written back",
+				row.name, row.u.ID)
+		}
+	}
+}
+
+// storedUserColumns is the RETURNING order writeReturning emits for User.
+var storedUserColumns = []string{"id", "email", "name", "age", "org_id", "password_hash", "created_at"}
+
+func storedUser(id, email string) []driver.Value {
+	return []driver.Value{id, email, "", nil, "acme", "", time.Time{}}
 }
 
 func TestUnscopedMutationsAreRefused(t *testing.T) {
@@ -379,6 +470,59 @@ func TestHooksDoNotAccumulate(t *testing.T) {
 	}
 	if second := h.lastQuery(); second != first {
 		t.Errorf("running twice changed the SQL\nfirst:  %s\nsecond: %s", first, second)
+	}
+}
+
+// The same guard for mutations, which had the opposite behaviour: hooks ran
+// against the caller's statement rather than a copy, so a second Exec assigned
+// twice and narrowed twice. Set("updated_at", …) is the example the BeforeUpdate
+// doc comment itself gives, so accumulating was reachable from the documented
+// use rather than from an exotic one.
+func TestMutationHooksDoNotAccumulate(t *testing.T) {
+	type Doc struct {
+		ID        string `db:"id" sqlb:"pk"`
+		OrgID     string `db:"org_id"`
+		Title     string `db:"title"`
+		UpdatedAt string `db:"updated_at"`
+	}
+	hooks := sqlb.On[Doc]()
+	defer hooks.Reset()
+	hooks.BeforeUpdate(func(ctx context.Context, u *sqlb.Update[Doc]) error {
+		u.Set("updated_at", "now")
+		u.Where(sqlb.F("org_id").Eq("acme"))
+		return nil
+	})
+	hooks.BeforeDelete(func(ctx context.Context, d *sqlb.Delete[Doc]) error {
+		d.Where(sqlb.F("org_id").Eq("acme"))
+		return nil
+	})
+
+	h := newHarness(t, []string{"id", "org_id", "title", "updated_at"}, nil)
+	defer h.close()
+	ctx := context.Background()
+
+	u := sqlb.UpdateRows[Doc]().Set("title", "Hello").Where(sqlb.F("id").Eq("d1"))
+	if _, err := u.Exec(ctx, h.db); err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+	first := h.lastQuery()
+	if _, err := u.Exec(ctx, h.db); err != nil {
+		t.Fatalf("second update: %v", err)
+	}
+	if second := h.lastQuery(); second != first {
+		t.Errorf("running the update twice changed the SQL\nfirst:  %s\nsecond: %s", first, second)
+	}
+
+	d := sqlb.DeleteRows[Doc]().Where(sqlb.F("id").Eq("d1"))
+	if _, err := d.Exec(ctx, h.db); err != nil {
+		t.Fatalf("first delete: %v", err)
+	}
+	firstDel := h.lastQuery()
+	if _, err := d.Exec(ctx, h.db); err != nil {
+		t.Fatalf("second delete: %v", err)
+	}
+	if second := h.lastQuery(); second != firstDel {
+		t.Errorf("running the delete twice changed the SQL\nfirst:  %s\nsecond: %s", firstDel, second)
 	}
 }
 
@@ -585,6 +729,27 @@ func (h *harness) failWith(msg string) {
 	defer h.mu.Unlock()
 	h.err = errors.New(msg)
 }
+
+// failWithErr makes the next statements fail with a specific error, so a test
+// can present something driver-shaped rather than a bare string.
+func (h *harness) failWithErr(err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.err = err
+}
+
+// pgErr stands in for a driver's error type. It carries SQLState as a method,
+// which is how pgx exposes it and the reason the class is reachable without
+// importing a driver, and the constraint name as a field, which is why it is
+// not.
+type pgErr struct {
+	code       string
+	constraint string
+	message    string
+}
+
+func (e *pgErr) Error() string    { return "ERROR: " + e.message + " (SQLSTATE " + e.code + ")" }
+func (e *pgErr) SQLState() string { return e.code }
 
 func (h *harness) record(q string) {
 	h.mu.Lock()

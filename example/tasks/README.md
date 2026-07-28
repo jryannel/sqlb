@@ -33,7 +33,7 @@ curl -X POST localhost:8080/auth/register -H 'content-type: application/json' \
 That returns a bearer token. Everything else needs it:
 
 ```bash
-curl localhost:8080/tasks?priority=in.high,urgent&sort=-due_at -H "authorization: Bearer $TOKEN"
+curl "localhost:8080/tasks?priority=in.high,urgent&sort=-due_at" -H "authorization: Bearer $TOKEN"
 ```
 
 **Postgres 18 or newer.** `cmd/migrate` passes `migrate.MinPostgres(18)`, so

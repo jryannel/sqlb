@@ -5,7 +5,7 @@
 - **Confidence:** High that the hole is real and that startup is where to close
   it; Low that one bit per hook is the final shape of the check
 - **Decided:** 2026-07-28
-- **Last reviewed:** 2026-07-28
+- **Last reviewed:** 2026-07-28 (expansion gap recorded under Consequences)
 
 ## Context
 
@@ -137,12 +137,35 @@ after mounting its resources is refused. That program's first request would
 have run unscoped, so the refusal is correct, but it is a real ordering
 constraint that did not exist before.
 
-**Where the boundary is not held.** `sqlb.Query[T]()` in application code
-bypasses this entirely — the check is at the REST mount, not on the query path.
-That is deliberate (a per-query check costs on every read, and legitimate
-unscoped admin paths exist) and it means this closes the *generated* hole, not
-every hole. Hooks still run on those queries; nothing verifies that they were
-registered.
+**Where the boundary is not held.** Two places, and the second is the sharper
+one.
+
+`sqlb.Query[T]()` in application code bypasses this entirely — the check is at
+the REST mount, not on the query path. That is deliberate (a per-query check
+costs on every read, and legitimate unscoped admin paths exist) and it means
+this closes the *generated* hole, not every hole. Hooks still run on those
+queries; nothing verifies that they were registered.
+
+`?expand` reaches a `Scoped` table without running its hooks at all. The check
+above guards the target's own resource; an expansion joins the target from a
+parent and no handler for it runs, so the hook this check proved exists is
+precisely the one the join does not call. Unlike the first case this is
+reachable from a request rather than only from code someone wrote deliberately,
+and it is worse for the reason this ADR exists: the declaration now reads as a
+boundary, so an author who declares `Scoped`, satisfies the check and sees it
+mount has more reason than before to believe the rows are confined everywhere.
+
+What confines an expansion is the foreign key, not the declaration. A composite
+key carrying the scoping column — `tasks` referencing
+`(workspace_id, list_id)` against `lists (workspace_id, id)`, which is what
+`example/tasks` does — makes a cross-tenant reference unrepresentable, so the
+expansion cannot cross a tenant whether or not a hook runs. A plain
+single-column key does not, and nothing at mount time will say so. The
+reasoning is in `expand.go`; the case for making `Scoped` also require the
+composite key, or for refusing `Expandable` on a `Scoped` target that lacks
+one, is real and is not taken here — it would refuse schemas that are correct
+for reasons this package cannot see, and the first thing to establish is
+whether anyone declares the unconfined combination at all.
 
 **Row-level security remains the floor worth having.** ADR-0008 already called
 RLS complementary. This makes hooks default-deny at the boundary that generates
@@ -169,6 +192,12 @@ rather than everything.
 - If the ordering constraint (register before mount) surprises anyone in a way
   the error does not resolve, the check should move to first use rather than
   mount, at the cost of failing on a request instead of at startup.
+- If a schema declares `Scoped` on a table that is `Expandable` from a parent
+  whose foreign key does not carry the scoping column, the expansion gap above
+  stops being theoretical and the validator should refuse the combination.
+  Nothing refuses it today because refusing it would also refuse schemas
+  confined by something this package cannot see; the cheap first step is a lint
+  that reports the pairing rather than an error that forbids it.
 - If `Scoped` turns out to want a table-level form — a table confined by
   something that is not a column of its own, expressed today by declaring it on
   the key the hook narrows — this becomes a `TableDef` method and the column

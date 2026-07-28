@@ -368,23 +368,37 @@ func (b *Builder[T]) compileProjection(c *compiler) {
 }
 
 // countSQL compiles the row count for the query, ignoring projection, ordering
-// and pagination. Grouped queries are wrapped, since counting them means
-// counting groups rather than rows.
+// and pagination. Grouped and distinct queries are wrapped instead, since for
+// them the number of rows is not the number of rows the FROM clause produces.
 func (b *Builder[T]) countSQL() (string, []any, error) {
 	if b.err != nil {
 		return "", nil, b.err
 	}
 	c := newCompiler(b.dialect)
 
-	if len(b.groups) > 0 {
+	// A grouped query counts groups. A distinct one counts the rows left after
+	// duplicates are removed, which is what All returns and therefore what a
+	// count has to agree with — dropping the DISTINCT and counting the rows
+	// underneath answers a question nobody asked, and answers it too high.
+	if len(b.groups) > 0 || b.distinct {
 		inner := b.Clone()
 		inner.orders = nil
 		inner.limit, inner.offset = nil, nil
 		inner.seek = Pred{}
 		inner.lock = ""
+		// The projection stays exactly as it would run. DISTINCT is defined
+		// over it, so narrowing it here — including dropping the expansions,
+		// which the unwrapped path below does drop — could only change the
+		// answer. A caller who wants the cheaper count can ask for it without
+		// the expansion.
+		alias := "grouped"
+		if b.distinct {
+			alias = "distinct_rows"
+		}
 		c.write("SELECT count(*) FROM (")
 		inner.compile(c)
-		c.write(") AS grouped")
+		c.write(") AS ")
+		c.ident(alias)
 		return c.result()
 	}
 
@@ -397,7 +411,6 @@ func (b *Builder[T]) countSQL() (string, []any, error) {
 	// paged, which is a worse answer than no count at all.
 	counted.seek = Pred{}
 	counted.lock = ""
-	counted.distinct = false
 	// An expansion never changes how many rows match: a forward one joins on
 	// the target's primary key, and a collection is a subquery in the
 	// projection, which a count does not read. Counting is the one place the

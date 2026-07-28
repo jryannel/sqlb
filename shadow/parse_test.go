@@ -47,6 +47,29 @@ func TestSplitStatements(t *testing.T) {
 			want: []string{"INSERT INTO t VALUES ('it''s; fine')", "SELECT 2"},
 		},
 		{
+			// Postgres's escape-string form, where a backslash escapes the
+			// next character. Without it the literal ends at the backslashed
+			// quote and the semicolon after it splits one statement into two
+			// broken halves.
+			name: "backslash-escaped quote inside an E'' literal",
+			sql:  `INSERT INTO t VALUES (E'it\'s; fine');` + "\nSELECT 2;",
+			want: []string{`INSERT INTO t VALUES (E'it\'s; fine')`, "SELECT 2"},
+		},
+		{
+			// A backslash is only special in the E form. In an ordinary
+			// literal it is a plain character, so the quote after it closes.
+			name: "backslash is not an escape in an ordinary literal",
+			sql:  `INSERT INTO t VALUES ('a\');` + "\nSELECT 2;",
+			want: []string{`INSERT INTO t VALUES ('a\')`, "SELECT 2"},
+		},
+		{
+			// The E is a prefix only when it stands alone; here it ends an
+			// identifier and the literal that follows is an ordinary one.
+			name: "a word ending in E does not start an escape string",
+			sql:  "SELECT typeE'a;b';\nSELECT 2;",
+			want: []string{"SELECT typeE'a;b'", "SELECT 2"},
+		},
+		{
 			name: "semicolon inside a quoted identifier",
 			sql:  `CREATE TABLE "we;ird" (id int);` + "\nSELECT 2;",
 			want: []string{`CREATE TABLE "we;ird" (id int)`, "SELECT 2"},
@@ -220,6 +243,35 @@ func TestNoTransactionIsDetected(t *testing.T) {
 	}
 	if files[1].NoTransaction {
 		t.Error("a file without the directive was marked as needing one")
+	}
+}
+
+// Only goose has a directive. golang-migrate and plain SQL have no way to say
+// it, and migrate.Unblock emits CREATE INDEX CONCURRENTLY for all three — so
+// reading the directive alone meant shadow could not replay the histories this
+// repository itself generates for two of the formats it supports.
+func TestConcurrentStatementsRunOutsideATransactionInEveryFormat(t *testing.T) {
+	for _, format := range []string{"golang-migrate", "sql"} {
+		dir := t.TempDir()
+		name := "1_indexes.up.sql"
+		if format == "sql" {
+			name = "1_indexes.sql"
+		}
+		write(t, filepath.Join(dir, name), "CREATE INDEX CONCURRENTLY i ON t (c);\n")
+		write(t, filepath.Join(dir, strings.Replace(name, "1_indexes", "2_plain", 1)),
+			"CREATE TABLE b (id int);\n")
+
+		files, err := collect(dir, format)
+		if err != nil {
+			t.Fatalf("%s: collect: %v", format, err)
+		}
+		if !files[0].NoTransaction {
+			t.Errorf("%s: a concurrent index build would be wrapped in a transaction, "+
+				"which Postgres rejects", format)
+		}
+		if files[1].NoTransaction {
+			t.Errorf("%s: an ordinary file was marked as needing to run unwrapped", format)
+		}
 	}
 }
 

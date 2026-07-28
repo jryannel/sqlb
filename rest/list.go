@@ -76,7 +76,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			DisableSearch:   opts.DisableSearch,
 		})
 		if err != nil {
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 
 		query := filter.Apply(sqlb.Query[T](), q)
@@ -85,7 +85,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		// without the count query that would otherwise be the only way to know.
 		rows, err := query.Limit(q.Limit+1).All(ctx, db)
 		if err != nil {
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 		hasMore := len(rows) > q.Limit
 		if hasMore {
@@ -106,7 +106,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		if hasMore && b.model.PK != nil {
 			cursor, err := query.CursorFor(rows[len(rows)-1])
 			if err != nil {
-				return nil, asHumaError(err, opts.name())
+				return nil, asHumaError(ctx, err, opts.name())
 			}
 			body.NextCursor = ptr(string(cursor))
 		}
@@ -116,12 +116,25 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			body.Items = []row[T]{}
 		}
 
-		if in.query.Get("count") == "exact" {
+		// An unrecognised value is refused rather than ignored, like every
+		// other parameter this package reads. Treating ?count=all as absent
+		// answers 200 with no total, which reads as "this resource cannot
+		// count" rather than as "that is not how you spell it".
+		switch v := in.query.Get("count"); v {
+		case "":
+		case "exact":
 			total, err := query.Count(ctx, db)
 			if err != nil {
-				return nil, asHumaError(err, opts.name())
+				return nil, asHumaError(ctx, err, opts.name())
 			}
 			body.Total = &total
+		default:
+			return nil, invalidQuery(filter.Errors{{
+				Param:   "count",
+				Value:   v,
+				Reason:  "unknown count mode",
+				Allowed: []string{"exact"},
+			}})
 		}
 
 		return &listOutput[T]{Body: body}, nil

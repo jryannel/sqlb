@@ -277,6 +277,16 @@ func (r *Registry) Validate() error {
 					report(t.name, "", "index %q references unknown column %q", idx.Name, c)
 				}
 			}
+			// A derived index name concatenates the table and every column it
+			// covers, so a prefixed table with a composite index passes 63
+			// bytes without anything looking long. Postgres then truncates
+			// silently — even quoted — so the name in the schema and the name
+			// in the database differ, and every later diff proposes renaming
+			// one to the other forever.
+			if len(idx.Name) > maxIdentBytes {
+				report(t.name, "", "index name %q is %d bytes; Postgres truncates at %d, "+
+					"so give it a shorter Name explicitly", idx.Name, len(idx.Name), maxIdentBytes)
+			}
 		}
 
 		if t.rest != nil {
@@ -295,6 +305,18 @@ func (r *Registry) Validate() error {
 			}
 			if t.rest.MaxPageSize > 0 && t.rest.DefaultPageSize > t.rest.MaxPageSize {
 				report(t.name, "", "DefaultPageSize %d exceeds MaxPageSize %d", t.rest.DefaultPageSize, t.rest.MaxPageSize)
+			}
+			// A declared soft delete and a generated hard DELETE are a
+			// contradiction the runtime cannot resolve: nothing reads
+			// deleted_at, so the generated handler removes the row and the
+			// column that was supposed to record its removal stays NULL
+			// forever. Every other disagreement between a schema and its
+			// behaviour in this package is loud; this one silently did the
+			// opposite of what the table declares.
+			if seen["deleted_at"] && t.rest.Ops.Has(OpDelete) {
+				report(t.name, "deleted_at",
+					"declares a soft delete but exposes OpDelete, which hard-deletes the row; "+
+						"drop OpDelete from Expose and route DELETE to an update of deleted_at")
 			}
 		}
 	}
@@ -332,21 +354,44 @@ func isTextual(t Type) bool {
 // isIdent reports whether s is a safe unquoted SQL identifier. The generator
 // and the filter parser both rely on this: an identifier that passes here can
 // be interpolated into SQL without further escaping.
-func isIdent(s string) bool {
-	if s == "" || len(s) > 63 {
-		return false
+func isIdent(s string) bool { return CheckIdent(s) == nil }
+
+// CheckIdent reports why the DSL cannot declare a table or column called name,
+// or nil when it can.
+//
+// It is exported for introspection, which reads names a database already has
+// rather than names an author chose. Those two are not the same set — a
+// camelCase column is legal in Postgres and undeclarable here — and an importer
+// needs to say which construct it had to skip, not fail the whole import with a
+// message about what the DSL considers impossible.
+func CheckIdent(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is empty")
 	}
-	for i, r := range s {
+	if len(name) > maxIdentBytes {
+		return fmt.Errorf("name is %d bytes; Postgres truncates identifiers at %d, "+
+			"so the declared name and the real one would differ", len(name), maxIdentBytes)
+	}
+	for i, r := range name {
 		switch {
 		case r >= 'a' && r <= 'z':
 		case r == '_':
 		case i > 0 && (r >= '0' && r <= '9'):
+		case r >= 'A' && r <= 'Z':
+			return fmt.Errorf("name contains an upper-case letter, which Postgres only " +
+				"preserves for a quoted identifier; the DSL declares unquoted names only")
 		default:
-			return false
+			return fmt.Errorf("name contains %q, which is not allowed in an unquoted "+
+				"identifier", r)
 		}
 	}
-	return true
+	return nil
 }
+
+// maxIdentBytes is Postgres's NAMEDATALEN-1. An identifier longer than this is
+// silently truncated, even when quoted, so a longer declared name would not be
+// the name the database ends up holding.
+const maxIdentBytes = 63
 
 // validateInverse checks a declared reverse relation.
 //

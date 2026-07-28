@@ -107,6 +107,12 @@ type reply struct {
 	cols  []string
 	rows  [][]driver.Value
 	err   error
+	// rowsErr is reported after the rows, standing in for a driver that raises
+	// a statement's failure while the result is being read rather than when it
+	// is sent. pgx does this on the extended protocol, so a check that only
+	// looks at what QueryContext returned would classify a constraint
+	// violation under one driver and not under another.
+	rowsErr error
 }
 
 // fakeDB is a database that answers from a script. Each reply matches the first
@@ -256,7 +262,7 @@ func (c *fakeConn) QueryContext(_ context.Context, query string, args []driver.N
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &fakeRows{cols: r.cols, data: r.rows}, nil
+	return &fakeRows{cols: r.cols, data: r.rows, err: r.rowsErr}, nil
 }
 
 func (c *fakeConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
@@ -274,6 +280,7 @@ type fakeRows struct {
 	cols []string
 	data [][]driver.Value
 	i    int
+	err  error
 }
 
 func (r *fakeRows) Columns() []string { return r.cols }
@@ -281,6 +288,9 @@ func (r *fakeRows) Close() error      { return nil }
 
 func (r *fakeRows) Next(dest []driver.Value) error {
 	if r.i >= len(r.data) {
+		if r.err != nil {
+			return r.err
+		}
 		return io.EOF
 	}
 	copy(dest, r.data[r.i])

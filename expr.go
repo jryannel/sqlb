@@ -57,6 +57,11 @@ type Unary struct {
 }
 
 // Call is a function call. Star renders `f(*)`; Distinct renders `f(DISTINCT x)`.
+//
+// Name is written verbatim and is not validated, like [Raw] and [Field.Cast].
+// It must not come from user input. The helpers in this package — Count, Sum,
+// Lower and the rest — supply their own names, so reaching for the struct
+// literal is what puts a caller on this path.
 type Call struct {
 	Name     string
 	Args     []Expr

@@ -87,11 +87,18 @@ func (r *Registry) Lint() Diagnostics {
 			// A filterable column with no index leading a btree means every
 			// request that uses it scans the table.
 			if d.Filterable && !d.Hidden && !indexed[d.Name] && !isLowCardinality(d) {
+				// Searchable implies Filterable, so a column that declared
+				// only the first has no .Filterable() to drop. Advising it
+				// sends the reader looking for a call that is not there.
+				drop := ".Filterable()"
+				if d.Searchable {
+					drop = ".Searchable(), which implies Filterable,"
+				}
 				add(Diagnostic{
 					Rule: "unindexed-filter", Table: t.name, Column: d.Name,
 					Severity: SeverityWarn,
 					Message:  "column is filterable but is not the leading column of any index, so filtering on it scans the table",
-					Fix:      fmt.Sprintf("add .Index(%q) to the table, or drop .Filterable() from the column", d.Name),
+					Fix:      fmt.Sprintf("add .Index(%q) to the table, or drop %s from the column", d.Name, drop),
 				})
 			}
 

@@ -188,7 +188,61 @@ generated values land back in your structs without a follow-up read.
 
 `OnConflictDoNothing(target...)` and `OnConflictUpdate(target, update...)` cover
 upserts. A row skipped by do-nothing is simply absent from the result, so `One`
-returns `ErrNotFound`.
+returns `ErrNotFound`. When any row is skipped, **no** caller struct is written
+back — the returned slice is shorter than the rows that went in, so position no
+longer identifies them, and writing back by position would hand one row's
+generated id to another. The returned slice is the account of what was written.
+
+### When the database refuses a write
+
+A unique index, a foreign key or a check constraint refusing a write is usually
+the caller's mistake rather than an outage, so it arrives as a value you can
+branch on:
+
+```go
+if _, err := sqlb.InsertRows(&loan).One(ctx, tx); err != nil {
+    var c *sqlb.ConstraintError
+    if errors.As(err, &c) && c.Kind == sqlb.ConstraintUnique {
+        return "you already have a copy of that book out"
+    }
+    return err
+}
+```
+
+`errors.Is(err, sqlb.ErrConstraint)` is the cheap test for the class.
+`ConstraintError.Kind` is always set — `ConstraintUnique`, `ConstraintForeignKey`,
+`ConstraintCheck`, `ConstraintNotNull`, `ConstraintExclusion`. The generated REST
+handlers use exactly this to answer 409 for a conflict and 422 for the rest,
+instead of the 500 an unrecognised error would otherwise become.
+
+`Constraint` — the name of the index that refused — needs a driver to read it,
+because every driver exposes it as a struct field rather than as a method and
+this library depends on the standard library alone. Register a classifier once
+at startup and the field is filled in:
+
+```go
+sqlb.SetErrorClassifier(func(err error) (sqlb.ConstraintError, bool) {
+    var pg *pgconn.PgError
+    if !errors.As(err, &pg) {
+        return sqlb.ConstraintError{}, false
+    }
+    kind, ok := sqlb.ConstraintKindOf(pg.SQLState())
+    if !ok {
+        return sqlb.ConstraintError{}, false
+    }
+    return sqlb.ConstraintError{
+        Kind:       kind,
+        Constraint: pg.ConstraintName,
+        Table:      pg.TableName,
+        Column:     pg.ColumnName,
+        Detail:     pg.Detail,
+    }, true
+})
+```
+
+Then `c.Constraint == "loans_one_open_per_book_per_borrower"` is a comparison
+against a value rather than a `strings.Contains` on a message — which is what
+the same code looks like without it, and what no rename survives.
 
 ```go
 _, err := sqlb.UpdateRows[Post]().
@@ -246,6 +300,46 @@ needs them yet.
 
 `WithTxOptions` takes an isolation level. Asking for stricter isolation than an
 enclosing transaction already has is an error rather than a silent downgrade.
+
+### Row locking
+
+A transaction on its own does not stop two requests reading the same row,
+deciding the same thing and both writing. `ForUpdate` is what does:
+
+```go
+stock, err := sqlb.Query[Stock]().
+    Where(sqlb.F("sku").Eq(sku)).
+    ForUpdate().
+    One(ctx, tx)
+```
+
+The lock is held until the transaction ends. `ForShare` takes the weaker form,
+and `SkipLocked` — valid only with one of the two — steps over rows another
+transaction already holds, which is what makes a queue consumer work.
+
+Two rules make the difference between code that passes its tests and code that
+survives load.
+
+**Take locks in a consistent order.** Two transactions locking the same rows in
+opposite orders deadlock, and the test that would have found it is the one
+nobody writes.
+
+**In a hook, take the lock in `BeforeCreate`, not `AfterCreate`.** This one is
+invisible in the Go code. Inserting a row takes a `FOR KEY SHARE` lock on every
+row its foreign keys reference — Postgres checking the reference, not anything
+you wrote. Key-share locks are shared, so two concurrent inserts both get them;
+if each then tries to upgrade the same referenced row to `FOR UPDATE` inside
+`AfterCreate`, each waits for the other's share lock. That is a guaranteed
+deadlock, it scales with concurrency, and it surfaces as a 500 naming a
+statement you did not write:
+
+```
+ERROR: deadlock detected (SQLSTATE 40P01)
+  on: SELECT ... FROM "stocks" WHERE "id" = $1 LIMIT 2 FOR UPDATE
+```
+
+Taking the exclusive lock in `BeforeCreate` — before the row exists, so before
+the key-share lock is taken — fixes it, and costs one line of ordering.
 
 ### Sharing the transaction with another library
 
@@ -361,6 +455,37 @@ where a transaction is — `rest` wraps every generated write in one, so
 `sqlb.TxFrom(ctx)` finds it and a hook can query, as
 [Reading your own writes](#reading-your-own-writes) below shows. On a read, or
 under `Options.DisableTransactions`, there is nothing to find.
+
+### What fires when, and inside which transaction
+
+Four questions decide whether a domain invariant holds, and none of them is
+answerable from a signature. Stated here so they need not be answered by
+reading the source.
+
+**Every write path fires the hooks, not just the generated ones.**
+`sqlb.InsertRows(&a, &b).Exec(ctx, tx)` runs `BeforeCreate` on each row and
+`AfterCreate` on each stored row, exactly as `POST /posts` does. A hand-written
+HTML form handler and a generated REST handler enforce the same rules without
+either knowing the other exists, and that is the property the whole arrangement
+is for.
+
+**`AfterCreate` receives a pointer into the returned rows, so it can change
+the response.** Mutating `*T` there changes what the caller gets back and what
+`rest` writes to the wire — which is how a generated `POST /orders` can answer
+with the fill it just executed rather than with the order as submitted. This
+makes `AfterCreate` a good deal more than the "validation" its row in the table
+above suggests.
+
+**A defaulted column holding its zero value is omitted from the insert.** So
+the database supplies it rather than a zero overwriting it, and a `BeforeCreate`
+that copies one column into another falls out correctly in the zero case
+without a special case. This is why "has a default" and "is optional in the
+create body" are the same question.
+
+**Hooks reach the transaction.** `WithTx` hands `fn` a `*sqlb.DB` carrying the
+same registry, so hooks fire on statements issued inside it, and `TxFrom(ctx)`
+resolves *within* a hook — a `BeforeCreate` can read what earlier statements in
+the same unit of work have written but not yet committed.
 
 The gap that remains is narrower and deliberate: `BeforeUpdate` cannot read the
 assignments it was handed, so a rule that depends on what a column is *becoming*

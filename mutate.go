@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 // ErrUnscoped is returned by Update and Delete when no WHERE clause was given.
@@ -54,18 +55,44 @@ func InsertRows[T any](rows ...*T) *Insert[T] {
 
 // Only restricts the insert to the named columns.
 func (i *Insert[T]) Only(columns ...string) *Insert[T] {
+	i.checkColumns("Only", columns)
 	i.only = toSet(columns)
 	return i
 }
 
 // Omit excludes the named columns, leaving them to their database defaults.
 func (i *Insert[T]) Omit(columns ...string) *Insert[T] {
+	i.checkColumns("Omit", columns)
 	i.omit = toSet(columns)
 	return i
 }
 
+// checkColumns fails the statement on a name the model does not have.
+//
+// Update.Set and the conflict target both validate their names, and an
+// unvalidated one here fails quietly in the worst way: Only("emial") matches
+// nothing, so the column is silently not written, or — if it was the only name
+// given — the statement fails with "no columns to write", which names neither
+// the typo nor the column it was meant to be.
+func (i *Insert[T]) checkColumns(method string, columns []string) {
+	for _, name := range columns {
+		if i.model.Column(name) == nil {
+			if i.err == nil {
+				i.err = fmt.Errorf("sqlb: %s names %q, which is not a column of %s (have: %s)",
+					method, name, i.model.Table, strings.Join(i.model.ColumnNames(), ", "))
+			}
+			return
+		}
+	}
+}
+
 // OnConflictDoNothing makes a conflict on the given columns skip the row
 // instead of failing. Skipped rows are simply absent from the result.
+//
+// Because a skipped row cannot be told apart from its neighbours in what
+// comes back, a statement that skips any row leaves every caller struct
+// untouched — the returned slice is then the only account of what was
+// written. See Exec.
 func (i *Insert[T]) OnConflictDoNothing(target ...string) *Insert[T] {
 	i.conflict = &conflictClause{target: target}
 	return i
@@ -192,7 +219,9 @@ func (i *Insert[T]) allZero(col *ColumnInfo) bool {
 }
 
 // Exec runs the insert, returning the stored rows with database defaults
-// applied. The caller's structs are updated in place as well.
+// applied. The caller's structs are updated in place as well — except when
+// ON CONFLICT DO NOTHING skipped a row, in which case none of them are; see
+// writeBack for why.
 func (i *Insert[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	hooks := hooksFor[T](db)
 	for _, row := range i.rows {
@@ -211,20 +240,41 @@ func (i *Insert[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	}
 	stored, err := scanAllClose[T](rows, i.model)
 	if err != nil {
-		return nil, err
+		return nil, asConstraintErr(err)
 	}
 
-	// Write the stored values back, so callers see generated ids without
-	// having to read the returned slice.
-	for n := range stored {
-		if n < len(i.rows) {
-			*i.rows[n] = stored[n]
-		}
-	}
+	i.writeBack(stored)
 	if err := hooks.runAfterCreate(ctx, stored); err != nil {
 		return nil, err
 	}
 	return stored, nil
+}
+
+// writeBack copies the stored rows into the caller's structs, so generated
+// ids are visible without reading the returned slice.
+//
+// A VALUES insert returns at most one row per row written, in the order they
+// were written, so equal lengths mean position identifies a row and nothing
+// was skipped. A shorter result means ON CONFLICT DO NOTHING dropped one:
+// every later stored row then belongs to an earlier struct than its index
+// says, and writing positionally hands one row's generated primary key to a
+// different row — silently, since both structs look plausible afterwards.
+//
+// Which row was skipped is not recoverable from the result. RETURNING reports
+// only the target table's columns, so no ordinal can be carried through the
+// statement to identify them, and matching on the conflict target fails
+// exactly when the target is generated rather than supplied. So a short
+// result writes nothing at all, and the returned slice — which is complete
+// and correct — is the account of what was written. A struct left holding its
+// zero value is a caller reading an obvious absence; a struct holding its
+// neighbour's identity is a caller reading a lie.
+func (i *Insert[T]) writeBack(stored []T) {
+	if len(stored) != len(i.rows) {
+		return
+	}
+	for n := range stored {
+		*i.rows[n] = stored[n]
+	}
 }
 
 // One inserts a single row and returns it.
@@ -343,13 +393,28 @@ func (u *Update[T]) SQL() (string, []any, error) {
 	return c.result()
 }
 
+// Clone returns an independent copy, so a statement can be reused as the
+// starting point for several derived ones.
+func (u *Update[T]) Clone() *Update[T] {
+	c := *u
+	c.sets = append([]assignment(nil), u.sets...)
+	c.where = append([]Pred(nil), u.where...)
+	return &c
+}
+
 // Exec runs the update and returns the updated rows.
+//
+// The statement is cloned first, for the reason Builder.All clones: a
+// BeforeUpdate hook amends what it is given, and the doc comment's own example
+// is one that calls Set. Amending the caller's statement would make a second
+// Exec assign updated_at twice and narrow a scoping predicate twice.
 func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	hooks := hooksFor[T](db)
-	if err := hooks.runBeforeUpdate(ctx, u); err != nil {
+	stmt := u.Clone()
+	if err := hooks.runBeforeUpdate(ctx, stmt); err != nil {
 		return nil, err
 	}
-	query, args, err := u.SQL()
+	query, args, err := stmt.SQL()
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +424,7 @@ func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	}
 	updated, err := scanAllClose[T](rows, u.model)
 	if err != nil {
-		return nil, err
+		return nil, asConstraintErr(err)
 	}
 	if err := hooks.runAfterUpdate(ctx, updated); err != nil {
 		return nil, err
@@ -368,6 +433,11 @@ func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 }
 
 // One runs an update expected to touch exactly one row.
+//
+// The check is on the result, so an update matching several rows has already
+// changed all of them when the error returns. Under autocommit that is durable;
+// inside WithTx the error rolls it back, which is the way to make "expected
+// one" a refusal rather than a report.
 func (u *Update[T]) One(ctx context.Context, db Executor) (T, error) {
 	var zero T
 	updated, err := u.Exec(ctx, db)
@@ -380,7 +450,9 @@ func (u *Update[T]) One(ctx context.Context, db Executor) (T, error) {
 	case 1:
 		return updated[0], nil
 	default:
-		return zero, fmt.Errorf("sqlb: update matched %d rows in %s, expected one", len(updated), u.model.Table)
+		return zero, fmt.Errorf("sqlb: update matched %d rows in %s, expected one; "+
+			"they have already been updated — wrap the call in WithTx if the count "+
+			"needs to be able to refuse it", len(updated), u.model.Table)
 	}
 }
 
@@ -440,13 +512,26 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 	return c.result()
 }
 
+// Clone returns an independent copy, so a statement can be reused as the
+// starting point for several derived ones.
+func (d *Delete[T]) Clone() *Delete[T] {
+	c := *d
+	c.where = append([]Pred(nil), d.where...)
+	return &c
+}
+
 // Exec runs the delete and returns the number of rows removed.
+//
+// The statement is cloned first, for the reason Update.Exec clones: a
+// BeforeDelete hook narrowing the statement must narrow one execution, not
+// every later one.
 func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	hooks := hooksFor[T](db)
-	if err := hooks.runBeforeDelete(ctx, d); err != nil {
+	stmt := d.Clone()
+	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
 		return 0, err
 	}
-	query, args, err := d.SQL()
+	query, args, err := stmt.SQL()
 	if err != nil {
 		return 0, err
 	}
