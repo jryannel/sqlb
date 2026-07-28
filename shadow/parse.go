@@ -166,11 +166,14 @@ func hasGooseDirective(body, want string) bool {
 // statement the directive exists for.
 //
 // A semicolon does not end a statement when it is inside a string literal, a
-// dollar-quoted body, or a comment. Those are the four cases; there is no fifth
-// in what Postgres accepts here, which is why this is a scanner rather than a
-// parser. A goose StatementBegin block is kept whole regardless, because that
-// is exactly what the marker is for: a function body whose semicolons are not
-// statement boundaries.
+// dollar-quoted body, or a comment. A string literal has two spellings: the
+// ordinary one, where a doubled quote is an escaped quote, and Postgres's
+// escape-string form E'…', where a backslash escapes the character after it —
+// so E'it\'s done; almost' is one literal and splitting it at the backslashed
+// quote produces two broken halves. Those are the cases; a goose
+// StatementBegin block is kept whole regardless, because that is exactly what
+// the marker is for: a function body whose semicolons are not statement
+// boundaries.
 func splitStatements(sql string) []string {
 	var out []string
 	for _, seg := range segments(sql) {
@@ -241,12 +244,25 @@ func scanSplit(sql string) []string {
 
 	for i := 0; i < len(sql); {
 		switch {
-		case sql[i] == '\'':
-			// A single-quoted literal. Two quotes in a row is an escaped
-			// quote and does not end it.
+		case sql[i] == '\'' || isEscapeStringPrefix(sql, i):
+			// A single-quoted literal. Two quotes in a row is an escaped quote
+			// and does not end it. In the E'…' form a backslash also escapes
+			// whatever follows, including a quote.
+			escapes := sql[i] != '\''
+			if escapes {
+				// Consume the E, leaving i on the opening quote.
+				cur.WriteByte(sql[i])
+				i++
+			}
 			cur.WriteByte(sql[i])
 			i++
 			for i < len(sql) {
+				if escapes && sql[i] == '\\' && i+1 < len(sql) {
+					cur.WriteByte(sql[i])
+					cur.WriteByte(sql[i+1])
+					i += 2
+					continue
+				}
 				if sql[i] == '\'' {
 					if i+1 < len(sql) && sql[i+1] == '\'' {
 						cur.WriteString("''")
@@ -352,4 +368,26 @@ func dollarTag(s string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isEscapeStringPrefix reports whether sql[i] opens an E'…' escape string.
+//
+// The E is only a prefix when it is not part of a longer word: `type E'x'` is
+// a literal, and the E of `CASE'` is not. A preceding identifier character
+// therefore rules it out.
+func isEscapeStringPrefix(sql string, i int) bool {
+	if sql[i] != 'E' && sql[i] != 'e' {
+		return false
+	}
+	if i+1 >= len(sql) || sql[i+1] != '\'' {
+		return false
+	}
+	if i == 0 {
+		return true
+	}
+	switch c := sql[i-1]; {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_':
+		return false
+	}
+	return true
 }

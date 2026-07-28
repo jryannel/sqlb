@@ -116,12 +116,25 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			body.Items = []row[T]{}
 		}
 
-		if in.query.Get("count") == "exact" {
+		// An unrecognised value is refused rather than ignored, like every
+		// other parameter this package reads. Treating ?count=all as absent
+		// answers 200 with no total, which reads as "this resource cannot
+		// count" rather than as "that is not how you spell it".
+		switch v := in.query.Get("count"); v {
+		case "":
+		case "exact":
 			total, err := query.Count(ctx, db)
 			if err != nil {
 				return nil, asHumaError(ctx, err, opts.name())
 			}
 			body.Total = &total
+		default:
+			return nil, invalidQuery(filter.Errors{{
+				Param:   "count",
+				Value:   v,
+				Reason:  "unknown count mode",
+				Allowed: []string{"exact"},
+			}})
 		}
 
 		return &listOutput[T]{Body: body}, nil

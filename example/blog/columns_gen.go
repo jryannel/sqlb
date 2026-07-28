@@ -62,6 +62,18 @@ func (u *AuthorUpdate) SetPasswordHash(v string) *AuthorUpdate {
 	return u
 }
 
+// SetCreatedAt sets created_at.
+func (u *AuthorUpdate) SetCreatedAt(v time.Time) *AuthorUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *AuthorUpdate) SetUpdatedAt(v time.Time) *AuthorUpdate {
+	u.stmt.Set("updated_at", v)
+	return u
+}
+
 // Where narrows the affected rows.
 func (u *AuthorUpdate) Where(preds ...sqlb.Pred) *AuthorUpdate {
 	u.stmt.Where(preds...)
@@ -108,6 +120,18 @@ func (u *OrgUpdate) SetName(v string) *OrgUpdate {
 // SetSlug sets slug.
 func (u *OrgUpdate) SetSlug(v string) *OrgUpdate {
 	u.stmt.Set("slug", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *OrgUpdate) SetCreatedAt(v time.Time) *OrgUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *OrgUpdate) SetUpdatedAt(v time.Time) *OrgUpdate {
+	u.stmt.Set("updated_at", v)
 	return u
 }
 
@@ -190,9 +214,33 @@ func (u *PostUpdate) SetStatus(v PostStatus) *PostUpdate {
 	return u
 }
 
+// SetViewCount sets view_count.
+func (u *PostUpdate) SetViewCount(v int64) *PostUpdate {
+	u.stmt.Set("view_count", v)
+	return u
+}
+
 // SetPublishedAt sets published_at.
 func (u *PostUpdate) SetPublishedAt(v *time.Time) *PostUpdate {
 	u.stmt.Set("published_at", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *PostUpdate) SetCreatedAt(v time.Time) *PostUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *PostUpdate) SetUpdatedAt(v time.Time) *PostUpdate {
+	u.stmt.Set("updated_at", v)
+	return u
+}
+
+// SetDeletedAt sets deleted_at.
+func (u *PostUpdate) SetDeletedAt(v *time.Time) *PostUpdate {
+	u.stmt.Set("deleted_at", v)
 	return u
 }
 

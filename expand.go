@@ -223,10 +223,22 @@ func writeRowObject(c *compiler, target *Model, alias string) {
 			c.write(", ")
 		}
 		first = false
-		c.write("'" + col.Name + "', ")
+		c.write(sqlStringLiteral(col.Name) + ", ")
 		c.column(Column{Table: alias, Name: col.Name})
 	}
 	c.write(")")
+}
+
+// sqlStringLiteral renders s as a single-quoted SQL string.
+//
+// The keys of the JSON object are the only place in this package where a name
+// reaches SQL as text rather than as a quoted identifier, so it is the only
+// place a quote in a name could close the literal early. Column names come from
+// struct tags or Describe and are the developer's own, so this is not a path
+// user input reaches — but "not reachable by a request" is a weaker property
+// than "cannot be malformed", and the second one costs a doubling.
+func sqlStringLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // compileCollection writes the reverse direction: the children that point back

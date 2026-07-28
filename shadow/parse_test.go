@@ -47,6 +47,29 @@ func TestSplitStatements(t *testing.T) {
 			want: []string{"INSERT INTO t VALUES ('it''s; fine')", "SELECT 2"},
 		},
 		{
+			// Postgres's escape-string form, where a backslash escapes the
+			// next character. Without it the literal ends at the backslashed
+			// quote and the semicolon after it splits one statement into two
+			// broken halves.
+			name: "backslash-escaped quote inside an E'' literal",
+			sql:  `INSERT INTO t VALUES (E'it\'s; fine');` + "\nSELECT 2;",
+			want: []string{`INSERT INTO t VALUES (E'it\'s; fine')`, "SELECT 2"},
+		},
+		{
+			// A backslash is only special in the E form. In an ordinary
+			// literal it is a plain character, so the quote after it closes.
+			name: "backslash is not an escape in an ordinary literal",
+			sql:  `INSERT INTO t VALUES ('a\');` + "\nSELECT 2;",
+			want: []string{`INSERT INTO t VALUES ('a\')`, "SELECT 2"},
+		},
+		{
+			// The E is a prefix only when it stands alone; here it ends an
+			// identifier and the literal that follows is an ordinary one.
+			name: "a word ending in E does not start an escape string",
+			sql:  "SELECT typeE'a;b';\nSELECT 2;",
+			want: []string{"SELECT typeE'a;b'", "SELECT 2"},
+		},
+		{
 			name: "semicolon inside a quoted identifier",
 			sql:  `CREATE TABLE "we;ird" (id int);` + "\nSELECT 2;",
 			want: []string{`CREATE TABLE "we;ird" (id int)`, "SELECT 2"},

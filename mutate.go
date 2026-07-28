@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 // ErrUnscoped is returned by Update and Delete when no WHERE clause was given.
@@ -54,14 +55,35 @@ func InsertRows[T any](rows ...*T) *Insert[T] {
 
 // Only restricts the insert to the named columns.
 func (i *Insert[T]) Only(columns ...string) *Insert[T] {
+	i.checkColumns("Only", columns)
 	i.only = toSet(columns)
 	return i
 }
 
 // Omit excludes the named columns, leaving them to their database defaults.
 func (i *Insert[T]) Omit(columns ...string) *Insert[T] {
+	i.checkColumns("Omit", columns)
 	i.omit = toSet(columns)
 	return i
+}
+
+// checkColumns fails the statement on a name the model does not have.
+//
+// Update.Set and the conflict target both validate their names, and an
+// unvalidated one here fails quietly in the worst way: Only("emial") matches
+// nothing, so the column is silently not written, or — if it was the only name
+// given — the statement fails with "no columns to write", which names neither
+// the typo nor the column it was meant to be.
+func (i *Insert[T]) checkColumns(method string, columns []string) {
+	for _, name := range columns {
+		if i.model.Column(name) == nil {
+			if i.err == nil {
+				i.err = fmt.Errorf("sqlb: %s names %q, which is not a column of %s (have: %s)",
+					method, name, i.model.Table, strings.Join(i.model.ColumnNames(), ", "))
+			}
+			return
+		}
+	}
 }
 
 // OnConflictDoNothing makes a conflict on the given columns skip the row
@@ -411,6 +433,11 @@ func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 }
 
 // One runs an update expected to touch exactly one row.
+//
+// The check is on the result, so an update matching several rows has already
+// changed all of them when the error returns. Under autocommit that is durable;
+// inside WithTx the error rolls it back, which is the way to make "expected
+// one" a refusal rather than a report.
 func (u *Update[T]) One(ctx context.Context, db Executor) (T, error) {
 	var zero T
 	updated, err := u.Exec(ctx, db)
@@ -423,7 +450,9 @@ func (u *Update[T]) One(ctx context.Context, db Executor) (T, error) {
 	case 1:
 		return updated[0], nil
 	default:
-		return zero, fmt.Errorf("sqlb: update matched %d rows in %s, expected one", len(updated), u.model.Table)
+		return zero, fmt.Errorf("sqlb: update matched %d rows in %s, expected one; "+
+			"they have already been updated — wrap the call in WithTx if the count "+
+			"needs to be able to refuse it", len(updated), u.model.Table)
 	}
 }
 

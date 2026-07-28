@@ -75,9 +75,23 @@ func renderColumns(opts Options) ([]byte, error) {
 func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.TableDef, typeName string) {
 	w := func(format string, args ...any) { _, _ = b.WriteString(fmt.Sprintf(format, args...)) }
 
+	// Everything but the primary key gets a setter, including ReadOnly and
+	// Immutable columns.
+	//
+	// Those two are REST-boundary rules, and the boundary is already defended
+	// where it exists: they are absent from the generated request bodies and
+	// the handler clears them. Go going through the query engine is trusted, so
+	// excluding them here protected nothing — it only meant that the code which
+	// is the *sole* writer of a ReadOnly column was the one code that could not
+	// write it typed, and had to reach for Set(string, any) on exactly the
+	// columns where a typo costs most.
+	//
+	// The primary key stays out. It addresses the row rather than being part of
+	// what an update writes, and Stmt() is there for the rare case that is
+	// genuinely meant.
 	var writable []*schema.Field
 	for _, f := range t.Fields() {
-		if !f.Desc().ReadOnly {
+		if !f.Desc().PrimaryKey {
 			writable = append(writable, f)
 		}
 	}

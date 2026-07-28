@@ -41,15 +41,45 @@ func UpdateComment() *CommentUpdate {
 	return &CommentUpdate{stmt: sqlb.UpdateRows[Comment]()}
 }
 
+// SetWorkspaceID sets workspace_id.
+func (u *CommentUpdate) SetWorkspaceID(v string) *CommentUpdate {
+	u.stmt.Set("workspace_id", v)
+	return u
+}
+
 // SetTaskID sets task_id.
 func (u *CommentUpdate) SetTaskID(v string) *CommentUpdate {
 	u.stmt.Set("task_id", v)
 	return u
 }
 
+// SetAuthorID sets author_id.
+func (u *CommentUpdate) SetAuthorID(v string) *CommentUpdate {
+	u.stmt.Set("author_id", v)
+	return u
+}
+
 // SetBody sets body.
 func (u *CommentUpdate) SetBody(v string) *CommentUpdate {
 	u.stmt.Set("body", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *CommentUpdate) SetCreatedAt(v time.Time) *CommentUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *CommentUpdate) SetUpdatedAt(v time.Time) *CommentUpdate {
+	u.stmt.Set("updated_at", v)
+	return u
+}
+
+// SetDeletedAt sets deleted_at.
+func (u *CommentUpdate) SetDeletedAt(v *time.Time) *CommentUpdate {
+	u.stmt.Set("deleted_at", v)
 	return u
 }
 
@@ -100,6 +130,12 @@ func UpdateList() *ListUpdate {
 	return &ListUpdate{stmt: sqlb.UpdateRows[List]()}
 }
 
+// SetWorkspaceID sets workspace_id.
+func (u *ListUpdate) SetWorkspaceID(v string) *ListUpdate {
+	u.stmt.Set("workspace_id", v)
+	return u
+}
+
 // SetName sets name.
 func (u *ListUpdate) SetName(v string) *ListUpdate {
 	u.stmt.Set("name", v)
@@ -127,6 +163,24 @@ func (u *ListUpdate) SetPosition(v int32) *ListUpdate {
 // SetArchived sets archived.
 func (u *ListUpdate) SetArchived(v bool) *ListUpdate {
 	u.stmt.Set("archived", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *ListUpdate) SetCreatedAt(v time.Time) *ListUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *ListUpdate) SetUpdatedAt(v time.Time) *ListUpdate {
+	u.stmt.Set("updated_at", v)
+	return u
+}
+
+// SetDeletedAt sets deleted_at.
+func (u *ListUpdate) SetDeletedAt(v *time.Time) *ListUpdate {
+	u.stmt.Set("deleted_at", v)
 	return u
 }
 
@@ -169,6 +223,12 @@ func UpdateMembership() *MembershipUpdate {
 	return &MembershipUpdate{stmt: sqlb.UpdateRows[Membership]()}
 }
 
+// SetWorkspaceID sets workspace_id.
+func (u *MembershipUpdate) SetWorkspaceID(v string) *MembershipUpdate {
+	u.stmt.Set("workspace_id", v)
+	return u
+}
+
 // SetUserID sets user_id.
 func (u *MembershipUpdate) SetUserID(v string) *MembershipUpdate {
 	u.stmt.Set("user_id", v)
@@ -178,6 +238,18 @@ func (u *MembershipUpdate) SetUserID(v string) *MembershipUpdate {
 // SetRole sets role.
 func (u *MembershipUpdate) SetRole(v MembershipRole) *MembershipUpdate {
 	u.stmt.Set("role", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *MembershipUpdate) SetCreatedAt(v time.Time) *MembershipUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *MembershipUpdate) SetUpdatedAt(v time.Time) *MembershipUpdate {
+	u.stmt.Set("updated_at", v)
 	return u
 }
 
@@ -240,6 +312,12 @@ func UpdateTask() *TaskUpdate {
 	return &TaskUpdate{stmt: sqlb.UpdateRows[Task]()}
 }
 
+// SetWorkspaceID sets workspace_id.
+func (u *TaskUpdate) SetWorkspaceID(v string) *TaskUpdate {
+	u.stmt.Set("workspace_id", v)
+	return u
+}
+
 // SetListID sets list_id.
 func (u *TaskUpdate) SetListID(v string) *TaskUpdate {
 	u.stmt.Set("list_id", v)
@@ -249,6 +327,12 @@ func (u *TaskUpdate) SetListID(v string) *TaskUpdate {
 // SetAssigneeID sets assignee_id.
 func (u *TaskUpdate) SetAssigneeID(v *string) *TaskUpdate {
 	u.stmt.Set("assignee_id", v)
+	return u
+}
+
+// SetAuthorID sets author_id.
+func (u *TaskUpdate) SetAuthorID(v string) *TaskUpdate {
+	u.stmt.Set("author_id", v)
 	return u
 }
 
@@ -282,9 +366,39 @@ func (u *TaskUpdate) SetDueAt(v *time.Time) *TaskUpdate {
 	return u
 }
 
+// SetCompletedAt sets completed_at.
+func (u *TaskUpdate) SetCompletedAt(v *time.Time) *TaskUpdate {
+	u.stmt.Set("completed_at", v)
+	return u
+}
+
 // SetPosition sets position.
 func (u *TaskUpdate) SetPosition(v int32) *TaskUpdate {
 	u.stmt.Set("position", v)
+	return u
+}
+
+// SetCommentCount sets comment_count.
+func (u *TaskUpdate) SetCommentCount(v int32) *TaskUpdate {
+	u.stmt.Set("comment_count", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *TaskUpdate) SetCreatedAt(v time.Time) *TaskUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *TaskUpdate) SetUpdatedAt(v time.Time) *TaskUpdate {
+	u.stmt.Set("updated_at", v)
+	return u
+}
+
+// SetDeletedAt sets deleted_at.
+func (u *TaskUpdate) SetDeletedAt(v *time.Time) *TaskUpdate {
+	u.stmt.Set("deleted_at", v)
 	return u
 }
 
@@ -344,6 +458,18 @@ func (u *UserUpdate) SetPasswordHash(v string) *UserUpdate {
 	return u
 }
 
+// SetCreatedAt sets created_at.
+func (u *UserUpdate) SetCreatedAt(v time.Time) *UserUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *UserUpdate) SetUpdatedAt(v time.Time) *UserUpdate {
+	u.stmt.Set("updated_at", v)
+	return u
+}
+
 // Where narrows the affected rows.
 func (u *UserUpdate) Where(preds ...sqlb.Pred) *UserUpdate {
 	u.stmt.Where(preds...)
@@ -390,6 +516,18 @@ func (u *WorkspaceUpdate) SetName(v string) *WorkspaceUpdate {
 // SetSlug sets slug.
 func (u *WorkspaceUpdate) SetSlug(v string) *WorkspaceUpdate {
 	u.stmt.Set("slug", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *WorkspaceUpdate) SetCreatedAt(v time.Time) *WorkspaceUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *WorkspaceUpdate) SetUpdatedAt(v time.Time) *WorkspaceUpdate {
+	u.stmt.Set("updated_at", v)
 	return u
 }
 
