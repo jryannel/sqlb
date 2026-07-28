@@ -123,6 +123,66 @@ func TestJSONArraysMatchURL(t *testing.T) {
 	}
 }
 
+// TestJSONDocumentsMatchURL is the same equivalence check for a jsonb column.
+// It earns its place separately from the array one because the two frontends
+// reach opDoc from opposite directions: the URL carries the document as text and
+// validates it, while the tree carries it as a parsed value and re-marshals it.
+// Those are two different code paths producing one bind parameter, and this is
+// what says they agree — including on key order, which round-tripping normalises
+// and a hand-written string does not.
+func TestJSONDocumentsMatchURL(t *testing.T) {
+	cases := []struct{ name, json, query string }{
+		{
+			"one key",
+			`{"op":"hasdoc","field":"metadata","value":{"lang":"de"}}`,
+			`metadata=hasdoc.{"lang":"de"}`,
+		},
+		{
+			// The comma inside the object is not a value separator on either side.
+			"nested, with commas",
+			`{"op":"hasdoc","field":"metadata","value":{"a":{"b":1},"d":[1,2]}}`,
+			`metadata=hasdoc.{"a":{"b":1},"d":[1,2]}`,
+		},
+		{
+			"array document",
+			`{"op":"hasdoc","field":"metadata","value":["urgent"]}`,
+			`metadata=hasdoc.["urgent"]`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			jSQL, jArgs := jsonSQL[Doc](t, docOpts(), tc.json)
+			uSQL, uArgs := urlSQL[Doc](t, docOpts(), tc.query)
+			if jSQL != uSQL {
+				t.Errorf("SQL differs:\n json: %s\n url:  %s", jSQL, uSQL)
+			}
+			if !reflect.DeepEqual(jArgs, uArgs) {
+				t.Errorf("args differ:\n json: %#v\n url:  %#v", jArgs, uArgs)
+			}
+		})
+	}
+}
+
+// A document column refuses the same operators through the tree as through the
+// URL. The gate is shared, so this is guarding that the tree keeps reaching it
+// rather than growing a second, laxer path.
+func TestJSONTreeRefusesNonDocumentOperators(t *testing.T) {
+	for _, body := range []string{
+		`{"op":"gt","field":"metadata","value":1}`,
+		`{"op":"startswith","field":"metadata","value":"x"}`,
+		`{"op":"contains","field":"metadata","value":"x"}`,
+	} {
+		_, err := filter.ParseFilterTree([]byte(body), docOpts())
+		if err == nil {
+			t.Errorf("ParseFilterTree(%s) should have been refused", body)
+			continue
+		}
+		if !strings.Contains(err.Error(), "hasdoc") {
+			t.Errorf("error = %q, want it to offer \"hasdoc\"", err)
+		}
+	}
+}
+
 // TestParseReadsFilterParam checks that Parse compiles a tree carried in
 // ?filter= and that it lands the identical predicate the URL grammar would — the
 // query string is just a second way in to the one compiler.

@@ -7,6 +7,7 @@
 ?tag=in.a,b,c                 value lists, quotable: in."a,b",c
 ?labels=has.urgent            an array column contains this element
 ?labels=hasany.a,b            overlaps these; hasall.a,b contains all of them
+?metadata=hasdoc.{"lang":"de"}  a jsonb document contains this one
 ?deleted_at=isnull            null tests
 ?views=between.10,20          ranges
 ?or=(status.eq.draft,age.lt.18)   explicit disjunction, nestable
@@ -58,6 +59,43 @@ to carry a GIN index — `schema.Validate` reports all three. The index is not a
 suggestion: an array filter without one still returns the right rows, by
 scanning the table for them, so nothing would ever report it
 ([ADR-0033](https://github.com/jryannel/sqlb/blob/main/docs/adr/0033-array-columns.md)).
+
+## Document columns take containment, and nothing else
+
+A `jsonb` column is the one place where the useful filter cannot be declared in
+advance, because the keys a caller attaches are the point of having it. So it
+gets one operator:
+
+| Request | Means |
+|---|---|
+| `?metadata=hasdoc.{"lang":"de"}` | the document contains that key and value, whatever else it holds |
+| `?metadata=isnull` | the column is NULL — not the same as `{}` |
+
+`hasdoc` compiles to Postgres's `@>`, which is subset containment rather than
+equality, and it is the operator a GIN index over the column serves.
+
+It is spelled `hasdoc` rather than `contains` for the reason ADR-0033 gives
+about arrays: `contains` is already the case-insensitive substring operator for
+text, and a third meaning dispatched on column type is exactly the ambiguity the
+generated clients exist to remove. `hasdoc` joins the `has` family, which is how
+containment is already spelled here.
+
+There is no bare-value shorthand — `?metadata={"lang":"de"}` is refused, because
+the `eq` it would infer is not an operator the column takes — and the ordering
+and pattern operators are refused too. Comparing documents by Postgres's
+ordering rule means something almost nobody intends, and a pattern would match
+against a serialisation whose key order and whitespace are Postgres's to choose;
+both would answer, which is worse than refusing:
+
+```
+GET /docs?metadata=startswith.x
+400 — operator "startswith" does not apply to the JSON document column metadata
+      (allowed: hasdoc, isnull, notnull)
+```
+
+The same filter can arrive through the JSON tree, where the document is a value
+rather than text — `{"field":"metadata","op":"hasdoc","value":{"lang":"de"}}` —
+and binds the identical parameter.
 
 ## It is the same builder
 

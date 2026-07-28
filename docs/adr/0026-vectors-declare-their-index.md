@@ -136,10 +136,15 @@ nothing ever outgrows an exact scan.
   index wants its own migration file, and nothing enforces that yet.
 - *`CREATE EXTENSION` usually needs privileges the migration role lacks* — failing
   at the first statement of the first migration, which is at least a good place.
-- *The metadata half is a debt this record does not pay.* `filter.operators` has
+- *The metadata half was a debt this record did not pay.* `filter.operators` had
   no containment operator and `Coerce` refuses `json.RawMessage`, so a JSONB
-  column is not filterable through sqlb at all, and the first regime is available
-  to Go callers via `RawPred` only.
+  column was not filterable through sqlb at all, and the first regime was
+  available to Go callers via `RawPred` only. Paid since: `hasdoc` compiles to
+  `@>` through both frontends, and `Field.ContainsJSON` is the Go spelling. The
+  operator is not called `contains` because that name is already the text
+  operator — [ADR-0033](0033-array-columns.md)'s reasoning, applied a second
+  time. `Coerce` still refuses `json.RawMessage`; the document is carried as
+  text rather than coerced, which is why it needs no codec.
 
 ## What would change our mind
 

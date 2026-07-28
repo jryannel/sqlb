@@ -1,6 +1,7 @@
 package filter_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -40,6 +41,42 @@ func (Author) TableName() string { return "authors" }
 
 func opts() filter.Options {
 	return filter.Options{Model: sqlb.ModelOf[Article](), Expandable: []string{"author"}}
+}
+
+// Doc carries the document column. It is a model of its own rather than two
+// more fields on Article so that the package examples keep documenting a
+// resource with an ordinary column set.
+//
+// Blob is here deliberately: []byte and json.RawMessage are the same reflect
+// kind, and only one of them may collect the jsonb operators.
+type Doc struct {
+	ID       string          `db:"id" sqlb:"pk"`
+	Title    string          `db:"title" sqlb:"filter,sort"`
+	Metadata json.RawMessage `db:"metadata" sqlb:"filter"`
+	Blob     []byte          `db:"blob" sqlb:"filter"`
+}
+
+func (Doc) TableName() string { return "docs" }
+
+func docOpts() filter.Options { return filter.Options{Model: sqlb.ModelOf[Doc]()} }
+
+// compileDoc is compile against the Doc model.
+func compileDoc(t *testing.T, query string) (string, []any) {
+	t.Helper()
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		t.Fatalf("bad test query %q: %v", query, err)
+	}
+	q, err := filter.Parse(values, docOpts())
+	if err != nil {
+		t.Fatalf("Parse(%q): %v", query, err)
+	}
+	b := filter.Apply(sqlb.Query[Doc]().Select(sqlb.F("id")), q)
+	sql, args, err := b.SQL()
+	if err != nil {
+		t.Fatalf("SQL(): %v", err)
+	}
+	return sql, args
 }
 
 // compile parses a query string and renders the resulting SQL, which is the
@@ -374,6 +411,145 @@ func TestQuotedValuesKeepTheirCommas(t *testing.T) {
 	}
 	if args[0] != "a,b" {
 		t.Errorf("arg 0 = %#v, want %q", args[0], "a,b")
+	}
+}
+
+// Containment is what a document column is for: the point of `metadata` is
+// that a caller attaches keys nobody declared and narrows by them later, which
+// is the one filter that cannot be expressed as a column capability.
+func TestJSONContainment(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+		arg   string
+	}{
+		{
+			name:  "object",
+			query: `metadata=hasdoc.{"lang":"de"}`,
+			want:  `WHERE "metadata" @> $1::jsonb`,
+			arg:   `{"lang":"de"}`,
+		},
+		{
+			// The comma inside the object must not be read as a value
+			// separator, and the nesting must survive intact.
+			name:  "nested object with commas",
+			query: `metadata=hasdoc.{"a":{"b":1,"c":2},"d":[1,2]}`,
+			want:  `WHERE "metadata" @> $1::jsonb`,
+			arg:   `{"a":{"b":1,"c":2},"d":[1,2]}`,
+		},
+		{
+			name:  "array",
+			query: `metadata=hasdoc.["urgent"]`,
+			want:  `WHERE "metadata" @> $1::jsonb`,
+			arg:   `["urgent"]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args := compileDoc(t, tt.query)
+			if !strings.Contains(sql, tt.want) {
+				t.Fatalf("SQL = %s\nwant it to contain %s", sql, tt.want)
+			}
+			if len(args) != 1 || args[0] != tt.arg {
+				t.Errorf("args = %#v, want [%q]", args, tt.arg)
+			}
+		})
+	}
+}
+
+// The `,` inside a JSON object sits at the same nesting level as the one
+// separating conditions, so a group has to count braces to tell them apart.
+func TestJSONContainmentInsideAGroup(t *testing.T) {
+	sql, args := compileDoc(t, `or=(metadata.hasdoc.{"a":1,"b":2},title.eq.draft)`)
+	if !strings.Contains(sql, `("metadata" @> $1::jsonb) OR ("title" = $2)`) {
+		t.Fatalf("SQL = %s", sql)
+	}
+	if args[0] != `{"a":1,"b":2}` {
+		t.Errorf("arg 0 = %#v, want the whole object", args[0])
+	}
+}
+
+func TestJSONColumnRejections(t *testing.T) {
+	tests := []struct {
+		name       string
+		query      string
+		wantReason string
+		wantAllows string
+	}{
+		{
+			name:       "malformed document",
+			query:      `metadata=hasdoc.{"lang":`,
+			wantReason: "not valid JSON",
+		},
+		{
+			name:       "empty document",
+			query:      "metadata=hasdoc.",
+			wantReason: "needs a JSON document",
+		},
+		{
+			// The request named no operator, so the rejection must not quote
+			// back the "eq" that the shorthand rule inferred.
+			name:       "shorthand has no meaning here",
+			query:      `metadata={"lang":"de"}`,
+			wantReason: "no shorthand form",
+			wantAllows: "hasdoc",
+		},
+		{
+			name:       "ordering operator",
+			query:      "metadata=gt.1",
+			wantReason: "does not apply to the JSON document column metadata",
+			wantAllows: "hasdoc",
+		},
+		{
+			name:       "pattern operator",
+			query:      "metadata=startswith.x",
+			wantReason: "does not apply to the JSON document column metadata",
+			wantAllows: "hasdoc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			values, _ := url.ParseQuery(tt.query)
+			_, err := filter.Parse(values, docOpts())
+			if err == nil {
+				t.Fatalf("Parse(%q) should have been rejected", tt.query)
+			}
+			if !strings.Contains(err.Error(), tt.wantReason) {
+				t.Errorf("error = %q, want it to mention %q", err, tt.wantReason)
+			}
+			if tt.wantAllows != "" && !strings.Contains(err.Error(), tt.wantAllows) {
+				t.Errorf("error = %q, want it to offer %q", err, tt.wantAllows)
+			}
+			if strings.Contains(err.Error(), "shorthand") && strings.Contains(err.Error(), `"eq"`) {
+				t.Errorf("the rejection quotes an operator the request never wrote: %s", err)
+			}
+		})
+	}
+}
+
+// Null tests keep working on a document column: "no metadata at all" is a
+// different question from "metadata containing nothing", and both are askable.
+func TestJSONColumnStillTakesNullTests(t *testing.T) {
+	sql, _ := compileDoc(t, "metadata=isnull")
+	if !strings.Contains(sql, `"metadata" IS NULL`) {
+		t.Fatalf("SQL = %s", sql)
+	}
+}
+
+// json.RawMessage and []byte are both slices of bytes. Only the first is a
+// document, and a bytea column must keep the ordinary operators rather than be
+// offered containment it cannot answer.
+func TestByteaIsNotTreatedAsJSON(t *testing.T) {
+	values, _ := url.ParseQuery(`blob=contains.{"a":1}`)
+	_, err := filter.Parse(values, docOpts())
+	if err == nil {
+		t.Fatal("contains on a bytea column should have been rejected")
+	}
+	if !strings.Contains(err.Error(), "needs a text column") {
+		t.Errorf("error = %q, want the text-column rejection, not the jsonb one", err)
 	}
 }
 

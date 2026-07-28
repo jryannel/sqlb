@@ -198,7 +198,7 @@ func (p *parser) jsonLeaf(n *Node) (sqlb.Pred, bool) {
 		return sqlb.Pred{}, false
 	}
 	f := sqlb.F(col.Name)
-	elem, isArray, ok := p.gateArrayScalar(col, n.Op, kind, n.Field, n.Op)
+	elem, isArray, ok := p.gateColumnKind(col, n.Op, kind, false, n.Field, n.Op)
 	if !ok {
 		return sqlb.Pred{}, false
 	}
@@ -261,6 +261,25 @@ func (p *parser) jsonOperands(col *sqlb.ColumnInfo, elem reflect.Type, isArray b
 			return nil, false
 		}
 		return vals, true
+
+	case opDoc:
+		// The URL frontend validates document text; here the document arrived as
+		// part of the filter tree and is already parsed, so it is re-marshalled
+		// rather than re-checked. Round-tripping also normalises the spelling, so
+		// the same filter written either way binds the same parameter.
+		if n.Value == nil {
+			p.errf(n.Field, n.Op, "operator %q needs a JSON document", n.Op)
+			return nil, false
+		}
+		doc, err := json.Marshal(n.Value)
+		if err != nil {
+			p.errf(n.Field, n.Op, "operator %q was given a value that is not a JSON document: %v", n.Op, err)
+			return nil, false
+		}
+		if !p.withinLength(string(doc), n.Field, string(doc)) {
+			return nil, false
+		}
+		return []any{string(doc)}, true
 
 	default: // opBinary
 		if isArray {

@@ -17,6 +17,7 @@
 //	?age=gte.18&age=lt.65        repeated params conjoin
 //	?tag=in.a,b,c                value lists
 //	?deleted_at=isnull           null tests
+//	?metadata=hasdoc.{"lang":"de"}    jsonb containment
 //	?or=(status.eq.draft,age.lt.18)   explicit disjunction
 //	?filter={"op":"and",...}     JSON expression tree, for arbitrary nesting
 //	?sort=-created_at,name       sorting, "-" for descending
@@ -34,6 +35,7 @@ package filter
 
 import (
 	"encoding"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -456,6 +458,8 @@ const (
 	// opElem takes one element of an array column; opSet takes a list of them.
 	opElem
 	opSet
+	// opDoc takes a JSON document and asks a jsonb column to contain it.
+	opDoc
 )
 
 var operators = map[string]opKind{
@@ -472,6 +476,13 @@ var operators = map[string]opKind{
 	// column it is applied to is exactly the ambiguity the generated clients
 	// exist to remove (ADR-0033).
 	"has": opElem, "hasany": opSet, "hasall": opSet,
+
+	// Document containment, and `contains` is not reused here either, for the
+	// reason ADR-0033 gives about arrays: it already means case-insensitive
+	// substring on text, and a third meaning dispatched on column type is the
+	// same ambiguity. `hasdoc` joins the `has` family instead, which is what
+	// containment is already spelled as here.
+	"hasdoc": opDoc,
 }
 
 func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb.Pred, bool) {
@@ -489,7 +500,8 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 	if kind != opList && kind != opRange && kind != opSet && !p.withinLength(value, param, raw) {
 		return sqlb.Pred{}, false
 	}
-	elem, isArray, ok := p.gateArrayScalar(col, op, kind, param, raw)
+	// The shorthand form names no operator, so splitOp inferred the "eq" here.
+	elem, isArray, ok := p.gateColumnKind(col, op, kind, op == "eq" && value == raw, param, raw)
 	if !ok {
 		return sqlb.Pred{}, false
 	}
@@ -500,18 +512,27 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 	return p.applyOp(col, f, op, kind, isArray, operands, param, raw)
 }
 
-// gateArrayScalar rejects an operator that does not fit the column's
-// array-ness, naming the allowed alternatives, and reports whether the column
-// is an array (with its element type) so the caller coerces operands to the
-// right type. The refusal is written here rather than left to Postgres, which
-// would report a type error from a statement the caller cannot see.
+// gateColumnKind rejects an operator that does not fit the kind of column it
+// was applied to — array, document or scalar — naming the allowed alternatives,
+// and reports whether the column is an array (with its element type) so the
+// caller coerces operands to the right type. The refusal is written here rather
+// than left to Postgres, which would report a type error from a statement the
+// caller cannot see.
 //
 // The whole-array ordering operators are refused here too: they share opKind
 // opBinary with the eq/ne that arrays do accept, so the operator table alone
 // cannot separate them, and refusing before extraction keeps the error the
 // caller sees the same whether or not the operand also fails to coerce.
-func (p *parser) gateArrayScalar(col *sqlb.ColumnInfo, op string, kind opKind, param, raw string) (reflect.Type, bool, bool) {
+//
+// A document column is gated the same way and for the same reason, with one
+// difference worth naming: it has no shorthand form. `?metadata={"lang":"de"}`
+// infers the "eq" that splitOp supplies, so quoting that operator back would
+// name a word the request never used — shorthand says the column needs an
+// operator instead. Only the URL frontend can produce that spelling; the JSON
+// tree always names its operator, and passes false.
+func (p *parser) gateColumnKind(col *sqlb.ColumnInfo, op string, kind opKind, shorthand bool, param, raw string) (reflect.Type, bool, bool) {
 	elem, isArray := arrayElem(col)
+	isDoc := isJSONColumn(col)
 	switch {
 	case isArray && !arrayOperators[kind],
 		isArray && kind == opBinary && op != "eq" && op != "ne" && op != "neq":
@@ -520,8 +541,31 @@ func (p *parser) gateArrayScalar(col *sqlb.ColumnInfo, op string, kind opKind, p
 	case !isArray && (kind == opElem || kind == opSet):
 		p.errf(param, raw, "operator %q needs an array column, but %s is %s", op, col.Name, col.Type)
 		return nil, false, false
+	case isDoc && kind != opDoc && kind != opNullary:
+		if shorthand {
+			p.errAllowed(param, raw,
+				fmt.Sprintf("%s is a JSON document column, which has no shorthand form; name an operator", col.Name),
+				documentOperatorNames())
+			return nil, false, false
+		}
+		p.errAllowed(param, raw,
+			fmt.Sprintf("operator %q does not apply to the JSON document column %s", op, col.Name),
+			documentOperatorNames())
+		return nil, false, false
+	case !isDoc && kind == opDoc:
+		p.errf(param, raw, "operator %q needs a JSON document column, but %s is %s", op, col.Name, col.Type)
+		return nil, false, false
 	}
 	return elem, isArray, true
+}
+
+// documentOperatorNames is the set a jsonb column accepts, and the list a
+// rejection offers back. It is short on purpose. The ordering operators compare
+// documents by a rule almost nobody means, and the pattern operators would
+// match against a serialisation whose key order and whitespace are Postgres's
+// to choose — both would answer, which is worse than refusing.
+func documentOperatorNames() []string {
+	return []string{"hasdoc", "isnull", "notnull"}
 }
 
 // urlOperands turns one URL operand string into the coerced operands applyOp
@@ -548,6 +592,18 @@ func (p *parser) urlOperands(col *sqlb.ColumnInfo, elem reflect.Type, isArray bo
 
 	case opSet:
 		return p.arrayOperand(elem, value, param, raw, op)
+
+	case opDoc:
+		doc := strings.TrimSpace(value)
+		if doc == "" {
+			p.errf(param, raw, "operator %q needs a JSON document, e.g. %s=hasdoc.{\"lang\":\"de\"}", op, col.Name)
+			return nil, false
+		}
+		if !json.Valid([]byte(doc)) {
+			p.errf(param, raw, "%s is a JSON document column and %q is not valid JSON", col.Name, doc)
+			return nil, false
+		}
+		return []any{doc}, true
 
 	case opList:
 		parts := splitTopLevel(value, ',')
@@ -634,6 +690,18 @@ func (p *parser) applyOp(col *sqlb.ColumnInfo, f sqlb.Field, op string, kind opK
 	case opElem:
 		// `has` binds the element — `$1 = ANY(col)` — not an array constant.
 		return f.Has(operands[0]), true
+
+	case opDoc:
+		// Both frontends deliver the document as JSON text, which is what
+		// ContainsJSON binds; the `::jsonb` cast is added there. The assertion
+		// is checked rather than assumed: a third frontend that got the operand
+		// shape wrong should be a 400 from here, not a panic in a request.
+		doc, isText := operands[0].(string)
+		if !isText {
+			p.errf(param, raw, "operator %q needs a JSON document", op)
+			return sqlb.Pred{}, false
+		}
+		return f.ContainsJSON(doc), true
 
 	case opSet:
 		if op == "hasany" {
@@ -1098,8 +1166,31 @@ func isTextColumn(col *sqlb.ColumnInfo) bool {
 	return t.Kind() == reflect.String
 }
 
-// splitTopLevel splits on sep, ignoring separators inside parentheses or
-// double quotes so that grouped and quoted values survive.
+var jsonRawMessageType = reflect.TypeOf(json.RawMessage(nil))
+
+// isJSONColumn reports whether a column holds a jsonb document.
+//
+// The test is type identity rather than kind, because json.RawMessage and the
+// []byte that a bytea column maps to are both slices of bytes and only one of
+// them is a document. Getting that backwards would offer containment over a
+// blob and refuse it over metadata.
+func isJSONColumn(col *sqlb.ColumnInfo) bool {
+	t := col.Type
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t == jsonRawMessageType
+}
+
+// splitTopLevel splits on sep, ignoring separators inside brackets or double
+// quotes so that grouped, quoted and JSON values survive.
+//
+// Braces and square brackets count towards the same depth as parentheses, so
+// `or=(metadata.contains.{"a":1,"b":2},status.eq.draft)` splits into two
+// conditions rather than three. One counter rather than a stack means `{)`
+// balances, which is the existing tolerance for an unmatched `)` rather than a
+// new one: this splits, it does not validate, and a malformed value is
+// rejected by whatever parses the piece it lands in.
 func splitTopLevel(s string, sep byte) []string {
 	var (
 		out   []string
@@ -1117,9 +1208,9 @@ func splitTopLevel(s string, sep byte) []string {
 			}
 		case c == '"':
 			quote = true
-		case c == '(':
+		case c == '(', c == '{', c == '[':
 			depth++
-		case c == ')':
+		case c == ')', c == '}', c == ']':
 			if depth > 0 {
 				depth--
 			}

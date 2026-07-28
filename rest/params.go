@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -231,6 +232,24 @@ func filterDescription(col *sqlb.ColumnInfo) string {
 				"conditions. Operators: %s.",
 			col.Name, strings.Join(ops, ", "))
 	}
+
+	// A document column takes containment and nothing else: it has no
+	// shorthand, and the ordering and pattern operators are refused. Listing
+	// the general set here would document a request that parsing rejects,
+	// which is the same mistake as offering `startswith` on an integer.
+	if isJSON(col.Type) {
+		ops := []string{"hasdoc"}
+		if col.Nullable {
+			ops = append(ops, "isnull", "notnull")
+		}
+		return fmt.Sprintf(
+			"Filter on `%s`, a JSON document. Written `hasdoc.{…}`, which matches rows "+
+				"whose document contains the one given — `hasdoc.{\"lang\":\"de\"}` matches "+
+				"any document carrying that key and value, whatever else it holds. There is no "+
+				"bare-value shorthand, and `contains` stays the text operator. Operators: %s.",
+			col.Name, strings.Join(ops, ", "))
+	}
+
 	ops := []string{"eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "between"}
 	if col.Nullable {
 		ops = append(ops, "isnull", "notnull")
@@ -255,6 +274,20 @@ func isText(t reflect.Type) bool {
 		t = t.Elem()
 	}
 	return t.Kind() == reflect.String
+}
+
+var jsonRawMessageType = reflect.TypeOf(json.RawMessage(nil))
+
+// isJSON reports whether a column holds a jsonb document. It matches the named
+// type rather than the kind, because json.RawMessage and the []byte a bytea
+// column maps to are both slices of bytes and only one is a document. The
+// filter package makes the same distinction for the same reason; it is
+// duplicated rather than exported, as isText already is.
+func isJSON(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t == jsonRawMessageType
 }
 
 // capable lists the non-hidden columns satisfying want, for documentation.
