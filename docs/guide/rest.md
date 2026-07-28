@@ -80,6 +80,7 @@ means the client sent the wrong shape. Immutable columns are absent entirely.
 ?tag=in.a,b,c                 value lists, quotable: in."a,b",c
 ?deleted_at=isnull            null tests
 ?views=between.10,20          ranges
+?metadata=contains.{"lang":"de"}  jsonb containment
 ?or=(status.eq.draft,age.lt.18)   explicit disjunction, nestable
 ?sort=-created_at,title       "-" for descending; created_at.desc also works
 ?select=id,title              projection (the primary key is always kept)
@@ -91,6 +92,14 @@ Values are always bind parameters. Identifiers are validated against the model
 before they reach the compiler, and quoted when they get there. LIKE
 metacharacters in user input are escaped, so a search for `50%` searches for the
 literal string.
+
+A `jsonb` column takes containment and nothing else. `contains` compiles to
+Postgres's `@>`, so `?metadata=contains.{"lang":"de"}` matches any document
+carrying that key and value whatever else it holds, and a GIN index over the
+column serves it. There is no bare-value shorthand and the ordering operators
+are refused, naming what would have worked — a document column is the one place
+where the useful filter cannot be declared in advance, because the keys a caller
+attaches are the point of having it.
 
 Here is that end to end, from `filter/example_test.go`:
 

@@ -292,6 +292,31 @@ func (f Field) StartsWith(v string) Pred { return f.ILike(escapeLike(v) + "%") }
 // EndsWith matches a case-insensitive suffix, with wildcards in v escaped.
 func (f Field) EndsWith(v string) Pred { return f.ILike("%" + escapeLike(v)) }
 
+// ContainsJSON matches rows whose jsonb column contains doc — Postgres's `@>`,
+// which asks that every key and value in doc appear in the column. It is the
+// operator a GIN index over the column serves, and the reason a document
+// column can be narrowed without declaring in advance which keys it holds.
+//
+//	sqlb.F("metadata").ContainsJSON(`{"lang":"de"}`)
+//	// "metadata" @> $1::jsonb
+//
+// doc is JSON text rather than a Go value because a Pred has no error to
+// return, and marshalling has one. A caller holding a value marshals it first
+// and handles the failure where it happens.
+//
+// The parameter carries an explicit ::jsonb cast. It is not strictly needed —
+// a driver that leaves the parameter type unspecified lets Postgres infer jsonb
+// from the operator, which pgtest confirmed by removing the cast and watching
+// the query still run — but it says what the statement means, and it holds for
+// a driver that types the parameter as text rather than leaving it open.
+func (f Field) ContainsJSON(doc string) Pred {
+	return pred(Binary{
+		Op:    "@>",
+		Left:  f.Column(),
+		Right: Cast{Inner: Param{Value: doc}, Type: "jsonb"},
+	})
+}
+
 // escapeLike neutralises LIKE metacharacters so that a user typing "50%" in a
 // search box searches for the literal string rather than a wildcard.
 func escapeLike(s string) string {

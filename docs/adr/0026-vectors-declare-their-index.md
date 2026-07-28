@@ -341,15 +341,17 @@ Managed Postgres allow-lists it; a locked-down role does not get it. The failure
 is at the first statement of the first migration, which is at least a good place
 to fail.
 
-*The metadata half is a debt this record incurs and does not pay.* The rag
-pattern's filter is `metadata @> '{"lang":"de"}'::jsonb`, and the REST filter
-grammar cannot express it: `filter.operators` has no containment operator, and
-`filter.Coerce` refuses a `json.RawMessage` outright — a JSONB column is not
-filterable through sqlb today at all. So the first regime above is only fully
-available to Go callers via `RawPred` until the grammar grows containment. That
-work has nothing to do with vectors and would be worth doing without them; it is
-listed here because a vector search whose companion filter has to be `Raw` is
-not the feature this record claims to deliver.
+*The metadata half was a debt this record incurred, and it has since been
+paid.* When this was written the REST filter grammar could not express
+`metadata @> '{"lang":"de"}'`: there was no containment operator and
+`filter.Coerce` refused a `json.RawMessage` outright, so a JSONB column was not
+filterable through sqlb at all and the first regime above was available only to
+Go callers via `RawPred`. `?metadata=contains.{"lang":"de"}` now compiles to
+`"metadata" @> $1::jsonb`, and a jsonb column takes containment and null tests
+and refuses everything else. The debt is recorded rather than deleted because
+the shape of it is the argument: the filter a document column needs is the one
+filter that cannot be declared in advance, which is the same observation the
+two-regime decision above rests on.
 
 ## What would change our mind
 
@@ -475,6 +477,11 @@ because the shape of the ask determines whether they are types or an option on
   Postgres are deliberately listed as the first thing that could invalidate it,
   because ADR-0025 was written after a green test suite turned out to have been
   asserting what somebody expected rather than what Postgres accepts.
+- 2026-07-28 — The jsonb containment gap listed under costs is closed:
+  `?metadata=contains.{…}` compiles to `@>` and is proven against Postgres,
+  including a plan assertion that the operator reaches a GIN index. Nothing
+  about the decision changed — the first regime is simply now reachable over
+  HTTP rather than only from Go.
 - 2026-07-28 — Revised against `core/rag` in studio-apps, a working pgvector
   module, which corrected the record within hours of it being written. The first
   draft made the ANN index mandatory and required every filter to be declared,

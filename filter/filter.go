@@ -17,6 +17,7 @@
 //	?age=gte.18&age=lt.65        repeated params conjoin
 //	?tag=in.a,b,c                value lists
 //	?deleted_at=isnull           null tests
+//	?metadata=contains.{"lang":"de"}  jsonb containment
 //	?or=(status.eq.draft,age.lt.18)   explicit disjunction
 //	?sort=-created_at,name       sorting, "-" for descending
 //	?select=id,name              projection
@@ -26,6 +27,7 @@ package filter
 
 import (
 	"encoding"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -337,6 +339,13 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 		return sqlb.Pred{}, false
 	}
 
+	// A document column takes its own small set of operators, so the ordering
+	// and pattern operators are refused with a list rather than reaching
+	// Coerce, which would report the Go type at a caller who never named one.
+	if isJSONColumn(col) {
+		return p.buildJSON(f, col, op, value, param, raw)
+	}
+
 	switch kind {
 	case opNullary:
 		if op == "isnull" {
@@ -420,6 +429,52 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 		default:
 			return f.Lte(v), true
 		}
+	}
+}
+
+// jsonOperators are the operators a jsonb column accepts, and the list a
+// rejection offers back. It is short on purpose. The ordering operators compare
+// documents by a rule almost nobody means, and the pattern operators would
+// match against a serialisation whose key order and whitespace are Postgres's
+// to choose — both would answer, which is worse than refusing.
+var jsonOperators = []string{"contains", "isnull", "notnull"}
+
+// buildJSON handles a jsonb column, where containment is the useful filter and
+// equality is not: `metadata=contains.{"lang":"de"}` asks the question the
+// column exists to answer, and does it through the `@>` operator a GIN index
+// serves.
+func (p *parser) buildJSON(f sqlb.Field, col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb.Pred, bool) {
+	switch op {
+	case "isnull":
+		return f.IsNull(), true
+	case "notnull":
+		return f.NotNull(), true
+
+	case "contains":
+		doc := strings.TrimSpace(value)
+		if doc == "" {
+			p.errf(param, raw, "operator %q needs a JSON document, e.g. %s=contains.{\"lang\":\"de\"}", op, col.Name)
+			return sqlb.Pred{}, false
+		}
+		if !json.Valid([]byte(doc)) {
+			p.errf(param, raw, "%s is a jsonb column and %q is not valid JSON", col.Name, doc)
+			return sqlb.Pred{}, false
+		}
+		return f.ContainsJSON(doc), true
+
+	default:
+		// The shorthand form names no operator, so reporting the "eq" that
+		// splitOp inferred would quote back a word the request never used.
+		if op == "eq" && value == raw {
+			p.errAllowed(param, raw,
+				fmt.Sprintf("%s is a jsonb column, which has no shorthand form; name an operator", col.Name),
+				jsonOperators)
+			return sqlb.Pred{}, false
+		}
+		p.errAllowed(param, raw,
+			fmt.Sprintf("operator %q cannot be used on %s, which is a jsonb column", op, col.Name),
+			jsonOperators)
+		return sqlb.Pred{}, false
 	}
 }
 
@@ -744,8 +799,31 @@ func isTextColumn(col *sqlb.ColumnInfo) bool {
 	return t.Kind() == reflect.String
 }
 
-// splitTopLevel splits on sep, ignoring separators inside parentheses or
-// double quotes so that grouped and quoted values survive.
+var jsonRawMessageType = reflect.TypeOf(json.RawMessage(nil))
+
+// isJSONColumn reports whether a column holds a jsonb document.
+//
+// The test is type identity rather than kind, because json.RawMessage and the
+// []byte that a bytea column maps to are both slices of bytes and only one of
+// them is a document. Getting that backwards would offer containment over a
+// blob and refuse it over metadata.
+func isJSONColumn(col *sqlb.ColumnInfo) bool {
+	t := col.Type
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t == jsonRawMessageType
+}
+
+// splitTopLevel splits on sep, ignoring separators inside brackets or double
+// quotes so that grouped, quoted and JSON values survive.
+//
+// Braces and square brackets count towards the same depth as parentheses, so
+// `or=(metadata.contains.{"a":1,"b":2},status.eq.draft)` splits into two
+// conditions rather than three. One counter rather than a stack means `{)`
+// balances, which is the existing tolerance for an unmatched `)` rather than a
+// new one: this splits, it does not validate, and a malformed value is
+// rejected by whatever parses the piece it lands in.
 func splitTopLevel(s string, sep byte) []string {
 	var (
 		out   []string
@@ -763,9 +841,9 @@ func splitTopLevel(s string, sep byte) []string {
 			}
 		case c == '"':
 			quote = true
-		case c == '(':
+		case c == '(', c == '{', c == '[':
 			depth++
-		case c == ')':
+		case c == ')', c == '}', c == ']':
 			if depth > 0 {
 				depth--
 			}
