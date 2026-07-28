@@ -1,0 +1,163 @@
+---
+title: Filter grammar reference
+description: Every operator in the REST filter grammar, which column types accept it, the reserved query parameters, and the parser's limits.
+sidebar:
+  label: Filter grammar
+  order: 1
+---
+
+Checked against `filter/filter.go`. The guide page is
+[Filtering and search](/sqlb/rest/filtering/).
+
+## Shape of a condition
+
+```
+?column=operator.value          eq.published
+?column=value                   published          — equality shorthand
+?column=op.value&column=op.value                   — repeats conjoin
+```
+
+The shorthand is why a dotted value is not read as an operator: `?date=2024-01-02`
+and `?email=a@b.com` mean equality, because the leading segment is not a known
+operator name.
+
+## Operators
+
+| Operator | Meaning | Value form | Accepts |
+|---|---|---|---|
+| `eq` | `=` | one value | any type |
+| `ne`, `neq` | `<>` | one value | any type |
+| `gt`, `gte` | `>`, `>=` | one value | any type |
+| `lt`, `lte` | `<`, `<=` | one value | any type |
+| `in` | `IN (…)` | comma list | any type |
+| `nin` | `NOT IN (…)` | comma list | any type |
+| `between` | `BETWEEN a AND b` | exactly two, comma-separated | any type |
+| `isnull` | `IS NULL` | none | any type |
+| `notnull` | `IS NOT NULL` | none | any type |
+| `like` | `LIKE`, pattern as written | one value | **text columns only** |
+| `ilike` | `ILIKE`, pattern as written | one value | **text columns only** |
+| `contains` | `ILIKE %v%`, metacharacters escaped | one value | **text columns only** |
+| `startswith` | `ILIKE v%`, metacharacters escaped | one value | **text columns only** |
+| `endswith` | `ILIKE %v`, metacharacters escaped | one value | **text columns only** |
+
+"Text column" means the Go field is a string kind, pointer or not. A pattern
+operator on any other column is rejected with
+`operator "contains" needs a text column, but views is int64`.
+
+`isnull` and `notnull` are accepted on **any** filterable column at the server;
+nothing checks that the column is nullable. The generated
+[TypeScript client](/sqlb/typescript/) and [CLI](/sqlb/cli/) are narrower — they
+offer a null test only where the schema says the column is nullable — so the
+looser server behaviour is only reachable by hand-written requests.
+
+An unknown operator is rejected with the full list of operator names.
+
+### Value lists and quoting
+
+```
+?tag=in.a,b,c
+?tag=in."a,b",c        a value containing a comma
+?views=between.10,20
+```
+
+Splitting ignores separators inside parentheses and double quotes, so a grouped
+or quoted value survives. `between` with anything other than two values is
+rejected by count.
+
+### Value coercion
+
+Values are coerced to the model's Go type before they reach the compiler, so
+nothing downstream sees a string:
+
+| Go type | Accepted |
+|---|---|
+| `string` kinds | as written |
+| `bool` | anything `strconv.ParseBool` accepts |
+| signed integer kinds | base 10, parsed at 64 bits |
+| unsigned integer kinds | base 10, non-negative, parsed at 64 bits |
+| float kinds | parsed at 64 bits |
+| `time.Time` | `RFC3339Nano`, `RFC3339`, `2006-01-02T15:04:05`, or `2006-01-02` |
+| anything implementing `encoding.TextUnmarshaler` | delegated to it — this is what covers `uuid.UUID` and similar wrappers |
+
+Anything else — a `[]byte` or a `json.RawMessage` column, say — is rejected with
+`values of type … cannot be used in a filter`, so a `jsonb` column is queryable
+from Go and not from a URL.
+
+`time.Time` is checked before the `TextUnmarshaler` branch on purpose: its own
+`UnmarshalText` accepts RFC 3339 only, which would reject the plain dates a date
+range is usually written with.
+
+## Grouping
+
+```
+?or=(status.eq.draft,age.lt.18)
+?and=(status.eq.draft,or(a.eq.1,b.eq.2))
+```
+
+Conditions inside a group are written `column.operator.value`. Groups nest, and
+`or(…)` and `and(…)` may appear as items inside one. Repeated `?or=` parameters
+conjoin with each other and with the plain conditions.
+
+Nesting deeper than **3** levels is rejected.
+
+## Reserved parameters
+
+These never name a column:
+
+| Parameter | Meaning |
+|---|---|
+| `select` | Projection. The primary key is always kept, even if omitted |
+| `sort`, `order` | Ordering, most significant first |
+| `search` | Substring fan-out over every `Searchable` column |
+| `expand` | Relations to resolve inline |
+| `page`, `per_page` | Offset paging |
+| `limit`, `offset` | Offset paging, the explicit form |
+| `cursor` | Keyset paging |
+| `count` | `count=exact` adds `total`, at the cost of a second query |
+| `or`, `and` | Explicit groups |
+
+Any other parameter that does not name a filterable column is rejected as an
+unknown parameter rather than ignored.
+
+### Sort
+
+```
+?sort=-created_at,title
+?sort=created_at.desc,title.asc
+```
+
+`-` prefix and `.desc`/`.asc` suffix both work. A direction that is neither is
+rejected naming both. Only `Sortable` columns are accepted; the primary key is
+appended automatically unless the sort already contains it, so every list is
+totally ordered.
+
+### Search
+
+Fans out over every `Searchable` column as a disjunction, with LIKE
+metacharacters in the input escaped. A resource with no searchable column
+rejects `?search=` with `no column of this resource is searchable` rather than
+silently matching nothing.
+
+## Limits
+
+| Limit | Default | Set by |
+|---|---|---|
+| `DefaultPageSize` | 25 | `schema.REST{DefaultPageSize}` |
+| `MaxPageSize` | 200 | `schema.REST{MaxPageSize}` |
+| `MaxFilters` | 24 | `schema.REST{MaxFilters}` |
+| `MaxGroupDepth` | 3 | package constant |
+
+A page size above the maximum is **capped rather than rejected** — a client
+asking for too much gets the maximum. Exceeding `MaxFilters` or the sort-term
+limit *is* a rejection, naming the count and the limit.
+
+`page` below 1 and a negative `offset` are both rejected.
+
+## Cursors
+
+`?cursor=` cannot be combined with `?page=` or `?offset=`, and the rejection
+says which to drop. A cursor is valid only for the ordering it was issued under;
+using one against a different `?sort=` is a 400 naming both orderings.
+
+See [Pagination](/sqlb/rest/pagination/) and
+[ADR-0027](/sqlb/adr/0027-keyset-pagination/).

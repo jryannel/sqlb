@@ -119,7 +119,7 @@ filter parameter, with the operator vocabulary in prose, so anything pointed at
 it produces a client where `?status=bogus.x` compiles. It is generated from the
 model instead, and stops at a key factory the change feed can consume — see
 [ADR-0028](adr/0028-typescript-client.md) and
-[the guide](guide/typescript-client.md). `example/tasks/web` is the worked one,
+[the guide](typescript/README.md). `example/tasks/web` is the worked one,
 and its refusals file asserts what must not compile.
 
 The REST handlers turned out not to need generating at all: one generic function

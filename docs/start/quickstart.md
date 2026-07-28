@@ -1,22 +1,18 @@
-# Getting started
+# Quickstart
 
-By the end of this page you have a schema, generated models, and a query
-running against Postgres.
+By the end of this page you have a schema, generated models, a query running
+against Postgres, and a REST API in front of it.
 
-sqlb needs Go 1.25 or newer and Postgres. Nothing else: the engine depends on
-the standard library alone, so importing it costs you no transitive
-dependencies. Only the `rest` package pulls in [Huma](https://huma.rocks), and
-only if you use it.
+sqlb needs Go 1.25 or newer and Postgres.
 
 ```bash
 go get github.com/jryannel/sqlb
 ```
 
-## See it running first
+## See one running first
 
 Before building one, run one. [`example/tasks`](../../example/tasks/) is
-everything on this page and the next four assembled into a multi-tenant task
-manager:
+everything on this page assembled into a multi-tenant task manager:
 
 ```bash
 cd example/tasks
@@ -28,7 +24,7 @@ TASKS_DATABASE_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode
 Migrations apply at startup, so an empty database is enough.
 <http://localhost:8080/docs> is then the API generated from its schema — with
 per-column filter operators, enumerated sort values and pagination, none of it
-hand-written. That document is the thing this guide is teaching you to produce.
+hand-written. That document is the thing this page is teaching you to produce.
 
 ## Two ways in
 
@@ -37,10 +33,10 @@ other:
 
 - **Schema-first** — declare tables as Go values, generate models, migrations
   and REST handlers from them. This is the path below, and the one the rest of
-  the guide assumes.
+  the documentation assumes.
 - **Structs-first** — you already have model structs, from another generator or
-  written by hand. Skip to [Using your own
-  structs](#using-your-own-structs); nothing here requires the DSL.
+  written by hand. See [Using your own structs](structs-first.md); nothing here
+  requires the DSL.
 
 ## 1. Declare a schema
 
@@ -88,8 +84,9 @@ Three ways out, and you have to pick one:
 | 13–17 | `schema.UUID("id").PrimaryKey().Default(schema.GenUUIDv4())` — `gen_random_uuid()`, built in since 13 |
 | Any, with the extension installed | Nothing; the default is already correct |
 
-This is the one place the guide will hand you DDL your server rejects, which is
-why it is called out here rather than in [Migrations](migrations.md).
+This is the one place the documentation will hand you DDL your server rejects,
+which is why it is called out here rather than in
+[Migrations](../migrations/README.md).
 
 Two things are doing the work here.
 
@@ -102,7 +99,7 @@ exposing your database.
 **`Expose` is what publishes a table.** Without that call, `authors` above is
 reachable from Go and has no HTTP surface at all.
 
-See [Schema](schema.md) for the full column vocabulary.
+See [Declaring tables](../schema/README.md) for the full column vocabulary.
 
 ## 2. Generate
 
@@ -144,7 +141,9 @@ That writes four files into `blog/`:
 
 Wire it to `go generate` with a directive in the schema file, and add
 `codegen.Check` to CI — generated code is committed, so it drifts the first time
-someone edits a schema and forgets to regenerate.
+someone edits a schema and forgets to regenerate. The
+[TypeScript client](../typescript/README.md) and the
+[Go CLI](../cli/README.md) are two more options on this same call.
 
 ## 3. Query
 
@@ -197,7 +196,7 @@ q := sqlb.Query[blog.Post]().
 
 `PostCols.Titel` does not compile. Neither does `PostCols.ViewCount.Eq("x")`,
 nor `PostCols.ViewCount.Contains("x")`. Hidden columns are not in the struct at
-all.
+all. See [Typed columns](../queries/typed-columns.md).
 
 ## 4. Serve
 
@@ -217,7 +216,7 @@ http.ListenAndServe(":8080", router)
 
 You now have list, read, create, patch and delete for every exposed table, with
 filtering, sorting, search, pagination and an OpenAPI document built from each
-column's capabilities. See [REST](rest.md).
+column's capabilities. See [Mounting resources](../rest/README.md).
 
 ## 5. Scope every read
 
@@ -237,70 +236,15 @@ sqlb.On[blog.Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.
 `BeforeQuery` receives the query itself, so this one registration applies to
 every read of the model — including the reads the generated REST handlers
 issue. Tenant scoping stops being something each call site has to remember, and
-a hook returning an error aborts the operation. See [Queries and
-hooks](queries-and-hooks.md).
+a hook returning an error aborts the operation.
 
-## Using your own structs
+A table can also *declare* that it expects to be scoped, so the missing
+registration is caught at startup rather than discovered in production. See
+[Hooks](../queries/hooks.md).
 
-The schema DSL and codegen are both optional. Point sqlb at structs you already
-have and describe them at startup:
+## Next
 
-```go
-type Invoice struct {
-    ID         string    `json:"id"`
-    CustomerID string    `json:"customerId"`
-    AmountDue  int64     `json:"amountDue"`
-    Memo       string    `json:"-"`
-    CreatedAt  time.Time `json:"createdAt"`
-}
-
-func init() {
-    sqlb.Describe[Invoice]().
-        PrimaryKey("id").
-        Defaulted("id").
-        Timestamps("created_at").
-        Filterable("customer_id", "amount_due").
-        Sortable("amount_due", "created_at").
-        Hidden("memo")
-}
-```
-
-Column names are derived from field names (`CustomerID` → `customer_id`), so the
-query builder works with no metadata at all. What `Describe` adds is what
-reflection cannot infer: which column is the key, which have database defaults
-(without this, an insert writes `""` over your generated uuid), and which
-capabilities are open. Naming a column that does not exist panics at startup and
-lists the ones that do.
-
-Call it from `init`. It mutates the cached model and does not lock, so it is
-only safe before any query has been built against that model.
-
-`?expand` works here too. A relation is a field the expanded row lands in, plus
-the column it joins on:
-
-```go
-type Invoice struct {
-    CustomerID string
-    Customer   *Customer `db:"-"`   // not a column
-}
-
-sqlb.Describe[Invoice]().Relation("Customer", "customer_id")
-```
-
-One call, because there is one fact. Declaring the relation is what makes
-`customer_id` expandable — with struct tags the two halves are written
-separately and can disagree, which is why the tagged form is checked and this
-one has nothing to check.
-
-## Where to next
-
-- [Schema](schema.md) — the full column vocabulary, references, linting
-- [Queries and hooks](queries-and-hooks.md) — mutations, transactions, `AfterCommit`
-- [REST](rest.md) — the filter grammar and what the OpenAPI document says
-- [Migrations](migrations.md) — turning a schema edit into files your runner applies
-
-Or read the finished one whose server you ran at the top of this page:
-[`example/tasks`](../../example/tasks/) is these four pages assembled, with
-authentication, a migration history and a workspace boundary held entirely by
-hooks. It also documents the two places it had to work around sqlb rather than
-use it, which is the part worth reading before you meet them yourself.
+- [Your first app](first-app.md) — a complete worked one, small enough to read
+- [Concepts](../concepts/README.md) — the five ideas the rest of this rests on
+- [Declaring tables](../schema/README.md) — the full column vocabulary
+- [Queries](../queries/README.md) — predicates, aggregates, transactions

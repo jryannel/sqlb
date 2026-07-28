@@ -10,7 +10,7 @@ typed composable queries, a validated REST filter grammar, and domain hooks —
 without hand-writing the HTTP-to-SQL layer for every dynamic view.
 
 **[Documentation](https://jryannel.github.io/sqlb/)** ·
-[Getting started](https://jryannel.github.io/sqlb/guide/getting-started/) ·
+[Quickstart](https://jryannel.github.io/sqlb/start/quickstart/) ·
 [API reference](https://pkg.go.dev/github.com/jryannel/sqlb) ·
 [Decision records](https://jryannel.github.io/sqlb/adr/)
 
@@ -65,12 +65,12 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   response type, and a hidden column has no spelling at all. The OpenAPI
   document cannot say any of that — `?status=eq.published` documents as
   `array<string>` — so it is generated from the model instead
-  ([guide](https://jryannel.github.io/sqlb/guide/typescript-client/)). The same
+  ([guide](https://jryannel.github.io/sqlb/typescript/)). The same
   vocabulary becomes a [cobra](https://github.com/spf13/cobra) command tree for
   a shell: one flag per filterable column, its operators in the usage string, so
   `--help` states what a resource accepts without a request — which is the form
   the guarantee has to take for a caller with no compile step, such as an agent
-  ([guide](https://jryannel.github.io/sqlb/guide/go-cli/)).
+  ([guide](https://jryannel.github.io/sqlb/cli/)).
 - **No dependencies to inherit.** The engine depends on the standard library
   alone, and a CI gate enforces it. Only the REST adapter pulls in
   [Huma](https://huma.rocks), and only if you use it. The generated TypeScript
@@ -84,7 +84,7 @@ go get github.com/jryannel/sqlb
 ```
 
 Go 1.25 or newer, and Postgres.
-[Getting started](https://jryannel.github.io/sqlb/guide/getting-started/) goes
+[Quickstart](https://jryannel.github.io/sqlb/start/quickstart/) goes
 from here to a running server.
 
 The schema DSL and code generation are both optional: `sqlb.Describe[T]()`
@@ -116,7 +116,11 @@ server over the manifest.
 
 | | |
 |---|---|
-| [Guide](https://jryannel.github.io/sqlb/guide/) | Install, schema, queries and hooks, REST, TypeScript client, Go CLI, migrations |
+| [Start here](https://jryannel.github.io/sqlb/start/) | Overview, quickstart, a worked first app, structs-first adoption |
+| [Concepts](https://jryannel.github.io/sqlb/concepts/) | The five ideas the rest of it rests on |
+| [Schema](https://jryannel.github.io/sqlb/schema/) · [Queries](https://jryannel.github.io/sqlb/queries/) · [REST](https://jryannel.github.io/sqlb/rest/) · [TypeScript](https://jryannel.github.io/sqlb/typescript/) · [CLI](https://jryannel.github.io/sqlb/cli/) · [Migrations](https://jryannel.github.io/sqlb/migrations/) | One section per surface |
+| [Examples](https://jryannel.github.io/sqlb/examples/) | Six worked applications, and what each one proves |
+| [Reference](https://jryannel.github.io/sqlb/reference/) | Filter operators, column types, capabilities, codegen options, CLI, rejections |
 | [Architecture](https://jryannel.github.io/sqlb/project/architecture/) | How the pieces fit, the request path, where safety lives |
 | [Decision records](https://jryannel.github.io/sqlb/adr/) | What was decided, why, and what would change our mind |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |

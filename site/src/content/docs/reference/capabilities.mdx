@@ -1,0 +1,130 @@
+---
+title: Capability reference
+description: Every capability method, exactly what it permits or forbids, the struct tag it becomes, and the combinations that are validation errors.
+sidebar:
+  label: Capabilities
+  order: 3
+---
+
+Checked against `schema/field.go`. The model is
+[Capabilities](/sqlb/concepts/capabilities/) in Concepts; the guide page is
+[Capabilities](/sqlb/schema/capabilities/) in Schema.
+
+**Everything is closed by default.** A column that does not declare a capability
+cannot be reached through it — not by a filter, not by a sort, not by a
+projection.
+
+## Permitting
+
+| Method | Permits | Applies to |
+|---|---|---|
+| `Filterable()` | Use in a REST filter expression: `?status=eq.draft` | any column |
+| `Sortable()` | Appearance in `?sort` | any column |
+| `Searchable()` | Inclusion in the `?search` fan-out. **Implies `Filterable`**, since search is a filter over the same column | any column |
+| `Expandable()` | Resolution inline via `?expand` | references only |
+| `Inverse(name)` | Names the relation from the target's side, which is what makes a reverse relation exist | references only |
+| `InverseExpandable(opts…)` | `?expand=<name>` on the *target's* endpoint. Requires `Inverse` | references only |
+
+`InverseExpandable` takes two options:
+
+| Option | Effect |
+|---|---|
+| `ExpandOrder("column")` | Orders the expanded collection by a column of the *referencing* table, `-` for descending. The child's primary key is appended as a tiebreaker |
+| `ExpandLimit(n)` | Caps how many children an expansion returns. Default **50** |
+
+The tiebreaker is not tidiness: under a cap, a non-total order decides which
+children the caller never sees.
+
+## Restricting
+
+| Method | Effect |
+|---|---|
+| `ReadOnly()` | Never settable through REST. The column is absent from both generated request bodies, and the handler clears the field before inserting — so even a hand-written `Row()` cannot set one. A hook still can |
+| `Immutable()` | Settable at create, absent from the update body |
+| `Hidden()` | Never serialised into a REST response, unusable as a filter, absent from the OpenAPI schema, and **absent from the `allowed` list of a rejection** |
+| `Scoped()` | Writes no predicate. Obliges one — see below |
+
+Go code going through the query engine directly is trusted: `ReadOnly` and
+`Immutable` are enforced at the REST boundary only. `Hidden` is enforced at the
+projection, so `filter.Apply` cannot select one even by mistake.
+
+## What `Scoped` obliges
+
+`Scoped` declares that a column confines the table's rows to one tenant, and
+that every operation the table exposes must be constrained by a hook.
+`rest.Resource` refuses to mount the resource until they exist, naming each
+missing one.
+
+| Exposed operation | Hook required |
+|---|---|
+| `OpList`, `OpRead` | `BeforeQuery` |
+| `OpUpdate` | `BeforeUpdate` |
+| `OpDelete` | `BeforeDelete` |
+| `OpCreate` | `BeforeCreate`, when the column is `ReadOnly` and so has no other source |
+
+The obligation follows the operations because a `BeforeQuery` predicate
+constrains what a request can *see* and says nothing about what it can
+*overwrite by id*.
+
+```go
+schema.Ref("workspace", Workspace).Filterable().ReadOnly().Scoped()
+```
+
+On the tenant table itself — the one the others point at — the row *is* the
+tenant, so the declaration goes on the primary key:
+
+```go
+schema.UUIDv7("id").PrimaryKey().Scoped()
+```
+
+A table may declare one scope column. Where the confinement cannot be written as
+a column of this table at all — a membership join, say — declare it on the
+column the hook does constrain, which is the key it narrows.
+
+A `SoftDelete()` column carries the same obligation on reads, for the same
+reason: nothing filters `deleted_at` unless a hook does.
+
+## The struct tag
+
+Capabilities reach the runtime as a `sqlb` struct tag that codegen writes onto
+the model, which is how the engine reads them back without importing `schema`:
+
+```go
+schema.Text("email").Unique().Searchable()   // → sqlb:"filter,search"
+schema.Text("secret").Hidden()               // → sqlb:"hidden"
+```
+
+The same metadata can be supplied at runtime for structs you did not generate;
+see [Using your own structs](/sqlb/start/structs-first/).
+
+## Combinations that are errors
+
+| Combination | Why |
+|---|---|
+| `Hidden()` + `Filterable()` | A filterable secret can be recovered a character at a time by probing |
+| `ExternalRef` + `Expandable()` | Expansion would reach a table this module does not own |
+| `ExternalRef` + `Inverse()` | Nothing about the other side is resolvable |
+| `InverseExpandable()` without `Inverse()` | A relation with no name cannot be asked for |
+
+These are reported by `Validate()`, all at once rather than one per run.
+
+## What the linter warns about
+
+`Lint()` reports what compiles but behaves badly:
+
+| Diagnostic | About |
+|---|---|
+| `unindexed-filter` | A filterable column that is not the leading column of any index, so filtering on it scans the table |
+| `unindexed-sort` | A sortable column with no composite index including the primary key, which cursor paging wants anyway |
+| `search-without-trigram` | A searchable column with no trigram index behind its substring match |
+| `unindexed-expand` | An expandable reference whose column is not indexed |
+| `unindexed-inverse-expand` | The same, in the reverse direction, where it matters more |
+| `uncapped-inverse-overflow` | An expanded collection whose cap the caller has no filterable column to page past |
+| `list-without-sort` | A list endpoint with no sortable column, so every client gets primary-key order and none can ask for another |
+| `list-without-filters` | A list endpoint with nothing filterable |
+| `no-max-page-size` | No `MaxPageSize`, so the package default applies as the hard ceiling |
+| `create-without-key` | A create operation on a table with no primary key |
+| `unnamespaced-table` | A table declared outside a module where one was expected |
+
+Each diagnostic carries the fix. Run both from a test — the loop is `go test`,
+not a CLI.

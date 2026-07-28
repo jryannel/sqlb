@@ -55,6 +55,9 @@ async function main() {
 
   const { existsSync } = await import("node:fs");
   const broken = [];
+  // Every page some other page links to. What is missing from this set is a
+  // page reachable only by typing its URL — see the orphan check below.
+  const linked = new Set();
   let checked = 0;
 
   for (const page of pages) {
@@ -69,7 +72,9 @@ async function main() {
         broken.push(`${from}: ${href} is outside the base path ${prefix}/`);
         continue;
       }
-      if (!candidates.some((c) => existsSync(c))) broken.push(`${from}: ${href}`);
+      const found = candidates.find((c) => existsSync(c));
+      if (found === undefined) broken.push(`${from}: ${href}`);
+      else linked.add(relative(dist, found));
     }
   }
 
@@ -84,7 +89,30 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`check-links: ${checked} internal links across ${pages.length} pages all resolve`);
+  // A page nothing links to is reachable only by typing its URL.
+  //
+  // The narrower claim is the true one: this catches a page in no sidebar group
+  // *and* linked from no prose — a hand-written directory nobody wired up. It
+  // does not catch a section merely missing from the sidebar, because the
+  // guide's pages cross-link heavily and one link is enough to satisfy this.
+  // That failure is caught at the source instead, by sync-docs.mjs, which knows
+  // both the routes and the sidebar groups.
+  //
+  // 404 is exempt: the server reaches it, no page links to it.
+  const orphans = pages
+    .map((p) => relative(dist, p))
+    .filter((p) => p !== "index.html" && p !== "404.html" && !linked.has(p));
+
+  if (orphans.length > 0) {
+    console.error(`check-links: ${orphans.length} page(s) are linked from nowhere:`);
+    for (const o of orphans.sort()) console.error(`  ${o}`);
+    console.error("\nGive the directory a sidebar group in astro.config.mjs, or link the page from one that is reachable.");
+    process.exit(1);
+  }
+
+  console.log(
+    `check-links: ${checked} internal links across ${pages.length} pages all resolve, and every page is reachable`,
+  );
 }
 
 await main();

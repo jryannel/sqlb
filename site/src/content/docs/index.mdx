@@ -1,25 +1,77 @@
 ---
 title: sqlb
-description: A schema-first data layer for Go — typed composable queries, a validated REST filter grammar, and domain hooks, without hand-writing the HTTP-to-SQL layer.
+description: A schema-first data layer for Go and Postgres — typed composable queries, a validated REST filter grammar, generated clients, and domain hooks, without hand-writing the HTTP-to-SQL layer.
 template: splash
 hero:
   tagline: >
     Declare your tables once. Get typed composable queries, a validated REST
-    filter grammar and domain hooks — without hand-writing the HTTP-to-SQL layer
-    for every dynamic view.
+    filter grammar, a TypeScript client, a CLI and domain hooks — without
+    hand-writing the HTTP-to-SQL layer for every dynamic view.
   actions:
-    - text: Get started
-      link: /sqlb/guide/getting-started/
+    - text: Quickstart
+      link: /sqlb/start/quickstart/
       icon: right-arrow
+    - text: Read the concepts
+      link: /sqlb/concepts/
+      icon: open-book
+      variant: minimal
     - text: View on GitHub
       link: https://github.com/jryannel/sqlb
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from "@astrojs/starlight/components";
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-## Why it exists
+## One declaration, five surfaces
+
+A schema is ordinary Go values, and it is the source of truth for all of these.
+Each one is independently optional — a project can take the query builder and
+nothing else.
+
+<CardGrid>
+  <Card title="Schema" icon="seti:config">
+    Tables as Go values: columns, references, indexes, constraints, and the
+    capabilities that decide what the outside world can reach.
+
+    [Declaring tables →](/sqlb/schema/)
+  </Card>
+  <Card title="Queries & domain logic" icon="seti:go">
+    A query is a value, so predicates compose on a branch. Hooks are where the
+    rules live — one registration constrains every read of a model.
+
+    [Queries →](/sqlb/queries/)
+  </Card>
+  <Card title="REST API" icon="cloud-download">
+    List, read, create, patch and delete per exposed table, with filtering,
+    sorting, search, pagination and an OpenAPI document built from the schema.
+
+    [Mounting resources →](/sqlb/rest/)
+  </Card>
+  <Card title="TypeScript SDK" icon="seti:typescript">
+    `where` admits only filterable columns with the operators their type
+    accepts, `select` narrows the response type, and a hidden column has no
+    spelling at all.
+
+    [TypeScript SDK →](/sqlb/typescript/)
+  </Card>
+  <Card title="Go CLI" icon="seti:shell">
+    A cobra command tree over the same vocabulary, so `--help` states what a
+    resource accepts without sending a request — the form the guarantee has to
+    take for a caller with no compile step.
+
+    [Go CLI →](/sqlb/cli/)
+  </Card>
+  <Card title="Migrations" icon="seti:db">
+    A schema edit diffed into DDL your own runner applies — and an existing
+    database read back into a schema file, which is the same machinery pointed
+    the other way.
+
+    [Migrations →](/sqlb/migrations/)
+  </Card>
+</CardGrid>
+
+## The same query, written twice
 
 Static query generators cannot express *"this WHERE clause exists only when the
 user typed something in the search box."* The usual workaround is string
@@ -41,8 +93,17 @@ if search != "" {
 posts, err := q.OrderBy(sqlb.F("created_at").Desc()).Limit(50).All(ctx, db)
 ```
 
-and the REST filter grammar compiles into that **same** predicate AST. One
-compiler, one bind-parameter discipline, one set of hooks — two producers.
+and the REST filter grammar compiles into that **same** predicate AST:
+
+```
+?status=eq.published&title=contains.postgres&sort=-created_at&per_page=50
+```
+
+One compiler, one bind-parameter discipline, one set of hooks — two producers.
+That is the whole design, and
+[One grammar, two producers](/sqlb/concepts/one-grammar/) is the long version.
+
+## What that buys
 
 <CardGrid>
   <Card title="Capabilities are opt-in" icon="approve-check">
@@ -66,14 +127,49 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   </Card>
 </CardGrid>
 
+## Read one that works
+
+Six worked applications, each settling a different question — and each saying
+out loud what it deliberately is not.
+
+<CardGrid>
+  <LinkCard
+    title="blog — the smallest whole thing"
+    description="A worked schema, everything codegen emits from it, and the two hand-written pieces generated code cannot produce."
+    href="/sqlb/examples/blog/"
+  />
+  <LinkCard
+    title="tasks — the whole surface"
+    description="Six tables, JWT auth, a workspace boundary held entirely by hooks, a generated TypeScript client and CLI."
+    href="/sqlb/examples/tasks/"
+  />
+  <LinkCard
+    title="library — a finite resource"
+    description="No authentication at all. The last copy of a book is lent exactly once, under twenty concurrent borrows."
+    href="/sqlb/examples/library/"
+  />
+  <LinkCard
+    title="All six, compared"
+    description="Including the same lending library built twice on sqlc, so the trade is visible rather than argued."
+    href="/sqlb/examples/"
+  />
+</CardGrid>
+
 ## Status
 
 sqlb is pre-1.0, has one author and no observed consumers. That is the honest
-starting position — see
-[compatibility](https://github.com/jryannel/sqlb/blob/main/docs/compatibility.md)
-for what the current tag freezes and which surfaces are expected to move, and
-the [adoption review](https://github.com/jryannel/sqlb/blob/main/docs/review-adoption-readiness.md)
-for an outside read on what that means in practice.
+starting position, and no amount of feature work substitutes for elapsed time
+under real traffic. See [compatibility](/sqlb/project/compatibility/) for what
+the current tag freezes and which surfaces are expected to move, and the
+[adoption review](/sqlb/project/review-adoption-readiness/) for an outside read
+on what that means in practice.
+
+What *is* proven, and re-checked on every run rather than asserted: CI applies
+the generated DDL to a real Postgres 18, reads it back with `introspect`, and
+requires the round trip to be a fixpoint; the query path runs through a real
+PgBouncer in transaction pooling, because that is the deployed topology; and the
+blog example is generated from its schema, so every behaviour test in it is also
+a test of the generator's output.
 
 Postgres only. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING` are all
 load-bearing; multi-dialect support would cost the best features.

@@ -30,7 +30,7 @@ The sections below take each in turn, leading with what it does better.
 **What it does better.** sqlc reads your actual SQL and generates types from it,
 checked against the real schema at build time. That is a stronger guarantee than
 sqlb offers and it is not close: `sqlb.F("titel")` is a runtime error, and the
-[typed column facade](guide/queries-and-hooks.md) narrows that without closing
+[typed column facade](queries/typed-columns.md) narrows that without closing
 it. Anything expressible in SQL — CTEs, window functions, `DISTINCT ON` — sqlc
 handles by definition, where sqlb hands you `Raw`.
 
@@ -125,7 +125,7 @@ CI/CD across engines. It is a company's entire product.
 
 **What sqlb's `migrate` actually is.** A diff between two registries, rendered
 as Postgres DDL, written as files for a runner you already have — with
-[lock-aware sequencing](guide/migrations.md) for the changes whose remedy is
+[lock-aware sequencing](migrations/rollout.md) for the changes whose remedy is
 mechanical. It does not apply migrations and does not track which have run.
 
 If migrations are the problem you are solving, use Atlas. sqlb's migration layer

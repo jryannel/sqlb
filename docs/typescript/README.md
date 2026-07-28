@@ -69,7 +69,7 @@ const page = await listPosts(request, {
 - **Hidden columns have no spelling anywhere.** Not in the row type, not in
   `select`, not in `where`.
 
-This is [the typed column facade](schema.md) carried across the wire, and it is
+This is [the typed column facade](../queries/typed-columns.md) carried across the wire, and it is
 why the client is generated from the schema rather than from the OpenAPI
 document: the document can only say `array<string>` about a filter parameter,
 with the operators in prose.
@@ -165,6 +165,6 @@ what would make the whole approach wrong.
 
 ## Next
 
-- [REST](rest.md) — the server side of the same grammar
-- [Go CLI](go-cli.md) — the same argument for a consumer with no compile step
-- [Schema](schema.md) — the capabilities these types come from
+- [Mounting resources](../rest/README.md) — the server side of the same grammar
+- [Go CLI](../cli/README.md) — the same argument for a consumer with no compile step
+- [Capabilities](../schema/capabilities.md) — the declarations these types come from

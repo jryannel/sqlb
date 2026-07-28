@@ -9,7 +9,7 @@
 // What it does gate is links, and it does so by resolving them rather than by
 // matching patterns. A relative link means something different depending on
 // which directory the file sits in — `adr/0011-x.md` from docs/, `../adr/0011-x.md`
-// from docs/guide/, `0011-x.md` from docs/adr/ all name the same record — so each
+// from docs/queries/, `0011-x.md` from docs/adr/ all name the same record — so each
 // link is resolved against the repository and then looked up:
 //
 //   published here    → an internal route
@@ -31,7 +31,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
 const contentRoot = join(here, "../src/content/docs");
 
-// Trailing slash stripped so `${prefix}/guide/...` is well-formed for base "/".
+// Trailing slash stripped so `${prefix}/start/...` is well-formed for base "/".
 const prefix = base.replace(/\/$/, "");
 
 const GITHUB = "https://github.com/jryannel/sqlb";
@@ -48,18 +48,84 @@ const TREE = `${GITHUB}/tree/main`;
  */
 const SOURCES = [
   {
-    dir: "docs/guide",
-    route: "guide",
-    // Explicit, because the guide is a reading order rather than a list: a new
-    // page should be placed deliberately, and one missing from here is reported
-    // rather than silently appended at the end.
-    sequence: ["index", "getting-started", "schema", "queries-and-hooks", "rest", "typescript-client", "go-cli", "migrations"],
+    dir: "docs/start",
+    route: "start",
+    // Explicit everywhere below, because each section is a reading order rather
+    // than a list: a new page should be placed deliberately, and one missing
+    // from here is reported rather than silently appended at the end.
+    sequence: ["index", "quickstart", "first-app", "structs-first"],
     order(slug) {
       return this.sequence.indexOf(slug);
     },
-    // "# Guide" is the right heading on GitHub, where the file is read on its
-    // own, and reads as "Guide › Guide" in a sidebar that already says Guide.
+  },
+  {
+    dir: "docs/concepts",
+    route: "concepts",
+    sequence: [
+      "index",
+      "queries-are-values",
+      "one-grammar",
+      "capabilities",
+      "domain-logic",
+      "generated-not-hidden",
+    ],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+  },
+  {
+    dir: "docs/schema",
+    route: "schema",
+    sequence: ["index", "capabilities", "references"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+  },
+  {
+    dir: "docs/queries",
+    route: "queries",
+    sequence: ["index", "typed-columns", "paging", "mutations", "hooks", "inspecting"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+  },
+  {
+    dir: "docs/rest",
+    route: "rest",
+    sequence: ["index", "filtering", "pagination", "expand", "errors"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+  },
+  {
+    dir: "docs/typescript",
+    route: "typescript",
+    sequence: ["index"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+    // "# TypeScript client" is the right heading on GitHub, where the file is
+    // read on its own, and reads as "TypeScript SDK › TypeScript client" in a
+    // sidebar whose group already says so. Same for the two below.
     label: (slug) => (slug === "index" ? "Overview" : null),
+  },
+  {
+    dir: "docs/cli",
+    route: "cli",
+    sequence: ["index"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+    label: (slug) => (slug === "index" ? "Overview" : null),
+  },
+  {
+    dir: "docs/migrations",
+    route: "migrations",
+    sequence: ["index", "rollout", "adopting"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+    label: (slug) => (slug === "index" ? "Diffing and rendering" : null),
   },
   {
     dir: "docs/adr",
@@ -298,6 +364,45 @@ async function transform(source, routes, problems) {
   return pages;
 }
 
+/**
+ * Every route must have a sidebar group, and every sidebar group a route.
+ *
+ * The pages of an unlisted section still build and are still cross-linked from
+ * the guide, so `check-links` sees nothing wrong — a whole section can be
+ * invisible in the navigation and nothing downstream notices. The two lists are
+ * in two files by necessity (one is Astro's config), so the pairing is checked
+ * here, where both are knowable.
+ *
+ * A regex over the config rather than an import: astro.config.mjs imports
+ * `astro/config`, which is not resolvable from a bare `node scripts/...` run,
+ * and `site-check` is specified to need no npm install.
+ */
+async function checkSidebar(problems) {
+  const config = await readFile(join(here, "../astro.config.mjs"), "utf8");
+  const grouped = new Set(
+    [...config.matchAll(/autogenerate:\s*{\s*directory:\s*"([^"]+)"/g)].map((m) => m[1]),
+  );
+
+  for (const source of SOURCES) {
+    if (!grouped.has(source.route)) {
+      problems.push(
+        `${source.dir}: publishes /${source.route}/ with no sidebar group, so the whole section is unreachable from the navigation`,
+      );
+    }
+  }
+  // The other direction catches a group left behind by a renamed or deleted
+  // source, which Starlight reports as an empty group rather than an error.
+  const routes = new Set(SOURCES.map((s) => s.route));
+  for (const dir of grouped) {
+    if (!routes.has(dir) && !HAND_WRITTEN.has(dir)) {
+      problems.push(`astro.config.mjs: sidebar group "${dir}" has no source in SOURCES and is not hand-written`);
+    }
+  }
+}
+
+/** Directories under src/content/docs that are written by hand, not generated. */
+const HAND_WRITTEN = new Set(["examples", "reference"]);
+
 async function main() {
   const routes = await buildRouteIndex();
   const problems = [];
@@ -305,11 +410,12 @@ async function main() {
   for (const source of SOURCES) {
     bySource.push({ source, pages: await transform(source, routes, problems) });
   }
+  await checkSidebar(problems);
 
   if (problems.length > 0) {
     console.error("sync-docs: the docs cannot be published as they stand:");
     for (const p of problems) console.error(`  ${p}`);
-    console.error("\nFix the link, or publish its target by adding it to SOURCES.");
+    console.error("\nFix the link, publish its target by adding it to SOURCES, or give the section a sidebar group.");
     process.exit(1);
   }
 
@@ -327,6 +433,12 @@ async function main() {
     // Rebuilt from scratch, so a page deleted from docs/ leaves the site too.
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { recursive: true });
+    // Each generated directory ignores itself. That is one line per route
+    // written by the code that owns the route, rather than a list in
+    // site/.gitignore that has to be remembered when SOURCES grows — and it
+    // leaves the hand-written directories beside it committable with no
+    // exception rule to maintain.
+    await writeFile(join(dir, ".gitignore"), "# Generated by scripts/sync-docs.mjs. Edit " + source.dir + " instead.\n*\n");
     for (const { path, body } of pages) await writeFile(path, body);
     console.log(`sync-docs: wrote ${pages.length} pages to src/content/docs/${source.route}/`);
   }

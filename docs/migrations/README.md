@@ -33,7 +33,7 @@ ALTER TABLE "posts" DROP COLUMN "view_count";
 
 `target` is your declared schema — `schema.DefaultRegistry()`. Where `current`
 comes from is the interesting question, and there are three answers; see
-[Where "current" comes from](#where-current-comes-from).
+[Where "current" comes from](adopting.md#where-current-comes-from).
 
 ### Destructive changes are commented out
 
@@ -131,107 +131,6 @@ migration already applied somewhere must not change under the runner's feet.
 Regenerating during development means deleting first, and that example deletes
 only the files `Render` says it is about to write.
 
-## Locks
-
-Some statements hold a lock for a time proportional to the size of the table.
-Whether that matters depends on how many rows the table holds, which is not in
-the schema — so this package will not decide for you. It tells you instead:
-
-```go
-if blocking := m.Blocking(); len(blocking) > 0 {
-    // refuse, or route to whoever sequences an expand/contract rollout
-}
-```
-
-`migrate.Unblock` rewrites the ones whose remedy is mechanical:
-
-- A scanning `ADD CONSTRAINT` (a `CHECK` or `FOREIGN KEY`) becomes `ADD … NOT
-  VALID` plus a `VALIDATE CONSTRAINT` in a later file, moving the scan under a
-  lock writers pass through.
-- A `SET NOT NULL` becomes the same pair with the requirement set between them,
-  since Postgres accepts a validated check as proof and skips its own scan.
-- A `UNIQUE` or `PRIMARY KEY` — which has no `NOT VALID` form, because there is
-  no way to build an index without reading every row — becomes `CREATE UNIQUE
-  INDEX CONCURRENTLY` plus an `ADD CONSTRAINT … USING INDEX` that adopts it.
-
-A **type change is left alone**. Rewriting a table has no in-place form: the
-alternative is a second column, a batched backfill and a cutover, and only you
-know what a batch costs or when the cutover can happen.
-
-`Unblock` is opt-in rather than the default, because the sequence is longer,
-splits the migration across files, and buys nothing on a table small enough that
-the scan is instant — which most tables are.
-
-`migrate.Split` separates changes that cannot share a file. Transaction control
-in both goose and golang-migrate is per file, not per statement, so a
-`CREATE INDEX CONCURRENTLY` would otherwise disable transactions for every other
-change generated alongside it, silently removing their rollback guarantee.
-
-## Where "current" comes from
-
-Three sources, in increasing order of how much you should trust them.
-
-**A live database**, via `introspect`:
-
-```go
-reg, report, err := introspect.Registry(ctx, db, introspect.Options{})
-```
-
-Tells you what the database looks like. It is the obvious source and the worst
-one, because it cannot tell you whether the migration history *produces* that
-state — a hand-applied hotfix, a migration edited after it ran, or a statement
-someone skipped are all invisible, and the next migration gets computed against
-a state no file describes.
-
-**The migration history**, via `shadow`:
-
-```go
-reg, report, result, err := shadow.Build(ctx, scratchDB, shadow.Options{Dir: "db/migrations"})
-```
-
-Replays the checked-in history into an empty database and reads back what it
-actually produced. This is a different and stronger claim: *this is the schema
-the history builds*. It is the better source for the current side of a diff,
-because an edited or skipped migration surfaces instead of being baked into the
-next one.
-
-This is not a migration runner. It applies all of them, in order, to an empty
-database nobody depends on, and throws away the result. No version table is read
-or written, nothing is skipped, and `Down` sections are never executed.
-
-**Drift detection** needs no extra API: it is `migrate.Diff` between the
-replayed registry and the live one. An empty result is the claim that the
-history and the database agree.
-
-## Adopting an existing database
-
-Two calls, and then you own a schema file:
-
-```go
-reg, report, err := introspect.Registry(ctx, db, introspect.Options{})
-if !report.Empty() {
-    // Constructs the DSL cannot express. Read them: the schema does not
-    // describe the database completely until this is empty.
-    log.Print(report)
-}
-
-src, err := codegen.RenderSchema(reg, codegen.SchemaOptions{Package: "blogschema"})
-os.WriteFile("blogschema/schema.go", src, 0o644)
-```
-
-`introspect` reports every construct it could not express rather than dropping
-it, which is what makes the report worth reading rather than skipping.
-
-Everything imports with **no capabilities and nothing exposed over REST**,
-because neither can be read from DDL — widening that is a deliberate edit, which
-is the correct default for a surface that decides what the outside world can
-reach. Table names are not singularised (`orgs` becomes `var Orgs`), because
-guessing wrongly on *status* or *address* costs more than renaming a variable
-the compiler checks for you.
-
-Generating a migration and adopting a database are the same machinery pointed in
-opposite directions.
-
 ## Which Postgres
 
 There is no hard minimum; the generated DDL is mostly SQL that has been valid
@@ -250,8 +149,14 @@ for a decade. Three places are version sensitive:
 - **`introspect`** handles the `NOT NULL` constraint rows Postgres 18
   introduced, and ignores them on older versions.
 
+
 ## Next
 
-- [Schema](schema.md) — the declarations these diffs are computed from
+- [Locks and rollout](rollout.md) — the statements that block writers, and what
+  rewrites them
+- [Adopting a database](adopting.md) — where the "current" side of a diff comes
+  from, and importing a schema you already have
+- [Declaring tables](../schema/README.md) — the declarations these diffs are
+  computed from
 - [ADR-0014](../adr/0014-migrations-and-import.md) — why renames are declared,
   and why the history beats production as a source of truth

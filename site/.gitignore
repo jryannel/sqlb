@@ -3,12 +3,13 @@ dist/
 node_modules/
 .astro/
 
-# Generated from docs/ by scripts/sync-docs.mjs on every build. The source of
-# truth is docs/guide and docs/adr; committing a second copy would invite
-# editing it.
+# Nothing about the generated pages is listed here on purpose.
 #
-# Every subdirectory, not a list of them: each entry in that script's SOURCES
-# array writes one, so naming them here would be a second place to update and
-# the failure — a generated page committed by accident — is silent.
-# Hand-written pages sit directly in src/content/docs/ and are unaffected.
-src/content/docs/*/
+# scripts/sync-docs.mjs writes a self-ignoring .gitignore into each directory it
+# owns, so the rule is written by the code that creates the directory. Naming
+# them here instead would be a second place to update whenever SOURCES grows,
+# and the failure — a generated page committed by accident — is silent.
+#
+# It also leaves the hand-written sections (examples/, reference/) committable
+# with no exception rule to maintain, which a blanket src/content/docs/*/ did
+# not.
