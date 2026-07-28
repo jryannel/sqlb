@@ -1,0 +1,169 @@
+# TypeScript client
+
+The REST layer's filter grammar is precise on the server: a column that never
+declared `.Filterable()` cannot be filtered on, and the rejection says what
+would have been accepted. None of that reaches a browser by itself. A
+hand-written client spells `?status=eq.published` into `URLSearchParams` and
+takes half a dozen bare `string` parameters, and a typo compiles.
+
+`codegen` emits a TypeScript client that closes that gap, from the same schema
+declaration the Go models come from.
+
+## Turning it on
+
+Set `TSDir` on the generator you already have:
+
+```go
+codegen.Must(codegen.Generate(codegen.Options{
+    Registry: schema.DefaultRegistry(),
+    Dir:      "blog",
+    Package:  "blog",
+
+    // Relative to Dir. Two files land here; nothing is emitted without it.
+    TSDir: "web/src/api",
+}))
+```
+
+Two files, because the layers are usable separately:
+
+| | |
+|---|---|
+| `client.gen.ts` | Row types, request bodies, the typed parameter vocabulary, the URL encoder, one function per exposed operation, and the cache keys. **Imports nothing.** |
+| `queries.gen.ts` | TanStack Query `queryOptions` and `infiniteQueryOptions`. Takes `@tanstack/react-query` as a peer dependency. Set `TSQueriesFile: "-"` to skip it. |
+
+The client is emitted into the repository that consumes it, the way
+`models_gen.go` is. There is no npm package to install and therefore no way for
+the client to be a version behind the server it talks to.
+`codegen.Check` covers both files, so the usual staleness gate catches a schema
+change that was never regenerated.
+
+## What the types know
+
+Everything a column declared, and nothing it did not:
+
+```ts
+const page = await listPosts(request, {
+  where: {
+    status: { in: ['draft', 'published'] },  // the enum's values
+    title: { contains: search },             // pattern operators: it is text
+    published_at: { notnull: true },         // a null test: it is nullable
+    view_count: { gte: 100 },
+  },
+  sort: ['-published_at', 'title'],
+  select: ['title', 'status'],
+  expand: ['author'],
+  per_page: 50,
+});
+```
+
+- **`where` admits filterable columns only**, and the operator set is narrowed
+  by column type. `contains` on a number does not compile; neither does
+  `isnull` on a non-nullable column, nor a value outside an enum.
+- **`sort` is a union** of the sortable columns and their `-` forms.
+- **`select` narrows the response type.** `page.items[0].title` is available
+  after the call above; `page.items[0].body` is not. The primary key is always
+  present, because the server adds it back to any projection that dropped it.
+- **`expand` widens it.** A forward relation resolves to the row type; a reverse
+  one to `Collection<T>` — `{items, has_more}` — so a capped expansion cannot
+  be mistaken for a complete list.
+- **Hidden columns have no spelling anywhere.** Not in the row type, not in
+  `select`, not in `where`.
+
+This is [the typed column facade](schema.md) carried across the wire, and it is
+why the client is generated from the schema rather than from the OpenAPI
+document: the document can only say `array<string>` about a filter parameter,
+with the operators in prose.
+
+## The transport is yours
+
+The generated functions take a request function as their first argument rather
+than constructing one. Base URL, auth header, refresh, retry and what a 401 does
+are not derivable from a schema, and are the parts of a real client that matter
+most:
+
+```ts
+import { type ApiRequest, type Transport } from './api/client.gen';
+
+export const request: Transport = async <T>({ method, path, query, body, signal }: ApiRequest): Promise<T> => {
+  const res = await fetch(`${BASE}${path}${query ? `?${query}` : ''}`, {
+    method,
+    headers: {
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      ...(token() === null ? {} : { authorization: `Bearer ${token()}` }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) throw await res.json();
+  return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+};
+```
+
+This is the same seam `rest` takes by mounting onto a `huma.API` you built. It
+also means the generated functions compose with hand-written ones: a login
+endpoint is not a table, and no schema generator will produce it.
+
+## Rejections keep their allow-list
+
+A 400 from the filter grammar carries what would have been accepted. The client
+types that body rather than flattening it to a message, so a UI can offer the
+alternatives:
+
+```ts
+import { allowedFor, isProblem } from './api/client.gen';
+
+if (isProblem(body)) {
+  const sortable = allowedFor(body, 'query.sort');  // ["title", "view_count", ...]
+}
+```
+
+## Paging
+
+`next_cursor` is on every list response with a page after it, which is exactly
+the shape `infiniteQueryOptions` wants:
+
+```ts
+const feed = postQueries(request).infinite({ sort: '-published_at', per_page: 50 });
+```
+
+`page` and `cursor` are absent from that factory's parameters: they are two
+answers to where a page starts, and the factory owns the answer. Paging by hand
+is the same loop with `cursor` threaded through `next_cursor`, and it costs the
+same at any depth.
+
+## Cache keys
+
+One factory per resource, plus a table-keyed index:
+
+```ts
+taskKeys.lists();                 // ['tasks', 'list']
+taskKeys.detail(id);              // ['tasks', 'detail', id, {}]
+keysByTable['tasks'].lists();     // the same list, reached from an event payload
+```
+
+The index exists so that a change event — a table plus a row key — maps onto
+cache keys mechanically. Two hand-maintained invalidation lists drift; the bug
+that motivated this was `['draft', id]` against `['drafts', id]` in a client
+where mutations and an event stream each kept their own list.
+
+## What is not generated
+
+Hooks, mutation helpers, optimistic updates, a client object, an npm package.
+Hooks bake in a framework and get copied out and edited; a `queryOptions` object
+is spread and overridden instead:
+
+```ts
+{ ...postQueries(request).list({ sort: 'title' }), staleTime: 30_000 }
+```
+
+`example/tasks/web` is a worked one, including
+[the refusals](../../example/tasks/web/src/refusals.ts) — the requests that must
+*not* compile, asserted with `@ts-expect-error` so that a generator which
+widened a type fails the build.
+[ADR-0028](../adr/0028-typescript-client.md) records the reasoning, including
+what would make the whole approach wrong.
+
+## Next
+
+- [REST](rest.md) — the server side of the same grammar
+- [Schema](schema.md) — the capabilities these types come from

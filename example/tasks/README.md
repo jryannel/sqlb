@@ -51,6 +51,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | [`app/auth_routes.go`](app/auth_routes.go) | Register and login: the endpoints that establish the identity everything else is scoped by. |
 | [`app/hooks.go`](app/hooks.go) | Also where the comment invariant lives: two writes in one transaction, and `AfterCommit` for the side effect. |
 | [`cmd/migrate/main.go`](cmd/migrate/main.go) | The generated baseline, plus three things the DSL cannot express. |
+| [`web/`](web/) | The generated TypeScript client, and the hand-written transport it takes. The schema reaches the browser without a second declaration. |
 | [`app/server_test.go`](app/server_test.go) | Every claim above, asserted against a real Postgres. |
 
 ## The shape of it
@@ -93,6 +94,41 @@ moved to `BeforeCreate` and `AfterCreate` on the model. That is a stronger
 guarantee than the endpoint gave, not merely a shorter one: the invariant now
 holds for *every* path that creates a comment, including one written later by
 someone who never read this file.
+
+## The client is generated too
+
+[`web/`](web/) holds a TypeScript client emitted from the same schema, in the
+same run as `models_gen.go`. It is the same argument as the server's generated
+layer, made in the other language: the capabilities a column declares become
+types, so the compiler refuses what the server would answer 400 to.
+
+```ts
+const page = await listTasks(request, {
+  where: { status: { in: ['todo', 'in_progress'] }, due_at: { notnull: true } },
+  sort: ['-priority', 'position'],
+  select: ['title', 'status'],
+  expand: ['list'],
+});
+```
+
+`status` admits the enum's four values and nothing else. `due_at` offers a null
+test because the column is nullable, and `title` offers `contains` because it is
+text. `select` narrows the response type, so reading `page.items[0].description`
+after that call does not compile — and neither does `sort: 'description'`, since
+that column is searchable but never asked to be sortable.
+[`web/src/refusals.ts`](web/src/refusals.ts) asserts each of those refusals with
+`@ts-expect-error`, so a generator that widened a type fails the build.
+
+What is *not* generated is the interesting half. [`web/src/api/http.ts`](web/src/api/http.ts)
+is hand-written: the base URL, the bearer token from `POST /auth/login`, what a
+401 does. The generated functions take that request function as an argument
+rather than building one, for the reason `rest` mounts onto a `huma.API` you
+built rather than handing you a router — and `POST /auth/login` is called from
+the same file, because it is not a table and no schema generator will ever
+produce it.
+
+Run `mise run test-ts` to typecheck it. [ADR-0028](../../docs/adr/0028-typescript-client.md)
+is the record.
 
 ## Two things sqlb does not do that this example works around
 
@@ -154,7 +190,7 @@ refresh endpoint. Both are noted where they bite.
 ## Regenerating
 
 ```bash
-go generate ./...              # models, typed columns, REST bodies, manifest
+go generate ./...              # models, typed columns, REST bodies, manifest, TypeScript client
 go run ./cmd/migrate -force    # migrations, from the schema
 ```
 
@@ -169,6 +205,13 @@ files it is about to write.
 ```bash
 mise run test-demo             # needs Docker
 ```
+
+```bash
+mise run test-ts               # needs no Docker
+```
+
+The first is the Go suite; the second typechecks the generated client and runs
+its encoder tests. Both are gates in `mise run ci`.
 
 Against a real Postgres in a container, one database per test. There is no
 skip-when-Docker-is-absent path, for the reason `pgtest/doc.go` gives: a suite

@@ -57,12 +57,34 @@ type Options struct {
 	ColumnsFile  string
 	ManifestFile string
 	RestFile     string
+
+	// TSDir emits the TypeScript client, into a directory relative to Dir —
+	// "web/src/api" in a repository whose frontend lives beside its server.
+	// Empty means no client is emitted at all, which is the right default for a
+	// project that has no TypeScript consumer.
+	//
+	// Two files land there. The client is dependency-free; the queries file
+	// takes @tanstack/react-query as a peer dependency, so a project that does
+	// not use it sets TSQueriesFile to "-" and keeps the rest.
+	TSDir         string
+	TSClientFile  string
+	TSQueriesFile string
 }
 
 func (o Options) modelsFile() string   { return orDefault(o.ModelsFile, "models_gen.go") }
 func (o Options) columnsFile() string  { return orDefault(o.ColumnsFile, "columns_gen.go") }
 func (o Options) manifestFile() string { return orDefault(o.ManifestFile, "sqlb.json") }
 func (o Options) restFile() string     { return orDefault(o.RestFile, "rest_gen.go") }
+
+func (o Options) tsClientFile() string  { return orDefault(o.TSClientFile, "client.gen.ts") }
+func (o Options) tsQueriesFile() string { return orDefault(o.TSQueriesFile, "queries.gen.ts") }
+
+// tsClientImport is the specifier the queries file imports the client by: a
+// sibling module, named without its extension, which is what a bundler
+// resolver expects.
+func (o Options) tsClientImport() string {
+	return "./" + strings.TrimSuffix(o.tsClientFile(), ".ts")
+}
 
 func orDefault(v, def string) string {
 	if v == "" {
@@ -99,6 +121,13 @@ func Generate(opts Options) ([]string, error) {
 	var written []string
 	for _, name := range sortedKeys(files) {
 		path := filepath.Join(opts.Dir, name)
+		// A name may carry a subdirectory — the TypeScript client is emitted
+		// into one — so the parent is created per file rather than once above.
+		if dir := filepath.Dir(path); dir != opts.Dir {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return nil, err
+			}
+		}
 		if err := os.WriteFile(path, files[name], 0o644); err != nil {
 			return nil, err
 		}
@@ -180,6 +209,26 @@ func render(opts Options) (map[string][]byte, error) {
 			return nil, err
 		}
 		files[name] = src
+	}
+	if opts.TSDir != "" {
+		if name := opts.tsClientFile(); name != "-" {
+			src, err := renderTSClient(opts)
+			if err != nil {
+				return nil, err
+			}
+			files[filepath.Join(opts.TSDir, name)] = src
+		}
+		if name := opts.tsQueriesFile(); name != "-" {
+			src, err := renderTSQueries(opts)
+			if err != nil {
+				return nil, err
+			}
+			// A schema that exposes nothing has no queries to emit, which is
+			// not an error and should not leave an empty file behind.
+			if src != nil {
+				files[filepath.Join(opts.TSDir, name)] = src
+			}
+		}
 	}
 	return files, nil
 }

@@ -127,4 +127,4 @@ nobody finishes reading has failed at its only job.
 | [0025](0025-expansion-is-one-statement.md) | Expansion is one statement, and Hidden survives the join | Working | Medium |
 | [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation | Exploring | Low |
 | [0027](0027-keyset-pagination.md) | A page is a position, not a distance | Working | High |
-| [0028](0028-typescript-client.md) | The TypeScript client is generated from the model, and stops at the query key | Exploring | Low |
+| [0028](0028-typescript-client.md) | The TypeScript client is generated from the model, and stops at the query key | Working | Medium |

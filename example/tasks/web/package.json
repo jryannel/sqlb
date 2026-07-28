@@ -1,0 +1,17 @@
+{
+  "name": "tasks-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The task manager's TypeScript client, generated from the same schema the Go server is generated from.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.90.2",
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -59,9 +59,17 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   on the migration that was written and never applied — which a compile-time
   column check cannot. `Diff` returns migration changes as values; your runner
   applies them.
+- **The client is generated from the schema too.** A TypeScript client, emitted
+  into the repository that consumes it, where `where` admits only filterable
+  columns with the operators their type accepts, `select` narrows the response
+  type, and a hidden column has no spelling at all. The OpenAPI document cannot
+  say any of that — `?status=eq.published` documents as `array<string>` — so it
+  is generated from the model instead
+  ([guide](https://jryannel.github.io/sqlb/guide/typescript-client/)).
 - **No dependencies to inherit.** The engine depends on the standard library
   alone, and a CI gate enforces it. Only the REST adapter pulls in
-  [Huma](https://huma.rocks), and only if you use it.
+  [Huma](https://huma.rocks), and only if you use it. The generated TypeScript
+  is a separate toolchain and a separate opt-in.
 
 ## Install
 
@@ -94,21 +102,19 @@ a test of the generator's output.
 Postgres only. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING` are all
 load-bearing; multi-dialect support would cost the best features.
 
-Not built yet, in the order they matter: a TypeScript client generated from the
-schema, because the OpenAPI document cannot type the filter grammar
-([ADR-0028](https://jryannel.github.io/sqlb/adr/0028-typescript-client/)); a
-durable change feed; and a command-line entry point.
+Not built yet, in the order they matter: a durable change feed, and a
+command-line entry point.
 [Vision](https://jryannel.github.io/sqlb/project/vision/) has the detail.
 
 ## Documentation
 
 | | |
 |---|---|
-| [Guide](https://jryannel.github.io/sqlb/guide/) | Install, schema, queries and hooks, REST, migrations |
+| [Guide](https://jryannel.github.io/sqlb/guide/) | Install, schema, queries and hooks, REST, TypeScript client, migrations |
 | [Architecture](https://jryannel.github.io/sqlb/project/architecture/) | How the pieces fit, the request path, where safety lives |
 | [Decision records](https://jryannel.github.io/sqlb/adr/) | What was decided, why, and what would change our mind |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
-| [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server |
+| [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client |
 
 ## Development
 

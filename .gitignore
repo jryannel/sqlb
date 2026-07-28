@@ -8,6 +8,10 @@
 *.out
 coverage.*
 
+# Node, for the example's generated TypeScript client. The lockfile is tracked;
+# what it installs is not.
+node_modules/
+
 # Local environment
 .env
 .env.local

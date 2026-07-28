@@ -107,18 +107,20 @@ Roughly in order of leverage. Everything below the first item is honestly
 speculative and should be reordered as understanding improves.
 
 **1. The generator.** The keystone, and mostly landed: models, typed column
-sets, REST request bodies and the registration that mounts them. What remains is
-migrations — the generator can render DDL but nothing tells it what changed —
-and a TypeScript client. `example/blog` is generated end to end, so every
+sets, REST request bodies, the registration that mounts them, and a TypeScript
+client. What remains is migrations — the generator can render DDL but nothing
+tells it what changed. `example/blog` is generated end to end, so every
 behaviour test in it tests the generator.
 
 That client was described here as the thing the OpenAPI document exists to feed.
-It is not, and the correction is the whole reason it needs a generator rather
+It is not, and the correction is the whole reason it needed a generator rather
 than an off-the-shelf tool: the document can only say `array<string>` about a
 filter parameter, with the operator vocabulary in prose, so anything pointed at
 it produces a client where `?status=bogus.x` compiles. It is generated from the
 model instead, and stops at a key factory the change feed can consume — see
-[ADR-0028](adr/0028-typescript-client.md).
+[ADR-0028](adr/0028-typescript-client.md) and
+[the guide](guide/typescript-client.md). `example/tasks/web` is the worked one,
+and its refusals file asserts what must not compile.
 
 The REST handlers turned out not to need generating at all: one generic function
 serves every model, while the *document* is built per resource from the model's

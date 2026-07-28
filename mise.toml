@@ -15,6 +15,13 @@ go = "1.26.4"
 # redefine analyzers and turn a green tree red, or quietly stop reporting a real
 # finding. Bump deliberately, then run `mise run lint`.
 golangci-lint = "2.12.2"
+# Node is here for one thing: typechecking the TypeScript client codegen emits
+# into example/tasks/web. That is the cost ADR-0028 names — a second toolchain
+# in a repository whose pitch is a stdlib-only Go module — and it is paid here
+# rather than in the Go module, which still inherits nothing. Pinned for the
+# same reason the others are: the emitted client's guarantees are enforced by
+# tsc, and a different tsc is a different guarantee.
+node = "26.4.0"
 
 # ---- Tasks ----
 
@@ -35,6 +42,15 @@ run = "go test ./..."
 description = "Run the task-manager example's suite against a real Postgres in a container. Needs Docker. Separate from `test` for the same reason `test-pg` is: the engine's inner loop stays database-free. This is the example that proves the pieces compose — schema to migration to DDL Postgres accepts, a JWT workspace boundary that holds across tenants, and a transaction that leaves nothing behind when it aborts."
 dir = "example/tasks"
 run = "go test ./..."
+
+[tasks.test-ts]
+description = "Typecheck the generated TypeScript client and run its encoder tests. The typecheck is the test: the client's whole claim is that a misspelled column, an operator its column type does not accept, or a sort on a column that did not opt in fails at tsc. example/tasks/web/src/refusals.ts asserts each of those with @ts-expect-error, so a generator that widened a type would fail here."
+dir = "example/tasks/web"
+run = '''
+[ -d node_modules ] || npm ci --no-audit --no-fund
+npm run typecheck
+npm test
+'''
 
 [tasks.demo-migrate]
 description = "Regenerate the task-manager example's migrations from its schema. Rewrites the checked-in files, which is safe only because they are a baseline nobody has applied to a database that matters."
@@ -305,7 +321,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-ts, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run vet
@@ -314,6 +330,7 @@ mise run tidy-check
 mise run deps-check
 mise run generate-check
 mise run test-race
+mise run test-ts
 # Last because they are the slowest and the only ones needing Docker. It is in the
 # gate rather than beside it because a check nobody remembers to run is one this
 # project has already lost once: ADR-0014's round-trip was measured by hand, and

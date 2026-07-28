@@ -30,6 +30,10 @@ jobs:
       - run: mise run deps-check
       - run: mise run generate-check
       - run: mise run test-race
+      # Node comes from mise.toml, like Go and golangci-lint. This is the gate
+      # ADR-0028 promised the TypeScript client would need: the emitted client's
+      # guarantees are enforced by tsc, so an unchecked one guarantees nothing.
+      - run: mise run test-ts
 
   postgres:
     # A job of its own rather than a step in `gate`, so that "the SQL is not
