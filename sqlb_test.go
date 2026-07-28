@@ -655,6 +655,27 @@ func (h *harness) failWith(msg string) {
 	h.err = errors.New(msg)
 }
 
+// failWithErr makes the next statements fail with a specific error, so a test
+// can present something driver-shaped rather than a bare string.
+func (h *harness) failWithErr(err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.err = err
+}
+
+// pgErr stands in for a driver's error type. It carries SQLState as a method,
+// which is how pgx exposes it and the reason the class is reachable without
+// importing a driver, and the constraint name as a field, which is why it is
+// not.
+type pgErr struct {
+	code       string
+	constraint string
+	message    string
+}
+
+func (e *pgErr) Error() string    { return "ERROR: " + e.message + " (SQLSTATE " + e.code + ")" }
+func (e *pgErr) SQLState() string { return e.code }
+
 func (h *harness) record(q string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

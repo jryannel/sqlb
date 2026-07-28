@@ -76,7 +76,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			DisableSearch:   opts.DisableSearch,
 		})
 		if err != nil {
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 
 		query := filter.Apply(sqlb.Query[T](), q)
@@ -85,7 +85,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		// without the count query that would otherwise be the only way to know.
 		rows, err := query.Limit(q.Limit+1).All(ctx, db)
 		if err != nil {
-			return nil, asHumaError(err, opts.name())
+			return nil, asHumaError(ctx, err, opts.name())
 		}
 		hasMore := len(rows) > q.Limit
 		if hasMore {
@@ -106,7 +106,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		if hasMore && b.model.PK != nil {
 			cursor, err := query.CursorFor(rows[len(rows)-1])
 			if err != nil {
-				return nil, asHumaError(err, opts.name())
+				return nil, asHumaError(ctx, err, opts.name())
 			}
 			body.NextCursor = ptr(string(cursor))
 		}
@@ -119,7 +119,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		if in.query.Get("count") == "exact" {
 			total, err := query.Count(ctx, db)
 			if err != nil {
-				return nil, asHumaError(err, opts.name())
+				return nil, asHumaError(ctx, err, opts.name())
 			}
 			body.Total = &total
 		}

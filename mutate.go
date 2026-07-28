@@ -218,7 +218,7 @@ func (i *Insert[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	}
 	stored, err := scanAllClose[T](rows, i.model)
 	if err != nil {
-		return nil, err
+		return nil, asConstraintErr(err)
 	}
 
 	i.writeBack(stored)
@@ -387,7 +387,7 @@ func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	}
 	updated, err := scanAllClose[T](rows, u.model)
 	if err != nil {
-		return nil, err
+		return nil, asConstraintErr(err)
 	}
 	if err := hooks.runAfterUpdate(ctx, updated); err != nil {
 		return nil, err

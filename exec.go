@@ -308,8 +308,18 @@ func fieldByIndex(v reflect.Value, index []int) (reflect.Value, error) {
 // wrapQueryErr attaches the failing SQL to a driver error. Without it a
 // Postgres syntax or type error names a column but not the statement, which is
 // unhelpful when the statement was assembled from a filter expression.
+//
+// A constraint violation is additionally classified, so a caller can tell its
+// own mistake from an outage with errors.Is rather than by reading the message
+// this builds. The statement stays in the wrapped error either way: it is what
+// a log needs, and it is exactly what a response must not carry.
 func wrapQueryErr(err error, query string) error {
-	return fmt.Errorf("sqlb: executing %s: %w", truncate(query, 400), err)
+	wrapped := fmt.Errorf("sqlb: executing %s: %w", truncate(query, 400), err)
+	if ce, ok := classifyConstraint(err); ok {
+		ce.err = wrapped
+		return ce
+	}
+	return wrapped
 }
 
 func truncate(s string, n int) string {
