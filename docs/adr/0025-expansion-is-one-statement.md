@@ -1,12 +1,12 @@
 # ADR-0025: Expansion is one statement, and Hidden survives the join
 
-- **Status:** Working — one level of `?expand` is built and running against a
-  real Postgres
+- **Status:** Working — one level of `?expand` is built on both the list and the
+  item endpoint, and running against a real Postgres
 - **Confidence:** Medium — the correctness argument is settled and tested three
   ways; what is unsettled is whether nesting can be added without reopening the
   one-statement choice
 - **Decided:** 2026-07-27
-- **Last reviewed:** 2026-07-27
+- **Last reviewed:** 2026-07-28
 
 ## Context
 
@@ -77,7 +77,7 @@ direction: not a guard that had never failed, but a test suite that could not.
 ## Decision
 
 **One statement. A `LEFT JOIN` per relation, and a `json_build_object` over the
-target's non-hidden columns, in the query that reads the page.**
+target's non-hidden columns, in the query that reads the row or the page.**
 
 ```sql
 SELECT "posts"."id", …,
@@ -226,3 +226,15 @@ not.
   not knowable until a real database saw the SQL, so a record written at design
   time would have argued the first two points confidently and missed the one
   that actually broke.
+- 2026-07-28 — Reviewed against the code rather than re-read. Every checkable
+  claim held: `Hidden` is dropped from the object and the assertion fails when
+  the filter is removed, a `LEFT JOIN` that matches nothing compiles to `CASE
+  WHEN … IS NULL`, qualification is asserted in both directions, `Lint` carries
+  the `unindexed-expand` rule this record credits it with, and the coverage is
+  the three packages plus `pgtest` it claims.
+
+  One narrowing corrected. `?expand` reached the item endpoint after this was
+  written, reusing `Builder.Expand` unchanged, so the decision reads "the row or
+  the page" rather than "the page" and the status says both. Nothing about the
+  argument changes — the item endpoint is the same statement with a primary key
+  predicate — which is the useful thing to know about the extension.
