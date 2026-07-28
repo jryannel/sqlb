@@ -100,7 +100,7 @@ type PostCreate struct {
 	AuthorID    string      `json:"author_id"`
 	Title       string      `json:"title"`
 	Body        string      `json:"body"`
-	Status      *PostStatus `json:"status,omitempty"`
+	Status      *PostStatus `json:"status,omitempty" enum:"draft,review,published"`
 	PublishedAt *time.Time  `json:"published_at,omitempty"`
 }
 
@@ -128,7 +128,7 @@ type PostPatch struct {
 	AuthorID    *string     `json:"author_id,omitempty"`
 	Title       *string     `json:"title,omitempty"`
 	Body        *string     `json:"body,omitempty"`
-	Status      *PostStatus `json:"status,omitempty"`
+	Status      *PostStatus `json:"status,omitempty" enum:"draft,review,published"`
 	PublishedAt *time.Time  `json:"published_at,omitempty"`
 
 	// present records which properties the request body actually carried.

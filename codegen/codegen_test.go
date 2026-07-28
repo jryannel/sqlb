@@ -224,6 +224,32 @@ func TestGeneratedCreateBodyOmitsWhatAClientMayNotSet(t *testing.T) {
 	}
 }
 
+// An enum column types as a string alias, which Huma documents as a plain
+// string — so without the tag an invalid value passed validation, reached the
+// INSERT and returned whatever the database said. The generated TypeScript
+// client and CLI both enforce the value set, which left the one participant
+// that has to as the only one that did not.
+func TestGeneratedBodiesConstrainEnumValues(t *testing.T) {
+	src := generate(t, restFixture())["rest_gen.go"]
+
+	for _, want := range []string{
+		`Status *PostStatus ` + "`" + `json:"status,omitempty" enum:"draft,published"`,
+	} {
+		if !contains(src, want) {
+			t.Errorf("body missing the enum constraint %q:\n%s", want, src)
+		}
+	}
+	// Both bodies, not just the create one: a patch can set a column too.
+	patch := src[strings.Index(src, "type PostPatch struct {"):]
+	if !contains(patch, `enum:"draft,published"`) {
+		t.Errorf("patch body does not constrain the enum:\n%s", patch)
+	}
+	// A non-enum column must not grow the tag.
+	if contains(src, `json:"title" enum:`) {
+		t.Error("a plain text column should carry no enum constraint")
+	}
+}
+
 func TestGeneratedPatchBodyDistinguishesAbsentFromNull(t *testing.T) {
 	src := generate(t, restFixture())["rest_gen.go"]
 

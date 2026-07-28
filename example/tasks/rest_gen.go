@@ -139,7 +139,7 @@ func (u ListPatch) Changes() (map[string]any, error) {
 // supplies the value rather than the zero value overwriting it.
 type MembershipCreate struct {
 	UserID string          `json:"user_id"`
-	Role   *MembershipRole `json:"role,omitempty"`
+	Role   *MembershipRole `json:"role,omitempty" enum:"owner,admin,member"`
 }
 
 // Row builds the row to insert. It satisfies rest.CreateBody.
@@ -162,8 +162,8 @@ type TaskCreate struct {
 	AssigneeID  *string       `json:"assignee_id,omitempty"`
 	Title       string        `json:"title"`
 	Description string        `json:"description"`
-	Status      *TaskStatus   `json:"status,omitempty"`
-	Priority    *TaskPriority `json:"priority,omitempty"`
+	Status      *TaskStatus   `json:"status,omitempty" enum:"todo,in_progress,blocked,done"`
+	Priority    *TaskPriority `json:"priority,omitempty" enum:"low,medium,high,urgent"`
 	DueAt       *time.Time    `json:"due_at,omitempty"`
 	Position    *int32        `json:"position,omitempty"`
 }
@@ -198,8 +198,8 @@ type TaskPatch struct {
 	AssigneeID  *string       `json:"assignee_id,omitempty"`
 	Title       *string       `json:"title,omitempty"`
 	Description *string       `json:"description,omitempty"`
-	Status      *TaskStatus   `json:"status,omitempty"`
-	Priority    *TaskPriority `json:"priority,omitempty"`
+	Status      *TaskStatus   `json:"status,omitempty" enum:"todo,in_progress,blocked,done"`
+	Priority    *TaskPriority `json:"priority,omitempty" enum:"low,medium,high,urgent"`
 	DueAt       *time.Time    `json:"due_at,omitempty"`
 	Position    *int32        `json:"position,omitempty"`
 
