@@ -296,6 +296,18 @@ func (r *Registry) Validate() error {
 			if t.rest.MaxPageSize > 0 && t.rest.DefaultPageSize > t.rest.MaxPageSize {
 				report(t.name, "", "DefaultPageSize %d exceeds MaxPageSize %d", t.rest.DefaultPageSize, t.rest.MaxPageSize)
 			}
+			// A declared soft delete and a generated hard DELETE are a
+			// contradiction the runtime cannot resolve: nothing reads
+			// deleted_at, so the generated handler removes the row and the
+			// column that was supposed to record its removal stays NULL
+			// forever. Every other disagreement between a schema and its
+			// behaviour in this package is loud; this one silently did the
+			// opposite of what the table declares.
+			if seen["deleted_at"] && t.rest.Ops.Has(OpDelete) {
+				report(t.name, "deleted_at",
+					"declares a soft delete but exposes OpDelete, which hard-deletes the row; "+
+						"drop OpDelete from Expose and route DELETE to an update of deleted_at")
+			}
 		}
 	}
 

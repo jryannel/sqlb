@@ -4,7 +4,7 @@ How sqlb fits together, and why the seams are where they are. For the reasoning
 behind individual choices, see the [decision records](adr/). For where this is
 going, see the [vision](vision.md).
 
-*Last reviewed: 2026-07-27.*
+*Last reviewed: 2026-07-28.*
 
 ## The shape of it
 
@@ -12,11 +12,18 @@ going, see the [vision](vision.md).
   blogschema/schema.go          ← you edit this
          │
          │  go generate ./...           (a generator main, not a CLI)
-         ├──────────────▶ migrations/*.sql                    (not wired up yet)
-         ├──────────────▶ models.go        db + sqlb struct tags
-         ├──────────────▶ columns.go       typed column facade
-         ├──────────────▶ rest_gen.go      request bodies + registration
-         └──────────────▶ openapi.json ──▶ TypeScript client   (client not built)
+         ├──────────────▶ migrations/*.sql  DDL, diffed against the last state
+         ├──────────────▶ models.go         db + sqlb struct tags
+         ├──────────────▶ columns.go        typed column facade
+         ├──────────────▶ rest_gen.go       request bodies + registration
+         ├──────────────▶ sqlb.json         the manifest
+         ├──────────────▶ client.gen.ts     TypeScript client   (ADR-0028)
+         └──────────────▶ cli/              cobra command tree  (ADR-0029)
+
+  The last two are generated from the *schema*, not from openapi.json. The
+  OpenAPI document cannot say what they need to say — `?status=eq.published`
+  documents as `array<string>`, which is exactly the guarantee being sold —
+  so the emitters read the same declaration everything else does.
 
                     ┌─────────────────────────────┐
    Go code ────────▶│                             │
@@ -46,8 +53,9 @@ Almost everything else follows from those two.
 | `filter` | URL grammar → predicates, validated against model capabilities. | `sqlb` |
 | `migrate` | Diffs two schemas into changes, renders them as Postgres DDL, and writes migration files for goose, golang-migrate or plain SQL. Does not apply them. | `schema` |
 | `introspect` | Reads `pg_catalog` back into a `*schema.Registry`, and reports every construct the DSL cannot express. Design-time; connects through `*sql.DB`, so the driver is the caller's. | `schema`, stdlib |
-| `codegen` | Generates models, the typed column facade, the REST request bodies and the manifest. `Check` is the dry-run mode wired into CI. | `schema` |
+| `codegen` | Generates models, the typed column facade, the REST request bodies, the manifest, the TypeScript client and the cobra CLI. `Check` is the dry-run mode wired into CI. | `schema` |
 | `rest` | Mounts a model on a Huma API: handlers, and an OpenAPI operation built from the model's capabilities. | `sqlb`, `filter`, huma |
+| `shadow` | Replays a checked-in migration history into an empty database, so the current side of a diff can come from the history rather than from a live schema. Design-time. | `schema`, `migrate` |
 | `example/blog` | A worked schema plus the artefacts codegen must produce. | all of the above |
 | `example/tasks` | A multi-tenant task manager: hooks as the authorisation seam, JWT middleware feeding the context hooks read, and a migration history applied by goose. A separate module, like `pgtest`. | all of the above, `migrate` |
 | `example/withsqlc` | The same schema rendered as DDL for sqlc, and a test that sqlb reads sqlc's structs. Proves [docs/with-sqlc.md](with-sqlc.md) rather than leaving it asserted. | `sqlb`, `filter`, stdlib |
@@ -244,8 +252,11 @@ working is worse than no test, so those are exercised as real build attempts.
   cannot reproduce is a destructive change: those render commented out, so the
   checked-in file is not the SQL that ran, and the shadow will differ from
   production wherever one was uncommented by hand.
-- No change feed, and no generated TypeScript client. See the
-  [vision](vision.md).
+- No change feed, and no MCP server over the manifest. See the
+  [vision](vision.md). The TypeScript client and the CLI have since landed
+  ([ADR-0028](adr/0028-typescript-client.md),
+  [ADR-0029](adr/0029-go-cli.md)); both read the schema rather than the
+  OpenAPI document, for the reason the diagram above gives.
 - `?expand` resolves one level. A relation expands to its row; that row's own
   relations do not expand in turn, and there is no `?expand=list.workspace`.
   One level is a join per relation and a bounded statement; nesting is where a

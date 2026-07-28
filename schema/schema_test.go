@@ -394,6 +394,21 @@ func TestInverseValidation(t *testing.T) {
 			},
 			want: "is not a column of",
 		},
+		{
+			// The one place the library used to silently do the opposite of
+			// what the table declares: nothing reads deleted_at, so the
+			// generated DELETE removed the row and the column meant to record
+			// its removal stayed NULL forever.
+			name: "soft delete declared and hard delete exposed",
+			build: func(r *schema.Registry) {
+				r.Table("posts",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Text("title"),
+					schema.SoftDelete(),
+				).Expose(schema.REST{Ops: schema.CRUD})
+			},
+			want: "hard-deletes the row",
+		},
 	}
 
 	for _, tt := range tests {
