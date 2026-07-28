@@ -345,7 +345,7 @@ thing that makes a transaction *do* anything for a balance.
 take locks in the same order), and a cross-reference from the hooks section,
 since a hook is where most people will need it.
 
-### 4. Aggregates over an empty set fail, and `Coalesce` cannot rescue them
+### 4. Aggregates over an empty set fail, and the rescue is one undocumented method away
 
 Verified all three legs against Postgres:
 
@@ -357,20 +357,40 @@ sqlb.Collect[T](ctx, db, q.Select(sqlb.Sum(sqlb.F("total_cents")).As("cents")))
 ```
 
 The obvious fix does not compile: `Coalesce` takes `...Expr`, `Sum` returns
-`Selection`, and `Selection` does not implement `Expr`. So the single most common
-aggregate idiom in any application — `COALESCE(SUM(x), 0)` — is not expressible
-with the two helpers provided for it. The route that works is
+`Selection`, and `Selection` does not implement `Expr`. During the build I read
+that as "not expressible" and fell back to
 `sqlb.RawSel("COALESCE(SUM(\"total_cents\"), 0)").As("cents")`, which gives up
 identifier checking for the whole expression.
 
-This is a runtime failure in code that passes every test written against
-populated data, and the failing case — a dashboard before the first sale, a new
-account, a stock with no trades yet — is the one nobody fixtures.
+**Correction, established after the fact by reading `expr.go` and compiling
+it.** `Selection` carries an `Expr()` accessor at `expr.go:453`, and it bridges
+the two:
 
-**Suggestion.** Make `Selection` satisfy `Expr` so the two compose, or emit the
-aggregates as `Expr` and let `.As()` live on the selection wrapper. Failing
-either, `sqlb.SumOr(f, 0)` covers the case that actually occurs. A note in the
-aggregates section would be the minimum.
+```go
+sqlb.Coalesce(sqlb.Sum(sqlb.F("total_cents")).Expr(), sqlb.Raw{SQL: "0"}).As("cents")
+// SELECT coalesce(sum("total_cents"), 0) AS "cents" FROM …
+```
+
+That renders the intended SQL with the identifier still quoted by the builder,
+so the `RawSel` in `market/` was never necessary and the idiom *is* expressible.
+The finding stands, but as ergonomics rather than as a missing capability: the
+route requires knowing about an accessor that appears in no example, and it
+still needs a bare `sqlb.Raw` for the literal `0`, so the escape hatch is only
+narrowed rather than avoided.
+
+What does not change is the failure itself. This is a runtime error in code that
+passes every test written against populated data, and the failing case — a
+dashboard before the first sale, a new account, a stock with no trades yet — is
+the one nobody fixtures. Nothing about the signatures suggests the empty set
+behaves differently, and the type error a first attempt at `Coalesce` produces
+reads as "these do not compose" rather than as "call `.Expr()`".
+
+**Suggestion.** Downgraded accordingly. `sqlb.SumOr(f, 0)` still covers the case
+that actually occurs, and is now a convenience rather than the only route. The
+minimum is a worked example in the aggregates section — the composition through
+`.Expr()`, next to a sentence saying that an aggregate over no rows scans as
+NULL. Making `Selection` satisfy `Expr` outright would remove the accessor from
+the call site, but it is a smaller win than I first claimed.
 
 ### 5. No arithmetic upsert
 
@@ -607,13 +627,17 @@ Which leads to the one suggestion I would make across all three reports:
 
 **The escape hatches are load-bearing and should be treated as first-class.**
 Every build reached for them on its central query: `RawPred` twice in ex01,
-`SetExpr`/`Raw` throughout ex02's money code, `RawSel` in ex02 because
-`Coalesce` and `Sum` do not compose (report 2, finding 4). Three for three. A DSL
-over SQL will always trail SQL, which is fine — but the design currently reads as
-though `Raw*` is the exception, and the evidence is that it is the seam every
-non-trivial application lands on. Making them compose cleanly (finding 4's
-`Selection`/`Expr` problem is the same phenomenon) is probably higher value than
-extending the DSL to cover another construct.
+`SetExpr`/`Raw` throughout ex02's money code, `RawSel` in ex02 because I could
+not see how to compose `Coalesce` with `Sum` — which, per the correction to
+report 2's finding 4, was a route I missed rather than one that is absent, and
+the composed form still needs a `Raw` literal. Three for three, and the
+correction does not rescue the count: the aggregate composes, but only around a
+`Raw{SQL: "0"}`. A DSL over SQL will always trail SQL, which is fine — but the
+design currently reads as though `Raw*` is the exception, and the evidence is
+that it is the seam every non-trivial application lands on. Making them compose
+cleanly is probably higher value than extending the DSL to cover another
+construct — and finding 4 sharpens that rather than weakening it, since the
+composition was there and three builds still ended up in the escape hatch.
 
 ## What the other stack does better
 
