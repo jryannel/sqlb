@@ -297,6 +297,75 @@ func TestUpsert(t *testing.T) {
 	}
 }
 
+// A multi-row insert writes the database's values back into the caller's
+// structs by position, which is only sound because a VALUES insert returns one
+// row per row written, in order.
+func TestInsertWritesStoredValuesBack(t *testing.T) {
+	h := newHarness(t, storedUserColumns, [][]driver.Value{
+		storedUser("gen-1", "ada@example.com"),
+		storedUser("gen-2", "bob@example.com"),
+	})
+	defer h.close()
+
+	ada := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
+	bob := &User{Email: "bob@example.com", Name: "Bob", OrgID: "acme"}
+	if _, err := sqlb.InsertRows(ada, bob).Exec(context.Background(), h.db); err != nil {
+		t.Fatalf("Exec() error: %v", err)
+	}
+	if ada.ID != "gen-1" || bob.ID != "gen-2" {
+		t.Errorf("generated ids = %q, %q; want gen-1, gen-2", ada.ID, bob.ID)
+	}
+}
+
+// ON CONFLICT DO NOTHING drops the skipped row from the result, so the rows
+// that come back no longer line up with the rows that went in. Writing them
+// back by position would hand one row's generated primary key to a different
+// row — a struct that then reads as a plausible row it is not. Nothing is
+// written back at all in that case, and the returned slice is the account.
+func TestInsertDoesNotWriteBackWhenAConflictSkippedARow(t *testing.T) {
+	// Three rows in; the middle one conflicts, so the database returns two.
+	h := newHarness(t, storedUserColumns, [][]driver.Value{
+		storedUser("gen-ada", "ada@example.com"),
+		storedUser("gen-cy", "cy@example.com"),
+	})
+	defer h.close()
+
+	ada := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
+	bob := &User{Email: "bob@example.com", Name: "Bob", OrgID: "acme"}
+	cy := &User{Email: "cy@example.com", Name: "Cy", OrgID: "acme"}
+
+	stored, err := sqlb.InsertRows(ada, bob, cy).
+		OnConflictDoNothing("email").Exec(context.Background(), h.db)
+	if err != nil {
+		t.Fatalf("Exec() error: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("returned %d rows, want 2", len(stored))
+	}
+	// The returned slice is complete and correct.
+	if stored[0].ID != "gen-ada" || stored[1].ID != "gen-cy" {
+		t.Errorf("returned ids = %q, %q; want gen-ada, gen-cy", stored[0].ID, stored[1].ID)
+	}
+	// Before the fix, bob took gen-cy and cy kept nothing: the skipped row
+	// carried away its successor's identity.
+	for _, row := range []struct {
+		name string
+		u    *User
+	}{{"ada", ada}, {"bob", bob}, {"cy", cy}} {
+		if row.u.ID != "" {
+			t.Errorf("%s.ID = %q; a skipped row makes position meaningless, so no struct may be written back",
+				row.name, row.u.ID)
+		}
+	}
+}
+
+// storedUserColumns is the RETURNING order writeReturning emits for User.
+var storedUserColumns = []string{"id", "email", "name", "age", "org_id", "password_hash", "created_at"}
+
+func storedUser(id, email string) []driver.Value {
+	return []driver.Value{id, email, "", nil, "acme", "", time.Time{}}
+}
+
 func TestUnscopedMutationsAreRefused(t *testing.T) {
 	if _, _, err := sqlb.UpdateRows[User]().Set("name", "x").SQL(); !errors.Is(err, sqlb.ErrUnscoped) {
 		t.Errorf("unscoped update error = %v, want ErrUnscoped", err)

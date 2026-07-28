@@ -66,6 +66,11 @@ func (i *Insert[T]) Omit(columns ...string) *Insert[T] {
 
 // OnConflictDoNothing makes a conflict on the given columns skip the row
 // instead of failing. Skipped rows are simply absent from the result.
+//
+// Because a skipped row cannot be told apart from its neighbours in what
+// comes back, a statement that skips any row leaves every caller struct
+// untouched — the returned slice is then the only account of what was
+// written. See Exec.
 func (i *Insert[T]) OnConflictDoNothing(target ...string) *Insert[T] {
 	i.conflict = &conflictClause{target: target}
 	return i
@@ -192,7 +197,9 @@ func (i *Insert[T]) allZero(col *ColumnInfo) bool {
 }
 
 // Exec runs the insert, returning the stored rows with database defaults
-// applied. The caller's structs are updated in place as well.
+// applied. The caller's structs are updated in place as well — except when
+// ON CONFLICT DO NOTHING skipped a row, in which case none of them are; see
+// writeBack for why.
 func (i *Insert[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	hooks := hooksFor[T](db)
 	for _, row := range i.rows {
@@ -214,17 +221,38 @@ func (i *Insert[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 		return nil, err
 	}
 
-	// Write the stored values back, so callers see generated ids without
-	// having to read the returned slice.
-	for n := range stored {
-		if n < len(i.rows) {
-			*i.rows[n] = stored[n]
-		}
-	}
+	i.writeBack(stored)
 	if err := hooks.runAfterCreate(ctx, stored); err != nil {
 		return nil, err
 	}
 	return stored, nil
+}
+
+// writeBack copies the stored rows into the caller's structs, so generated
+// ids are visible without reading the returned slice.
+//
+// A VALUES insert returns at most one row per row written, in the order they
+// were written, so equal lengths mean position identifies a row and nothing
+// was skipped. A shorter result means ON CONFLICT DO NOTHING dropped one:
+// every later stored row then belongs to an earlier struct than its index
+// says, and writing positionally hands one row's generated primary key to a
+// different row — silently, since both structs look plausible afterwards.
+//
+// Which row was skipped is not recoverable from the result. RETURNING reports
+// only the target table's columns, so no ordinal can be carried through the
+// statement to identify them, and matching on the conflict target fails
+// exactly when the target is generated rather than supplied. So a short
+// result writes nothing at all, and the returned slice — which is complete
+// and correct — is the account of what was written. A struct left holding its
+// zero value is a caller reading an obvious absence; a struct holding its
+// neighbour's identity is a caller reading a lie.
+func (i *Insert[T]) writeBack(stored []T) {
+	if len(stored) != len(i.rows) {
+		return
+	}
+	for n := range stored {
+		*i.rows[n] = stored[n]
+	}
 }
 
 // One inserts a single row and returns it.
