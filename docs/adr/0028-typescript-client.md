@@ -106,6 +106,27 @@ that a seam is in the wrong place, and it applies here unchanged.
 It also keeps the layer honest: both observed clients keep their transport free
 of TanStack coupling even though both depend on it.
 
+### An expanded collection is an envelope, and the generated type keeps it
+
+Expansion narrows the response type by direction, because the two directions do
+not return the same shape. `?expand=author` yields an object; `?expand=tasks`
+yields `sqlb.Collection[T]` — `{items, has_more}`, capped, and told whether there
+was more ([ADR-0022](0022-references-declare-their-inverse.md)). So layer 2
+resolves a forward expansion to `author: Author` and a reverse one to
+`tasks: Collection<Task>`.
+
+Typing the reverse as `Task[]` is the one shortcut to refuse. That envelope
+exists because a bare array cannot say it was truncated, and a client type that
+drops `has_more` reintroduces the defect one layer further out: the caller
+renders fifty of two hundred tasks with nothing in the type suggesting there are
+more. It is the same failure in a different language, and the generator is the
+last place it can be prevented rather than documented.
+
+It also means the emitter has three response envelopes rather than two.
+`Collection<T>` is a strict subset of `Page<T>` — items and `has_more`, without
+`page`, `per_page`, `next_cursor` or `total` — so they are one generic with the
+paging fields optional, not two hand-written shapes that can drift.
+
 ### Cursors make an infinite-query factory the second emitter, not a maybe
 
 `next_cursor` is on every list response that has a next page
@@ -264,6 +285,12 @@ is the convention most TypeScript codebases expect, so it will be asked for.
   two hand-written clients against Go backends, one of which has a key factory
   and an architecture test, and one of which has a live invalidation bug that the
   factory would have made unrepresentable.
+- 2026-07-28 — Reverse expansion landed
+  ([ADR-0022](0022-references-declare-their-inverse.md)), so expand-narrowing has
+  two shapes rather than one: an object forward, a `Collection<T>` envelope back.
+  Recorded that the reverse must not be typed as a bare array, since that
+  reproduces on the client exactly the silent truncation the envelope was
+  introduced to prevent on the server.
 - 2026-07-28 — Renumbered from 0026, and reconciled with keyset pagination
   ([ADR-0027](0027-keyset-pagination.md)), which landed the same day: the
   response envelope carries `next_cursor`, and an infinite-query factory became
