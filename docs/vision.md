@@ -4,7 +4,7 @@ What sqlb is for, who it is for, and what would make it a success. This is the
 most speculative document here — it is a statement of intent, not a plan of
 record, and it should be edited whenever the intent changes.
 
-*Last reviewed: 2026-07-27.*
+*Last reviewed: 2026-07-28.*
 
 ## The problem
 
@@ -109,8 +109,16 @@ speculative and should be reordered as understanding improves.
 **1. The generator.** The keystone, and mostly landed: models, typed column
 sets, REST request bodies and the registration that mounts them. What remains is
 migrations — the generator can render DDL but nothing tells it what changed —
-and the TypeScript client the OpenAPI document exists to feed. `example/blog` is
-generated end to end, so every behaviour test in it tests the generator.
+and a TypeScript client. `example/blog` is generated end to end, so every
+behaviour test in it tests the generator.
+
+That client was described here as the thing the OpenAPI document exists to feed.
+It is not, and the correction is the whole reason it needs a generator rather
+than an off-the-shelf tool: the document can only say `array<string>` about a
+filter parameter, with the operator vocabulary in prose, so anything pointed at
+it produces a client where `?status=bogus.x` compiles. It is generated from the
+model instead, and stops at a key factory the change feed can consume — see
+[ADR-0028](adr/0028-typescript-client.md).
 
 The REST handlers turned out not to need generating at all: one generic function
 serves every model, while the *document* is built per resource from the model's
@@ -139,6 +147,13 @@ not built; the record says what would change that.
 ([ADR-0012](adr/0012-change-feed-outbox.md)). This is what closes the loop from
 "dynamic views" to "live views", and the piece most likely to change shape once
 it meets real traffic.
+
+It is also worth less on its own than the ordering suggests. A feed delivers
+table plus row key and expects the client to refetch, which is only mechanical if
+something derives the cache key from that pair — otherwise every consumer
+hand-writes an invalidation list that drifts from the one its own mutations use.
+That derivation is item 1's key factory, so the two are worth building in that
+order and are worth more together than apart.
 
 **5. Introspection for agents.** A `sqlb.json` manifest and a generated
 `AGENTS.md` describing the schema and its capabilities, plus `sqlb explain` to

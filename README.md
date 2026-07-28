@@ -94,8 +94,10 @@ a test of the generator's output.
 Postgres only. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING` are all
 load-bearing; multi-dialect support would cost the best features.
 
-Not built yet, in the order they matter: a TypeScript client from the generated
-OpenAPI document; a durable change feed; and a command-line entry point.
+Not built yet, in the order they matter: a TypeScript client generated from the
+schema, because the OpenAPI document cannot type the filter grammar
+([ADR-0028](https://jryannel.github.io/sqlb/adr/0028-typescript-client/)); a
+durable change feed; and a command-line entry point.
 [Vision](https://jryannel.github.io/sqlb/project/vision/) has the detail.
 
 ## Documentation
