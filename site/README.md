@@ -123,5 +123,18 @@ Do not try to hold it in your head: change `base`, run `mise run site-build`, an
 the link check names every href that no longer resolves. It found exactly this
 when the base was first switched to `"/"` as a test.
 
-Nothing publishes automatically. There is no deploy workflow, so `site/dist` is
-built and goes nowhere until someone wires one up.
+`.github/workflows/pages.yml` builds and deploys on a push to `main` that
+touches `site/**` or `docs/**`, and on `workflow_dispatch`. It runs
+`npm run build`, so the link check gates the deploy: a link that would 404 in
+production fails there instead of shipping.
+
+It is deliberately separate from `ci`. The site is Astro, so folding it into the
+gate would make Node a build dependency of a Go library whose whole argument is
+that it imposes none — and a red site build should not be able to say the
+library is broken.
+
+The path filter is the whole of `docs/`, not the published subset. It listed
+`docs/guide/**` when the guide was the only source and silently outgrew that:
+an ADR was committed, CI was green, and the page 404d because no deploy ran.
+Building on an unpublished `docs/` change is cheap; not building on a published
+one is invisible.
