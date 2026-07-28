@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
@@ -19,6 +21,21 @@ import (
 // column name is what the predicate uses.
 type itemInput struct {
 	ID string `path:"id" doc:"Primary key of the row"`
+}
+
+// expandableInput is itemInput for a resource that declares a relation.
+//
+// It exists as a second type rather than as a field on itemInput because
+// huma builds its known-parameter set from the input struct, not from
+// Operation.Parameters — so a field here is what makes `?expand` a parameter
+// the operation *has*, and its absence is what makes RejectUnknownQueryParameters
+// refuse the parameter on a resource with nothing to expand. Declaring it
+// unconditionally would document a parameter that always fails, and answer
+// `?expand=org` with a 200 and no relation on every resource that forgot to
+// reject it.
+type expandableInput struct {
+	ID     string   `path:"id" doc:"Primary key of the row"`
+	Expand []string `query:"expand" doc:"Relations to embed."`
 }
 
 type itemOutput[T any] struct {
@@ -71,33 +88,82 @@ func registerRead[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 	reg := api.OpenAPI().Components.Schemas
 	opts := b.opts
 
-	huma.Register(api, huma.Operation{
+	op := huma.Operation{
 		OperationID: "get-" + opts.name(),
 		Method:      http.MethodGet,
 		Path:        opts.itemPath(),
 		Summary:     "Fetch one " + opts.name(),
 		Description: opts.Description,
 		Tags:        []string{opts.tag()},
-		// The operation declares no query parameters, so anything in the query
-		// string is a mistake. Dropping it silently would answer a question the
-		// client did not ask.
+		// Anything the operation does not declare is a mistake. Dropping it
+		// silently would answer a question the client did not ask — the same
+		// reason the list endpoint refuses an unknown parameter rather than
+		// ignoring it.
 		RejectUnknownQueryParameters: true,
 		Responses: errorResponses(reg,
-			http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError),
-	}, func(ctx context.Context, in *itemInput) (*itemOutput[T], error) {
-		key, err := b.key(in.ID)
+			http.StatusBadRequest, http.StatusNotFound,
+			http.StatusUnprocessableEntity, http.StatusInternalServerError),
+	}
+
+	// read is the handler proper, shared by both registrations below so the
+	// expandable and plain forms cannot answer differently.
+	read := func(ctx context.Context, id string, expand []string) (*itemOutput[T], error) {
+		key, err := b.key(id)
 		if err != nil {
 			return nil, err
 		}
 		found, err := sqlb.Query[T]().
 			Select(b.selection()...).
+			Expand(expand...).
 			Where(sqlb.F(b.model.PK.Name).Eq(key)).
 			One(ctx, db)
 		if err != nil {
 			return nil, asHumaError(err, opts.name())
 		}
-		return &itemOutput[T]{Body: row[T]{value: found, cols: b.selectable, names: b.jsonName}}, nil
+		return &itemOutput[T]{Body: row[T]{
+			value: found, cols: b.selectable, names: b.jsonName,
+			expand: b.relationsFor(expand),
+		}}, nil
+	}
+
+	// Two registrations, differing only in whether the input declares `expand`.
+	// See expandableInput for why that cannot be one type with a conditional
+	// parameter.
+	if p := expandParam(b); p != nil {
+		op.Parameters = []*huma.Param{p}
+		huma.Register(api, op, func(ctx context.Context, in *expandableInput) (*itemOutput[T], error) {
+			expand, err := b.expansions(in.Expand)
+			if err != nil {
+				return nil, err
+			}
+			return read(ctx, in.ID, expand)
+		})
+		return
+	}
+	huma.Register(api, op, func(ctx context.Context, in *itemInput) (*itemOutput[T], error) {
+		return read(ctx, in.ID, nil)
 	})
+}
+
+// expansions validates an item request's `?expand`.
+//
+// It goes through filter.Parse rather than checking the names here, so that the
+// item endpoint refuses an unexpandable relation with exactly the document the
+// list endpoint produces — same status, same message, same `allowed` list.
+// ADR-0011 makes the rejection part of the contract, and a second hand-written
+// copy of it is a second thing to drift.
+func (b *binding[T]) expansions(names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	q, err := filter.Parse(
+		url.Values{"expand": {strings.Join(names, ",")}},
+		filter.Options{Model: b.model, Expandable: b.opts.Expandable},
+	)
+	if err != nil {
+		return nil, asHumaError(err, b.opts.name())
+	}
+	return q.Expand, nil
 }
 
 func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T]) {

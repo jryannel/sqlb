@@ -106,3 +106,75 @@ func TestUnknownExpandIsRefusedWithTheAllowedList(t *testing.T) {
 		t.Errorf("the rejection should name the expandable relations, got %s", mustJSON(p))
 	}
 }
+
+// The item endpoint addresses its row by primary key, and `id` is the column
+// tasks and lists most obviously share. Unqualified, `WHERE "id" = $1` beside a
+// LEFT JOIN is not a predicate that matches the wrong row — Postgres refuses
+// the statement (SQLSTATE 42702). Only a real database can say so.
+func TestExpandOnTheItemEndpoint(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+
+	backlog := alice.listID("Backlog")
+	task := alice.taskID(backlog, "Write the migration", nil)
+
+	got := alice.get("/tasks/" + task + "?expand=list").expect(http.StatusOK).item()
+
+	list, ok := got["list"].(map[string]any)
+	if !ok {
+		t.Fatalf("no expanded list on the task: %s", mustJSON(got))
+	}
+	if list["id"] != backlog || list["name"] != "Backlog" {
+		t.Errorf("expanded the wrong list: %s", mustJSON(list))
+	}
+	if got["list_id"] != backlog {
+		t.Errorf("the foreign key went missing: %s", mustJSON(got))
+	}
+}
+
+// Without the parameter the item endpoint is what it was: no join, no relation.
+func TestItemCarriesNoListUnlessAsked(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	task := alice.taskID(alice.listID("Backlog"), "Write the migration", nil)
+
+	got := alice.get("/tasks/" + task).expect(http.StatusOK).item()
+	if _, present := got["list"]; present {
+		t.Errorf("the relation was serialised without being asked for: %s", mustJSON(got))
+	}
+}
+
+// The item endpoint refuses an unexpandable relation the same way the list one
+// does — same status, same allow-list. It is the same rejection, not a second
+// copy of it.
+func TestItemExpandRejectionMatchesTheListEndpoint(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	task := alice.taskID(alice.listID("Backlog"), "Write the migration", nil)
+
+	item := alice.get("/tasks/" + task + "?expand=assignee").expect(http.StatusBadRequest).problem()
+	list := alice.get("/tasks?expand=assignee").expect(http.StatusBadRequest).problem()
+
+	if len(item.Errors) != 1 || len(list.Errors) != 1 {
+		t.Fatalf("expected one error each:\nitem %s\nlist %s", mustJSON(item), mustJSON(list))
+	}
+	if item.Errors[0].Message != list.Errors[0].Message {
+		t.Errorf("messages differ: item %q, list %q", item.Errors[0].Message, list.Errors[0].Message)
+	}
+	if !contains(item.Errors[0].Allowed, "list") {
+		t.Errorf("the item rejection does not say what would have worked: %s", mustJSON(item))
+	}
+}
+
+// The item endpoint still refuses what it does not declare. `sort` is a real
+// parameter on the list endpoint, which is what makes it the interesting one to
+// try here.
+func TestItemStillRefusesAnUnknownQueryParameter(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	task := alice.taskID(alice.listID("Backlog"), "Write the migration", nil)
+
+	if r := alice.get("/tasks/" + task + "?sort=title"); r.Code == http.StatusOK {
+		t.Errorf("an unknown query parameter was accepted on the item endpoint: %s", r.Body)
+	}
+}

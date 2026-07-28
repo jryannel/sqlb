@@ -701,3 +701,149 @@ func TestExpandRejectionNamesWhatWouldHaveWorked(t *testing.T) {
 		t.Errorf("the rejection does not name the expandable relations: %s", resp.Body)
 	}
 }
+
+// ?expand on the item endpoint. The list endpoint had it from the start; the
+// item one refused every query parameter, so a client that fetched a row after
+// creating it had to fetch the relation separately or re-list.
+
+func TestExpandOnTheItemEndpoint(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols(), rows: [][]driver.Value{
+		docRow("d1", "Hello", []byte(`{"id":"acme","name":"Acme"}`)),
+	}})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	resp := api.Get("/documents/d1?expand=org")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+
+	stmt := db.lastStatement()
+	if !strings.Contains(stmt, `LEFT JOIN "orgs" AS "__ex_org"`) {
+		t.Errorf("no join in the statement:\n%s", stmt)
+	}
+	// The item query addresses the row by primary key, and `id` is exactly the
+	// column both tables have. Unqualified it is not a wrong predicate, it is
+	// not a query — see ADR-0025.
+	if !strings.Contains(stmt, `WHERE "docs"."id" = $1`) {
+		t.Errorf("the key predicate is not qualified, so the join makes it ambiguous:\n%s", stmt)
+	}
+	// Hidden survives the join here too.
+	if strings.Contains(stmt, "secret") {
+		t.Errorf("a hidden column of the target reached the statement:\n%s", stmt)
+	}
+
+	item := decode(t, resp.Body.Bytes())
+	org, ok := item["org"].(map[string]any)
+	if !ok {
+		t.Fatalf("the expansion is not nested under its relation name: %v", item)
+	}
+	if org["name"] != "Acme" {
+		t.Errorf("expanded org = %v", org)
+	}
+	if item["org_id"] != "acme" {
+		t.Errorf("org_id = %v, want acme", item["org_id"])
+	}
+}
+
+func TestItemWithoutExpandJoinsNothing(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]driver.Value{
+		{"d1", "acme", "Hello"},
+	}})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	resp := api.Get("/documents/d1")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	if strings.Contains(db.lastStatement(), "LEFT JOIN") {
+		t.Errorf("an unexpanded item request joined anyway:\n%s", db.lastStatement())
+	}
+	if _, present := decode(t, resp.Body.Bytes())["org"]; present {
+		t.Errorf("an unexpanded response carries the relation: %s", resp.Body)
+	}
+}
+
+// The rejection is the list endpoint's, not a second copy of it: same status,
+// same allow-list (ADR-0011).
+func TestItemExpandRejectionNamesWhatWouldHaveWorked(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols(), rows: nil})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	resp := api.Get("/documents/d1?expand=owner")
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body)
+	}
+	if !strings.Contains(resp.Body.String(), "org") {
+		t.Errorf("the rejection does not say what would have worked: %s", resp.Body)
+	}
+}
+
+// A resource with nothing expandable must refuse ?expand as an unknown
+// parameter rather than accepting it and answering without the relation. This
+// is why the parameter is declared per-resource instead of living on the input
+// struct, where it would exist on every resource.
+func TestItemRefusesExpandWhenTheResourceDeclaresNone(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]driver.Value{
+		{"d1", "acme", "Hello"},
+	}})
+	api := mountDocs(t, db.db, nil)
+
+	resp := api.Get("/documents/d1?expand=org")
+	if resp.Code == http.StatusOK {
+		t.Fatalf("a resource with no expandable relation answered ?expand with 200: %s", resp.Body)
+	}
+	// And an ordinary read still works.
+	if code := api.Get("/documents/d1").Code; code != http.StatusOK {
+		t.Errorf("plain item read = %d, want 200", code)
+	}
+}
+
+// Unknown query parameters stay refused now that the operation declares one.
+func TestItemStillRefusesAnUnknownQueryParameter(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols(), rows: nil})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	if resp := api.Get("/documents/d1?sort=title"); resp.Code == http.StatusOK {
+		t.Errorf("an unknown query parameter was accepted on the item endpoint: %s", resp.Body)
+	}
+}
+
+// The item operation documents ?expand with the same enum the list operation
+// carries. A client generates against that enum, so two spellings of it is two
+// places for a relation to go missing — and huma builds its parameter set from
+// the input struct, which would give a bare string array without this.
+func TestItemOperationDocumentsTheExpandableRelations(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols(), rows: nil})
+	api := mountDocs(t, db.db, []string{"org"})
+
+	op := api.OpenAPI().Paths["/documents/{id}"].Get
+	if op == nil {
+		t.Fatal("no GET operation on the item path")
+	}
+	var found *huma.Param
+	for _, p := range op.Parameters {
+		if p.Name == "expand" {
+			found = p
+		}
+	}
+	if found == nil {
+		t.Fatalf("the item operation does not document ?expand: %+v", op.Parameters)
+	}
+	if found.Schema == nil || found.Schema.Items == nil || len(found.Schema.Items.Enum) != 1 ||
+		found.Schema.Items.Enum[0] != "org" {
+		t.Errorf("the parameter does not enumerate the relations: %+v", found.Schema)
+	}
+}
+
+// And a resource with no relation documents no such parameter, so the generated
+// client cannot offer one that would be refused.
+func TestItemOperationOmitsExpandWhenNothingIsExpandable(t *testing.T) {
+	db := newFakeDB(t, reply{cols: docCols(), rows: nil})
+	api := mountDocs(t, db.db, nil)
+
+	for _, p := range api.OpenAPI().Paths["/documents/{id}"].Get.Parameters {
+		if p.Name == "expand" {
+			t.Errorf("a resource with no expandable relation documents ?expand: %+v", p)
+		}
+	}
+}

@@ -196,10 +196,12 @@ when left zero, and both are worth setting per resource in the schema's
 
 ## Expanding a relation
 
-`schema.Ref("list", List).Expandable()` makes a reference reachable inline:
+`schema.Ref("list", List).Expandable()` makes a reference reachable inline, on
+the collection and on a single row alike:
 
 ```
 GET /tasks?expand=list
+GET /tasks/{id}?expand=list
 ```
 
 ```json
@@ -229,6 +231,13 @@ Codegen wires all of it: the relation field on the model, and the resource's
 
 A relation the schema did not mark expandable is refused with the list of the
 ones that would have worked, and an unexpanded request pays for no join at all.
+Both endpoints produce the same rejection, because both go through the same
+parser rather than through two hand-written checks.
+
+`?expand` is the item endpoint's only query parameter, and it is absent on a
+resource that declares no relation — asking for it there is an unknown
+parameter, not a silently ignored one. `POST` and `PATCH` return the row they
+wrote without expansions; fetch the relation with a `GET` if you need it.
 
 ### Hooks do not follow the join
 

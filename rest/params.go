@@ -94,21 +94,8 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 		}
 	}
 
-	if len(b.opts.Expandable) > 0 {
-		relations := make([]any, len(b.opts.Expandable))
-		for i, name := range b.opts.Expandable {
-			relations[i] = name
-		}
-		params = append(params, &huma.Param{
-			Name:        "expand",
-			In:          "query",
-			Description: "Relations to embed.",
-			Explode:     ptr(false),
-			Schema: &huma.Schema{
-				Type:  "array",
-				Items: &huma.Schema{Type: "string", Enum: relations},
-			},
-		})
+	if p := expandParam(b); p != nil {
+		params = append(params, p)
 	}
 
 	groupDoc := "Disjunction of conditions, each written `column.operator.value`, " +
@@ -161,6 +148,37 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 	)
 
 	return params
+}
+
+// expandParam documents `?expand`, or returns nil when the resource declares no
+// expandable relation.
+//
+// Shared by the list and the item operations rather than written twice: the
+// enum is the contract a client generates against, and two copies of it is two
+// places for a relation to be missing from.
+//
+// Returning nil rather than an empty enum is what makes the parameter unknown
+// on a resource with no relations, which — with RejectUnknownQueryParameters on
+// the item operation — is the difference between refusing `?expand=author` and
+// accepting it and answering without it.
+func expandParam[T any](b *binding[T]) *huma.Param {
+	if len(b.opts.Expandable) == 0 {
+		return nil
+	}
+	relations := make([]any, len(b.opts.Expandable))
+	for i, name := range b.opts.Expandable {
+		relations[i] = name
+	}
+	return &huma.Param{
+		Name:        "expand",
+		In:          "query",
+		Description: "Relations to embed.",
+		Explode:     ptr(false),
+		Schema: &huma.Schema{
+			Type:  "array",
+			Items: &huma.Schema{Type: "string", Enum: relations},
+		},
+	}
 }
 
 // filterDescription documents the operators a column accepts. The pattern
