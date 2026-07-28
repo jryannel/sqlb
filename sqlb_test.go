@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/schema"
 )
 
 // The model under test mirrors what codegen emits from a schema declaration:
@@ -831,4 +832,31 @@ func TestDescribeAfterUsePanics(t *testing.T) {
 		}
 	}()
 	sqlb.Describe[Late]().Filterable("name")
+}
+
+// The engine's cap and the schema package's have to be the same number.
+//
+// They are declared twice on purpose: schema is a leaf package that publishes
+// the cap into the manifest and the generated tags, and the engine applies it
+// to a model that may have come from Describe with no schema package in sight.
+// Two constants that must agree is exactly the arrangement that drifts, so the
+// agreement is asserted rather than assumed. ADR-0022.
+func TestTheDefaultExpansionCapAgreesWithTheSchemaPackage(t *testing.T) {
+	type child struct {
+		ID       string `db:"id" sqlb:"pk"`
+		ParentID string `db:"parent_id"`
+	}
+	type parent struct {
+		ID       string                  `db:"id" sqlb:"pk"`
+		Children *sqlb.Collection[child] `db:"-" json:"children" sqlb:"expands=parent_id"`
+	}
+
+	rel := sqlb.ModelOf[parent]().Relation("children")
+	if rel == nil {
+		t.Fatal("the collection did not become a relation")
+	}
+	if rel.Cap() != schema.DefaultExpandLimit {
+		t.Errorf("the engine caps an undeclared expansion at %d, the schema package publishes %d",
+			rel.Cap(), schema.DefaultExpandLimit)
+	}
 }

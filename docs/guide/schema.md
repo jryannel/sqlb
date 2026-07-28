@@ -80,6 +80,8 @@ parameter.
 | `Sortable()` | Appear in `?sort` |
 | `Searchable()` | Inclusion in the `?search` fan-out (implies `Filterable`) |
 | `Expandable()` | A reference resolved inline via `?expand` (references only) |
+| `Inverse("tasks")` | Names the relation from the target's side, which is what makes a reverse relation exist |
+| `InverseExpandable()` | The reverse relation is reachable via `?expand` on the *target's* endpoint |
 
 And three that restrict rather than permit:
 
@@ -137,8 +139,30 @@ integrity becomes the application's job — the trade a module architecture is
 already making everywhere else. The target string is free text and is not
 resolved, because resolving it would require exactly the dependency this avoids.
 
-An external reference cannot be `Expandable`: expanding it would join a table
-this module does not own.
+An external reference cannot be `Expandable`, and cannot declare an `Inverse`
+either: expanding it in either direction would reach a table this module does
+not own, and nothing about the other side is resolvable.
+
+### Both directions of one reference
+
+`Inverse` names the relation as the *target* knows it, and it is declared on the
+referencing side because that is where the column and the constraint already
+are:
+
+```go
+schema.Ref("list", List).Filterable().Expandable().
+    Inverse("tasks").
+    InverseExpandable(schema.ExpandOrder("position"), schema.ExpandLimit(20))
+```
+
+The two exposures are separate decisions about two endpoints — `?expand=list` on
+a task and `?expand=tasks` on a list — and neither implies the other. The name
+cannot be derived, because two references from one table to another would derive
+the same one for different sets of rows.
+
+The target's generated struct gains a field for the collected rows; its
+declaration is untouched. See [the REST guide](rest.md#the-other-direction) for
+what the response looks like and why it is capped.
 
 ## Indexes and constraints
 

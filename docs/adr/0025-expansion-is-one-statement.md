@@ -150,9 +150,12 @@ qualified column rather than an obvious failure.
   weaker argument for a nested relation, whose inconsistency window a client is
   less able to observe.
 - **The reverse direction.** A collection of children rather than a single
-  parent — `?expand=comments` on a post — is not this decision at all.
-  `json_agg` over a joined set changes the row count unless it is grouped, and
-  that is the design this record does not cover.
+  parent — `?expand=comments` on a post — was never this decision, and now has
+  its own: [ADR-0022](0022-references-declare-their-inverse.md) builds it as a
+  correlated subquery in the projection, for the reason this record anticipated.
+  `json_agg` over a joined set changes the row count unless it is grouped, so
+  the join shape could not carry it. What survived unchanged is the property
+  this record is named for: it is still one statement, and `Hidden` still holds.
 - **A hook that has to follow the join.** One concrete case where a boundary can
   only be expressed as a `BeforeQuery` on the target, and cannot be moved into
   the schema, is the trigger to revisit. The fix would be applying the target
@@ -238,3 +241,9 @@ not.
   the page" rather than "the page" and the status says both. Nothing about the
   argument changes — the item endpoint is the same statement with a primary key
   predicate — which is the useful thing to know about the extension.
+- 2026-07-28 — The reverse direction landed in
+  [ADR-0022](0022-references-declare-their-inverse.md) rather than here, which
+  is the split this record predicted: a collection cannot be a join. The
+  prediction that mattered was the diagnosis — "changes the row count unless it
+  is grouped" — since it is what sent the design to a subquery instead of to a
+  `GROUP BY` over every base column.

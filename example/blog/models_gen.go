@@ -2,18 +2,23 @@
 
 package blog
 
-import "time"
+import (
+	"time"
+
+	"github.com/jryannel/sqlb"
+)
 
 // Author is a row of authors.
 type Author struct {
-	ID           string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	OrgID        string    `db:"org_id" json:"org_id" sqlb:"expand"`
-	Org          *Org      `db:"-" json:"org,omitempty" sqlb:"expands=org_id"` // filled in by ?expand=org
-	Email        string    `db:"email" json:"email" sqlb:"filter,search"`
-	Name         string    `db:"name" json:"name" sqlb:"filter,sort,search"`
-	PasswordHash string    `db:"password_hash" json:"-" sqlb:"hidden"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt    time.Time `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	ID           string                 `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	OrgID        string                 `db:"org_id" json:"org_id" sqlb:"filter,expand"`
+	Org          *Org                   `db:"-" json:"org,omitempty" sqlb:"expands=org_id"` // filled in by ?expand=org
+	Email        string                 `db:"email" json:"email" sqlb:"filter,search"`
+	Name         string                 `db:"name" json:"name" sqlb:"filter,sort,search"`
+	PasswordHash string                 `db:"password_hash" json:"-" sqlb:"hidden"`
+	CreatedAt    time.Time              `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
+	UpdatedAt    time.Time              `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	Posts        *sqlb.Collection[Post] `db:"-" json:"posts,omitempty" sqlb:"expands=author_id,order=-published_at,limit=2"` // filled in by ?expand=posts
 }
 
 // TableName is the table Author maps to.
@@ -21,11 +26,12 @@ func (Author) TableName() string { return "authors" }
 
 // Org a tenant. Every other table is scoped to one.
 type Org struct {
-	ID        string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	Name      string    `db:"name" json:"name" sqlb:"filter,sort,search"`
-	Slug      string    `db:"slug" json:"slug" sqlb:"filter"`
-	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	ID        string                   `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	Name      string                   `db:"name" json:"name" sqlb:"filter,sort,search"`
+	Slug      string                   `db:"slug" json:"slug" sqlb:"filter"`
+	CreatedAt time.Time                `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
+	UpdatedAt time.Time                `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	Authors   *sqlb.Collection[Author] `db:"-" json:"authors,omitempty" sqlb:"expands=org_id,order=name,limit=50"` // filled in by ?expand=authors
 }
 
 // TableName is the table Org maps to.
@@ -44,7 +50,7 @@ const (
 type Post struct {
 	ID          string     `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
 	OrgID       string     `db:"org_id" json:"org_id"`
-	AuthorID    string     `db:"author_id" json:"author_id" sqlb:"expand"`
+	AuthorID    string     `db:"author_id" json:"author_id" sqlb:"filter,expand"`
 	Author      *Author    `db:"-" json:"author,omitempty" sqlb:"expands=author_id"` // filled in by ?expand=author
 	Title       string     `db:"title" json:"title" sqlb:"filter,sort,search"`
 	Body        string     `db:"body" json:"body" sqlb:"filter,search"`

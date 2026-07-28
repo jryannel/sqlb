@@ -40,7 +40,34 @@ type TableManifest struct {
 	PrimaryKey string           `json:"primaryKey,omitempty"`
 	Columns    []ColumnManifest `json:"columns"`
 	Indexes    []IndexManifest  `json:"indexes,omitempty"`
-	REST       *RESTManifest    `json:"rest,omitempty"`
+
+	// CollectedBy describes the reverse relations pointing at this table: the
+	// rows of another table that this one collects, and the name it knows them
+	// by. Declared on the referencing side, which is where the column and the
+	// constraint already live, so reading this table alone would otherwise not
+	// show that its endpoint has them. ADR-0022.
+	CollectedBy []InverseManifest `json:"collectedBy,omitempty"`
+
+	REST *RESTManifest `json:"rest,omitempty"`
+}
+
+// InverseManifest describes one reverse relation from the target's side.
+type InverseManifest struct {
+	Name   string `json:"name"`
+	Table  string `json:"table"`
+	Column string `json:"column"`
+	// Order is the column an expansion sorts the collected rows by, with a
+	// leading "-" for descending. Empty means the primary key.
+	Order string `json:"order,omitempty"`
+	// Limit is how many rows one expansion returns at most, with the default
+	// already resolved: a client reading this is never left to guess the cap.
+	// Past it the response reports has_more and the caller pages the collected
+	// table's own endpoint by Column.
+	Limit int `json:"limit,omitempty"`
+	// Expandable reports whether ?expand on this table may ask for it. A
+	// relation that is named but not expandable is still described here,
+	// because the relationship exists whether or not this endpoint serves it.
+	Expandable bool `json:"expandable"`
 }
 
 // ColumnManifest describes one column. Hidden columns are omitted entirely
@@ -126,7 +153,7 @@ func (r *Registry) BuildManifest() *Manifest {
 		Params:    paramDocs(),
 	}
 	for _, t := range r.Tables() {
-		m.Tables = append(m.Tables, t.manifest())
+		m.Tables = append(m.Tables, t.manifest(r.Inverses(t)))
 	}
 	return m
 }
@@ -134,7 +161,7 @@ func (r *Registry) BuildManifest() *Manifest {
 // BuildManifest describes the default registry.
 func BuildManifest() *Manifest { return defaultRegistry.BuildManifest() }
 
-func (t *TableDef) manifest() TableManifest {
+func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 	tm := TableManifest{Name: t.name, Comment: t.comment}
 	if t.module != "" {
 		tm.Module, tm.LocalName = t.module, t.local
@@ -196,13 +223,24 @@ func (t *TableDef) manifest() TableManifest {
 		})
 	}
 
+	for _, inv := range inverses {
+		tm.CollectedBy = append(tm.CollectedBy, InverseManifest{
+			Name:       inv.Name,
+			Table:      inv.Table.Name(),
+			Column:     inv.Column,
+			Order:      inv.Order,
+			Limit:      inv.Cap(),
+			Expandable: inv.Expandable,
+		})
+	}
+
 	if t.rest != nil {
-		tm.REST = t.restManifest()
+		tm.REST = t.restManifest(inverses)
 	}
 	return tm
 }
 
-func (t *TableDef) restManifest() *RESTManifest {
+func (t *TableDef) restManifest(inverses []InverseRelation) *RESTManifest {
 	rm := &RESTManifest{
 		Path:            t.rest.Path,
 		Operations:      strings.Split(t.rest.Ops.String(), "|"),
@@ -231,6 +269,13 @@ func (t *TableDef) restManifest() *RESTManifest {
 		// caller reading this should not have to strip an "_id" to guess it.
 		if d.Expandable && d.Ref != nil && !d.Ref.External {
 			rm.Expandable = append(rm.Expandable, d.Ref.Name)
+		}
+	}
+	// The reverse direction is expandable on this endpoint too, and a client
+	// reading the vocabulary should not have to infer it from another table.
+	for _, inv := range inverses {
+		if inv.Expandable {
+			rm.Expandable = append(rm.Expandable, inv.Name)
 		}
 	}
 	rm.Examples = t.examples(rm)

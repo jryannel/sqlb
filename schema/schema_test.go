@@ -291,3 +291,167 @@ func TestExposedTablesAreListedSeparately(t *testing.T) {
 		t.Errorf("Exposed() = %v, want only public_docs: a table without Expose has no REST surface", exposed)
 	}
 }
+
+// Reverse relations: what a declared Inverse must satisfy. ADR-0022.
+func TestInverseValidation(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(*schema.Registry)
+		want  string
+	}{
+		{
+			// The case the whole record was written for. Two references from
+			// one table to another would derive the same reverse name, and an
+			// author's posts are not the posts an author reviewed.
+			name: "two references claim one name on the target",
+			build: func(r *schema.Registry) {
+				authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey())
+				r.Table("posts",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Ref("author", authors).Inverse("posts").InverseExpandable(),
+					schema.Ref("reviewer", authors).Inverse("posts").InverseExpandable(),
+				)
+			},
+			want: "already claimed",
+		},
+		{
+			name: "the name collides with a column of the target",
+			build: func(r *schema.Registry) {
+				authors := r.Table("authors",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Text("posts"),
+				)
+				r.Table("posts",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Ref("author", authors).Inverse("posts"),
+				)
+			},
+			want: "collides with a column",
+		},
+		{
+			name: "exposed without being named",
+			build: func(r *schema.Registry) {
+				authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey())
+				r.Table("posts",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Ref("author", authors).InverseExpandable(),
+				)
+			},
+			want: "InverseExpandable without Inverse",
+		},
+		{
+			// Nothing about the other side of a module boundary is resolvable,
+			// which is the same reason ExternalRef cannot be Expandable.
+			name: "declared across a module boundary",
+			build: func(r *schema.Registry) {
+				r.Table("invoices",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.ExternalRef("tenant", "tenants.id").Inverse("invoices"),
+				)
+			},
+			want: "cannot declare an Inverse",
+		},
+		{
+			// The easy mistake: an expanded collection is ordered by the rows
+			// it collects, which are the referencing table's, not the target's.
+			name: "ordered by a column of the wrong table",
+			build: func(r *schema.Registry) {
+				authors := r.Table("authors",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Text("name"),
+				)
+				r.Table("posts",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Ref("author", authors).
+						Inverse("posts").
+						InverseExpandable(schema.ExpandOrder("name")),
+				)
+			},
+			want: "is not a column of",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := schema.NewRegistry()
+			tt.build(r)
+			err := r.Validate()
+			if err == nil {
+				t.Fatalf("expected validation to fail with %q", tt.want)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// Two references to one table are fine as long as they are named apart, which
+// is the point of declaring the name rather than deriving it.
+func TestTwoInversesOnOneTargetAreFineWhenNamedApart(t *testing.T) {
+	r := schema.NewRegistry()
+	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey())
+	posts := r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("author", authors).Filterable().Inverse("written").InverseExpandable(),
+		schema.Ref("reviewer", authors).Filterable().Inverse("reviewed").InverseExpandable(),
+	).Index("author_id").Index("reviewer_id")
+	if err := r.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	_ = posts
+
+	inv := r.Inverses(authors)
+	if len(inv) != 2 {
+		t.Fatalf("got %d inverses, want 2", len(inv))
+	}
+	if inv[0].Name != "written" || inv[0].Column != "author_id" {
+		t.Errorf("first inverse = %+v", inv[0])
+	}
+	if inv[1].Name != "reviewed" || inv[1].Column != "reviewer_id" {
+		t.Errorf("second inverse = %+v", inv[1])
+	}
+
+	// The manifest describes the relationship from the target's side, which is
+	// the side that cannot see the declaration.
+	m := r.BuildManifest()
+	var found int
+	for _, tm := range m.Tables {
+		if tm.Name != "authors" {
+			continue
+		}
+		found = len(tm.CollectedBy)
+	}
+	if found != 2 {
+		t.Errorf("the manifest describes %d reverse relations on authors, want 2", found)
+	}
+}
+
+// A named inverse that nothing exposed is still a fact about the schema, and it
+// is not an error: exposure is a separate decision (ADR-0006).
+func TestAnUnexposedInverseIsNamedButNotExpandable(t *testing.T) {
+	r := schema.NewRegistry()
+	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.OpList})
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("author", authors).Inverse("posts"),
+	)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	inv := r.Inverses(authors)
+	if len(inv) != 1 || inv[0].Expandable {
+		t.Fatalf("inverses = %+v, want one that is not expandable", inv)
+	}
+	for _, tm := range r.BuildManifest().Tables {
+		if tm.Name != "authors" || tm.REST == nil {
+			continue
+		}
+		for _, name := range tm.REST.Expandable {
+			if name == "posts" {
+				t.Error("an unexposed inverse reached the ?expand vocabulary")
+			}
+		}
+	}
+}

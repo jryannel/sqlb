@@ -143,6 +143,37 @@ func (r *Registry) Lint() Diagnostics {
 					Fix:      fmt.Sprintf("add .Index(%q)", d.Name),
 				})
 			}
+
+			if d.Ref != nil && d.Ref.InverseExpandable {
+				// The reverse direction runs one correlated subquery per base
+				// row, so an unindexed foreign key is a sequential scan per row
+				// of the page rather than one extra scan for the statement.
+				// Same rule as above, a worse consequence.
+				if !indexed[d.Name] {
+					add(Diagnostic{
+						Rule: "unindexed-inverse-expand", Table: t.name, Column: d.Name,
+						Severity: SeverityWarn,
+						Message: fmt.Sprintf(
+							"%q collects these rows, and an expansion runs one subquery per row of the page; without an index on this column each of those scans the table",
+							d.Ref.Inverse),
+						Fix: fmt.Sprintf("add .Index(%q)", d.Name),
+					})
+				}
+				// An expanded collection is capped, and past the cap the caller
+				// is expected to follow this table's own endpoint filtered by
+				// this column. If it cannot filter by it, the overflow has
+				// nowhere to go and the truncation is a dead end.
+				if !d.Filterable {
+					add(Diagnostic{
+						Rule: "uncapped-inverse-overflow", Table: t.name, Column: d.Name,
+						Severity: SeverityWarn,
+						Message: fmt.Sprintf(
+							"an expansion of %q is capped and reports has_more, but this column is not filterable, so a caller has no way to read the rest",
+							d.Ref.Inverse),
+						Fix: "add .Filterable() to this column",
+					})
+				}
+			}
 		}
 
 		// A table outside any module in a codebase that uses them is usually

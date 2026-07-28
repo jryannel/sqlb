@@ -20,6 +20,7 @@
           "type": "uuid",
           "goType": "string",
           "capabilities": [
+            "filter",
             "expand"
           ],
           "references": {
@@ -78,6 +79,16 @@
           ]
         }
       ],
+      "collectedBy": [
+        {
+          "name": "posts",
+          "table": "posts",
+          "column": "author_id",
+          "order": "-published_at",
+          "limit": 2,
+          "expandable": true
+        }
+      ],
       "rest": {
         "path": "/authors",
         "operations": [
@@ -91,6 +102,7 @@
         "maxPageSize": 100,
         "filterable": [
           "id",
+          "org_id",
           "email",
           "name"
         ],
@@ -104,14 +116,15 @@
           "name"
         ],
         "expandable": [
-          "org"
+          "org",
+          "posts"
         ],
         "examples": [
           "GET /authors?id=eq.VALUE",
           "GET /authors?sort=-name\u0026page=2\u0026per_page=20",
           "GET /authors?search=TERM",
           "GET /authors?expand=org",
-          "GET /authors?or=(id.eq.A,email.eq.B)"
+          "GET /authors?or=(id.eq.A,org_id.eq.B)"
         ]
       }
     },
@@ -169,6 +182,16 @@
           ]
         }
       ],
+      "collectedBy": [
+        {
+          "name": "authors",
+          "table": "authors",
+          "column": "org_id",
+          "order": "name",
+          "limit": 50,
+          "expandable": true
+        }
+      ],
       "rest": {
         "path": "/orgs",
         "operations": [
@@ -190,10 +213,14 @@
         "searchable": [
           "name"
         ],
+        "expandable": [
+          "authors"
+        ],
         "examples": [
           "GET /orgs?id=eq.VALUE",
           "GET /orgs?sort=-name\u0026page=2\u0026per_page=20",
           "GET /orgs?search=TERM",
+          "GET /orgs?expand=authors",
           "GET /orgs?or=(id.eq.A,name.eq.B)"
         ]
       }
@@ -230,6 +257,7 @@
           "type": "uuid",
           "goType": "string",
           "capabilities": [
+            "filter",
             "expand"
           ],
           "references": {
@@ -351,6 +379,7 @@
         "maxFilters": 12,
         "filterable": [
           "id",
+          "author_id",
           "title",
           "body",
           "status",
@@ -377,7 +406,7 @@
           "GET /posts?sort=-title\u0026page=2\u0026per_page=20",
           "GET /posts?search=TERM",
           "GET /posts?expand=author",
-          "GET /posts?or=(id.eq.A,title.eq.B)"
+          "GET /posts?or=(id.eq.A,author_id.eq.B)"
         ]
       }
     }

@@ -27,7 +27,13 @@ var Org = schema.Table("orgs",
 // Author is a person who writes posts.
 var Author = schema.Table("authors",
 	schema.UUIDv7("id").PrimaryKey(),
-	schema.Ref("org", Org).OnDelete(schema.Cascade).Expandable(),
+	// Expandable both ways: an author pulls in its org, and an org pulls in its
+	// authors. The reverse is capped and reports has_more; a caller wanting all
+	// of them follows /authors?org_id=eq.<id>, which is why the column is
+	// Filterable. ADR-0022.
+	schema.Ref("org", Org).OnDelete(schema.Cascade).Filterable().Expandable().
+		Inverse("authors").
+		InverseExpandable(schema.ExpandOrder("name")),
 	schema.Text("email").Unique().Searchable(),
 	schema.Text("name").Searchable().Sortable(),
 	// The hash is readable by Go code but never leaves the process, and is not
@@ -49,7 +55,9 @@ var Author = schema.Table("authors",
 var Post = schema.Table("posts",
 	schema.UUIDv7("id").PrimaryKey(),
 	schema.Ref("org", Org).OnDelete(schema.Cascade),
-	schema.Ref("author", Author).OnDelete(schema.Restrict).Expandable(),
+	schema.Ref("author", Author).OnDelete(schema.Restrict).Filterable().Expandable().
+		Inverse("posts").
+		InverseExpandable(schema.ExpandOrder("-published_at"), schema.ExpandLimit(2)),
 
 	schema.Text("title").Searchable().Sortable(),
 	schema.Text("body").Searchable(),

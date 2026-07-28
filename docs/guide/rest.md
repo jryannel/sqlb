@@ -279,6 +279,62 @@ absent from an expansion as it is from the table's own responses — otherwise
 Codegen wires all of it: the relation field on the model, and the resource's
 `Expandable` list. Nothing here is hand-written.
 
+### The other direction
+
+A reference can also be expanded backwards — a list and the tasks that point at
+it — and that is declared on the same line, because the referencing table is the
+one that already owns the column:
+
+```go
+schema.Ref("list", List).Filterable().Expandable().
+    Inverse("tasks").
+    InverseExpandable(schema.ExpandOrder("position"), schema.ExpandLimit(20))
+```
+
+Read as: a task has a list; a list has tasks; both may be expanded. The name has
+to be declared rather than derived, because two references to one table — an
+author's posts and the posts an author reviewed — would derive the same name for
+different sets. Absent `Inverse` there is no reverse relation, which is normal.
+
+```
+GET /lists?expand=tasks
+```
+
+```json
+{
+  "id": "01936...",
+  "name": "Backlog",
+  "tasks": {
+    "items": [{ "id": "01937...", "title": "Write the migration" }],
+    "has_more": false
+  }
+}
+```
+
+The value is an envelope, not a bare array, and the reason is `has_more`. A
+collection is capped — 20 above, 50 by default — because an uncapped one makes
+one response's size a function of data nobody bounded, and an array that was
+silently truncated is a wrong answer rather than a short one. Past the cap the
+caller follows the child's own endpoint, filtered by the same key:
+
+```
+GET /tasks?list_id=eq.{id}&sort=position&page=2
+```
+
+which is why that column wants to be `Filterable` — `schema.Lint` says so when
+it is not, along with reporting an unindexed foreign key, which matters more
+here than in the forward direction.
+
+Under the covers this is one correlated subquery per relation rather than a
+join: joining a collection would multiply the base rows, so the page's row count
+would depend on the data, and two expanded collections would multiply each
+other. It is still one statement, so the snapshot argument above is unchanged,
+and `Hidden` holds over the collected rows exactly as it holds over a joined one.
+
+Ordering is declared and always total — the child's primary key is appended as a
+tiebreaker — because under a cap the order does not merely arrange the result,
+it decides which children the caller never sees.
+
 A relation the schema did not mark expandable is refused with the list of the
 ones that would have worked, and an unexpanded request pays for no join at all.
 Both endpoints produce the same rejection, because both go through the same

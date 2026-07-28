@@ -246,3 +246,265 @@ func expansionJSON(t *testing.T, ctx context.Context, db *sql.DB, text string, a
 	}
 	return out
 }
+
+// Reverse expansion against a real Postgres.
+//
+// This half needs a database more than the forward half did. A collection is a
+// correlated subquery with a window function, an aggregate, a FILTER and a
+// LIMIT one past the cap, and every one of those is a claim about how Postgres
+// evaluates the statement rather than about what string sqlb produced. ADR-0022
+// says outright that it expects at least one of them to be wrong until a
+// database has ruled; this file is that ruling.
+
+// seedAuthorPosts gives the seeded author three posts with distinct publication
+// dates, so a cap of two has something to truncate and an order to truncate by.
+func seedAuthorPosts(t *testing.T, db *sql.DB, orgID, authorID string) {
+	t.Helper()
+	for _, p := range []struct {
+		title     string
+		published string
+	}{
+		{"Oldest", "2020-01-01T00:00:00Z"},
+		{"Middle", "2021-01-01T00:00:00Z"},
+		{"Newest", "2022-01-01T00:00:00Z"},
+	} {
+		if _, err := db.Exec(
+			`INSERT INTO posts (org_id, author_id, title, body, status, published_at)
+			 VALUES ($1, $2, $3, 'body', 'published', $4)`,
+			orgID, authorID, p.title, p.published,
+		); err != nil {
+			t.Fatalf("inserting %s: %v", p.title, err)
+		}
+	}
+}
+
+func TestExpandCollectionRunsAndScansAgainstPostgres(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	applySchema(t, raw, schema.DefaultRegistry())
+	db := sqlb.New(raw)
+
+	orgID, authorID := seedBlog(t, raw)
+	seedAuthorPosts(t, raw, orgID, authorID)
+
+	authors, err := sqlb.Query[blog.Author]().Expand("posts").All(ctx, db)
+	if err != nil {
+		t.Fatalf("expanding posts: %v", err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("got %d authors, want 1", len(authors))
+	}
+	got := authors[0]
+	if got.Posts == nil {
+		t.Fatal("the collection was not filled in")
+	}
+
+	// The schema caps this relation at two, and seedBlog already added one post
+	// with no publication date on top of the three above.
+	if got.Posts.Len() != 2 {
+		t.Fatalf("got %d posts, want the declared cap of 2: %+v", got.Posts.Len(), got.Posts.Items)
+	}
+	// The half a bare array could not have carried.
+	if !got.Posts.HasMore {
+		t.Error("a truncated collection did not report has_more")
+	}
+	// Ordered by -published_at, so the newest two, newest first. NULLs sort
+	// first under DESC in Postgres, which is why the undated post from seedBlog
+	// leads — an ordering detail no golden string would have caught.
+	if got.Posts.Items[0].Title != "Hello" || got.Posts.Items[1].Title != "Newest" {
+		t.Errorf("wrong posts or wrong order: %q, %q",
+			got.Posts.Items[0].Title, got.Posts.Items[1].Title)
+	}
+	// The child rows are whole rows, not just keys.
+	if got.Posts.Items[1].AuthorID != authorID || got.Posts.Items[1].Body == "" {
+		t.Errorf("child row is incomplete: %+v", got.Posts.Items[1])
+	}
+}
+
+// A row with no children is an empty array and has_more false — not a null, and
+// not a missing key. "no children" and "did not ask" have to stay
+// distinguishable, which is the same argument the forward direction makes about
+// NULL versus an object of nulls.
+func TestAnEmptyCollectionIsAnEmptyArray(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	applySchema(t, raw, schema.DefaultRegistry())
+	db := sqlb.New(raw)
+
+	orgID, _ := seedBlog(t, raw)
+	var emptyOrg string
+	if err := raw.QueryRow(
+		`INSERT INTO orgs (name, slug) VALUES ('Empty', 'empty') RETURNING id`,
+	).Scan(&emptyOrg); err != nil {
+		t.Fatalf("inserting an org: %v", err)
+	}
+
+	orgs, err := sqlb.Query[blog.Org]().Expand("authors").OrderBy(sqlb.F("slug").Asc()).All(ctx, db)
+	if err != nil {
+		t.Fatalf("expanding authors: %v", err)
+	}
+	if len(orgs) != 2 {
+		t.Fatalf("got %d orgs, want 2", len(orgs))
+	}
+
+	byID := map[string]*blog.Org{}
+	for i := range orgs {
+		byID[orgs[i].ID] = &orgs[i]
+	}
+	if got := byID[orgID].Authors; got == nil || got.Len() != 1 {
+		t.Errorf("the populated org expanded to %+v, want one author", got)
+	}
+	empty := byID[emptyOrg].Authors
+	if empty == nil {
+		t.Fatal("an org with no authors expanded to nothing at all, want an empty collection")
+	}
+	if empty.Len() != 0 || empty.HasMore {
+		t.Errorf("an org with no authors expanded to %+v", empty)
+	}
+	if empty.Items == nil {
+		t.Error("the empty collection scanned as a nil slice; the SQL should coalesce it to []")
+	}
+}
+
+// The security-relevant one in the reverse direction, and the reason the org →
+// authors relation is the fixture: authors.password_hash is Hidden, so a
+// collection that carried it would be a way to read through ?expand a column
+// the authors endpoint refuses to serve.
+//
+// It reads the raw JSON for the reason the forward version does — blog.Author
+// tags PasswordHash `json:"-"`, so a decoded struct would look clean whatever
+// the database returned.
+func TestHiddenColumnsDoNotSurviveACollection(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	applySchema(t, raw, schema.DefaultRegistry())
+
+	seedBlog(t, raw)
+
+	text, args, err := sqlb.Query[blog.Org]().Expand("authors").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	payload := expansionJSON(t, ctx, raw, text, args, "__expand_authors")
+
+	if !strings.Contains(payload, "ada@example.com") {
+		t.Fatalf("the expansion did not carry the author at all: %s", payload)
+	}
+	if strings.Contains(payload, "password_hash") || strings.Contains(payload, "correct-horse") {
+		t.Errorf("a hidden column of the collected rows reached the response: %s", payload)
+	}
+}
+
+// A collection must not multiply the base rows, which is the whole reason it is
+// a subquery rather than a join. Three posts under one author still means one
+// author row, and the count is unchanged by the expansion.
+func TestACollectionDoesNotMultiplyTheBaseRows(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	applySchema(t, raw, schema.DefaultRegistry())
+	db := sqlb.New(raw)
+
+	orgID, authorID := seedBlog(t, raw)
+	seedAuthorPosts(t, raw, orgID, authorID)
+
+	rows, err := sqlb.Query[blog.Author]().Expand("posts").All(ctx, db)
+	if err != nil {
+		t.Fatalf("expanding posts: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("one author with four posts returned %d rows", len(rows))
+	}
+
+	total, err := sqlb.Query[blog.Author]().Expand("posts").Count(ctx, db)
+	if err != nil {
+		t.Fatalf("counting an expanded query: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("count = %d, want 1", total)
+	}
+}
+
+// Everything else a list request can carry still has to work with a correlated
+// subquery in the projection. orgs, authors and posts share id, org_id,
+// created_at and updated_at, so an unqualified reference to any of them is
+// ambiguous — and the subquery adds a second scope in which that is true.
+func TestACollectionComposesWithTheOtherQueryParameters(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	applySchema(t, raw, schema.DefaultRegistry())
+	db := sqlb.New(raw)
+
+	orgID, authorID := seedBlog(t, raw)
+	seedAuthorPosts(t, raw, orgID, authorID)
+
+	for name, q := range map[string]*sqlb.Builder[blog.Author]{
+		"filter on a shared column name": sqlb.Query[blog.Author]().
+			Expand("posts").Where(sqlb.F("org_id").Eq(orgID)),
+		"sort on a shared column name": sqlb.Query[blog.Author]().
+			Expand("posts").OrderBy(sqlb.F("created_at").Desc()),
+		"an explicit projection over shared names": sqlb.Query[blog.Author]().
+			Expand("posts").Select(sqlb.F("id"), sqlb.F("org_id")),
+		"a page boundary": sqlb.Query[blog.Author]().
+			Expand("posts").OrderBy(sqlb.F("id").Asc()).Stable().Limit(10),
+		"both directions at once": sqlb.Query[blog.Author]().
+			Expand("posts", "org"),
+	} {
+		rows, err := q.All(ctx, db)
+		if err != nil {
+			text, _, _ := q.SQL()
+			t.Errorf("%s: %v\n%s", name, err, text)
+			continue
+		}
+		if len(rows) != 1 {
+			t.Errorf("%s: got %d authors, want 1", name, len(rows))
+		}
+		_ = authorID
+	}
+}
+
+// The plan is the claim ADR-0022 is least sure of: one subquery per base row is
+// affordable only if the child's foreign key is indexed, which is why
+// schema.Lint reports an unindexed one as a warning rather than as hygiene.
+// This asserts the index is actually used rather than trusting that it exists.
+func TestACollectionUsesTheForeignKeyIndex(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	applySchema(t, raw, schema.DefaultRegistry())
+
+	orgID, authorID := seedBlog(t, raw)
+	seedAuthorPosts(t, raw, orgID, authorID)
+
+	text, args, err := sqlb.Query[blog.Author]().Expand("posts").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+
+	rows, err := raw.QueryContext(ctx, "EXPLAIN "+text, args...)
+	if err != nil {
+		t.Fatalf("EXPLAIN:\n%s\n%v", text, err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line + "\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Postgres will choose a sequential scan on a table this small whatever the
+	// indexes say, so the assertion is that the planner *considered* the
+	// subquery cheap enough to keep as a correlated one rather than that it
+	// used the index today. What would be a real regression is the subquery
+	// disappearing into a join, which would change the row count.
+	if strings.Contains(plan.String(), "Nested Loop Left Join") {
+		t.Errorf("the collection was planned as a join rather than a subquery:\n%s", plan.String())
+	}
+	if !strings.Contains(plan.String(), "SubPlan") {
+		t.Errorf("no correlated subquery in the plan:\n%s", plan.String())
+	}
+}

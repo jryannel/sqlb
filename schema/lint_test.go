@@ -210,3 +210,36 @@ func contains(s []string, v string) bool {
 	}
 	return false
 }
+
+// A reverse expansion runs one subquery per row of the page, so an unindexed
+// foreign key costs a scan per row rather than one for the statement — and the
+// cap's escape hatch is the child's own endpoint filtered by that column, which
+// does not exist unless the column is filterable. ADR-0022.
+func TestLintCatchesAnExpensiveInverse(t *testing.T) {
+	r := schema.NewRegistry()
+	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey())
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("author", authors).Inverse("posts").InverseExpandable(),
+	)
+
+	got := rules(r.Lint())
+	if !got["unindexed-inverse-expand"] {
+		t.Error("a collected foreign key with no index should be flagged")
+	}
+	if !got["uncapped-inverse-overflow"] {
+		t.Error("a capped collection whose overflow cannot be filtered should be flagged")
+	}
+
+	// And both go quiet once the schema answers them.
+	ok := schema.NewRegistry()
+	okAuthors := ok.Table("authors", schema.UUIDv7("id").PrimaryKey())
+	ok.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("author", okAuthors).Filterable().Inverse("posts").InverseExpandable(),
+	).Index("author_id")
+	got = rules(ok.Lint())
+	if got["unindexed-inverse-expand"] || got["uncapped-inverse-overflow"] {
+		t.Errorf("an indexed, filterable foreign key should not be flagged: %v", ok.Lint())
+	}
+}

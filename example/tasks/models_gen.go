@@ -2,7 +2,11 @@
 
 package tasks
 
-import "time"
+import (
+	"time"
+
+	"github.com/jryannel/sqlb"
+)
 
 // Comment a comment on a task.
 type Comment struct {
@@ -21,16 +25,17 @@ func (Comment) TableName() string { return "comments" }
 
 // List a named list of tasks within a workspace.
 type List struct {
-	ID          string     `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	WorkspaceID string     `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly"`
-	Name        string     `db:"name" json:"name" sqlb:"filter,sort,search"`
-	Description string     `db:"description" json:"description" sqlb:"filter,search"`
-	Color       string     `db:"color" json:"color" sqlb:"default,filter"`
-	Position    int32      `db:"position" json:"position" sqlb:"default,sort"`
-	Archived    bool       `db:"archived" json:"archived" sqlb:"default,filter,sort"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
-	DeletedAt   *time.Time `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
+	ID          string                 `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
+	WorkspaceID string                 `db:"workspace_id" json:"workspace_id" sqlb:"filter,readonly"`
+	Name        string                 `db:"name" json:"name" sqlb:"filter,sort,search"`
+	Description string                 `db:"description" json:"description" sqlb:"filter,search"`
+	Color       string                 `db:"color" json:"color" sqlb:"default,filter"`
+	Position    int32                  `db:"position" json:"position" sqlb:"default,sort"`
+	Archived    bool                   `db:"archived" json:"archived" sqlb:"default,filter,sort"`
+	CreatedAt   time.Time              `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
+	UpdatedAt   time.Time              `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	DeletedAt   *time.Time             `db:"deleted_at" json:"deleted_at" sqlb:"readonly"`
+	Tasks       *sqlb.Collection[Task] `db:"-" json:"tasks,omitempty" sqlb:"expands=list_id,order=position,limit=20"` // filled in by ?expand=tasks
 }
 
 // TableName is the table List maps to.

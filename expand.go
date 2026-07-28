@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -48,13 +49,28 @@ import (
 // base table for a joined query, and only for a joined query. See compiler.column.
 //
 // ADR-0025 records all three, and the reason the third one is the useful one.
+//
+// # The reverse direction is a subquery, not a join
+//
+// `?expand=tasks` on a list is many rows rather than one, and a join cannot
+// carry it: joining a collection multiplies the base rows, so the page's row
+// count would depend on the data, and two expanded collections would multiply
+// each other. Each collection is a correlated subquery in the projection
+// instead, so n of them compose by addition. It is still one statement, so the
+// snapshot argument above holds unchanged. ADR-0022 has the rest, including why
+// the value is an envelope rather than a bare array.
 
 // expandPrefix marks a result column as an expanded relation. It is not a legal
 // column name in any schema this generates, so it cannot collide with one.
 const expandPrefix = "__expand_"
 
-// expandAlias is the table alias the target is joined under.
+// expandAlias is the table alias the target is joined under, and — for a
+// collection — the alias of the child table inside the subquery.
 func expandAlias(name string) string { return "__ex_" + name }
+
+// expandRowsAlias is the alias of the capped, ordered child rows a collection
+// aggregates over.
+func expandRowsAlias(name string) string { return "__rows_" + name }
 
 // Expand resolves the named relations inline, one LEFT JOIN each.
 //
@@ -91,9 +107,17 @@ func (b *Builder[T]) Expanded() []string { return append([]string(nil), b.expand
 
 // compileExpansions writes the joins. Called while compiling FROM, so the
 // aliases exist by the time the projection references them.
+//
+// A collection contributes nothing here. Joining one would multiply the base
+// rows — a page's row count would become a function of the data, and two
+// expanded collections would produce a cross product of each other — so a
+// collection is a correlated subquery in the projection instead. ADR-0022.
 func (b *Builder[T]) compileExpansions(c *compiler) {
 	for _, name := range b.expand {
 		rel := b.model.Relation(name)
+		if rel.Collection {
+			continue
+		}
 		target, err := rel.Target()
 		if err != nil {
 			c.fail("%s", err)
@@ -129,28 +153,137 @@ func (b *Builder[T]) compileExpansionSelections(c *compiler) {
 		alias := expandAlias(name)
 
 		c.write(", ")
+		if rel.Collection {
+			b.compileCollection(c, name, rel, target)
+			c.write(" AS ")
+			c.ident(expandPrefix + name)
+			continue
+		}
+
 		// A LEFT JOIN that matched nothing produces a row of NULLs, and
 		// json_build_object over those yields an object full of nulls rather
 		// than a null. The caller asked whether there is a related row; an
 		// object of nulls answers "yes, and it is empty", which is wrong.
 		c.write("CASE WHEN ")
 		c.column(Column{Table: alias, Name: target.PK.Name})
-		c.write(" IS NULL THEN NULL ELSE json_build_object(")
-		first := true
-		for _, col := range target.Columns {
-			if col.Hidden {
-				continue
-			}
-			if !first {
-				c.write(", ")
-			}
-			first = false
-			c.write("'" + col.Name + "', ")
-			c.column(Column{Table: alias, Name: col.Name})
-		}
-		c.write(") END AS ")
+		c.write(" IS NULL THEN NULL ELSE ")
+		writeRowObject(c, target, alias)
+		c.write(" END AS ")
 		c.ident(expandPrefix + name)
 	}
+}
+
+// writeRowObject builds one target row as a JSON object.
+//
+// The columns are listed rather than using row_to_json(t.*), because Hidden has
+// to hold across an expansion in either direction: a hidden column on the
+// target is hidden when the target is expanded, and row_to_json of the whole
+// row would quietly carry a password hash into a response.
+func writeRowObject(c *compiler, target *Model, alias string) {
+	c.write("json_build_object(")
+	first := true
+	for _, col := range target.Columns {
+		if col.Hidden {
+			continue
+		}
+		if !first {
+			c.write(", ")
+		}
+		first = false
+		c.write("'" + col.Name + "', ")
+		c.column(Column{Table: alias, Name: col.Name})
+	}
+	c.write(")")
+}
+
+// compileCollection writes the reverse direction: the children that point back
+// at this row, capped, ordered, and told whether there were more.
+//
+//	(SELECT json_build_object(
+//	          'items',    coalesce(json_agg("__rows_tasks"."o" ORDER BY "__rows_tasks"."n")
+//	                               FILTER (WHERE "__rows_tasks"."n" <= 50), '[]'::json),
+//	          'has_more', count(*) > 50)
+//	   FROM (SELECT json_build_object(…) AS "o",
+//	                row_number() OVER (ORDER BY …) AS "n"
+//	           FROM "tasks" AS "__ex_tasks"
+//	          WHERE "__ex_tasks"."list_id" = "lists"."id"
+//	          ORDER BY … LIMIT 51) AS "__rows_tasks")
+//
+// One row past the cap is fetched so that count(*) can answer has_more without
+// a second aggregate over the whole child table, and the FILTER drops it again
+// so it is never returned. The ORDER BY appears twice on purpose: the inner one
+// decides which rows the LIMIT keeps, the window one decides the order they are
+// aggregated in, and neither implies the other.
+func (b *Builder[T]) compileCollection(c *compiler, name string, rel *RelationInfo, target *Model) {
+	if target.PK == nil {
+		c.fail("cannot expand %q: %s has no primary key to order its rows by",
+			name, target.Type.Name())
+		return
+	}
+
+	if b.model.PK == nil {
+		c.fail("cannot expand %q: %s has no primary key for its children to point at",
+			name, b.model.Type.Name())
+		return
+	}
+
+	alias := expandAlias(name)
+	rows := expandRowsAlias(name)
+	capped := strconv.Itoa(rel.Cap())
+
+	// The order is made total by the primary key, because under a cap a
+	// non-total order does not merely reshuffle the result — it decides which
+	// children the caller never sees, and decides it differently each run.
+	order := func() {
+		if rel.Order != "" {
+			c.column(Column{Table: alias, Name: rel.Order})
+			if rel.OrderDesc {
+				c.write(" DESC")
+			}
+			c.write(", ")
+		}
+		c.column(Column{Table: alias, Name: target.PK.Name})
+		if rel.OrderDesc {
+			c.write(" DESC")
+		}
+	}
+
+	c.write("(SELECT json_build_object('items', coalesce(json_agg(")
+	c.column(Column{Table: rows, Name: "o"})
+	c.write(" ORDER BY ")
+	c.column(Column{Table: rows, Name: "n"})
+	c.write(") FILTER (WHERE ")
+	c.column(Column{Table: rows, Name: "n"})
+	c.write(" <= " + capped + "), '[]'::json), 'has_more', count(*) > " + capped + ")")
+
+	c.write(" FROM (SELECT ")
+	writeRowObject(c, target, alias)
+	c.write(" AS ")
+	c.ident("o")
+	c.write(", row_number() OVER (ORDER BY ")
+	order()
+	c.write(") AS ")
+	c.ident("n")
+
+	c.write(" FROM ")
+	c.table(target.Table)
+	c.write(" AS ")
+	c.ident(alias)
+	c.write(" WHERE ")
+	c.column(Column{Table: alias, Name: rel.FK.Name})
+	c.write(" = ")
+	// The correlated reference. It names the base table explicitly rather than
+	// relying on the statement's default qualifier, because inside this
+	// subquery an unqualified name resolves to the child table first.
+	c.column(Column{Table: b.from(), Name: b.model.PK.Name})
+
+	c.write(" ORDER BY ")
+	order()
+	// Rendered as a literal rather than a bind parameter, for the reason
+	// Limit and Offset already are: a plan should not have to guess at it.
+	c.write(" LIMIT " + strconv.Itoa(rel.Cap()+1) + ") AS ")
+	c.ident(rows)
+	c.write(")")
 }
 
 // scanExpansion decodes one expanded relation into the row being built.
@@ -167,11 +300,19 @@ func scanExpansion(rv reflect.Value, rel *RelationInfo, raw []byte) error {
 		return nil
 	}
 
-	target := reflect.New(rel.Elem)
+	// Decoded into the field's own type rather than into rel.Elem, because the
+	// two differ for a collection: the field holds a Collection[T] and Elem is
+	// the T inside it.
+	ft := field.Type()
+	pointer := ft.Kind() == reflect.Pointer
+	if pointer {
+		ft = ft.Elem()
+	}
+	target := reflect.New(ft)
 	if err := json.Unmarshal(raw, target.Interface()); err != nil {
 		return fmt.Errorf("sqlb: decoding expanded %q: %w", rel.Name, err)
 	}
-	if field.Kind() == reflect.Pointer {
+	if pointer {
 		field.Set(target)
 		return nil
 	}

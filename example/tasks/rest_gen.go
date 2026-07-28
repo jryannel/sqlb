@@ -301,6 +301,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 		Description:     "A named list of tasks within a workspace.",
 		DefaultPageSize: 25,
 		MaxPageSize:     100,
+		Expandable:      []string{"tasks"},
 	}); err != nil {
 		return err
 	}
