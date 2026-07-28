@@ -93,6 +93,29 @@ something `?view_count=lt.100` would have done anyway.
 `Where`, so `countSQL` drops it exactly as it drops `LIMIT`. `?count=exact`
 answers how large the result set is, not how much of it is left.
 
+**Columns only, and an expression ordering is refused by name.** `keysetTerms`
+rejects any `ORDER BY` term that is not a column — *"cursor pagination orders by
+columns only, and this query orders by an expression; order by a column, or page
+with Limit and Offset"* — because the boundary is read off the returned row, and
+a computed term is not on the row. It is a programming error rather than a bad
+request: the ordering was assembled by the caller, not sent by a client.
+
+That is also the answer for a distance-ordered vector search
+([ADR-0026](0026-vectors-declare-their-index.md)), and it is right for a stronger
+reason than the value being unreadable. An ANN index returns *approximate*
+neighbours, so the ordering it produces is not a total order over the table at
+all, and a boundary named in it could skip or repeat rows however carefully the
+distance were encoded. Search being its own operation in that record is not only
+about the shape of the API — this is one of the things that makes it one, rather
+than a list that happens to be sorted differently.
+
+`Stable()` will still append the primary key to such an ordering, since it only
+checks whether the key is already among the terms. That is harmless for
+correctness and is a plan question rather than a semantic one: whether a trailing
+term costs an ANN index its ordering is exactly the kind of claim ADR-0026 says
+to settle with `EXPLAIN` rather than assume, and there is no vector code to
+assert it against yet.
+
 **Forward only.** There is no `Before` and no `?before=`.
 
 ## Consequences
@@ -199,3 +222,11 @@ rejected it for expansion on a consistency argument that applies here too.
 ## Revisions
 
 - 2026-07-28 — Written, when keyset paging landed.
+- 2026-07-28 — Recorded the rule's boundary, which the code enforced but no
+  record stated: an ordering term that is not a column cannot be cursor-paged.
+  Prompted by asking what a distance-ordered search
+  ([ADR-0026](0026-vectors-declare-their-index.md)) would inherit from
+  `Stable()`. The answer was already correct in `keysetTerms`; what was missing
+  was why it is correct rather than a limitation, since an approximate ordering
+  is not a total order and a boundary in it would be unsound even if the value
+  could be read.

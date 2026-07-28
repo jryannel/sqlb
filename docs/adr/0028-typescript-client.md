@@ -1,4 +1,4 @@
-# ADR-0026: The TypeScript client is generated from the model, and stops at the query key
+# ADR-0028: The TypeScript client is generated from the model, and stops at the query key
 
 - **Status:** Exploring
 - **Confidence:** Low
