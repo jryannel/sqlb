@@ -1,10 +1,12 @@
 # ADR-0022: A reference declares the name its target knows it by
 
-- **Status:** Exploring
+- **Status:** Exploring — and narrower than when written: forward expansion
+  shipped without any of this ([ADR-0025](0025-expansion-is-one-statement.md)),
+  so what is open is the reverse direction alone
 - **Confidence:** Medium — the gap is demonstrated and narrow; the shape of the
-  fix is one candidate among several
+  fix is one candidate among several, and the layer it would live in has moved
 - **Decided:** 2026-07-27
-- **Last reviewed:** 2026-07-27
+- **Last reviewed:** 2026-07-28
 
 ## Context
 
@@ -105,6 +107,16 @@ Three properties follow from where the declaration sits:
 Cardinality is still derived rather than declared, because it is already correct
 and a second source for it could only disagree with the first.
 
+**The layer above is now known to be wrong, and is left as written.** The
+sketch puts the declaration in the schema DSL, because that is where `Ref` lives
+and where this record was reasoning. Forward expansion has since shipped one
+layer down: an `expand` capability on the foreign key column plus a
+`sqlb:"expands=<column>"` field beside it, read by reflection, with the DSL and
+codegen emitting that pair rather than being the mechanism. A reverse
+declaration would follow the same route — otherwise `Describe` users, who have
+no DSL at all, could never express one. Read `Inverse` above as naming the fact
+that must be declared, not the API that would declare it.
+
 ## Consequences
 
 **What this buys.** Reverse expansion becomes expressible, which is the half of
@@ -186,6 +198,9 @@ compiles and describes a relationship the database does not have.
 **Do nothing and ship forward expansion only.** The strongest of the four, and
 not exclusive with this record: forward expansion is unblocked today and could
 land first. It is listed here because it may turn out to be the whole answer.
+**This is what happened** — see the revision below. It has not yet turned out to
+be the whole answer, but it has not turned out not to be either, and that is the
+open question this record is now waiting on.
 
 ## Revisions
 
@@ -193,3 +208,35 @@ land first. It is listed here because it may turn out to be the whole answer.
   premise — that reverse cardinality is underivable — was tested against the
   registry and did not hold; the gap it pointed at is real but is naming and
   exposure, not cardinality.
+- 2026-07-28 — **Forward expansion shipped, and none of this was needed for it.**
+  The fourth alternative was taken: `?expand=author` on a list or an item is
+  built, tested against a real Postgres, and documented in
+  [ADR-0025](0025-expansion-is-one-statement.md), which owns the SQL shape — one
+  statement, a `LEFT JOIN` and a `json_build_object` per relation, with `Hidden`
+  holding across the join. This record keeps the declaration question and loses
+  the half that turned out not to be a question at all.
+
+  Three things this record claimed were checked by the implementation rather
+  than by argument:
+
+  - **Forward needed no inverse.** The prediction that forward expansion was
+    "fully determined by what the schema records today" held: a reference targets
+    a primary key, so the target is one row, and nothing had to be declared about
+    the other side.
+  - **Cardinality is structural.** `newRelation` requires the relation field to
+    be a struct or a pointer to one, so a `[]Post` is refused at model build.
+    The reverse direction is excluded by the type rather than by a check someone
+    could forget — which is a stronger form of the same conclusion.
+  - **Exposure stayed opt-in in two halves.** The `expand` capability on the
+    column and the `expands=` field must both be present, and disagreeing halves
+    are an error at model build rather than a request refused for a relation the
+    model plainly has.
+
+  What is unchanged: there is no inverse, no reverse relation, and no way to
+  write `?expand=posts` on an author. The naming problem that motivated this
+  record — two references from one table to another, both wanting to be called
+  "posts" on the far side — is untouched, because nothing has yet tried to name
+  a reverse. The trigger in **What would change our mind** therefore still
+  stands as written, and is now answerable with evidence rather than by
+  speculation: `example/tasks` and `example/blog` both expand forward, and
+  neither has yet wanted to expand back.
