@@ -156,7 +156,19 @@ var Task = schema.Table("tasks",
 	schema.UUIDv7("id").PrimaryKey(),
 	// ReadOnly, supplied by the BeforeCreate hook; see the note on Membership.
 	schema.Ref("workspace", Workspace).OnDelete(schema.Cascade).Filterable().ReadOnly(),
-	schema.Ref("list", List).OnDelete(schema.Cascade).Filterable().Expandable(),
+	// Expandable in both directions, which are two decisions about two
+	// endpoints: ?expand=list on a task pulls in the one list it belongs to,
+	// and ?expand=tasks on a list pulls in the tasks that point back at it.
+	//
+	// The reverse is declared here, on the side that already owns the column
+	// and the constraint, and it is capped: a list with two hundred tasks
+	// returns twenty and says has_more, and a caller wanting the rest follows
+	// /tasks?list_id=eq.<id>, which is the endpoint that already pages and
+	// filters. Ordering by position is what the screen wants, and
+	// Index("list_id", "position") below is what makes it cheap. ADR-0022.
+	schema.Ref("list", List).OnDelete(schema.Cascade).Filterable().Expandable().
+		Inverse("tasks").
+		InverseExpandable(schema.ExpandOrder("position"), schema.ExpandLimit(20)),
 
 	// Nullable: an unassigned task is the normal state of a new one. The column
 	// is typed *string on the model and Col[string] on the typed facade, so

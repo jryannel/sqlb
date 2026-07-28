@@ -170,7 +170,21 @@ func (d *Description[T]) Hidden(columns ...string) *Description[T] {
 // The target's own model — its columns, and which of them are Hidden — comes
 // from the Go type, and is resolved on first expansion rather than here, so two
 // models expandable to each other do not recurse at startup.
-func (d *Description[T]) Relation(field, fkColumn string) *Description[T] {
+//
+// # The reverse direction
+//
+// A field of type *sqlb.Collection[T] declares the other direction, and then
+// fkColumn is a column of T rather than of this model:
+//
+//	sqlb.Describe[List]().
+//	    Table("lists").
+//	    PrimaryKey("id").
+//	    Relation("Tasks", "list_id", sqlb.ExpandOrder("-created_at"), sqlb.ExpandLimit(20))
+//
+// The options apply to a collection only, because only a collection is capped
+// and only a capped result has to decide which rows it keeps. Passing them to a
+// forward relation is refused rather than ignored.
+func (d *Description[T]) Relation(field, fkColumn string, opts ...RelationOption) *Description[T] {
 	sf, ok := d.m.Type.FieldByName(field)
 	if !ok {
 		panic(fmt.Sprintf("sqlb: Relation(%q, %q): %s has no such field (fields: %s)",
@@ -185,7 +199,11 @@ func (d *Description[T]) Relation(field, fkColumn string) *Description[T] {
 		}
 	}
 
-	rel, err := newRelation(sf, sf.Index, fkColumn)
+	rt := relationTag{fk: fkColumn}
+	for _, opt := range opts {
+		opt(&rt)
+	}
+	rel, err := newRelation(sf, sf.Index, rt)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -194,10 +212,38 @@ func (d *Description[T]) Relation(field, fkColumn string) *Description[T] {
 			field, fkColumn, d.m.Type, rel.Name, prev.Field))
 	}
 
-	rel.FK = d.column("Relation", fkColumn)
-	rel.FK.Expandable = true
+	// A collection joins on a column of the target, which this description
+	// cannot see and must not mark expandable: that column's capabilities
+	// describe the target's own endpoint. It resolves with the target instead,
+	// on first expansion.
+	if !rel.Collection {
+		rel.FK = d.column("Relation", fkColumn)
+		rel.FK.Expandable = true
+	}
 	d.m.Relations = append(d.m.Relations, rel)
 	return d
+}
+
+// RelationOption adjusts a collection expansion declared through Describe. The
+// generated form spells the same two things in the struct tag:
+// `sqlb:"expands=list_id,order=-created_at,limit=20"`.
+type RelationOption func(*relationTag)
+
+// ExpandOrder orders a collection's children, most significant first, with a
+// leading "-" for descending — the spelling ?sort already uses. The target's
+// primary key is appended as a tiebreaker either way, because under a cap a
+// non-total order decides which children the caller never sees.
+func ExpandOrder(column string) RelationOption {
+	return func(rt *relationTag) {
+		rt.order, rt.desc = strings.TrimPrefix(column, "-"), strings.HasPrefix(column, "-")
+	}
+}
+
+// ExpandLimit caps how many children an expansion returns. The default is 50.
+// Past the cap the collection reports HasMore, and the caller follows the
+// child's own endpoint filtered by the foreign key.
+func ExpandLimit(n int) RelationOption {
+	return func(rt *relationTag) { rt.limit = n }
 }
 
 // Timestamps is shorthand for the common created_at / updated_at pair:

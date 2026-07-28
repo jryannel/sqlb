@@ -56,7 +56,7 @@ func renderREST(opts Options) ([]byte, error) {
 		renderCreateBody(b, t)
 		renderUpdateBody(b, t)
 	}
-	renderRegister(b, exposed)
+	renderRegister(b, opts.Registry, exposed)
 
 	return gofmt(opts.restFile(), b.Bytes())
 }
@@ -225,7 +225,7 @@ func omitEmpty(optional bool) string {
 	return ""
 }
 
-func renderRegister(b *bytes.Buffer, exposed []*schema.TableDef) {
+func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.TableDef) {
 	fmt.Fprintf(b, "\n// Register mounts every exposed resource on api.\n")
 	fmt.Fprintf(b, "//\n// The handlers are rest.Resource, instantiated per model. Registration is\n")
 	fmt.Fprintf(b, "// generic rather than reflective because query hooks are keyed by type: a\n")
@@ -263,7 +263,7 @@ func renderRegister(b *bytes.Buffer, exposed []*schema.TableDef) {
 		// Expandable comes from the columns rather than from REST, because
 		// .Expandable() is already the opt-in and a second one on the resource
 		// would only be a way to disagree with the first.
-		if rel := expandableRelations(t); len(rel) > 0 {
+		if rel := expandableRelations(reg, t); len(rel) > 0 {
 			quoted := make([]string, len(rel))
 			for i, name := range rel {
 				quoted[i] = fmt.Sprintf("%q", name)

@@ -180,11 +180,15 @@ func collectColumns(m *Model, t reflect.Type, prefix []int) error {
 		// A relation field holds an expanded row rather than a column. It is
 		// checked before the `db:"-"` skip below, because `db:"-"` is exactly
 		// how it declares that it is not a column.
-		if fk, isRelation := expansionOf(sf.Tag.Get("sqlb")); isRelation {
+		rt, isRelation, err := expansionOf(sf.Tag.Get("sqlb"))
+		if err != nil {
+			return fmt.Errorf("%w (field %s.%s)", err, t.Name(), sf.Name)
+		}
+		if isRelation {
 			if !sf.IsExported() {
-				return fmt.Errorf("sqlb: field %s.%s expands %q but is not exported", t.Name(), sf.Name, fk)
+				return fmt.Errorf("sqlb: field %s.%s expands %q but is not exported", t.Name(), sf.Name, rt.fk)
 			}
-			rel, err := newRelation(sf, index, fk)
+			rel, err := newRelation(sf, index, rt)
 			if err != nil {
 				return err
 			}

@@ -3,6 +3,7 @@ package sqlb
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -27,6 +28,29 @@ import (
 // reachable by reflection rather than by a second declaration that could
 // disagree with the first.
 
+// The reverse direction is the same two words with the column on the other
+// side, and the cardinality of the field is what says so:
+//
+//	Tasks *sqlb.Collection[Task] `db:"-" json:"tasks,omitempty" sqlb:"expands=list_id,order=-created_at,limit=50"`
+//
+// `expands=` names a column either way; whose column it is follows from the
+// type. A struct means a column of mine, a Collection means a column of theirs.
+// A second keyword — `collects=`, `hasmany=` — would restate what the type
+// already says, and two statements of one fact can disagree.
+//
+// One asymmetry is deliberate. A forward relation requires the `expand`
+// capability on its own column as well as the field, because that capability is
+// what puts the relation in this resource's vocabulary. A reverse relation
+// requires nothing of the column it joins on, because that column belongs to
+// another table whose capabilities describe another endpoint. The field's
+// existence is the whole opt-in, and codegen only emits it from an explicit
+// `.InverseExpandable()`. ADR-0022 records why.
+
+// defaultExpandLimit caps a reverse expansion that does not declare one. Past
+// it the caller follows the child's own endpoint, filtered by the foreign key,
+// which is paging and filtering that already exist.
+const defaultExpandLimit = 50
+
 // RelationInfo describes one expandable reference.
 type RelationInfo struct {
 	// Name is what `?expand` names it, taken from the field's json tag and
@@ -38,10 +62,25 @@ type RelationInfo struct {
 	Field string
 	// Index is the reflect path to that field.
 	Index []int
-	// Elem is the struct type behind the field, with any pointer removed.
+	// Elem is the struct type behind the field, with any pointer removed. For
+	// a Collection it is the child type, not the Collection itself.
 	Elem reflect.Type
-	// FK is the local column joined on.
+	// FK is the column joined on: a column of this model for a forward
+	// relation, and a column of the target for a collection. It is resolved
+	// with the target for a collection, so it is nil until Target has run.
 	FK *ColumnInfo
+
+	// Collection reports that this relation is the reverse direction — many
+	// rows of the target pointing back at one row of this model.
+	Collection bool
+	// Order is the child column a collection is ordered by, with the target's
+	// primary key appended as a tiebreaker. Empty means the primary key alone.
+	// Under a cap, a non-total order does not reshuffle the result, it decides
+	// which children the caller never sees — see ADR-0027 and ADR-0022.
+	Order     string
+	OrderDesc bool
+	// Limit caps a collection. Zero means defaultExpandLimit.
+	Limit int
 
 	// fkName holds the declared foreign key column until it can be resolved,
 	// which cannot happen until every column of the model has been collected —
@@ -64,8 +103,32 @@ type RelationInfo struct {
 func (r *RelationInfo) Target() (*Model, error) {
 	r.once.Do(func() {
 		r.target, r.err = modelOfType(r.Elem)
+		if r.err != nil || !r.Collection {
+			return
+		}
+		// A collection joins on a column of the *target*, so it cannot be
+		// resolved while this model is being built — the target may expand
+		// back, and building it then would recurse. It resolves here instead,
+		// with the target, the first time anything asks to expand.
+		col := r.target.Column(r.fkName)
+		if col == nil {
+			r.err = fmt.Errorf(
+				"sqlb: field %s expands %q, which is not a column of %s (have: %s)",
+				r.Field, r.fkName, r.target.Type.Name(),
+				strings.Join(r.target.ColumnNames(), ", "))
+			return
+		}
+		r.FK = col
 	})
 	return r.target, r.err
+}
+
+// Cap reports how many children this relation returns at most.
+func (r *RelationInfo) Cap() int {
+	if r.Limit > 0 {
+		return r.Limit
+	}
+	return defaultExpandLimit
 }
 
 // Relation returns the named relation, or nil.
@@ -87,23 +150,74 @@ func (m *Model) RelationNames() []string {
 	return out
 }
 
+// relationTag is the `sqlb` tag of a relation field: the column it expands, and
+// for a collection the order and cap that decide which children are returned.
+type relationTag struct {
+	fk    string
+	order string
+	desc  bool
+	limit int
+}
+
 // expansionOf reads the `expands=<column>` capability, which marks a field as
-// holding an expanded row rather than a value of its own.
-func expansionOf(tag string) (string, bool) {
+// holding an expanded row rather than a value of its own, along with the
+// options only a collection uses.
+func expansionOf(tag string) (relationTag, bool, error) {
+	var rt relationTag
+	found := false
 	for _, part := range strings.Split(tag, ",") {
 		part = strings.TrimSpace(part)
-		if rest, found := strings.CutPrefix(part, "expands="); found {
-			return strings.TrimSpace(rest), true
+		switch {
+		case strings.HasPrefix(part, "expands="):
+			rt.fk = strings.TrimSpace(strings.TrimPrefix(part, "expands="))
+			found = true
+		case strings.HasPrefix(part, "order="):
+			col := strings.TrimSpace(strings.TrimPrefix(part, "order="))
+			// The `-` prefix is the descending marker the sort grammar
+			// already uses, so a schema and a URL spell it the same way.
+			rt.order, rt.desc = strings.TrimPrefix(col, "-"), strings.HasPrefix(col, "-")
+		case strings.HasPrefix(part, "limit="):
+			n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(part, "limit=")))
+			if err != nil || n <= 0 {
+				return rt, false, fmt.Errorf(
+					"sqlb: %q is not a usable expansion limit: want a positive whole number", part)
+			}
+			rt.limit = n
 		}
 	}
-	return "", false
+	return rt, found, nil
 }
 
 // newRelation builds a relation from the struct field carrying it. The foreign
 // key is not resolved here; see RelationInfo.fkName.
-func newRelation(sf reflect.StructField, index []int, fk string) (*RelationInfo, error) {
-	if fk == "" {
+func newRelation(sf reflect.StructField, index []int, rt relationTag) (*RelationInfo, error) {
+	if rt.fk == "" {
 		return nil, fmt.Errorf("sqlb: field %s declares `expands=` with no column name", sf.Name)
+	}
+
+	r := &RelationInfo{
+		Name:      relationName(sf),
+		Field:     sf.Name,
+		Index:     index,
+		Order:     rt.order,
+		OrderDesc: rt.desc,
+		Limit:     rt.limit,
+		fkName:    rt.fk,
+	}
+
+	// The field's cardinality is the declaration of which side the column is
+	// on, so it is read before anything else about the type.
+	if elem, isCollection := collectionElem(sf.Type); isCollection {
+		r.Collection = true
+		r.Elem = elem
+		return r, nil
+	}
+
+	if rt.order != "" || rt.limit != 0 {
+		return nil, fmt.Errorf(
+			"sqlb: field %s expands %q and declares order or limit, which only a collection uses; "+
+				"make it a *sqlb.Collection[T] to expand the reverse direction, or drop the options",
+			sf.Name, rt.fk)
 	}
 
 	elem := sf.Type
@@ -112,17 +226,11 @@ func newRelation(sf reflect.StructField, index []int, fk string) (*RelationInfo,
 	}
 	if elem.Kind() != reflect.Struct {
 		return nil, fmt.Errorf(
-			"sqlb: field %s expands %q but is %s, want a struct or a pointer to one",
-			sf.Name, fk, sf.Type.Kind())
+			"sqlb: field %s expands %q but is %s, want a struct, a pointer to one, or a *sqlb.Collection[T]",
+			sf.Name, rt.fk, sf.Type.Kind())
 	}
-
-	return &RelationInfo{
-		Name:   relationName(sf),
-		Field:  sf.Name,
-		Index:  index,
-		Elem:   elem,
-		fkName: fk,
-	}, nil
+	r.Elem = elem
+	return r, nil
 }
 
 // relationName prefers the json tag, so the expand parameter and the response
@@ -139,6 +247,12 @@ func relationName(sf reflect.StructField) string {
 // column is known.
 func resolveRelations(m *Model) error {
 	for _, r := range m.Relations {
+		// A collection's column belongs to the target, and resolving it here
+		// would mean building the target's model in the middle of building
+		// this one. RelationInfo.Target does it instead, lazily and once.
+		if r.Collection {
+			continue
+		}
 		col := m.Column(r.fkName)
 		if col == nil {
 			return fmt.Errorf(

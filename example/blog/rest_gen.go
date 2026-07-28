@@ -208,7 +208,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 		Ops:             rest.OpCreate | rest.OpRead | rest.OpUpdate | rest.OpDelete | rest.OpList,
 		DefaultPageSize: 25,
 		MaxPageSize:     100,
-		Expandable:      []string{"org"},
+		Expandable:      []string{"org", "posts"},
 	}); err != nil {
 		return err
 	}
@@ -218,6 +218,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 		Tag:         "orgs",
 		Ops:         rest.OpRead | rest.OpList,
 		Description: "A tenant. Every other table is scoped to one.",
+		Expandable:  []string{"authors"},
 	}); err != nil {
 		return err
 	}

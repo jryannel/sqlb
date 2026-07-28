@@ -130,11 +130,18 @@ hardest correctness problem in the project, because a wrong diff is
 destructive. Expect this to need a review-before-apply workflow and a way to
 express what cannot be inferred, such as a column rename.
 
-**3. Relation expansion.** One level of `?expand=author` is built: a LEFT JOIN
-and a `json_build_object` in the same statement, wired end to end by codegen.
-What is left is what makes it competitive with hand-written endpoints on a real
-screen — nesting under a depth limit, and the reverse direction, a collection of
-children rather than a single parent.
+**3. Relation expansion.** Both directions of one level are built and wired end
+to end by codegen. Forward is a LEFT JOIN and a `json_build_object` in the same
+statement ([ADR-0025](adr/0025-expansion-is-one-statement.md)); the reverse is a
+correlated subquery per relation, capped and told whether there was more, because
+joining a collection would make a page's row count depend on the data
+([ADR-0022](adr/0022-references-declare-their-inverse.md)). A board of lists each
+showing its first few tasks is one request rather than an N+1 the client writes.
+
+What is left is nesting under a depth limit, and — the likelier ask — an order
+and cap chosen per request, which is an extension to a wire format
+[compatibility.md](compatibility.md) freezes rather than a parameter to add
+quietly.
 
 Paging, which used to sit here as the other half of "a real screen", is done:
 `?cursor=` names a position rather than a distance, so a walk costs the same at

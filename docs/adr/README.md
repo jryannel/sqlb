@@ -121,7 +121,7 @@ nobody finishes reading has failed at its only job.
 | [0019](0019-pgbouncer-in-the-path.md) | Connections go through PgBouncer, except the ones that cannot | Exploring | Low |
 | [0020](0020-transaction-scoped-handle.md) | The transaction handle is built now, not with Go 1.27 | Working | Medium |
 | [0021](0021-hooks-receive-an-event.md) | A hook gets a transaction, not an event | Working | High |
-| [0022](0022-references-declare-their-inverse.md) | A reference declares the name its target knows it by | Exploring | Medium |
+| [0022](0022-references-declare-their-inverse.md) | A reference declares the name its target knows it by | Working | Medium |
 | [0023](0023-mixins-carry-behaviour.md) | A mixin contributes columns; carrying behaviour needs codegen | Exploring | Medium |
 | [0024](0024-no-annotation-slot.md) | No annotation slot until something can consume one | Working | Medium |
 | [0025](0025-expansion-is-one-statement.md) | Expansion is one statement, and Hidden survives the join | Working | Medium |

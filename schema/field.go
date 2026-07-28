@@ -84,6 +84,26 @@ type Reference struct {
 	// deliberately — resolving it would require the dependency this is
 	// designed to avoid.
 	Target string
+
+	// Inverse is the name the target knows this relation by, and declaring it
+	// is what makes the reverse relation exist at all.
+	//
+	// It cannot be derived. Two references from posts to authors — the writer
+	// and the reviewer — would both derive to "posts" on the far side, and an
+	// author's posts are not the posts an author reviewed. The distinction
+	// exists only in the head of whoever wrote the schema, so the schema is
+	// where it has to be written. ADR-0022.
+	Inverse string
+	// InverseExpandable exposes the reverse relation through ?expand on the
+	// target's endpoint. It is a separate decision from Expandable, about a
+	// different endpoint, and neither implies the other — ADR-0006.
+	InverseExpandable bool
+	// InverseOrder is the column an expanded collection is ordered by, with a
+	// leading "-" for descending. It names a column of *this* table, since
+	// these are the rows being collected. Empty means the primary key.
+	InverseOrder string
+	// InverseLimit caps an expanded collection. Zero takes sqlb's default.
+	InverseLimit int
 }
 
 // Desc returns the column description. The pointer aliases the field's own
@@ -328,6 +348,66 @@ func (f *Field) Searchable() *Field {
 func (f *Field) Expandable() *Field {
 	f.d.Expandable = true
 	return f
+}
+
+// Inverse names the relation from the target's side: the name an author knows
+// its posts by. Declaring it is what makes the reverse relation exist.
+//
+//	schema.Ref("list", List).Expandable().Inverse("tasks").InverseExpandable()
+//
+// Read as: a task has a list; a list has tasks; both directions may be
+// expanded. Absent Inverse there is no reverse relation, which is not an error
+// — most references never need one.
+//
+// One side declares, as it already does for the column, the constraint and the
+// delete action. What the target does gain is a field on its generated struct,
+// because the expanded rows need somewhere to land.
+func (f *Field) Inverse(name string) *Field {
+	if f.d.Ref != nil {
+		f.d.Ref.Inverse = name
+	}
+	return f
+}
+
+// InverseExpandable exposes the reverse relation through ?expand on the
+// target's endpoint, and takes the options that decide which children a capped
+// expansion returns:
+//
+//	schema.Ref("list", List).
+//	    Expandable().
+//	    Inverse("tasks").
+//	    InverseExpandable(schema.ExpandOrder("-created_at"), schema.ExpandLimit(20))
+//
+// It requires Inverse: a relation with no name cannot be asked for. Exposure is
+// a separate decision from Expandable in the forward direction, because the two
+// are about different endpoints.
+func (f *Field) InverseExpandable(opts ...InverseOption) *Field {
+	if f.d.Ref != nil {
+		f.d.Ref.InverseExpandable = true
+		for _, opt := range opts {
+			opt(f.d.Ref)
+		}
+	}
+	return f
+}
+
+// InverseOption adjusts an expanded collection.
+type InverseOption func(*Reference)
+
+// ExpandOrder orders an expanded collection by a column of the referencing
+// table, with a leading "-" for descending — the spelling ?sort already uses.
+// The primary key is appended as a tiebreaker, because under a cap a non-total
+// order decides which children the caller never sees.
+func ExpandOrder(column string) InverseOption {
+	return func(r *Reference) { r.InverseOrder = column }
+}
+
+// ExpandLimit caps how many children an expansion returns; the default is 50.
+// Past the cap the response reports has_more and the caller follows the child's
+// own endpoint, filtered by this foreign key — which is why that column wants
+// to be Filterable, and why Lint says so when it is not.
+func ExpandLimit(n int) InverseOption {
+	return func(r *Reference) { r.InverseLimit = n }
 }
 
 // ReadOnly makes the column unwritable through REST.

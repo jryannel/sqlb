@@ -137,6 +137,11 @@ func (r *Registry) Validate() error {
 	// same one and no table may claim a name that is still declared.
 	renamedTables := make(map[string]string)
 
+	// Inverse names are claimed on the *target's* endpoint, so the collision
+	// this catches is between two references declared in different tables.
+	// Keyed by target table and name; the value is where it was claimed from.
+	inverses := make(map[string]string)
+
 	for _, t := range r.Tables() {
 		if !isIdent(t.name) {
 			report(t.name, "", "table name is not a valid SQL identifier")
@@ -212,6 +217,9 @@ func (r *Registry) Validate() error {
 				if d.Expandable {
 					report(t.name, d.Name, "a reference across a module boundary cannot be Expandable: expanding it would join a table this module does not own")
 				}
+				if d.Ref.Inverse != "" {
+					report(t.name, d.Name, "a reference across a module boundary cannot declare an Inverse: nothing about the other side is resolvable, in either direction")
+				}
 				if d.Ref.Target == "" {
 					report(t.name, d.Name, "ExternalRef declares no target")
 				}
@@ -225,6 +233,9 @@ func (r *Registry) Validate() error {
 				case d.Ref.Table.PrimaryKey() == nil:
 					report(t.name, d.Name, "Ref target %q has no primary key", d.Ref.Table.name)
 				}
+			}
+			if d.Ref != nil {
+				r.validateInverse(t, d, inverses, report)
 			}
 		}
 
@@ -310,4 +321,116 @@ func isIdent(s string) bool {
 		}
 	}
 	return true
+}
+
+// validateInverse checks a declared reverse relation.
+//
+// The collision case is the one this exists for, and it is the reason the name
+// cannot be derived: posts.author_id and posts.reviewer_id both point at
+// authors, so a derived reverse would call both of them "posts" and an author's
+// posts are not the posts an author reviewed. Two references claiming one name
+// on one target is therefore an error rather than a last-writer-wins. ADR-0022.
+func (r *Registry) validateInverse(t *TableDef, d *FieldDesc, claimed map[string]string, report func(string, string, string, ...any)) {
+	ref := d.Ref
+	if ref.Inverse == "" {
+		if ref.InverseExpandable {
+			report(t.name, d.Name, "InverseExpandable without Inverse: a relation with no name on the target cannot be asked for")
+		}
+		if ref.InverseOrder != "" || ref.InverseLimit != 0 {
+			report(t.name, d.Name, "an expansion order or limit was declared without an Inverse to apply it to")
+		}
+		return
+	}
+	if ref.External {
+		return // already reported, and nothing below can be checked
+	}
+	if !isIdent(ref.Inverse) {
+		report(t.name, d.Name, "Inverse %q is not a valid identifier", ref.Inverse)
+	}
+	if ref.Table == nil {
+		return // already reported
+	}
+
+	key := ref.Table.name + "." + ref.Inverse
+	if prev, dup := claimed[key]; dup {
+		report(t.name, d.Name,
+			"Inverse %q is already claimed on %q by %s; two references to one table need two names, since the rows they collect are different sets",
+			ref.Inverse, ref.Table.name, prev)
+	}
+	claimed[key] = t.name + "." + d.Name
+
+	// The name lands as a field on the target, beside its columns.
+	if ref.Table.Field(ref.Inverse) != nil {
+		report(t.name, d.Name, "Inverse %q collides with a column of %q", ref.Inverse, ref.Table.name)
+	}
+
+	if ref.InverseLimit < 0 {
+		report(t.name, d.Name, "ExpandLimit is %d, want a positive number", ref.InverseLimit)
+	}
+	// The order names a column of this table, because these are the rows being
+	// collected — not of the target, which is the easy mistake to make.
+	if col := strings.TrimPrefix(ref.InverseOrder, "-"); col != "" && t.Field(col) == nil {
+		report(t.name, d.Name,
+			"ExpandOrder %q is not a column of %q — an expanded collection is ordered by the rows it collects, which are this table's",
+			col, t.name)
+	}
+}
+
+// DefaultExpandLimit is the cap an expanded collection takes when it declares
+// none. It mirrors the engine's own default, and sqlb's model test asserts the
+// two agree — a schema package that disagreed with the runtime would publish a
+// number the responses do not honour.
+const DefaultExpandLimit = 50
+
+// InverseRelation is a reverse relation seen from the target's side: the rows
+// of another table that point at this one, and the name this table knows them
+// by.
+//
+// It is derived rather than declared here — the declaration lives on the
+// referencing column, which is the side that already owns the constraint. What
+// the target gains is a field on its generated struct and, if the reference
+// exposed it, a name in its ?expand vocabulary. ADR-0022.
+type InverseRelation struct {
+	Name       string    // the name ?expand uses on the target
+	Table      *TableDef // the table whose rows are collected
+	Column     string    // that table's foreign key column
+	Order      string    // ordering column, with a leading "-" for descending
+	Limit      int       // cap as declared; zero means DefaultExpandLimit
+	Expandable bool      // reachable through ?expand on the target
+}
+
+// Cap is how many rows one expansion returns at most, with the default
+// resolved. Anything published — the manifest, a generated tag — uses this
+// rather than Limit, so a caller is never left to guess the number.
+func (i InverseRelation) Cap() int {
+	if i.Limit > 0 {
+		return i.Limit
+	}
+	return DefaultExpandLimit
+}
+
+// Inverses returns the reverse relations pointing at t, in a deterministic
+// order: by referencing table, then by declaration order within it.
+func (r *Registry) Inverses(t *TableDef) []InverseRelation {
+	if t == nil {
+		return nil
+	}
+	var out []InverseRelation
+	for _, src := range r.Tables() {
+		for _, f := range src.Fields() {
+			d := f.Desc()
+			if d.Ref == nil || d.Ref.Inverse == "" || d.Ref.External || d.Ref.Table != t {
+				continue
+			}
+			out = append(out, InverseRelation{
+				Name:       d.Ref.Inverse,
+				Table:      src,
+				Column:     d.Name,
+				Order:      d.Ref.InverseOrder,
+				Limit:      d.Ref.InverseLimit,
+				Expandable: d.Ref.InverseExpandable,
+			})
+		}
+	}
+	return out
 }

@@ -379,3 +379,61 @@ func TestExternalReferenceGetsNoRelationField(t *testing.T) {
 		t.Errorf("an external reference should not be advertised as expandable:\n%s", files["rest_gen.go"])
 	}
 }
+
+// inverseFixture declares a reference that names its inverse and exposes it,
+// and one that names an inverse and does not.
+func inverseFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	author := r.Table("authors", schema.UUIDv7("id").PrimaryKey(), schema.Text("email")).
+		Expose(schema.REST{Ops: schema.OpList})
+	editor := r.Table("editors", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.OpList})
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("author", author).OnDelete(schema.Restrict).Filterable().Expandable().
+			Inverse("posts").
+			InverseExpandable(schema.ExpandOrder("-title"), schema.ExpandLimit(5)),
+		schema.Ref("editor", editor).OnDelete(schema.Restrict).Filterable().Inverse("edited"),
+		schema.Text("title"),
+	).Index("author_id").Index("editor_id").Expose(schema.REST{Ops: schema.OpList})
+	return r
+}
+
+// The reverse relation is declared on the referencing side and lands as a field
+// on the target's struct, because the collected rows need somewhere to go.
+// ADR-0022.
+func TestInverseEmitsACollectionOnTheTarget(t *testing.T) {
+	models := generate(t, inverseFixture())["models_gen.go"]
+
+	want := "Posts *sqlb.Collection[Post] `db:\"-\" json:\"posts,omitempty\" sqlb:\"expands=author_id,order=-title,limit=5\"`"
+	if !contains(models, want) {
+		t.Errorf("collection field missing:\nwant %s\ngot:\n%s", want, models)
+	}
+	// The collection is the one thing here that is not a plain Go type, so the
+	// file takes an import it would otherwise not need.
+	if !contains(models, `"github.com/jryannel/sqlb"`) {
+		t.Errorf("models importing a Collection should import sqlb:\n%s", models)
+	}
+	// A named but unexposed inverse emits nothing: the field exists to be
+	// filled in by ?expand, and nothing can ask for that one.
+	if contains(models, "Edited *sqlb.Collection") {
+		t.Errorf("an inverse that was never exposed should emit no field:\n%s", models)
+	}
+	// And the referencing side is unchanged — the reverse costs it nothing.
+	if !contains(models, "AuthorID string `db:\"author_id\" json:\"author_id\" sqlb:\"filter,expand\"`") {
+		t.Errorf("the foreign key column should be unchanged:\n%s", models)
+	}
+}
+
+func TestGeneratedRegisterCarriesTheInverseRelation(t *testing.T) {
+	src := generate(t, inverseFixture())["rest_gen.go"]
+
+	if !contains(src, `Expandable: []string{"posts"}`) {
+		t.Errorf("the target's registration should list the reverse relation:\n%s", src)
+	}
+	// The referencing side keeps its own forward relation, and does not gain
+	// the reverse one.
+	if !contains(src, `Expandable: []string{"author"}`) {
+		t.Errorf("the forward relation should be unaffected:\n%s", src)
+	}
+}

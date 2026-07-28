@@ -17,7 +17,24 @@ type expList struct {
 	ID     string `db:"id" json:"id" sqlb:"pk"`
 	Name   string `db:"name" json:"name"`
 	Secret string `db:"secret" json:"-" sqlb:"hidden"`
+
+	// The reverse direction. The column named is a column of the child, and
+	// the field's cardinality is what says so. That expTask expands back to
+	// expList makes this pair a cycle, which is deliberate: relation targets
+	// resolve lazily so that a cycle cannot recurse at model build.
+	Tasks *sqlb.Collection[expTask] `db:"-" json:"tasks,omitempty" sqlb:"expands=list_id"`
+	Notes *sqlb.Collection[expNote] `db:"-" json:"notes,omitempty" sqlb:"expands=list_id,order=-created_at,limit=2"`
 }
+
+type expNote struct {
+	ID      string `db:"id" json:"id" sqlb:"pk"`
+	ListID  string `db:"list_id" json:"list_id" sqlb:"filter"`
+	Body    string `db:"body" json:"body"`
+	Author  string `db:"author" json:"-" sqlb:"hidden"`
+	Created string `db:"created_at" json:"created_at" sqlb:"sort"`
+}
+
+func (expNote) TableName() string { return "notes" }
 
 func (expList) TableName() string { return "lists" }
 
@@ -220,5 +237,194 @@ func TestASingleTableQueryLeavesPredicatesUnqualified(t *testing.T) {
 	}
 	if !strings.Contains(sql, `WHERE "title" = $1`) {
 		t.Errorf("a query with nothing joined should not qualify its predicates:\n%s", sql)
+	}
+}
+
+// Reverse expansion — a list and its tasks. ADR-0022.
+
+func TestExpandCollectionCompilesASubqueryRatherThanAJoin(t *testing.T) {
+	sql, _, err := sqlb.Query[expList]().Expand("tasks").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+
+	// The whole point: a join would multiply the base rows, so the page's row
+	// count would depend on how many children each row has.
+	if strings.Contains(sql, "LEFT JOIN") {
+		t.Errorf("a collection was joined rather than subqueried:\n%s", sql)
+	}
+
+	for _, want := range []string{
+		`AS "__expand_tasks"`,
+		`FROM "tasks" AS "__ex_tasks"`,
+		// Correlated on the base table's primary key, named explicitly: inside
+		// the subquery a bare "id" would resolve to the child.
+		`WHERE "__ex_tasks"."list_id" = "lists"."id"`,
+		// One row past the cap, so count(*) can answer has_more...
+		`LIMIT 51`,
+		// ...and the extra row is filtered back out before it is returned.
+		`FILTER (WHERE "__rows_tasks"."n" <= 50)`,
+		`'has_more', count(*) > 50`,
+		// An empty collection is [], not null: "no children" and "not asked
+		// for" must stay distinguishable.
+		`coalesce(json_agg`,
+		`'[]'::json`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("statement missing %q:\n%s", want, sql)
+		}
+	}
+}
+
+// With no declared order the primary key is the order, because a LIMIT over an
+// unordered child table does not merely reshuffle the result — it decides which
+// children the caller never sees, differently on each run. ADR-0027's argument,
+// applied under a cap.
+func TestExpandCollectionOrdersByThePrimaryKeyByDefault(t *testing.T) {
+	sql, _, err := sqlb.Query[expList]().Expand("tasks").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, `ORDER BY "__ex_tasks"."id") AS "n"`) {
+		t.Errorf("the window is not ordered by the child's primary key:\n%s", sql)
+	}
+	if !strings.Contains(sql, `ORDER BY "__ex_tasks"."id" LIMIT 51`) {
+		t.Errorf("the capped read is not ordered by the child's primary key:\n%s", sql)
+	}
+}
+
+// A declared order carries the primary key as a tiebreaker, so the order is
+// total even when the declared column is not unique.
+func TestExpandCollectionOrderIsMadeTotalByThePrimaryKey(t *testing.T) {
+	sql, _, err := sqlb.Query[expList]().Expand("notes").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	for _, want := range []string{
+		`ORDER BY "__ex_notes"."created_at" DESC, "__ex_notes"."id" DESC LIMIT 3`,
+		`FILTER (WHERE "__rows_notes"."n" <= 2)`,
+		`'has_more', count(*) > 2`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("statement missing %q:\n%s", want, sql)
+		}
+	}
+}
+
+// The security-relevant one, in the direction ADR-0025 did not cover: Hidden has
+// to survive the reverse expansion too, or a collection becomes a way to read a
+// column the child's own endpoint refuses to serve.
+func TestExpandCollectionOmitsHiddenColumnsOfTheChild(t *testing.T) {
+	sql, _, err := sqlb.Query[expList]().Expand("notes").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(sql, "author") {
+		t.Errorf("a hidden column of the expanded child reached the statement:\n%s", sql)
+	}
+}
+
+// Two collections compose by addition rather than by multiplication, which is
+// the property the join shape loses.
+func TestExpandTwoCollectionsAreIndependentSubqueries(t *testing.T) {
+	sql, _, err := sqlb.Query[expList]().Expand("tasks", "notes").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if n := strings.Count(sql, "row_number() OVER"); n != 2 {
+		t.Errorf("two collections produced %d subqueries, want 2:\n%s", n, sql)
+	}
+	if strings.Contains(sql, "GROUP BY") {
+		t.Errorf("a collection expansion should need no aggregation over the base row:\n%s", sql)
+	}
+}
+
+func TestExpandCollectionScansTheEnvelope(t *testing.T) {
+	h := newHarness(t,
+		[]string{"id", "name", "secret", "__expand_tasks"},
+		[][]driver.Value{
+			{"l1", "Backlog", "", []byte(`{"items":[{"id":"t1","list_id":"l1","title":"Ship it"}],"has_more":true}`)},
+			{"l2", "Done", "", []byte(`{"items":[],"has_more":false}`)},
+		})
+	defer h.close()
+
+	lists, err := sqlb.Query[expList]().Expand("tasks").All(context.Background(), h.db)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(lists) != 2 {
+		t.Fatalf("got %d rows, want 2", len(lists))
+	}
+	if lists[0].Tasks == nil {
+		t.Fatal("the expanded collection was not scanned")
+	}
+	if got := lists[0].Tasks.Len(); got != 1 {
+		t.Fatalf("got %d children, want 1", got)
+	}
+	if lists[0].Tasks.Items[0].Title != "Ship it" {
+		t.Errorf("child = %+v", lists[0].Tasks.Items[0])
+	}
+	// The half a bare slice could not carry.
+	if !lists[0].Tasks.HasMore {
+		t.Error("a truncated collection did not report HasMore")
+	}
+	if lists[1].Tasks == nil || lists[1].Tasks.Len() != 0 || lists[1].Tasks.HasMore {
+		t.Errorf("an empty collection scanned as %+v", lists[1].Tasks)
+	}
+}
+
+// A cycle — tasks expand their list, lists collect their tasks — must not
+// recurse at model build. It cannot, because a relation's target resolves on
+// first expansion rather than when the model is built.
+func TestExpandCycleResolvesLazily(t *testing.T) {
+	if _, _, err := sqlb.Query[expList]().Expand("tasks").SQL(); err != nil {
+		t.Fatalf("expanding forwards through a cycle: %v", err)
+	}
+	if _, _, err := sqlb.Query[expTask]().Expand("list").SQL(); err != nil {
+		t.Fatalf("expanding backwards through a cycle: %v", err)
+	}
+}
+
+// The reverse relation requires nothing of the child's column, because that
+// column's capabilities describe the child's own endpoint. What it does require
+// is that the column exists, and the rejection names what does. ADR-0011.
+func TestExpandCollectionRejectsAColumnTheChildDoesNotHave(t *testing.T) {
+	type badList struct {
+		ID    string                    `db:"id" sqlb:"pk"`
+		Tasks *sqlb.Collection[expTask] `db:"-" json:"tasks" sqlb:"expands=owner_id"`
+	}
+	_, _, err := sqlb.Query[badList]().Expand("tasks").SQL()
+	if err == nil {
+		t.Fatal("a collection on a column the child does not have was accepted")
+	}
+	if !strings.Contains(err.Error(), "list_id") {
+		t.Errorf("the rejection does not name the child's columns: %v", err)
+	}
+}
+
+// Order and limit are a collection's vocabulary. On a forward relation they
+// describe nothing, so they are refused rather than ignored.
+func TestForwardRelationRefusesCollectionOptions(t *testing.T) {
+	type badTask struct {
+		ID     string   `db:"id" sqlb:"pk"`
+		ListID string   `db:"list_id" sqlb:"expand"`
+		List   *expList `db:"-" json:"list" sqlb:"expands=list_id,limit=5"`
+	}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("a forward relation with a limit was accepted")
+		}
+	}()
+	_ = sqlb.ModelOf[badTask]()
+}
+
+// A collection is not paid for unless it is asked for.
+func TestExpandCollectionIsNotAppliedUnlessAsked(t *testing.T) {
+	sql, _, err := sqlb.Query[expList]().SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(sql, "__expand_") || strings.Contains(sql, "row_number") {
+		t.Errorf("an unexpanded query subqueried anyway:\n%s", sql)
 	}
 }

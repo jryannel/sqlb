@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 )
@@ -176,5 +177,120 @@ func TestItemStillRefusesAnUnknownQueryParameter(t *testing.T) {
 
 	if r := alice.get("/tasks/" + task + "?sort=title"); r.Code == http.StatusOK {
 		t.Errorf("an unknown query parameter was accepted on the item endpoint: %s", r.Body)
+	}
+}
+
+// The reverse direction: a list and the tasks that point back at it. ADR-0022.
+//
+// This is the screen the forward direction could not serve. "A board of lists,
+// each showing its first few tasks" was two requests per list and an N+1 the
+// client had to write; it is now one request, and the cap is declared in the
+// schema rather than negotiated per caller.
+func TestExpandCollectsTheTasksOfAList(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+
+	backlog := alice.listID("Backlog")
+	done := alice.listID("Done")
+	for i, title := range []string{"First", "Second", "Third"} {
+		alice.taskID(backlog, title, map[string]any{"position": i})
+	}
+
+	got := alice.get("/lists?expand=tasks&sort=name").expect(http.StatusOK).list()
+	if len(got.Items) != 2 {
+		t.Fatalf("got %d lists, want 2: %s", len(got.Items), mustJSON(got.Items))
+	}
+
+	// A collection is an envelope rather than a bare array, because an array
+	// cannot say it was truncated.
+	tasks, ok := got.Items[0]["tasks"].(map[string]any)
+	if !ok {
+		t.Fatalf("no expanded tasks on the list: %s", mustJSON(got.Items[0]))
+	}
+	items, ok := tasks["items"].([]any)
+	if !ok {
+		t.Fatalf("the collection carries no items: %s", mustJSON(tasks))
+	}
+	if len(items) != 3 {
+		t.Fatalf("got %d tasks, want 3: %s", len(items), mustJSON(items))
+	}
+	if tasks["has_more"] != false {
+		t.Errorf("three tasks under a cap of twenty should not report has_more: %s", mustJSON(tasks))
+	}
+
+	// Ordered by position, as the schema declares.
+	for i, want := range []string{"First", "Second", "Third"} {
+		row, _ := items[i].(map[string]any)
+		if row["title"] != want {
+			t.Errorf("position %d = %v, want %q", i, row["title"], want)
+		}
+	}
+
+	// A list with no tasks says so, rather than omitting the key or sending
+	// null: "none" and "did not ask" are different answers.
+	empty, ok := got.Items[1]["tasks"].(map[string]any)
+	if !ok || got.Items[1]["id"] != done {
+		t.Fatalf("the empty list did not expand: %s", mustJSON(got.Items[1]))
+	}
+	if rows, _ := empty["items"].([]any); len(rows) != 0 || empty["has_more"] != false {
+		t.Errorf("a list with no tasks expanded to %s", mustJSON(empty))
+	}
+}
+
+// The cap is the load-bearing half. Past it the response says so, and the
+// caller follows the tasks endpoint filtered by the same foreign key — which is
+// paging and filtering that already exist rather than a second surface.
+func TestACollectionIsCappedAndSaysSo(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+
+	backlog := alice.listID("Backlog")
+	for i := range 25 { // the schema caps this relation at 20
+		alice.taskID(backlog, fmt.Sprintf("Task %02d", i), map[string]any{"position": i})
+	}
+
+	got := alice.get("/lists/" + backlog + "?expand=tasks").expect(http.StatusOK).item()
+	tasks, ok := got["tasks"].(map[string]any)
+	if !ok {
+		t.Fatalf("no expanded tasks on the list: %s", mustJSON(got))
+	}
+	items, _ := tasks["items"].([]any)
+	if len(items) != 20 {
+		t.Fatalf("got %d tasks, want the declared cap of 20", len(items))
+	}
+	if tasks["has_more"] != true {
+		t.Errorf("a truncated collection did not report has_more: %s", mustJSON(tasks))
+	}
+
+	// The escape hatch the cap assumes: the rest are reachable through the
+	// child's own endpoint, filtered by the column that collected them.
+	rest := alice.get("/tasks?list_id=eq." + backlog + "&sort=position&page=2&per_page=20").
+		expect(http.StatusOK).list()
+	if len(rest.Items) != 5 {
+		t.Errorf("the overflow is not reachable: got %d tasks on page 2", len(rest.Items))
+	}
+}
+
+// One statement, whichever direction it runs in: a list expanding its tasks
+// while a task expands its list is the same page count either way, and the
+// collection must not multiply the rows it hangs off.
+func TestACollectionDoesNotMultiplyTheListPage(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+
+	backlog := alice.listID("Backlog")
+	for i, title := range []string{"First", "Second", "Third"} {
+		alice.taskID(backlog, title, map[string]any{"position": i})
+	}
+
+	plain := alice.get("/lists").expect(http.StatusOK).list()
+	expanded := alice.get("/lists?expand=tasks&count=exact").expect(http.StatusOK).list()
+
+	if len(plain.Items) != len(expanded.Items) {
+		t.Errorf("expanding a collection changed the page from %d rows to %d",
+			len(plain.Items), len(expanded.Items))
+	}
+	if expanded.Total == nil || *expanded.Total != len(plain.Items) {
+		t.Errorf("count = %v, want %d", expanded.Total, len(plain.Items))
 	}
 }

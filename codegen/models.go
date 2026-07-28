@@ -3,6 +3,7 @@ package codegen
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jryannel/sqlb/schema"
@@ -26,6 +27,15 @@ func renderModels(opts Options) ([]byte, error) {
 				imports["time"] = true
 			case "json.RawMessage":
 				imports["encoding/json"] = true
+			}
+		}
+		// An expanded collection lands in a sqlb.Collection, which is the one
+		// thing in this file that is not a plain Go type. Models are otherwise
+		// importable without sqlb, and a table with no reverse relation stays
+		// that way.
+		for _, inv := range opts.Registry.Inverses(t) {
+			if inv.Expandable {
+				imports["github.com/jryannel/sqlb"] = true
 			}
 		}
 	}
@@ -79,6 +89,18 @@ func renderModels(opts Options) ([]byte, error) {
 				fmt.Fprintf(b, "\t%s *%s `db:\"-\" json:%q sqlb:%q` // filled in by ?expand=%s\n",
 					rel.field, rel.target, rel.relation+",omitempty", "expands="+d.Name, rel.relation)
 			}
+		}
+
+		// The reverse relations come after every column, because they belong to
+		// no column of this table: they are declared on the far side, by the
+		// reference that points here.
+		inverses, err := inversesOf(opts.Registry, t)
+		if err != nil {
+			return nil, err
+		}
+		for _, inv := range inverses {
+			fmt.Fprintf(b, "\t%s *sqlb.Collection[%s] `db:\"-\" json:%q sqlb:%q` // filled in by ?expand=%s\n",
+				inv.field, inv.target, inv.relation+",omitempty", inv.tag, inv.relation)
 		}
 		fmt.Fprintln(b, "}")
 
@@ -152,14 +174,95 @@ func relationsOf(t *schema.TableDef) (map[string]relation, error) {
 	return out, nil
 }
 
+// inverse is the field a reverse relation contributes to the *target's*
+// struct: the collection the children land in.
+type inverse struct {
+	field    string // Go field name, e.g. "Tasks"
+	target   string // Go type of the child model, e.g. "Task"
+	relation string // name on the wire, e.g. "tasks"
+	tag      string // the sqlb tag, e.g. "expands=list_id,order=-created_at"
+}
+
+// inversesOf returns the collection fields to emit on t, one per reference
+// elsewhere in the registry that named an inverse and exposed it.
+//
+// Only exposed ones produce a field. A declared-but-unexposed inverse names the
+// relationship for the manifest and stops there — the field exists to be filled
+// in by ?expand, so emitting one nothing can ask for would be vocabulary with
+// no consumer. ADR-0022, and ADR-0006 for why the two are separate decisions.
+func inversesOf(reg *schema.Registry, t *schema.TableDef) ([]inverse, error) {
+	taken := map[string]string{}
+	for _, f := range t.Fields() {
+		taken[GoName(f.Desc().Name)] = "column " + f.Desc().Name
+	}
+	for _, rel := range relationsIn(t) {
+		taken[rel.field] = "relation " + rel.relation
+	}
+
+	var out []inverse
+	for _, inv := range reg.Inverses(t) {
+		if !inv.Expandable {
+			continue
+		}
+		name := GoName(inv.Name)
+		if by, dup := taken[name]; dup {
+			return nil, fmt.Errorf(
+				"codegen: table %s: inverse relation %q wants the Go field %s, which %s already uses; "+
+					"rename the Inverse on %s.%s",
+				t.Name(), inv.Name, name, by, inv.Table.Name(), inv.Column)
+		}
+		taken[name] = "inverse relation " + inv.Name
+
+		// The cap is always written out, even when it is the default. A
+		// generated model that stated no limit would be relying on the
+		// engine's, and the number would then live in two places with only one
+		// of them readable from the file.
+		tag := "expands=" + inv.Column
+		if inv.Order != "" {
+			tag += ",order=" + inv.Order
+		}
+		tag += ",limit=" + strconv.Itoa(inv.Cap())
+		out = append(out, inverse{
+			field:    name,
+			target:   TypeName(inv.Table.LocalName()),
+			relation: inv.Name,
+			tag:      tag,
+		})
+	}
+	return out, nil
+}
+
+// relationsIn is relationsOf without the collision report, for callers that
+// only need the field names already spoken for.
+func relationsIn(t *schema.TableDef) []relation {
+	var out []relation
+	for _, f := range t.Fields() {
+		d := f.Desc()
+		if !d.Expandable || d.Ref == nil || d.Ref.External || d.Ref.Table == nil {
+			continue
+		}
+		out = append(out, relation{
+			field:    GoName(d.Ref.Name),
+			target:   TypeName(d.Ref.Table.LocalName()),
+			relation: d.Ref.Name,
+		})
+	}
+	return out
+}
+
 // expandableRelations names the relations a resource may expand, in
-// declaration order. It drives both the generated rest.Options and the
-// manifest, so the two cannot drift apart.
-func expandableRelations(t *schema.TableDef) []string {
+// declaration order and forward direction first. It drives both the generated
+// rest.Options and the manifest, so the two cannot drift apart.
+func expandableRelations(reg *schema.Registry, t *schema.TableDef) []string {
 	var out []string
 	for _, f := range t.Fields() {
 		if d := f.Desc(); d.Expandable && d.Ref != nil && !d.Ref.External {
 			out = append(out, d.Ref.Name)
+		}
+	}
+	for _, inv := range reg.Inverses(t) {
+		if inv.Expandable {
+			out = append(out, inv.Name)
 		}
 	}
 	return out

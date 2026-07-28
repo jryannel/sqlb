@@ -398,10 +398,12 @@ func (b *Builder[T]) countSQL() (string, []any, error) {
 	counted.seek = Pred{}
 	counted.lock = ""
 	counted.distinct = false
-	// Expansions join on the target's primary key, so they never change how
-	// many rows match — and counting is the one place the joined row is not
-	// read at all. Dropping them keeps ?count=exact from paying for a join
-	// whose result is discarded.
+	// An expansion never changes how many rows match: a forward one joins on
+	// the target's primary key, and a collection is a subquery in the
+	// projection, which a count does not read. Counting is the one place the
+	// expanded row is not looked at, so dropping them keeps ?count=exact from
+	// paying for work whose result is discarded — and a collection is the
+	// expensive kind, one subquery per row.
 	counted.expand = nil
 	counted.compile(c)
 	return c.result()

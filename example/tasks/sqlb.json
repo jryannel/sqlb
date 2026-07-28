@@ -272,6 +272,16 @@
           "unique": true
         }
       ],
+      "collectedBy": [
+        {
+          "name": "tasks",
+          "table": "tasks",
+          "column": "list_id",
+          "order": "position",
+          "limit": 20,
+          "expandable": true
+        }
+      ],
       "rest": {
         "path": "/lists",
         "operations": [
@@ -301,10 +311,14 @@
           "name",
           "description"
         ],
+        "expandable": [
+          "tasks"
+        ],
         "examples": [
           "GET /lists?id=eq.VALUE",
           "GET /lists?sort=-name\u0026page=2\u0026per_page=20",
           "GET /lists?search=TERM",
+          "GET /lists?expand=tasks",
           "GET /lists?or=(id.eq.A,workspace_id.eq.B)"
         ]
       }
