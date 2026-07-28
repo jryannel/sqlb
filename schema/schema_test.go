@@ -409,6 +409,23 @@ func TestInverseValidation(t *testing.T) {
 			},
 			want: "hard-deletes the row",
 		},
+		{
+			// A derived index name concatenates the table and every column,
+			// so this passes 63 bytes without any single part looking long.
+			// Postgres truncates silently, and then every diff proposes
+			// renaming the truncated name back to the declared one.
+			name: "derived index name exceeds Postgres's identifier limit",
+			build: func(r *schema.Registry) {
+				r.Table("subscription_invoice_line_items",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Text("subscription_identifier"),
+					schema.Text("invoice_identifier"),
+					schema.Text("line_item_identifier"),
+				).AddIndex(schema.Index{Columns: []string{
+					"subscription_identifier", "invoice_identifier", "line_item_identifier"}})
+			},
+			want: "Postgres truncates at 63",
+		},
 	}
 
 	for _, tt := range tests {

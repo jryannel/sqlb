@@ -33,6 +33,15 @@ func build(cat *catalog, opts Options) (*schema.Registry, *Report, error) {
 				"registry would rename it on the way back out", "")
 			continue
 		}
+		// A name the DSL cannot declare is skipped and reported like any other
+		// unrepresentable construct. Letting it through to Validate below would
+		// fail the entire import with a message blaming this package, when the
+		// cause is a database that quotes its identifiers — a camelCase table
+		// is legal Postgres and routine in schemas built by other tools.
+		if err := schema.CheckIdent(local); err != nil {
+			rep.add(name, "", "table name cannot be declared: "+err.Error(), "")
+			continue
+		}
 		t, err := buildTable(r, name, local, byTable[name], built, rep)
 		if err != nil {
 			return nil, rep, err
@@ -290,6 +299,10 @@ func candidateEnumColumns(row constraintRow) []string {
 func buildColumn(table string, col columnRow, cons *constraints,
 	built map[string]*schema.TableDef, rep *Report) (*schema.Field, bool) {
 
+	if err := schema.CheckIdent(col.Name); err != nil {
+		rep.add(table, col.Name, "column name cannot be declared: "+err.Error(), col.Type)
+		return nil, false
+	}
 	if col.Generated != "" {
 		rep.add(table, col.Name, "generated column, which the DSL cannot declare", col.Type)
 		return nil, false
@@ -343,13 +356,28 @@ func newField(col columnRow, t schema.Type, size int, cons *constraints,
 	built map[string]*schema.TableDef, rep *Report, table string) *schema.Field {
 
 	if fk, isRef := cons.foreign[col.Name]; isRef {
-		target := built[fk.RefTable]
-		if target == nil {
-			rep.add(table, col.Name, "foreign key points at "+fk.RefTable+
-				", which is not in the schema being read", fk.Def)
-			return nil
+		// built holds the tables finished so far, so a target that is missing
+		// from it is either genuinely outside the schema or the table
+		// currently being built — a self-reference, which is common enough
+		// (manager_id, parent_id, reply_to) that reporting it as absent would
+		// be both wrong and confusing.
+		//
+		// Either way only the *constraint* is unrepresentable. The column
+		// itself is an ordinary typed column and is imported as one: dropping
+		// it would leave the registry missing a column the database has, which
+		// makes the next Diff propose adding a column that exists, or dropping
+		// one that is load-bearing.
+		if target := built[fk.RefTable]; target != nil {
+			return refField(col, fk, target, rep, table)
 		}
-		return refField(col, fk, target, rep, table)
+		if fk.RefTable == table {
+			rep.add(table, col.Name, "self-referential foreign key, which the DSL cannot "+
+				"declare; the column is imported without it", fk.Def)
+		} else {
+			rep.add(table, col.Name, "foreign key points at "+fk.RefTable+
+				", which is not in the schema being read; the column is imported "+
+				"without it", fk.Def)
+		}
 	}
 	if values, isEnum := cons.enums[col.Name]; isEnum && t == schema.TypeText {
 		return schema.Enum(col.Name, values...)

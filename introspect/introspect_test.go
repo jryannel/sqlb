@@ -254,6 +254,86 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 	}
 }
 
+// A self-referential foreign key is common enough — manager_id, parent_id,
+// reply_to — that dropping the column it sits on is a serious import bug: the
+// registry ends up missing a column the database has, so the next Diff proposes
+// adding one that exists, and a drift check proposes dropping a real one.
+//
+// Only the constraint is unrepresentable. The column is an ordinary uuid.
+func TestSelfReferentialForeignKeyKeepsItsColumn(t *testing.T) {
+	cat := &catalog{
+		tables: []tableRow{{Name: "employees"}},
+		columns: []columnRow{
+			{Table: "employees", Name: "id", Type: "uuid", NotNull: true},
+			{Table: "employees", Name: "name", Type: "text", NotNull: true},
+			{Table: "employees", Name: "manager_id", Type: "uuid"},
+		},
+		constraints: []constraintRow{
+			{Table: "employees", Name: "employees_pkey", Type: "p", Columns: []string{"id"}},
+			{Table: "employees", Name: "employees_manager_id_fkey", Type: "f",
+				Columns: []string{"manager_id"}, RefTable: "employees",
+				RefCols: []string{"id"}, Def: "FOREIGN KEY (manager_id) REFERENCES employees(id)"},
+		},
+	}
+	r, rep, err := build(cat, Options{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	tbl := r.Get("employees")
+	if tbl == nil {
+		t.Fatal("employees was not imported at all")
+	}
+	var found bool
+	for _, f := range tbl.Fields() {
+		if f.Desc().Name == "manager_id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("manager_id was dropped; only its foreign key is unrepresentable")
+	}
+	// And the report says so accurately: the old message claimed the target
+	// table "is not in the schema being read", which is the table being read.
+	if !strings.Contains(rep.String(), "self-referential") {
+		t.Errorf("report should name the self-reference:\n%s", rep)
+	}
+}
+
+// A camelCase identifier is legal Postgres and routine in databases built by
+// other tools. It used to abort the whole import at Validate, with an error
+// framed as this package having built something impossible.
+func TestUndeclarableNamesAreReportedRatherThanFatal(t *testing.T) {
+	cat := &catalog{
+		tables: []tableRow{{Name: "users"}, {Name: "userProfiles"}},
+		columns: []columnRow{
+			{Table: "users", Name: "id", Type: "uuid", NotNull: true},
+			{Table: "users", Name: "createdAt", Type: "timestamp with time zone"},
+			{Table: "userProfiles", Name: "id", Type: "uuid", NotNull: true},
+		},
+		constraints: []constraintRow{
+			{Table: "users", Name: "users_pkey", Type: "p", Columns: []string{"id"}},
+			{Table: "userProfiles", Name: "userProfiles_pkey", Type: "p", Columns: []string{"id"}},
+		},
+	}
+	r, rep, err := build(cat, Options{})
+	if err != nil {
+		t.Fatalf("an undeclarable name should be reported, not fatal: %v", err)
+	}
+	// The table that *can* be declared still is.
+	if r.Get("users") == nil {
+		t.Error("a readable table was lost along with the unreadable one")
+	}
+	if r.Get("userProfiles") != nil {
+		t.Error("a table whose name cannot be declared should be skipped")
+	}
+	for _, want := range []string{"userProfiles", "createdAt", "upper-case"} {
+		if !strings.Contains(rep.String(), want) {
+			t.Errorf("report should mention %q:\n%s", want, rep)
+		}
+	}
+}
+
 func TestBuildReportsAForeignKeyCycle(t *testing.T) {
 	// A reference names the target table's own value, so a cycle is a Go
 	// initialisation cycle: there is no ordering that fixes it.
