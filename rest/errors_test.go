@@ -1,12 +1,14 @@
 package rest_test
 
 import (
+	"context"
 	"database/sql/driver"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
 )
 
@@ -128,6 +130,30 @@ func TestConstraintResponseDoesNotNameTheConstraint(t *testing.T) {
 	}
 	if strings.Contains(resp.Body.String(), "posts_org_id_title_key") {
 		t.Errorf("the response names the constraint:\n%s", resp.Body)
+	}
+}
+
+// Sanitising the unclassified case must not swallow the classified ones an
+// application makes for itself. A hook returning huma.Error403Forbidden because
+// the caller lacks a role has already decided the answer; replacing it with a
+// generic 500 turns every deliberate refusal into an apparent outage.
+func TestAnErrorCarryingItsOwnStatusIsNotSanitised(t *testing.T) {
+	defer sqlb.On[Post]().Reset()
+	sqlb.On[Post]().BeforeCreate(func(context.Context, *Post) error {
+		return huma.Error403Forbidden("posting needs the author role")
+	})
+
+	db := newFakeDB(t, reply{cols: postCols()})
+	api := mount(t, db.db, postOptions())
+
+	resp := api.Post("/posts", map[string]any{
+		"org_id": "acme", "title": "Hello", "body": "text",
+	})
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", resp.Code, resp.Body)
+	}
+	if !strings.Contains(resp.Body.String(), "author role") {
+		t.Errorf("the hook's own message should reach the client: %s", resp.Body)
 	}
 }
 

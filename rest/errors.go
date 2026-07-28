@@ -137,6 +137,15 @@ func asHumaError(ctx context.Context, err error, resource string) error {
 	if errs, ok := filter.AsErrors(err); ok {
 		return invalidQuery(errs)
 	}
+	// An error that already carries a status is an answer application code
+	// chose — a hook returning huma.Error403Forbidden because the caller lacks
+	// a role, say. It is not an unclassified failure, and replacing it with a
+	// generic 500 would turn every deliberate refusal a hook makes into an
+	// apparent outage.
+	var status huma.StatusError
+	if errors.As(err, &status) {
+		return err
+	}
 	slog.ErrorContext(ctx, "rest: unclassified error answering as 500",
 		"resource", resource, "err", err)
 	return newError(http.StatusInternalServerError, "the request could not be completed")
