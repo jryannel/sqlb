@@ -246,6 +246,35 @@ func TestNoTransactionIsDetected(t *testing.T) {
 	}
 }
 
+// Only goose has a directive. golang-migrate and plain SQL have no way to say
+// it, and migrate.Unblock emits CREATE INDEX CONCURRENTLY for all three — so
+// reading the directive alone meant shadow could not replay the histories this
+// repository itself generates for two of the formats it supports.
+func TestConcurrentStatementsRunOutsideATransactionInEveryFormat(t *testing.T) {
+	for _, format := range []string{"golang-migrate", "sql"} {
+		dir := t.TempDir()
+		name := "1_indexes.up.sql"
+		if format == "sql" {
+			name = "1_indexes.sql"
+		}
+		write(t, filepath.Join(dir, name), "CREATE INDEX CONCURRENTLY i ON t (c);\n")
+		write(t, filepath.Join(dir, strings.Replace(name, "1_indexes", "2_plain", 1)),
+			"CREATE TABLE b (id int);\n")
+
+		files, err := collect(dir, format)
+		if err != nil {
+			t.Fatalf("%s: collect: %v", format, err)
+		}
+		if !files[0].NoTransaction {
+			t.Errorf("%s: a concurrent index build would be wrapped in a transaction, "+
+				"which Postgres rejects", format)
+		}
+		if files[1].NoTransaction {
+			t.Errorf("%s: an ordinary file was marked as needing to run unwrapped", format)
+		}
+	}
+}
+
 func write(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

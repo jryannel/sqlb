@@ -52,8 +52,8 @@ Named in advance, so the break is a documented plan rather than a surprise.
   `*sqlb.DB` was meant silently uses the default.
 - **Terminal call signatures**, when Go 1.27 arrives. `sqlb.Collect[R](ctx, db,
   b)`, `filter.Apply(b, q)` and the `db` threaded through every terminal call
-  all gain method forms. The README's *Go 1.27 generic methods* section has the
-  table. These are additive — the functions stay.
+  all gain method forms, because a method on a concrete type cannot introduce a
+  type parameter before then. These are additive — the functions stay.
 - **Nested `?expand`.** One level resolves today. If nesting lands it arrives as
   a longer name — `?expand=list.workspace` — under a depth limit, so nothing a
   request can send today changes meaning.

@@ -262,6 +262,12 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 			continue
 		}
 		tsDoc(b, "  ", d.Comment)
+		if d.Type == schema.TypeBigInt {
+			// Stated where the type is read, because the loss is silent:
+			// JSON.parse turns 9007199254740993 into 9007199254740992 with no
+			// error anywhere.
+			fmt.Fprintf(b, "  /** bigint. Values above 2^53 lose precision in JSON. */\n")
+		}
 		fmt.Fprintf(b, "  %s: %s;\n", tsProp(d.Name), tsType(typeName, d))
 		if rel, ok := rels[d.Name]; ok {
 			fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. */\n", rel.name)
@@ -629,6 +635,12 @@ func tsBaseType(typeName string, d *schema.FieldDesc) string {
 	}
 	switch d.Type {
 	case schema.TypeInt, schema.TypeBigInt, schema.TypeFloat, schema.TypeNumeric:
+		// bigint is `number` with a known limit: JSON.parse loses precision
+		// above 2^53, so a counter is fine and a bigint surrogate key is not.
+		// Typing it `string` would be correct for the key and wrong for every
+		// arithmetic use, and `bigint` does not survive JSON.parse either —
+		// so the honest fix is a per-column choice the schema cannot yet
+		// express. Until it can, the generated column comment says so.
 		return "number"
 	case schema.TypeBool:
 		return "boolean"

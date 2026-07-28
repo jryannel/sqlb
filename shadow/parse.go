@@ -59,6 +59,15 @@ func collect(dir, format string) ([]file, error) {
 			}
 		}
 		f.Statements = splitStatements(body)
+		// A statement that cannot run inside a transaction decides how the
+		// file runs, whatever the format. goose says so with a directive;
+		// golang-migrate and plain SQL have no way to, and migrate.Unblock
+		// emits CREATE INDEX CONCURRENTLY for all three — so without this,
+		// shadow could not replay the histories this repository itself
+		// generates for two of the formats it supports.
+		if !f.NoTransaction && anyConcurrent(f.Statements) {
+			f.NoTransaction = true
+		}
 		files = append(files, f)
 	}
 
@@ -390,4 +399,18 @@ func isEscapeStringPrefix(sql string, i int) bool {
 		return false
 	}
 	return true
+}
+
+// anyConcurrent reports whether a statement must run outside a transaction.
+//
+// CONCURRENTLY is the whole list: Postgres rejects a concurrent index build
+// inside a transaction block, and nothing else the DDL layer emits has that
+// property.
+func anyConcurrent(stmts []string) bool {
+	for _, s := range stmts {
+		if strings.Contains(strings.ToUpper(s), "CONCURRENTLY") {
+			return true
+		}
+	}
+	return false
 }

@@ -136,6 +136,9 @@ in-memory `database/sql` driver, which keeps the inner loop fast; `test-pg`
 answers what that cannot — whether the generated SQL is *valid* rather than
 merely expected — and is part of `ci`.
 
+[CONTRIBUTING.md](CONTRIBUTING.md) has what a change is expected to carry, and
+where to argue with a decision record rather than around it.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
