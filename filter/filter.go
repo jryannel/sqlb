@@ -111,6 +111,12 @@ type Query struct {
 	PageSize int
 	Limit    int
 	Offset   int
+
+	// Cursor is the keyset position `?cursor=` asked to resume from, empty for
+	// the first page. It is the alternative to Page and Offset rather than an
+	// addition to them: a request carrying both is refused, since the two
+	// answer the same question with different answers.
+	Cursor sqlb.Cursor
 }
 
 // Apply writes the parsed query onto a builder.
@@ -130,20 +136,54 @@ func Apply[T any](b *sqlb.Builder[T], q *Query) *sqlb.Builder[T] {
 	b.Where(q.Where...)
 	b.Expand(q.Expand...)
 
-	names := q.Select
-	if len(names) == 0 {
+	// Ordering is settled before the projection, because Stable may add a term
+	// and the projection has to cover whatever the ordering ended up being.
+	b.OrderBy(q.Order...)
+	b.Stable()
+
+	names := make([]string, 0, len(q.Select))
+	if len(q.Select) > 0 {
+		names = append(names, q.Select...)
+	} else {
 		for _, col := range b.Model().Selectable() {
 			names = append(names, col.Name)
 		}
 	}
+	names = append(names, unprojectedOrderColumns(b, names)...)
+
 	items := make([]sqlb.Selectable, len(names))
 	for i, name := range names {
 		items[i] = sqlb.F(name)
 	}
 	b.ClearSelect().Select(items...)
 
-	b.OrderBy(q.Order...)
+	b.After(q.Cursor)
 	return b.Limit(q.Limit).Offset(q.Offset)
+}
+
+// unprojectedOrderColumns names the ordering columns a projection would leave
+// out.
+//
+// A cursor is built by reading the ordering columns off the last row, so
+// `?select=id&sort=created_at` has to fetch created_at even though the response
+// will not show it — otherwise the cursor would encode a zero time and the next
+// page would start from the beginning. Selecting more than the response shows is
+// safe here and nowhere else: rest marshals from the request's ?select, not
+// from the columns the statement happened to read.
+func unprojectedOrderColumns[T any](b *sqlb.Builder[T], projected []string) []string {
+	have := make(map[string]bool, len(projected))
+	for _, name := range projected {
+		have[name] = true
+	}
+	var out []string
+	for _, name := range b.OrderColumns() {
+		if have[name] {
+			continue
+		}
+		have[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // reserved parameter names, which never name a column.
@@ -157,6 +197,7 @@ var reserved = map[string]bool{
 	"select": true, "sort": true, "order": true, "search": true,
 	"expand": true, "limit": true, "offset": true, "page": true,
 	"per_page": true, "or": true, "and": true, "count": true,
+	"cursor": true,
 }
 
 // Parse compiles URL query parameters into a Query.
@@ -630,6 +671,24 @@ func (p *parser) parsePagination(values url.Values, q *Query) {
 	}
 	q.PageSize = size
 	q.Limit = size
+
+	// A cursor and an offset are two answers to "where does this page start",
+	// and honouring one silently would make the other's presence a no-op the
+	// client could not see. Naming both and saying which to drop is the only
+	// answer that lets a caller fix it in one step.
+	if raw := firstValue(values, "cursor"); raw != "" {
+		q.Cursor = sqlb.Cursor(raw)
+		for _, conflict := range []string{"page", "offset"} {
+			if firstValue(values, conflict) != "" {
+				p.errf("cursor", raw,
+					"a cursor and %s both say where the page starts; send one or the other", conflict)
+			}
+		}
+		// Page numbers are meaningless under keyset paging: the client's
+		// position is the cursor, and there is no count of pages behind it.
+		q.Page = 1
+		return
+	}
 
 	if raw := firstValue(values, "page"); raw != "" {
 		n, err := strconv.Atoi(raw)

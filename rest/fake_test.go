@@ -375,3 +375,13 @@ func docCols() []string { return []string{"id", "org_id", "title", "__expand_org
 func docRow(id, title string, org []byte) []driver.Value {
 	return []driver.Value{id, "acme", title, org}
 }
+
+// Ledger has no primary key, which a list-only resource is allowed to have.
+// It is the case cursor paging cannot serve: with no unique column there is no
+// tiebreaker, so no position can be named unambiguously.
+type Ledger struct {
+	Account string `db:"account" json:"account" sqlb:"filter,sort"`
+	Amount  int64  `db:"amount" json:"amount" sqlb:"filter,sort"`
+}
+
+func (Ledger) TableName() string { return "ledger" }

@@ -847,3 +847,151 @@ func TestItemOperationOmitsExpandWhenNothingIsExpandable(t *testing.T) {
 		}
 	}
 }
+
+// cursorOf reads next_cursor from a list response, failing if it is absent.
+func cursorOf(t *testing.T, body map[string]any) string {
+	t.Helper()
+	raw, ok := body["next_cursor"]
+	if !ok {
+		t.Fatalf("response has no next_cursor: %v", body)
+	}
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		t.Fatalf("next_cursor = %v, want a non-empty string", raw)
+	}
+	return s
+}
+
+// A client should be able to page by cursor without ever having asked for it:
+// the first response carries the position to resume from, so there is no flag
+// to set and no first cursor to obtain some other way.
+func TestListHandsBackACursorWhenThereIsMore(t *testing.T) {
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{
+		postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
+	}})
+	api := mount(t, db.db, postOptions())
+
+	resp := api.Get("/posts")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	body := decode(t, resp.Body.Bytes())
+	if body["has_more"] != true {
+		t.Fatalf("has_more = %v, want true", body["has_more"])
+	}
+	cursor := cursorOf(t, body)
+
+	// Nothing sorted this request, so the ordering is the tiebreaker alone and
+	// the cursor names the last row of the page — p2, not the p3 that was read
+	// only to answer has_more.
+	resp = api.Get("/posts?cursor=" + cursor)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	stmt := db.lastStatement()
+	if !strings.Contains(stmt, `WHERE "id" > $1`) {
+		t.Errorf("second page did not seek:\n%s", stmt)
+	}
+	if args := db.lastArgs(); len(args) != 1 || args[0] != "p2" {
+		t.Errorf("seek bound %v, want the last row of the first page", args)
+	}
+}
+
+// The cursor names the end of *this* page, so a last page has none — which is
+// how a client knows to stop without comparing counts.
+func TestListOmitsTheCursorOnTheLastPage(t *testing.T) {
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "One")}})
+	api := mount(t, db.db, postOptions())
+
+	body := decode(t, api.Get("/posts").Body.Bytes())
+	if body["has_more"] != false {
+		t.Fatalf("has_more = %v, want false", body["has_more"])
+	}
+	if _, present := body["next_cursor"]; present {
+		t.Errorf("last page carries a next_cursor: %v", body)
+	}
+}
+
+// A sorted request produces a cursor over that sort, and feeding it back seeks
+// on both the sort column and the tiebreaker.
+func TestCursorCarriesTheRequestedSort(t *testing.T) {
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{
+		postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
+	}})
+	api := mount(t, db.db, postOptions())
+
+	body := decode(t, api.Get("/posts?sort=-view_count").Body.Bytes())
+	cursor := cursorOf(t, body)
+
+	resp := api.Get("/posts?sort=-view_count&cursor=" + cursor)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	stmt := db.lastStatement()
+	// Both terms descend and neither column is nullable, so this is the row
+	// comparison Postgres can answer with one index seek.
+	if !strings.Contains(stmt, `WHERE ("view_count", "id") < ($1, $2)`) {
+		t.Errorf("statement did not seek on the sort and the tiebreaker:\n%s", stmt)
+	}
+	if args := db.lastArgs(); len(args) != 2 || args[0] != int64(3) || args[1] != "p2" {
+		t.Errorf("seek bound %v, want the last row's view_count and id", args)
+	}
+}
+
+// Changing ?sort= and keeping the cursor is the ordinary way to reach an
+// unusable one, so it is a 400 that says what happened rather than a 500.
+func TestCursorFromADifferentSortIsRejected(t *testing.T) {
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{
+		postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
+	}})
+	api := mount(t, db.db, postOptions())
+
+	cursor := cursorOf(t, decode(t, api.Get("/posts?sort=-view_count").Body.Bytes()))
+
+	resp := api.Get("/posts?sort=title&cursor=" + cursor)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body)
+	}
+	for _, want := range []string{"view_count desc", "title asc", "query.cursor"} {
+		if !strings.Contains(resp.Body.String(), want) {
+			t.Errorf("body does not mention %q:\n%s", want, resp.Body)
+		}
+	}
+}
+
+func TestCursorAndPageTogetherAreRejected(t *testing.T) {
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "One")}})
+	api := mount(t, db.db, postOptions())
+
+	resp := api.Get("/posts?cursor=abc&page=2")
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body)
+	}
+	if !strings.Contains(resp.Body.String(), "send one or the other") {
+		t.Errorf("body should say which to drop:\n%s", resp.Body)
+	}
+}
+
+// A count is the size of the result set, so it must not shrink as a client
+// pages through it — otherwise a progress bar built on it would run backwards.
+func TestCountIgnoresTheCursor(t *testing.T) {
+	db := newFakeDB(t,
+		reply{match: "count(*)", cols: []string{"count"}, rows: [][]driver.Value{{int64(97)}}},
+		reply{cols: postCols(), rows: [][]driver.Value{
+			postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
+		}},
+	)
+	api := mount(t, db.db, postOptions())
+
+	cursor := cursorOf(t, decode(t, api.Get("/posts?count=exact").Body.Bytes()))
+	body := decode(t, api.Get("/posts?count=exact&cursor="+cursor).Body.Bytes())
+
+	if body["total"] != float64(97) {
+		t.Errorf("total = %v, want the whole result set", body["total"])
+	}
+	for _, stmt := range db.statements() {
+		if strings.Contains(stmt, "count(*)") && strings.Contains(stmt, `"id" > `) {
+			t.Errorf("the count query carried the cursor boundary:\n%s", stmt)
+		}
+	}
+}

@@ -190,10 +190,10 @@ for _, d := range reg.Lint() {
 ```
 
 ```
-[warn] list-without-sort: events: list endpoint has no sortable column, so paging has no deterministic order and may repeat or skip rows
-    fix: mark at least one column .Sortable(), conventionally created_at or the primary key
 [warn] unindexed-filter: events.kind: column is filterable but is not the leading column of any index, so filtering on it scans the table
     fix: add .Index("kind") to the table, or drop .Filterable() from the column
+[info] list-without-sort: events: list endpoint has no sortable column, so every client gets the same primary-key order and none can ask for another
+    fix: mark at least one column .Sortable(), conventionally created_at
 [info] no-max-page-size: events: no MaxPageSize, so the package default applies as the hard ceiling
     fix: set MaxPageSize on the REST exposure to a value this table can serve
 ```

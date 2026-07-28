@@ -1,7 +1,9 @@
 package app_test
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -411,4 +413,74 @@ func titles(items []map[string]any) []any {
 		out = append(out, it["title"])
 	}
 	return out
+}
+
+// A cursor is a client-supplied value that becomes part of a WHERE clause, so
+// the question this test asks is whether it can be used to reach around a
+// tenant scope. It cannot, and the reason is structural rather than a check:
+// the seek is one more predicate on the same builder the BeforeQuery hook has
+// already constrained, so the workspace filter is conjoined with it. There is
+// no code path where a cursor replaces the scope, because a cursor never
+// produces a query — it amends one.
+func TestPagingByCursorStaysInsideTheWorkspace(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	bob := account(t, server, "bob@example.com", "Globex")
+
+	aliceList := alice.listID("Acme work")
+	for i := range 7 {
+		alice.taskID(aliceList, fmt.Sprintf("Acme %02d", i), nil)
+	}
+	bobList := bob.listID("Globex work")
+	for i := range 7 {
+		bob.taskID(bobList, fmt.Sprintf("Globex %02d", i), nil)
+	}
+
+	// Bob walks his own tasks by cursor, and sees exactly his seven.
+	var seen []string
+	cursor := ""
+	for page := 0; page < 10; page++ {
+		path := "/tasks?sort=title&per_page=2"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		body := bob.get(path).expect(http.StatusOK).list()
+		for _, item := range body.Items {
+			title, _ := item["title"].(string)
+			if !strings.HasPrefix(title, "Globex") {
+				t.Fatalf("paging crossed the workspace boundary: %q", title)
+			}
+			seen = append(seen, title)
+		}
+		if !body.HasMore {
+			cursor = ""
+			break
+		}
+		if body.NextCursor == "" {
+			t.Fatal("has_more is true but no cursor was given, so the walk cannot continue")
+		}
+		cursor = body.NextCursor
+	}
+	if cursor != "" {
+		t.Fatal("the walk did not terminate")
+	}
+	if len(seen) != 7 {
+		t.Fatalf("the walk saw %d tasks, want Bob's 7: %v", len(seen), seen)
+	}
+
+	// And a cursor Alice was issued does not carry Bob past his scope when he
+	// replays it. It is a position in an ordering, not a capability: the rows it
+	// admits are still filtered by Bob's workspace, so he reaches the end of his
+	// own list rather than the middle of hers.
+	alices := alice.get("/tasks?sort=title&per_page=2").expect(http.StatusOK).list()
+	if alices.NextCursor == "" {
+		t.Fatal("Alice's first page carries no cursor")
+	}
+	replayed := bob.get("/tasks?sort=title&per_page=20&cursor=" +
+		url.QueryEscape(alices.NextCursor)).expect(http.StatusOK).list()
+	for _, item := range replayed.Items {
+		if title, _ := item["title"].(string); !strings.HasPrefix(title, "Globex") {
+			t.Errorf("replaying another workspace's cursor returned %q", title)
+		}
+	}
 }

@@ -138,14 +138,32 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 			Description: "Rows to skip. Ignored when page is given.",
 			Schema:      &huma.Schema{Type: "integer", Minimum: fptr(0)},
 		},
-		&huma.Param{
-			Name: "count", In: "query",
-			Description: "Set to `exact` to include the total row count. It costs a second " +
-				"query against the same filter, so it is opt-in; `has_more` is always present " +
-				"and is enough to drive paging.",
-			Schema: &huma.Schema{Type: "string", Enum: []any{"exact"}},
-		},
 	)
+
+	// Cursor paging needs a key to break ties with. A model without one can
+	// still be listed and paged by offset, so the parameter is withheld rather
+	// than the resource refused — and withholding it keeps the document honest,
+	// since next_cursor will not be in the responses either.
+	if b.model.PK != nil {
+		params = append(params, &huma.Param{
+			Name: "cursor", In: "query",
+			Description: "Resume after the position `next_cursor` named on a previous response. " +
+				"Cursor paging costs the same at any depth and does not skip or repeat rows when " +
+				"the table is written to while a client pages, so prefer it to `page` and `offset` " +
+				"for anything that walks a whole result set. It cannot be combined with either, " +
+				"and a cursor is only valid for the `sort` it was issued under.",
+			Schema: &huma.Schema{Type: "string"},
+		})
+	}
+
+	params = append(params, &huma.Param{
+		Name: "count", In: "query",
+		Description: "Set to `exact` to include the total row count. It costs a second " +
+			"query against the same filter, so it is opt-in; `has_more` is always present " +
+			"and is enough to drive paging. The total is the size of the whole result set, " +
+			"so it does not shrink as a cursor advances through it.",
+		Schema: &huma.Schema{Type: "string", Enum: []any{"exact"}},
+	})
 
 	return params
 }

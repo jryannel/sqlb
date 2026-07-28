@@ -50,6 +50,10 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   registration constrains every read of a model — including the reads that
   generated REST handlers issue. Tenant scoping stops being something each call
   site has to remember.
+- **Paging that survives a write.** `?cursor=` names the position of the last
+  row rather than counting to it, so page 500 costs what page 1 costs and a
+  concurrent insert cannot make a client read a row twice. Every list response
+  carries the cursor for the next page, so adopting it needs no flag.
 - **Nothing runs unasked.** `SQL()` renders text and args without executing.
   `Explain` plans against the live schema without running it, so it also fails
   on the migration that was written and never applied — which a compile-time

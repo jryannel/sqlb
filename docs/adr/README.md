@@ -126,3 +126,4 @@ nobody finishes reading has failed at its only job.
 | [0024](0024-no-annotation-slot.md) | No annotation slot until something can consume one | Working | Medium |
 | [0025](0025-expansion-is-one-statement.md) | Expansion is one statement, and Hidden survives the join | Working | Medium |
 | [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation | Exploring | Low |
+| [0027](0027-keyset-pagination.md) | A page is a position, not a distance | Working | High |
