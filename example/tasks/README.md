@@ -303,6 +303,15 @@ introspected one never matched as strings and every run proposed dropping and
 re-adding it. The declared expression is now put through the same normalisation
 by asking the shadow database, which is open anyway at that point.
 
+**That check is a CI gate, and it does not need you to run it.**
+[`migrations/drift_test.go`](migrations/drift_test.go) is the same three steps —
+replay, normalise, diff — with the shell taken off, and `mise run test-demo`
+runs it. Editing `schema.go` without adding a migration passes `lint`, `vet` and
+`generate-check` and fails there, with the `ALTER TABLE` it wanted printed in
+the failure. It is also the gate that notices if the history ever grows a
+construct the DSL cannot describe, because a *new* entry in the introspection
+report means every diff computed from then on is working from a partial picture.
+
 `mise run generate-check` fails if the committed output has drifted from the
 schema. The migrations are *not* checked that way: `migrate.Write` refuses to
 overwrite, because a migration already applied somewhere must not change under

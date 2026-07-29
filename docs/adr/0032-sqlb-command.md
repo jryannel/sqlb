@@ -240,6 +240,17 @@ was going to make.
 is the property ADR-0014 rests on. The impurity is in a separate call the caller
 makes first.
 
+With that fixed the check became a gate rather than a demonstration.
+`example/tasks/migrations/drift_test.go` is `sqlb migrate -check ./taskschema`
+with the shell taken off, it runs under `mise run test-demo`, and it is the only
+thing in the build that can catch a schema edited without a migration —
+`generate-check` compares files against the schema and cannot see the history at
+all. Writing it found one more thing worth recording: an earlier version applied
+the migrations with goose rather than replaying them with `shadow.Build`, and
+goose's own `goose_db_version` table came back from introspection as a table the
+declaration does not have, so the gate proposed dropping it. That shadow writes
+no version table is a line in its package doc; this is what the line is for.
+
 ## What would change our mind
 
 - If projects start writing a `main` again to do something `Project` cannot
