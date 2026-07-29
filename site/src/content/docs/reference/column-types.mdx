@@ -36,6 +36,49 @@ kind. `UUID` maps to `string`, so it accepts them — worth knowing, since
 `JSON` and `Bytes` cannot carry a filter value at all: coercion has no case for
 them, so a filter naming one is rejected. They are queryable from Go with `Raw`.
 
+## Arrays
+
+`Array()` is a modifier, not a set of parallel constructors: the constructor
+keeps naming the element type and the column becomes a one-dimensional Postgres
+array of it.
+
+```go
+schema.Text("labels").Array().Filterable().Default(schema.Value("{}"))
+schema.Enum("channels", "web", "email").Array().Nullable()
+```
+
+| Declared | SQL type | Go type | TypeScript | Dart |
+|---|---|---|---|---|
+| `Text("tags").Array()` | `text[]` | `[]string` | `string[]` | `List<String>` |
+| `Int("sizes").Array()` | `integer[]` | `[]int32` | `number[]` | `List<int>` |
+| `Enum("c", "a", "b").Array()` | `text[]` + a containment `CHECK` | `[]TableC` | `TableC[]` | `List<TableC>` |
+
+Every scalar constructor above may take it — text, varchar, enum, the numerics,
+bool, uuid and the three time types. `JSON` and `Bytes` may not, and neither may
+a second dimension.
+
+**The Go type is the plain slice**, so a model described over an existing sqlc
+struct carries one unchanged. A nullable array is still `[]string`: `nil` is
+NULL and `[]string{}` is `{}`, which covers both values without a pointer.
+
+Operators, and the three refusals:
+
+| | |
+|---|---|
+| Accepts | `has`, `hasany`, `hasall`, `eq`, `ne`, `isnull`, `notnull` |
+| Refuses | the ordering four, `between`, `in`/`nin`, and every pattern operator — including `contains`, which stays the text substring operator |
+| `Sortable()` | refused — the keyset cursor encodes the ordering columns |
+| `Searchable()` | refused — search is a text operation |
+| `Filterable()` | requires a GIN index on the column, checked by `schema.Validate` |
+
+```go
+).AddIndex(schema.Index{Columns: []string{"labels"}, Method: "gin"})
+```
+
+Without it the filter still returns the right rows, by scanning the table for
+them — so nothing reports the problem and only a plan would show it. See
+[ADR-0033](https://github.com/jryannel/sqlb/blob/main/docs/adr/0033-array-columns.md).
+
 ## Shorthands
 
 ```go

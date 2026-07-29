@@ -270,6 +270,15 @@ func scan[T any](rows *sql.Rows, m *Model, mode scanMode) ([]T, error) {
 			if err != nil {
 				return nil, err
 			}
+			// A slice field is a Postgres array, which database/sql cannot
+			// scan: the driver hands back `{a,b,"c d"}` and the conversion
+			// fails. This is the one place a result column is pointed at a
+			// struct field, so it is the one place the decoder goes
+			// (ADR-0033).
+			if _, isArray := arrayElemKind(field.Type()); isArray {
+				dest[i] = arrayScanner{dest: field, col: cols[i]}
+				continue
+			}
 			dest[i] = field.Addr().Interface()
 		}
 		if err := rows.Scan(dest...); err != nil {

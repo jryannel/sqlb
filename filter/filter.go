@@ -427,6 +427,9 @@ const (
 	opNullary
 	opRange
 	opPattern
+	// opElem takes one element of an array column; opSet takes a list of them.
+	opElem
+	opSet
 )
 
 var operators = map[string]opKind{
@@ -437,6 +440,12 @@ var operators = map[string]opKind{
 	"between": opRange,
 	"like":    opPattern, "ilike": opPattern,
 	"contains": opPattern, "startswith": opPattern, "endswith": opPattern,
+
+	// Array containment. `contains` is deliberately not reused: it is a text
+	// pattern operator above, and one name meaning two things depending on the
+	// column it is applied to is exactly the ambiguity the generated clients
+	// exist to remove (ADR-0033).
+	"has": opElem, "hasany": opSet, "hasall": opSet,
 }
 
 func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb.Pred, bool) {
@@ -451,8 +460,24 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 	}
 	// Lists and ranges hold several operands in one value, so they are measured
 	// per member where they are split rather than in aggregate here.
-	if kind != opList && kind != opRange && !p.withinLength(value, param, raw) {
+	if kind != opList && kind != opRange && kind != opSet && !p.withinLength(value, param, raw) {
 		return sqlb.Pred{}, false
+	}
+
+	// An array column and a scalar one accept disjoint operator sets, and the
+	// refusal names the alternative rather than letting Postgres report a type
+	// error from a statement the caller cannot see.
+	elem, isArray := arrayElem(col)
+	switch {
+	case isArray && !arrayOperators[kind]:
+		p.errAllowed(param, raw, fmt.Sprintf("operator %q does not apply to the array column %s", op, col.Name), arrayOperatorNames())
+		return sqlb.Pred{}, false
+	case !isArray && (kind == opElem || kind == opSet):
+		p.errf(param, raw, "operator %q needs an array column, but %s is %s", op, col.Name, col.Type)
+		return sqlb.Pred{}, false
+	}
+	if isArray {
+		return p.buildArray(col, elem, f, op, kind, value, param, raw)
 	}
 
 	switch kind {
@@ -554,6 +579,116 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 			return f.Lte(v), true
 		}
 	}
+}
+
+// arrayOperators is the set an array column accepts.
+//
+// Ordering and BETWEEN are absent because Postgres's array ordering is not a
+// thing an API should offer; `in` is absent because a list of arrays has no
+// spelling in this grammar; the pattern operators are absent because search is
+// a text operation. Each of those is additive to allow later and breaking to
+// withdraw, so the refusal is the starting position (ADR-0033).
+var arrayOperators = map[opKind]bool{
+	opElem:    true,
+	opSet:     true,
+	opNullary: true,
+	opBinary:  true, // narrowed to eq/ne below; the ordering four are refused there
+}
+
+// buildArray builds a condition against an array column.
+//
+// `has` binds the *element* — `$1 = ANY(tags)` — which is why the descriptor
+// keeps naming the element type rather than fusing it into an array constant.
+func (p *parser) buildArray(col *sqlb.ColumnInfo, elem reflect.Type, f sqlb.Field,
+	op string, kind opKind, value, param, raw string) (sqlb.Pred, bool) {
+
+	switch kind {
+	case opNullary:
+		// A NULL column and an empty array are different values, so this stays
+		// meaningful on an array and means what it does everywhere else.
+		if op == "isnull" {
+			return f.IsNull(), true
+		}
+		return f.NotNull(), true
+
+	case opElem:
+		v, err := Coerce(unquote(value), elem)
+		if err != nil {
+			p.errf(param, value, "%v", err)
+			return sqlb.Pred{}, false
+		}
+		return f.Has(v), true
+
+	case opSet:
+		vals, ok := p.arrayOperand(elem, value, param, raw, op)
+		if !ok {
+			return sqlb.Pred{}, false
+		}
+		if op == "hasany" {
+			return f.HasAny(vals...), true
+		}
+		return f.HasAll(vals...), true
+
+	default:
+		// Whole-array comparison. The ordering operators are refused here
+		// rather than in the table above, because they share opBinary with the
+		// two that are allowed.
+		if op != "eq" && op != "ne" && op != "neq" {
+			p.errAllowed(param, raw, fmt.Sprintf("operator %q does not apply to the array column %s", op, col.Name), arrayOperatorNames())
+			return sqlb.Pred{}, false
+		}
+		vals, ok := p.arrayOperand(elem, value, param, raw, op)
+		if !ok {
+			return sqlb.Pred{}, false
+		}
+		if op == "eq" {
+			return f.Eq(sqlb.Array(vals...)), true
+		}
+		return f.Neq(sqlb.Array(vals...)), true
+	}
+}
+
+// arrayOperand parses the comma-separated element list an array-valued operator
+// takes, under the same per-member limits a value list is held to.
+func (p *parser) arrayOperand(elem reflect.Type, value, param, raw, op string) ([]any, bool) {
+	parts := splitTopLevel(value, ',')
+	if len(parts) > p.opts.maxListValues() {
+		p.errf(param, raw, "operator %q was given %d values, the limit is %d",
+			op, len(parts), p.opts.maxListValues())
+		return nil, false
+	}
+	// Unlike `in`, an empty list is meaningful: it is the empty array, which
+	// every array contains and none overlaps.
+	if len(parts) == 1 && strings.TrimSpace(parts[0]) == "" {
+		return nil, true
+	}
+	vals := make([]any, 0, len(parts))
+	for _, part := range parts {
+		if !p.withinLength(part, param, raw) {
+			return nil, false
+		}
+		v, err := Coerce(unquote(part), elem)
+		if err != nil {
+			p.errf(param, part, "%v", err)
+			return nil, false
+		}
+		vals = append(vals, v)
+	}
+	return vals, true
+}
+
+// arrayElem reports whether the column is a Postgres array, and its element
+// type. bytea and json.RawMessage are []byte and are not arrays.
+func arrayElem(col *sqlb.ColumnInfo) (reflect.Type, bool) {
+	t := col.Type
+	if t == nil || t.Kind() != reflect.Slice || t.Elem().Kind() == reflect.Uint8 {
+		return nil, false
+	}
+	return t.Elem(), true
+}
+
+func arrayOperatorNames() []string {
+	return []string{"eq", "has", "hasall", "hasany", "isnull", "ne", "neq", "notnull"}
 }
 
 // parseGroup parses `(cond,cond,...)` where each condition is

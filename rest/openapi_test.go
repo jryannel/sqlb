@@ -71,6 +71,22 @@ func TestFilterParameterDocumentsItsOperators(t *testing.T) {
 			t.Errorf("view_count's description offers the text-only %s operator: %s", op, number)
 		}
 	}
+
+	// An array column takes containment and nothing else. Offering `between`
+	// or `contains` here would document a request the parser refuses — and
+	// `contains` in particular would suggest it means containment, which is
+	// the one thing it must not be read as.
+	array := params["tags"].Description
+	for _, op := range []string{"has", "hasany", "hasall"} {
+		if !strings.Contains(array, op) {
+			t.Errorf("tags's description omits the %s operator: %s", op, array)
+		}
+	}
+	for _, op := range []string{"between", "contains", "gte", "nin"} {
+		if strings.Contains(array, op) {
+			t.Errorf("tags's description offers %s, which an array column refuses: %s", op, array)
+		}
+	}
 }
 
 func TestSortParameterEnumeratesSortableColumnsInBothDirections(t *testing.T) {

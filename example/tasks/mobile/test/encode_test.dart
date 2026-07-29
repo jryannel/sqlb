@@ -46,6 +46,38 @@ void main() {
     );
   });
 
+  test('an array column takes one element with has', () {
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(has: 'urgent'))),
+      'labels=has.urgent',
+    );
+  });
+
+  test('hasAny and hasAll take element lists', () {
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(hasAny: ['a', 'b']))),
+      'labels=hasany.a%2Cb',
+    );
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(hasAll: ['a', 'b']))),
+      'labels=hasall.a%2Cb',
+    );
+  });
+
+  test('eq on an array column compares the whole array', () {
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(eq: ['a', 'b']))),
+      'labels=eq.a%2Cb',
+    );
+  });
+
+  test('an array element carrying a comma is quoted, like any list member', () {
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(hasAny: ['a,b']))),
+      'labels=hasany.%22a%2Cb%22',
+    );
+  });
+
   test('a null test is the bare operator, with no value', () {
     expect(
       listQuery(const TaskWhere(assigneeId: NullableCond(isNull: true))),

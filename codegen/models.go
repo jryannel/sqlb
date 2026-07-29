@@ -23,7 +23,7 @@ func renderModels(opts Options) ([]byte, error) {
 	for _, t := range tables {
 		for _, f := range t.Fields() {
 			switch f.Desc().GoType() {
-			case "time.Time", "*time.Time":
+			case "time.Time", "*time.Time", "[]time.Time":
 				imports["time"] = true
 			case "json.RawMessage":
 				imports["encoding/json"] = true
@@ -273,7 +273,12 @@ func expandableRelations(reg *schema.Registry, t *schema.TableDef) []string {
 func goType(typeName string, d *schema.FieldDesc) string {
 	if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
 		enum := typeName + GoName(d.Name)
-		if d.Nullable {
+		switch {
+		case d.Array:
+			// A nil slice already says NULL, so an array is the plain slice
+			// whether or not the column is nullable.
+			return "[]" + enum
+		case d.Nullable:
 			return "*" + enum
 		}
 		return enum

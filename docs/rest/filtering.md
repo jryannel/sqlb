@@ -5,6 +5,8 @@
 ?email=alice@example.com      shorthand (a dotted value is not read as an operator)
 ?age=gte.18&age=lt.65         repeated parameters conjoin
 ?tag=in.a,b,c                 value lists, quotable: in."a,b",c
+?labels=has.urgent            an array column contains this element
+?labels=hasany.a,b            overlaps these; hasall.a,b contains all of them
 ?deleted_at=isnull            null tests
 ?views=between.10,20          ranges
 ?or=(status.eq.draft,age.lt.18)   explicit disjunction, nestable
@@ -22,6 +24,40 @@ literal string.
 
 Every operator, and which column types accept it, is in the
 [filter grammar reference](https://jryannel.github.io/sqlb/reference/filter-grammar/).
+
+## Array columns take containment, and nothing else
+
+A column declared `.Array()` accepts a vocabulary of its own:
+
+| Request | Means |
+|---|---|
+| `?labels=has.urgent` | the array contains that one element |
+| `?labels=hasany.a,b` | the array overlaps the list |
+| `?labels=hasall.a,b` | the array contains every member of the list |
+| `?labels=eq.a,b` | the whole array, compared element by element |
+| `?labels=isnull` | the column is NULL — which is *not* the same as empty |
+
+The ordering operators, `in` and `between` are refused: Postgres will order
+arrays, but that is not an ordering an API should offer, and a list of arrays
+has no spelling in this grammar.
+
+`contains` is refused too, and that one is deliberate rather than incidental.
+It is the case-insensitive substring operator for text, and giving it a second
+meaning on array columns would put an ambiguity into the one vocabulary whose
+whole purpose is that there is none. The refusal names `has` instead, since that
+is what a request spelling it that way meant:
+
+```
+GET /tasks?labels=contains.urgent
+400 — operator "contains" does not apply to the array column labels
+      (allowed: eq, has, hasall, hasany, isnull, ne, neq, notnull)
+```
+
+An array column cannot be `Sortable` or `Searchable`, and a `Filterable` one has
+to carry a GIN index — `schema.Validate` reports all three. The index is not a
+suggestion: an array filter without one still returns the right rows, by
+scanning the table for them, so nothing would ever report it
+([ADR-0033](https://github.com/jryannel/sqlb/blob/main/docs/adr/0033-array-columns.md)).
 
 ## It is the same builder
 

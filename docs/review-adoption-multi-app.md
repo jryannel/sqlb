@@ -551,7 +551,11 @@ flowchart LR
   these tables needs a surrogate `UUIDv7` PK + a unique index. That is a real
   migration with real data, on tables the team chose composite keys for
   deliberately.
-- **Arrays (8 files)** — no `text[]`. Workarounds: jsonb, or a join table.
+- **Arrays (8 files)** — ~~no `text[]`~~. **Closed since this review**:
+  `schema.Text("tags").Array()` declares one, and it round-trips through
+  `introspect` ([ADR-0033](adr/0033-array-columns.md)). The pilot-target table
+  below was written before that and still reads `app-d` out on this ground; on
+  arrays alone it no longer is.
 - **pgvector / `core/rag`** — not just unsupported, actively hazardous: the
   query *works* through `Raw` and silently sequential-scans. `introspect` refuses
   vector columns, so `rag` cannot round-trip. **Scope `rag` out entirely.**
@@ -625,8 +629,11 @@ core does not carry.
    scheme into the OpenAPI document (the TS client does not need it — it never
    reads the document).
 3. **Array columns** — the cheapest of the schema gaps and the one with 8 real
-   call sites here. [Shape recorded in [ADR-0033](adr/0033-array-columns.md);
-   nothing built. The ask is what prompted it.]
+   call sites here. [Built — [ADR-0033](adr/0033-array-columns.md). The ask is
+   what prompted the record, and the record is now implemented: `text[]`
+   declares, renders, introspects, scans and filters. This closes the half of
+   B2 that ruled `app-d` out as a pilot target; composite keys and the
+   generated columns are what is left of it.]
 4. **A Go client generator** to match the TypeScript one, for the admin CLIs.
    [Answered — [ADR-0029](adr/0029-go-cli.md).]
 5. **Composite primary keys**, or a documented "surrogate key required" stance.

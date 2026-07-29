@@ -133,8 +133,28 @@ export interface TextMatch {
   endswith?: string;
 }
 
+/** Containment operators, offered only by array columns. The substring
+ * operator is absent on purpose: it belongs to text, and one name meaning two
+ * things depending on the column would put back the ambiguity this client
+ * exists to remove. */
+export interface ArrayComparison<E> {
+  /** The whole array, compared element by element. */
+  eq?: readonly E[];
+  ne?: readonly E[];
+  /** The array contains this element. */
+  has?: E;
+  /** The array shares at least one element with these. */
+  hasany?: readonly E[];
+  /** The array contains all of these. */
+  hasall?: readonly E[];
+}
+
 /** One column's filter: a bare value for equality, or an operator object. */
 export type Cond<V, Extra = unknown> = V | (Comparison<V> & Extra);
+
+/** One array column's filter: a bare array for whole-array equality, or an
+ * operator object. */
+export type ArrayCond<E, Extra = unknown> = readonly E[] | (ArrayComparison<E> & Extra);
 
 type Scalar = string | number | boolean | Date;
 
@@ -157,6 +177,13 @@ function appendCond(out: URLSearchParams, column: string, cond: unknown): void {
     out.append(column, 'isnull');
     return;
   }
+  // A bare array is a whole-array equality, the same way a bare scalar is a
+  // scalar one. It is checked before the object branch because an array is an
+  // object.
+  if (Array.isArray(cond)) {
+    out.append(column, 'eq.' + (cond as Scalar[]).map(encodeMember).join(','));
+    return;
+  }
   if (typeof cond !== 'object' || cond instanceof Date) {
     out.append(column, 'eq.' + encodeScalar(cond as Scalar));
     return;
@@ -172,6 +199,8 @@ function appendCond(out: URLSearchParams, column: string, cond: unknown): void {
         break;
       case 'in':
       case 'nin':
+      case 'hasany':
+      case 'hasall':
         out.append(column, op + '.' + (value as Scalar[]).map(encodeMember).join(','));
         break;
       case 'between': {
@@ -180,6 +209,11 @@ function appendCond(out: URLSearchParams, column: string, cond: unknown): void {
         break;
       }
       default:
+        // eq and ne against an array column carry the whole array.
+        if (Array.isArray(value)) {
+          out.append(column, op + '.' + (value as Scalar[]).map(encodeMember).join(','));
+          break;
+        }
         out.append(column, op + '.' + encodeScalar(value as Scalar));
     }
   }
@@ -357,6 +391,8 @@ export interface Task {
   author_id: string;
   title: string;
   description: string;
+  /** Free-form labels. Filter with has, hasany or hasall. */
+  labels: string[];
   status: TaskStatus;
   priority: TaskPriority;
   due_at: string | null;
@@ -379,6 +415,8 @@ export interface TaskCreate {
   assignee_id?: string | null;
   title: string;
   description: string;
+  /** Free-form labels. Filter with has, hasany or hasall. */
+  labels?: string[];
   status?: TaskStatus;
   priority?: TaskPriority;
   due_at?: string | null;
@@ -398,6 +436,8 @@ export interface TaskPatch {
   assignee_id?: string | null;
   title?: string;
   description?: string;
+  /** Free-form labels. Filter with has, hasany or hasall. */
+  labels?: string[];
   status?: TaskStatus;
   priority?: TaskPriority;
   due_at?: string | null;
@@ -789,6 +829,7 @@ export type TaskColumn =
   | 'author_id'
   | 'title'
   | 'description'
+  | 'labels'
   | 'status'
   | 'priority'
   | 'due_at'
@@ -837,6 +878,7 @@ export type TaskWhere = {
   assignee_id?: Cond<string, NullCheck>;
   title?: Cond<string, TextMatch>;
   description?: Cond<string, TextMatch>;
+  labels?: ArrayCond<string>;
   status?: Cond<TaskStatus>;
   priority?: Cond<TaskPriority>;
   due_at?: Cond<string | Date, NullCheck>;

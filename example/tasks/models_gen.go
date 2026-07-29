@@ -93,6 +93,7 @@ type Task struct {
 	AuthorID     string       `db:"author_id" json:"author_id" sqlb:"readonly"`
 	Title        string       `db:"title" json:"title" sqlb:"filter,sort,search"`
 	Description  string       `db:"description" json:"description" sqlb:"filter,search"`
+	Labels       []string     `db:"labels" json:"labels" sqlb:"default,filter"` // Free-form labels. Filter with has, hasany or hasall.
 	Status       TaskStatus   `db:"status" json:"status" sqlb:"default,filter,sort"`
 	Priority     TaskPriority `db:"priority" json:"priority" sqlb:"default,filter,sort"`
 	DueAt        *time.Time   `db:"due_at" json:"due_at" sqlb:"filter,sort"`

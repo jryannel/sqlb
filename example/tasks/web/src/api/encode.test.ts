@@ -38,6 +38,38 @@ test('a list member carrying a comma is quoted, so the parser reads it whole', (
   );
 });
 
+test('an array column takes one element with has', () => {
+  assert.equal(
+    encodeListQuery({ where: { labels: { has: 'urgent' } } }),
+    'labels=has.urgent',
+  );
+});
+
+test('hasany and hasall take element lists', () => {
+  assert.equal(
+    encodeListQuery({ where: { labels: { hasany: ['a', 'b'] } } }),
+    'labels=hasany.a%2Cb',
+  );
+  assert.equal(
+    encodeListQuery({ where: { labels: { hasall: ['a', 'b'] } } }),
+    'labels=hasall.a%2Cb',
+  );
+});
+
+test('a bare array is whole-array equality, as a bare scalar is scalar equality', () => {
+  assert.equal(
+    encodeListQuery({ where: { labels: ['a', 'b'] } }),
+    'labels=eq.a%2Cb',
+  );
+});
+
+test('an array element carrying a comma is quoted, like any list member', () => {
+  assert.equal(
+    encodeListQuery({ where: { labels: { hasany: ['a,b'] } } }),
+    'labels=hasany.%22a%2Cb%22',
+  );
+});
+
 test('a null test is the bare operator, with no value', () => {
   assert.equal(
     encodeListQuery({ where: { assignee_id: { isnull: true } } }),

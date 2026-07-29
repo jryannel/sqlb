@@ -223,8 +223,11 @@ func (r *Registry) Validate() error {
 			if d.Expandable && d.Ref == nil {
 				report(t.name, d.Name, "Expandable is only meaningful on a Ref column")
 			}
-			if d.Searchable && !isTextual(d.Type) {
-				report(t.name, d.Name, "Searchable requires a text column, got %s", d.Type)
+			if d.Searchable && (!isTextual(d.Type) || d.Array) {
+				report(t.name, d.Name, "Searchable requires a text column, got %s", describeType(d))
+			}
+			if d.Array {
+				r.validateArray(t, d, report)
 			}
 			if d.Type == TypeEnum && len(d.EnumValues) == 0 {
 				report(t.name, d.Name, "Enum declares no values")
@@ -403,6 +406,67 @@ const maxIdentBytes = 63
 // authors, so a derived reverse would call both of them "posts" and an author's
 // posts are not the posts an author reviewed. Two references claiming one name
 // on one target is therefore an error rather than a last-writer-wins. ADR-0022.
+// validateArray checks the refusals ADR-0033 starts an array column from.
+//
+// Each of them is the cheap direction to be wrong in: allowing one of these
+// later is additive, and withdrawing it once a schema declares it is not.
+func (r *Registry) validateArray(t *TableDef, d *FieldDesc, report func(string, string, string, ...any)) {
+	if !IsArrayElement(d.Type) {
+		report(t.name, d.Name, "%s is not an array element type; arrays are one-dimensional and hold scalars", d.Type)
+	}
+	if d.PrimaryKey {
+		report(t.name, d.Name, "an array column cannot be the primary key: one column addresses a row in its URL and its cursor, and an array has no spelling in either")
+	}
+	if d.Ref != nil {
+		report(t.name, d.Name, "an array column cannot be a reference: Postgres has no foreign key from an array's elements")
+	}
+	if d.Scoped {
+		report(t.name, d.Name, "an array column cannot be Scoped: a tenant predicate compares one value, not a set")
+	}
+	if d.SoftDelete {
+		report(t.name, d.Name, "an array column cannot carry the soft-delete marker")
+	}
+	// Postgres orders arrays happily. The refusal is about the cursor: keyset
+	// paging reads the ordering columns off the last row and encodes them into
+	// a token that is wire format (ADR-0027), and an array has no spelling
+	// there that a client could be asked to keep sending back.
+	if d.Sortable {
+		report(t.name, d.Name, "an array column cannot be Sortable: the keyset cursor encodes the ordering columns, and an array has no spelling in it")
+	}
+	if d.Filterable && !t.hasGINIndex(d.Name) {
+		// The failure this prevents is the one that reports nothing: an array
+		// filter with no GIN index still returns the right rows, by scanning
+		// the table for them. ADR-0026 made the same argument for vectors.
+		report(t.name, d.Name, "a Filterable array column needs a GIN index, or every filter over it is a sequential scan: add t.AddIndex(schema.Index{Columns: []string{%q}, Method: \"gin\"})", d.Name)
+	}
+}
+
+// hasGINIndex reports whether a GIN index covers the column. Leading position
+// does not matter: GIN indexes every key in the row, so a column anywhere in
+// the column list is searchable through it.
+func (t *TableDef) hasGINIndex(column string) bool {
+	for _, idx := range t.indexes {
+		if !strings.EqualFold(idx.Method, "gin") {
+			continue
+		}
+		for _, c := range idx.Columns {
+			if c == column {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// describeType spells a column's type the way an error message should, so that
+// a refusal aimed at an array does not read as though it were aimed at text.
+func describeType(d *FieldDesc) string {
+	if d.Array {
+		return string(d.Type) + "[]"
+	}
+	return string(d.Type)
+}
+
 func (r *Registry) validateInverse(t *TableDef, d *FieldDesc, claimed map[string]string, report func(string, string, string, ...any)) {
 	ref := d.Ref
 	if ref.Inverse == "" {

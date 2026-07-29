@@ -296,6 +296,13 @@ func renderField(d *schema.FieldDesc, names map[string]string) (string, error) {
 		b.WriteString(ctor)
 	}
 
+	// Array comes first among the modifiers, because it changes what the
+	// constructor named — the element type — into the column's own type, and
+	// reading it anywhere else would suggest the order does not matter.
+	if d.Array {
+		b.WriteString(".Array()")
+	}
+
 	// A reference is a uuid column whose name, type and default are decided by
 	// Ref itself, so only the modifiers below apply to both kinds.
 	if d.PrimaryKey {

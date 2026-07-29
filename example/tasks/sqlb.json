@@ -546,6 +546,17 @@
           ]
         },
         {
+          "name": "labels",
+          "type": "text",
+          "array": true,
+          "goType": "[]string",
+          "comment": "Free-form labels. Filter with has, hasany or hasall.",
+          "hasDefault": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
           "name": "status",
           "type": "enum",
           "goType": "string",
@@ -675,6 +686,13 @@
           ]
         },
         {
+          "name": "tasks_labels_idx",
+          "columns": [
+            "labels"
+          ],
+          "method": "gin"
+        },
+        {
           "name": "tasks_workspace_id_id_uniq",
           "columns": [
             "workspace_id",
@@ -701,6 +719,7 @@
           "assignee_id",
           "title",
           "description",
+          "labels",
           "status",
           "priority",
           "due_at",

@@ -33,6 +33,26 @@ export function refusals(request: Transport) {
   // @ts-expect-error — description is searchable but not sortable.
   void listTasks(request, { sort: 'description' });
 
+  // labels is an array column. What it accepts is containment...
+  void listTasks(request, { where: { labels: { has: 'urgent' } } });
+  void listTasks(request, { where: { labels: { hasany: ['urgent', 'blocked'] } } });
+  void listTasks(request, { where: { labels: ['a', 'b'] } });
+
+  // @ts-expect-error — ...and `contains` is the text operator, not this one.
+  void listTasks(request, { where: { labels: { contains: 'urgent' } } });
+
+  // @ts-expect-error — `has` takes one element, not the array.
+  void listTasks(request, { where: { labels: { has: ['urgent'] } } });
+
+  // @ts-expect-error — array ordering is not offered, so there is no gt.
+  void listTasks(request, { where: { labels: { gt: ['a'] } } });
+
+  // @ts-expect-error — labels declared Filterable, deliberately not Sortable.
+  void listTasks(request, { sort: 'labels' });
+
+  // @ts-expect-error — a scalar column has no containment operator.
+  void listTasks(request, { where: { title: { has: 'x' } } });
+
   // @ts-expect-error — password_hash is hidden: it has no spelling at all here.
   void listTasks(request, { select: ['password_hash'] });
 

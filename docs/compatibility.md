@@ -26,7 +26,11 @@ or deployed clients, not just call sites.
   `?select=`, `?limit=`) and its operator names. This is a wire format: a
   deployed client or an agent driving the API off `sqlb.json` has requests built
   against it. New operators are additive; existing spellings do not change
-  meaning.
+  meaning. `has`, `hasany` and `hasall` were added for array columns
+  ([ADR-0033](adr/0033-array-columns.md)) and are frozen from here on; `contains`
+  was *not* extended to mean array containment, and will not be — one name
+  meaning two things depending on the column it is applied to is the ambiguity
+  the generated clients exist to remove.
 - **The generated DDL's shape** — `migrate.Diff` output for a given pair of
   schemas may improve, but a migration already written and applied is never
   reinterpreted.

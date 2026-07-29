@@ -41,9 +41,11 @@ var dartCoreNames = map[string]bool{
 	"Type": true, "Uri": true,
 
 	// The runtime this file emits.
-	"ApiRequest": true, "Collection": true, "Cond": true, "CursorPager": true,
-	"MissingColumn": true, "NullableCond": true, "NullableTextCond": true,
-	"Page": true, "Problem": true, "ProblemDetail": true, "Row": true,
+	"ApiRequest": true, "ArrayCond": true, "Collection": true, "Cond": true,
+	"CursorPager":   true,
+	"MissingColumn": true, "NullableArrayCond": true, "NullableCond": true,
+	"NullableTextCond": true,
+	"Page":             true, "Problem": true, "ProblemDetail": true, "Row": true,
 	"SortTerm": true, "TableName": true, "TextCond": true, "Transport": true,
 	"UnknownEnumValue": true, "WireValue": true,
 }
@@ -410,8 +412,27 @@ func dartColumnDoc(d *schema.FieldDesc, lead string) string {
 // name, which is what keeps a getter to one line the formatter will not break.
 func dartGetter(base, member string, d *schema.FieldDesc) string {
 	col := dartString(d.Name)
+	isEnum := d.Type == schema.TypeEnum && len(d.EnumValues) > 0
 
-	if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
+	// An array column is a JSON array on the wire, and a NULL one is null —
+	// two different absences, which is why the nullable form returns null
+	// rather than an empty list.
+	if d.Array {
+		if isEnum {
+			enum := base + dartPascal(d.Name)
+			if d.Nullable {
+				return dartLine(fmt.Sprintf("List<%s>? get %s => _enumListOrNull(%s, %s.byWire);", enum, member, col, enum))
+			}
+			return dartLine(fmt.Sprintf("List<%s> get %s => _enumList(%s, %s.byWire);", enum, member, col, enum))
+		}
+		decode, typ := dartElemReader(d.Type)
+		if d.Nullable {
+			return dartLine(fmt.Sprintf("List<%s>? get %s => _listOrNull(%s, %s);", typ, member, col, decode))
+		}
+		return dartLine(fmt.Sprintf("List<%s> get %s => _list(%s, %s);", typ, member, col, decode))
+	}
+
+	if isEnum {
 		enum := base + dartPascal(d.Name)
 		if d.Nullable {
 			return dartLine(fmt.Sprintf("%s? get %s => _enumOrNull(%s, %s.byWire);", enum, member, col, enum))
@@ -448,6 +469,27 @@ func dartReader(t schema.Type) (fn, typ string) {
 	default:
 		// Text, varchar, uuid and bytea all arrive as strings.
 		return "_str", "String"
+	}
+}
+
+// dartElemReader maps a column type onto the top-level decoder that reads one
+// element of an array of it, and the Dart type that decoder returns.
+//
+// It is separate from dartReader because the two take different things: a
+// column reader is handed a column name and looks it up, an element decoder is
+// handed the value already pulled out of the JSON list.
+func dartElemReader(t schema.Type) (decode, typ string) {
+	switch t {
+	case schema.TypeInt, schema.TypeBigInt:
+		return "_asInt", "int"
+	case schema.TypeFloat, schema.TypeNumeric:
+		return "_asDouble", "double"
+	case schema.TypeBool:
+		return "_asBool", "bool"
+	case schema.TypeTimestamp, schema.TypeDate, schema.TypeTime:
+		return "_asTime", "DateTime"
+	default:
+		return "_asStr", "String"
 	}
 }
 
@@ -664,6 +706,16 @@ func dartBodyType(base string, d *schema.FieldDesc, create bool) string {
 // dartValueType is the non-null Dart type of a column's value, as a filter
 // condition or a request body carries it.
 func dartValueType(base string, d *schema.FieldDesc) string {
+	if d.Array {
+		return "List<" + dartElemType(base, d) + ">"
+	}
+	return dartElemType(base, d)
+}
+
+// dartElemType is the type of a single value of the column's declared type,
+// ignoring the array flag — which is what an array's containment operators take
+// one of.
+func dartElemType(base string, d *schema.FieldDesc) string {
 	if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
 		return base + dartPascal(d.Name)
 	}
@@ -785,6 +837,14 @@ func dartCondType(base string, d *schema.FieldDesc) string {
 	// Pattern operators need a text column: the server refuses them on anything
 	// else, and an enum is a string in SQL but compared by equality in
 	// practice, so it is excluded here as it is in the typed facade.
+	// An array column takes containment and whole-array equality, and none of
+	// the ordering or pattern operators — the same set the server accepts.
+	if d.Array {
+		if d.Nullable {
+			return "NullableArrayCond<" + dartElemType(base, d) + ">"
+		}
+		return "ArrayCond<" + dartElemType(base, d) + ">"
+	}
 	text := d.Type == schema.TypeText || d.Type == schema.TypeVarchar
 	switch {
 	case text && d.Nullable:
@@ -1417,6 +1477,26 @@ abstract class Row {
     return value == null ? null : DateTime.parse(value);
   }
 
+  /// Reads an array column, decoding each element with the decoder its scalar
+  /// form uses. A NULL column and an empty array are different values, which is
+  /// why the nullable form returns null rather than an empty list.
+  List<T> _list<T>(String column, T Function(Object) decode) {
+    final value = _read(column, nullable: false)! as List;
+    return value.map((e) => decode(e as Object)).toList(growable: false);
+  }
+
+  List<T>? _listOrNull<T>(String column, T Function(Object) decode) {
+    final value = _read(column, nullable: true) as List?;
+    if (value == null) return null;
+    return value.map((e) => decode(e as Object)).toList(growable: false);
+  }
+
+  List<T> _enumList<T>(String column, T? Function(String) byWire) =>
+      _list(column, (e) => _asEnum(byWire, e));
+
+  List<T>? _enumListOrNull<T>(String column, T? Function(String) byWire) =>
+      _listOrNull(column, (e) => _asEnum(byWire, e));
+
   Object _any(String column) => _read(column, nullable: false)!;
 
   Object? _anyOrNull(String column) => _read(column, nullable: true);
@@ -1751,6 +1831,95 @@ class Cond<T extends Object> {
     notIn: notIn,
     between: between,
   );
+}
+
+/// The operators an array column accepts: containment, and whole-array
+/// equality.
+///
+/// The ordering operators and the substring one are absent, because the server
+/// refuses them on an array — array ordering is not a thing an API should
+/// offer, and a substring is a text operation. There is no [contains] here for
+/// the same reason: the name belongs to text, and one name meaning two things
+/// depending on the column is the ambiguity this client exists to remove.
+class ArrayCond<T extends Object> {
+  /// Builds a condition. Every operator is optional; the unset ones are not
+  /// sent.
+  const ArrayCond({this.eq, this.ne, this.has, this.hasAny, this.hasAll});
+
+  /// The whole array, compared element by element.
+  final List<T>? eq;
+
+  /// Not equal to the whole array.
+  final List<T>? ne;
+
+  /// The array contains this element.
+  final T? has;
+
+  /// The array shares at least one element with these.
+  final List<T>? hasAny;
+
+  /// The array contains all of these.
+  final List<T>? hasAll;
+
+  void _encode(_Query out, String column) => _containment(
+    out,
+    column,
+    eq: eq,
+    ne: ne,
+    has: has,
+    hasAny: hasAny,
+    hasAll: hasAll,
+  );
+}
+
+/// An array column that may be NULL: the containment operators, plus the null
+/// tests. A NULL array and an empty one are different values, so both tests
+/// mean something here.
+class NullableArrayCond<T extends Object> {
+  /// Builds a condition. Every operator is optional.
+  const NullableArrayCond({
+    this.eq,
+    this.ne,
+    this.has,
+    this.hasAny,
+    this.hasAll,
+    this.isNull,
+    this.notNull,
+  });
+
+  /// The whole array, compared element by element.
+  final List<T>? eq;
+
+  /// Not equal to the whole array.
+  final List<T>? ne;
+
+  /// The array contains this element.
+  final T? has;
+
+  /// The array shares at least one element with these.
+  final List<T>? hasAny;
+
+  /// The array contains all of these.
+  final List<T>? hasAll;
+
+  /// The column is NULL, which is not the same as holding no elements.
+  final bool? isNull;
+
+  /// The column is not NULL.
+  final bool? notNull;
+
+  void _encode(_Query out, String column) {
+    _containment(
+      out,
+      column,
+      eq: eq,
+      ne: ne,
+      has: has,
+      hasAny: hasAny,
+      hasAll: hasAll,
+    );
+    _nullChecks(out, column, isNull: isNull, notNull: notNull);
+  }
 }
 
 /// The operators a nullable column accepts: the comparisons, plus the null
@@ -2126,6 +2295,9 @@ int _jsonHash(Object? value) {
 Object? _wire(Object? value) {
   if (value is WireValue) return value.wire;
   if (value is DateTime) return value.toUtc().toIso8601String();
+  // An array column carries a list, whose elements need the same treatment —
+  // an enum array is a list of WireValue, and JSON has no spelling for one.
+  if (value is List) return value.map(_wire).toList(growable: false);
   return value;
 }
 
@@ -2168,6 +2340,46 @@ void _comparison(
   if (notIn != null) out.add(column, 'nin.${notIn.map(_member).join(',')}');
   if (between != null) {
     out.add(column, 'between.${_member(between.$1)},${_member(between.$2)}');
+  }
+}
+
+/// Decoders for one element of an array column. They take the value already
+/// pulled out of the JSON list, which is what makes them shareable between the
+/// nullable and non-nullable readers.
+String _asStr(Object v) => v as String;
+
+int _asInt(Object v) => (v as num).toInt();
+
+double _asDouble(Object v) => (v as num).toDouble();
+
+bool _asBool(Object v) => v as bool;
+
+DateTime _asTime(Object v) => DateTime.parse(v as String);
+
+/// Decodes one element of an enum array, naming the type in the error so a
+/// value the schema has since grown is reported as what it is.
+T _asEnum<T>(T? Function(String) byWire, Object v) {
+  final value = v as String;
+  return byWire(value) ?? (throw UnknownEnumValue('$T', value));
+}
+
+void _containment(
+  _Query out,
+  String column, {
+  List<Object?>? eq,
+  List<Object?>? ne,
+  Object? has,
+  List<Object?>? hasAny,
+  List<Object?>? hasAll,
+}) {
+  if (eq != null) out.add(column, 'eq.${eq.map(_member).join(',')}');
+  if (ne != null) out.add(column, 'ne.${ne.map(_member).join(',')}');
+  if (has != null) out.add(column, 'has.${_scalar(has)}');
+  if (hasAny != null) {
+    out.add(column, 'hasany.${hasAny.map(_member).join(',')}');
+  }
+  if (hasAll != null) {
+    out.add(column, 'hasall.${hasAll.map(_member).join(',')}');
   }
 }
 

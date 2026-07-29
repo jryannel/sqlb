@@ -24,6 +24,7 @@ type Post struct {
 	// Excerpt declares nothing, so it is readable but not filterable, sortable
 	// or searchable — the default an opt-in capability model gives a column.
 	Excerpt   string    `db:"excerpt" json:"excerpt"`
+	Tags      []string  `db:"tags" json:"tags" sqlb:"default,filter"`
 	Status    string    `db:"status" json:"status" sqlb:"default,filter,sort"`
 	ViewCount int64     `db:"view_count" json:"view_count" sqlb:"default,filter,sort,readonly"`
 	Secret    string    `db:"secret" json:"-" sqlb:"hidden"`

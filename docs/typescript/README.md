@@ -48,6 +48,7 @@ const page = await listPosts(request, {
     title: { contains: search },             // pattern operators: it is text
     published_at: { notnull: true },         // a null test: it is nullable
     view_count: { gte: 100 },
+    labels: { has: 'urgent' },               // containment: it is an array
   },
   sort: ['-published_at', 'title'],
   select: ['title', 'status'],
@@ -59,7 +60,13 @@ const page = await listPosts(request, {
 - **`where` admits filterable columns only**, and the operator set is narrowed
   by column type. `contains` on a number does not compile; neither does
   `isnull` on a non-nullable column, nor a value outside an enum.
-- **`sort` is a union** of the sortable columns and their `-` forms.
+- **An array column takes `ArrayCond`**: `has` for one element, `hasany` and
+  `hasall` for a list, and a bare array for whole-array equality. It has no
+  `contains` — that is the text substring operator, and one name meaning two
+  things depending on the column is precisely the ambiguity this client exists
+  to remove. It has no ordering operators either.
+- **`sort` is a union** of the sortable columns and their `-` forms. An array
+  column is never in it.
 - **`select` narrows the response type.** `page.items[0].title` is available
   after the call above; `page.items[0].body` is not. The primary key is always
   present, because the server adds it back to any projection that dropped it.

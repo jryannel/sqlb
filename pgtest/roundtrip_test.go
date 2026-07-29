@@ -42,12 +42,22 @@ func declare(r *schema.Registry) {
 		schema.Bytes("thumbnail").Nullable(),
 		schema.Date("published_on").Nullable(),
 		schema.Timestamp("reviewed_at").Nullable(),
+
+		// Arrays, whose round trip is the whole reason ADR-0033 exists: a
+		// module with one text[] in it could not be adopted at all, because a
+		// column introspect dropped makes the first Diff propose deleting
+		// production data.
+		schema.Text("tags").Array().Default(schema.Value("{}")).Filterable(),
+		schema.Int("revisions").Array().Nullable(),
+		schema.Enum("channels", "web", "email", "push").Array().Nullable(),
+
 		schema.Timestamps(),
 	).
 		Describe("Articles.").
 		Check("views_non_negative", `"views" >= 0`).
 		Index("org_id", "status").
-		Index("title")
+		Index("title").
+		AddIndex(schema.Index{Columns: []string{"tags"}, Method: "gin"})
 }
 
 func TestGeneratedDDLAppliesAndReadsBackUnchanged(t *testing.T) {

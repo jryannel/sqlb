@@ -203,6 +203,21 @@ func expandParam[T any](b *binding[T]) *huma.Param {
 // operators need a text column, so offering them on an integer would document a
 // request that parsing rejects.
 func filterDescription(col *sqlb.ColumnInfo) string {
+	// An array column takes containment and nothing else, so listing the
+	// ordering and pattern operators here would document requests the parser
+	// refuses — including `contains`, which stays the text operator (ADR-0033).
+	if isArray(col.Type) {
+		ops := []string{"eq", "ne", "has", "hasany", "hasall"}
+		if col.Nullable {
+			ops = append(ops, "isnull", "notnull")
+		}
+		return fmt.Sprintf(
+			"Filter on `%s`, an array column. `has.value` tests for one element; "+
+				"`hasany.a,b` and `hasall.a,b` take a list, and a bare list is "+
+				"whole-array equality. Repeat the parameter to conjoin "+
+				"conditions. Operators: %s.",
+			col.Name, strings.Join(ops, ", "))
+	}
 	ops := []string{"eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "between"}
 	if col.Nullable {
 		ops = append(ops, "isnull", "notnull")
@@ -214,6 +229,12 @@ func filterDescription(col *sqlb.ColumnInfo) string {
 		"Filter on `%s`. Written `operator.value`, or a bare value for equality. "+
 			"Repeat the parameter to conjoin conditions. Operators: %s.",
 		col.Name, strings.Join(ops, ", "))
+}
+
+// isArray reports whether the column is a Postgres array. bytea and
+// json.RawMessage are []byte and are not.
+func isArray(t reflect.Type) bool {
+	return t != nil && t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8
 }
 
 func isText(t reflect.Type) bool {

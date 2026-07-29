@@ -39,10 +39,41 @@ operator name.
 | `contains` | `ILIKE %v%`, metacharacters escaped | one value | **text columns only** |
 | `startswith` | `ILIKE v%`, metacharacters escaped | one value | **text columns only** |
 | `endswith` | `ILIKE %v`, metacharacters escaped | one value | **text columns only** |
+| `has` | `$1 = ANY(col)` | one **element** | **array columns only** |
+| `hasany` | `col && $1` | comma list | **array columns only** |
+| `hasall` | `col @> $1` | comma list | **array columns only** |
 
 "Text column" means the Go field is a string kind, pointer or not. A pattern
 operator on any other column is rejected with
 `operator "contains" needs a text column, but views is int64`.
+
+### Array columns
+
+An array column — one declared `.Array()`, whose Go field is a slice — accepts a
+disjoint set from a scalar one:
+
+| | |
+|---|---|
+| Accepts | `has`, `hasany`, `hasall`, `eq`, `ne`/`neq`, `isnull`, `notnull` |
+| Refuses | `gt`, `gte`, `lt`, `lte`, `between`, `in`, `nin`, and every pattern operator |
+
+`has` binds one **element**, so `?labels=has.urgent` is coerced to the element's
+Go type and compared as a scalar. `hasany`, `hasall`, `eq` and `ne` take the
+same comma-separated, quotable list `in` does, and bind it as a whole array.
+
+`contains` is **not** array containment. It is the text substring operator, and
+overloading it by column type would put an ambiguity into the one vocabulary
+whose whole purpose is that there is none. A request that spells it that way is
+rejected with the operators that would have worked:
+
+```
+operator "contains" does not apply to the array column labels
+  (allowed: eq, has, hasall, hasany, isnull, ne, neq, notnull)
+```
+
+`isnull` keeps meaning something here, because a NULL column and an empty array
+are different values. An array column can never be `Sortable` or `Searchable`,
+so it appears in neither `?sort` nor the `?search` fan-out.
 
 `isnull` and `notnull` are accepted on **any** filterable column at the server;
 nothing checks that the column is nullable. The generated

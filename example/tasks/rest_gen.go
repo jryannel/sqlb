@@ -162,6 +162,7 @@ type TaskCreate struct {
 	AssigneeID  *string       `json:"assignee_id,omitempty"`
 	Title       string        `json:"title"`
 	Description string        `json:"description"`
+	Labels      *[]string     `json:"labels,omitempty"` // Free-form labels. Filter with has, hasany or hasall.
 	Status      *TaskStatus   `json:"status,omitempty" enum:"todo,in_progress,blocked,done"`
 	Priority    *TaskPriority `json:"priority,omitempty" enum:"low,medium,high,urgent"`
 	DueAt       *time.Time    `json:"due_at,omitempty"`
@@ -175,6 +176,9 @@ func (c TaskCreate) Row() (*Task, error) {
 	row.AssigneeID = c.AssigneeID
 	row.Title = c.Title
 	row.Description = c.Description
+	if c.Labels != nil {
+		row.Labels = *c.Labels
+	}
 	if c.Status != nil {
 		row.Status = *c.Status
 	}
@@ -198,6 +202,7 @@ type TaskPatch struct {
 	AssigneeID  *string       `json:"assignee_id,omitempty"`
 	Title       *string       `json:"title,omitempty"`
 	Description *string       `json:"description,omitempty"`
+	Labels      *[]string     `json:"labels,omitempty"` // Free-form labels. Filter with has, hasany or hasall.
 	Status      *TaskStatus   `json:"status,omitempty" enum:"todo,in_progress,blocked,done"`
 	Priority    *TaskPriority `json:"priority,omitempty" enum:"low,medium,high,urgent"`
 	DueAt       *time.Time    `json:"due_at,omitempty"`
@@ -250,6 +255,12 @@ func (u TaskPatch) Changes() (map[string]any, error) {
 			return nil, errors.New("description is not nullable and cannot be set to null")
 		}
 		out["description"] = *u.Description
+	}
+	if u.present["labels"] {
+		if u.Labels == nil {
+			return nil, errors.New("labels is not nullable and cannot be set to null")
+		}
+		out["labels"] = *u.Labels
 	}
 	if u.present["status"] {
 		if u.Status == nil {

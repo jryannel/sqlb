@@ -2,6 +2,7 @@ package sqlb
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -70,9 +71,28 @@ func (c *compiler) fail(format string, args ...any) {
 
 func (c *compiler) write(s string) { c.sb.WriteString(s) }
 
+// bind appends a value as the next bind parameter.
+//
+// It is the one function every value passes through on its way out, which is
+// why the array encoding lands here rather than at each operator that can take
+// one: a slice the driver would refuse becomes a driver.Valuer rendering the
+// Postgres array literal, and everything else is passed on untouched
+// (ADR-0033). A []byte stays a []byte — that is bytea, and the driver has
+// always handled it.
 func (c *compiler) bind(v any) {
-	c.args = append(c.args, v)
+	c.args = append(c.args, bindValue(v))
 	c.write(c.d.Placeholder(len(c.args)))
+}
+
+// bindValue wraps a value the driver cannot take as it stands.
+func bindValue(v any) any {
+	if v == nil {
+		return nil
+	}
+	if _, isArray := arrayElemKind(reflect.TypeOf(v)); isArray {
+		return arrayParam{v: v}
+	}
+	return v
 }
 
 func (c *compiler) ident(s string) {

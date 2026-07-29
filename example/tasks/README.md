@@ -107,7 +107,11 @@ types, so the compiler refuses what the server would answer 400 to.
 
 ```ts
 const page = await listTasks(request, {
-  where: { status: { in: ['todo', 'in_progress'] }, due_at: { notnull: true } },
+  where: {
+    status: { in: ['todo', 'in_progress'] },
+    due_at: { notnull: true },
+    labels: { has: 'urgent' },
+  },
   sort: ['-priority', 'position'],
   select: ['title', 'status'],
   expand: ['list'],
@@ -116,7 +120,9 @@ const page = await listTasks(request, {
 
 `status` admits the enum's four values and nothing else. `due_at` offers a null
 test because the column is nullable, and `title` offers `contains` because it is
-text. `select` narrows the response type, so reading `page.items[0].description`
+text. `labels` is a `text[]`, so it offers `has`, `hasany` and `hasall` — and
+*not* `contains`, which stays the text substring operator rather than acquiring a
+second meaning on array columns. `select` narrows the response type, so reading `page.items[0].description`
 after that call does not compile — and neither does `sort: 'description'`, since
 that column is searchable but never asked to be sortable.
 [`web/src/refusals.ts`](web/src/refusals.ts) asserts each of those refusals with
@@ -164,8 +170,8 @@ That last part is the piece a phone actually needs. Every list response carries
 arithmetic is what hand-written mobile clients reimplement out of `has_more` and
 an offset counter, once per screen.
 
-[`mobile/lib/refusals.dart`](mobile/lib/refusals.dart) asserts sixteen refusals
-the way `refusals.ts` asserts twelve, using the `unnecessary_ignore` lint as
+[`mobile/lib/refusals.dart`](mobile/lib/refusals.dart) asserts twenty-one
+refusals the way `refusals.ts` asserts seventeen, using the `unnecessary_ignore` lint as
 Dart's `@ts-expect-error`. Run `mise run test-dart`;
 [ADR-0031](../../docs/adr/0031-dart-client.md) is the record.
 
