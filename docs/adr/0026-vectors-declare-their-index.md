@@ -4,7 +4,8 @@
   first line of it, which is the order [the README](README.md) asks for and the
   opposite of [ADR-0025](0025-expansion-is-one-statement.md)
 - **Confidence:** Low — nothing here is built. The unindexed half is grounded in
-  a working module (`core/rag` in studio-apps) rather than reasoned about, which
+  a working module (`core/rag` in `subject-mono`, an anonymised application
+  repository) rather than reasoned about, which
   is why it is the starting point; the indexed half is entirely argument, and its
   sharpest claims are about how Postgres behaves under a filter — exactly the
   kind of claim [ADR-0025](0025-expansion-is-one-statement.md) learned not to
@@ -53,7 +54,7 @@ express the column. So the sqlc split does not rescue this the way it rescues
 window functions — it breaks on it. `mise run generate-check` fails, or worse,
 `schema.sql` is edited by hand and the two sources of truth quietly separate.
 
-This is observed rather than predicted. `core/rag` in studio-apps runs pgvector
+This is observed rather than predicted. `core/rag` in `subject-mono` runs pgvector
 under sqlc, and its `schema.sql` is a hand-maintained mirror of the migration
 because the migration cannot say what the migration means:
 
@@ -475,7 +476,7 @@ because the shape of the ask determines whether they are types or an option on
   Postgres are deliberately listed as the first thing that could invalidate it,
   because ADR-0025 was written after a green test suite turned out to have been
   asserting what somebody expected rather than what Postgres accepts.
-- 2026-07-28 — Revised against `core/rag` in studio-apps, a working pgvector
+- 2026-07-28 — Revised against `core/rag` in `subject-mono`, a working pgvector
   module, which corrected the record within hours of it being written. The first
   draft made the ANN index mandatory and required every filter to be declared,
   which would have refused the shape that module actually runs — no vector index
