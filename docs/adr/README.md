@@ -130,3 +130,4 @@ nobody finishes reading has failed at its only job.
 | [0028](0028-typescript-client.md) | The TypeScript client is generated from the model, and stops at the query key | Working | Medium |
 | [0029](0029-go-cli.md) | The CLI is generated too, and its help text is the type system | Working | Medium |
 | [0030](0030-declared-scope-is-required.md) | A declaration that rows are confined is an obligation, not a comment | Working | High |
+| [0031](0031-dart-client.md) | The Dart client keeps the vocabulary and gives up the narrowing | Working | Medium |

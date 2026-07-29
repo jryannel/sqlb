@@ -27,12 +27,13 @@
 // and every file is run through go/format, so a generator bug that produces
 // invalid Go fails here rather than at the consumer's next build.
 //
-// Two further artefacts are opt-in, and both are emitted into the repository
+// Three further artefacts are opt-in, and all are emitted into the repository
 // that consumes them rather than published: TSDir writes a typed TypeScript
-// client (ADR-0028), and CLIDir writes a cobra command-line client (ADR-0029).
-// Each depends on something this package does not — @tanstack/react-query,
-// spf13/cobra — which is why neither is emitted unless asked for, and why
-// asking costs the consuming module a dependency rather than this one.
+// client (ADR-0028), DartDir writes a typed Dart client for a Flutter app
+// (ADR-0031), and CLIDir writes a cobra command-line client (ADR-0029). Each
+// belongs to a toolchain this module does not have, which is why none is
+// emitted unless asked for, and why asking costs the consuming repository a
+// gate rather than this one.
 package codegen
 
 import (
@@ -95,6 +96,18 @@ type Options struct {
 	CLIPackage string
 	CLIName    string
 	CLIFile    string
+
+	// DartDir emits a typed Dart client, into a directory relative to Dir —
+	// "mobile/lib/api" in a repository whose Flutter app lives beside its
+	// server. Empty means no client is emitted, which is the right default for
+	// a project that has no Dart consumer.
+	//
+	// One file lands there, and it imports nothing: not a pub package, not even
+	// dart:io. There is no framework layer to make optional, because the
+	// mobile ecosystem has no equivalent of TanStack Query to bind to — the
+	// cursor pager it emits instead is plain Dart (ADR-0031).
+	DartDir  string
+	DartFile string
 }
 
 func (o Options) modelsFile() string   { return orDefault(o.ModelsFile, "models_gen.go") }
@@ -104,6 +117,8 @@ func (o Options) restFile() string     { return orDefault(o.RestFile, "rest_gen.
 
 func (o Options) tsClientFile() string  { return orDefault(o.TSClientFile, "client.gen.ts") }
 func (o Options) tsQueriesFile() string { return orDefault(o.TSQueriesFile, "queries.gen.ts") }
+
+func (o Options) dartFile() string { return orDefault(o.DartFile, "client.gen.dart") }
 
 func (o Options) cliFile() string { return orDefault(o.CLIFile, "cli_gen.go") }
 func (o Options) cliName() string { return orDefault(o.CLIName, o.Package) }
@@ -281,6 +296,15 @@ func render(opts Options) (map[string][]byte, error) {
 			if src != nil {
 				files[filepath.Join(opts.TSDir, name)] = src
 			}
+		}
+	}
+	if opts.DartDir != "" {
+		if name := opts.dartFile(); name != "-" {
+			src, err := renderDartClient(opts)
+			if err != nil {
+				return nil, err
+			}
+			files[filepath.Join(opts.DartDir, name)] = src
 		}
 	}
 	if opts.CLIDir != "" {

@@ -166,5 +166,6 @@ what would make the whole approach wrong.
 ## Next
 
 - [Mounting resources](../rest/README.md) — the server side of the same grammar
+- [Dart client](../dart/README.md) — the same design where the language cannot narrow
 - [Go CLI](../cli/README.md) — the same argument for a consumer with no compile step
 - [Capabilities](../schema/capabilities.md) — the declarations these types come from

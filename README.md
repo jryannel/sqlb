@@ -65,17 +65,20 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   response type, and a hidden column has no spelling at all. The OpenAPI
   document cannot say any of that — `?status=eq.published` documents as
   `array<string>` — so it is generated from the model instead
-  ([guide](https://jryannel.github.io/sqlb/typescript/)). The same
-  vocabulary becomes a [cobra](https://github.com/spf13/cobra) command tree for
-  a shell: one flag per filterable column, its operators in the usage string, so
+  ([guide](https://jryannel.github.io/sqlb/typescript/)). The same vocabulary
+  reaches a Flutter app as Dart — plus the cursor pager an infinite-scrolling
+  list needs, which is the piece a mobile client otherwise rebuilds out of
+  `has_more` and an offset counter
+  ([guide](https://jryannel.github.io/sqlb/dart/)) — and a shell as a
+  [cobra](https://github.com/spf13/cobra) command tree: one flag per filterable column, its operators in the usage string, so
   `--help` states what a resource accepts without a request — which is the form
   the guarantee has to take for a caller with no compile step, such as an agent
   ([guide](https://jryannel.github.io/sqlb/cli/)).
 - **No dependencies to inherit.** The engine depends on the standard library
   alone, and a CI gate enforces it. Only the REST adapter pulls in
-  [Huma](https://huma.rocks), and only if you use it. The generated TypeScript
-  and the generated CLI are separate toolchains and separate opt-ins; the
-  emitters produce text, so `codegen` itself takes nothing.
+  [Huma](https://huma.rocks), and only if you use it. The generated TypeScript,
+  the generated Dart and the generated CLI are separate toolchains and separate
+  opt-ins; the emitters produce text, so `codegen` itself takes nothing.
 
 ## Install
 
@@ -118,13 +121,13 @@ server over the manifest.
 |---|---|
 | [Start here](https://jryannel.github.io/sqlb/start/) | Overview, quickstart, a worked first app, structs-first adoption |
 | [Concepts](https://jryannel.github.io/sqlb/concepts/) | The five ideas the rest of it rests on |
-| [Schema](https://jryannel.github.io/sqlb/schema/) · [Queries](https://jryannel.github.io/sqlb/queries/) · [REST](https://jryannel.github.io/sqlb/rest/) · [TypeScript](https://jryannel.github.io/sqlb/typescript/) · [CLI](https://jryannel.github.io/sqlb/cli/) · [Migrations](https://jryannel.github.io/sqlb/migrations/) | One section per surface |
+| [Schema](https://jryannel.github.io/sqlb/schema/) · [Queries](https://jryannel.github.io/sqlb/queries/) · [REST](https://jryannel.github.io/sqlb/rest/) · [TypeScript](https://jryannel.github.io/sqlb/typescript/) · [Dart](https://jryannel.github.io/sqlb/dart/) · [CLI](https://jryannel.github.io/sqlb/cli/) · [Migrations](https://jryannel.github.io/sqlb/migrations/) | One section per surface |
 | [Examples](https://jryannel.github.io/sqlb/examples/) | Six worked applications, and what each one proves |
 | [Reference](https://jryannel.github.io/sqlb/reference/) | Filter operators, column types, capabilities, codegen options, CLI, rejections |
 | [Architecture](https://jryannel.github.io/sqlb/project/architecture/) | How the pieces fit, the request path, where safety lives |
 | [Decision records](https://jryannel.github.io/sqlb/adr/) | What was decided, why, and what would change our mind |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
-| [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client and CLI |
+| [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
 
 ## Development
 

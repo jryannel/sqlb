@@ -65,6 +65,18 @@ package with no REST surface does not acquire a dependency on Huma.
 Two files because the layers are usable separately. See
 [TypeScript SDK](/sqlb/typescript/).
 
+## Dart client
+
+| Field | Default | Notes |
+|---|---|---|
+| `DartDir` | *empty* | Relative to `Dir`. **Empty means nothing is emitted** — the right default for a project with no Dart consumer |
+| `DartFile` | `client.gen.dart` | Row views, request bodies, the typed parameter vocabulary, the URL encoder, one function per operation, and a cursor pager per list. **Imports nothing** — not `dart:io`, not a pub package, not Flutter |
+
+One file, not two: there is no framework layer to make optional, because Dart
+has no equivalent of TanStack Query to bind to. The output is clean under
+`package:lints/recommended` and stable under `dart format`, so a consuming
+project needs no exclusion for either. See [Dart SDK](/sqlb/dart/).
+
 ## Go CLI
 
 | Field | Default | Notes |
@@ -91,7 +103,7 @@ stale, err := codegen.Check(opts)
 Returns the files that would change, without writing any. Generated code is
 committed, so this belongs in CI — it drifts the first time somebody edits a
 schema and forgets to regenerate. It covers every artefact the same `Options`
-would emit, including the TypeScript client and the CLI.
+would emit, including the TypeScript client, the Dart client and the CLI.
 
 `codegen.Must` panics on error, which is what a generator `main` wants.
 

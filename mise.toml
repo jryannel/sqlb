@@ -22,6 +22,14 @@ golangci-lint = "2.12.2"
 # same reason the others are: the emitted client's guarantees are enforced by
 # tsc, and a different tsc is a different guarantee.
 node = "26.4.0"
+# The third toolchain, and the last one this repository intends to acquire. It
+# is here for the Dart client codegen emits into example/tasks/mobile, whose
+# guarantees are enforced by `dart analyze` the way the TypeScript client's are
+# by tsc — including the `unnecessary_ignore` lint that makes lib/refusals.dart
+# a gate rather than a comment (ADR-0031). The Dart SDK alone, not Flutter: the
+# emitted client imports nothing, so nothing in that package needs a Flutter
+# toolchain and CI does not pay for one.
+dart = "3.12.2"
 
 # ---- Tasks ----
 
@@ -50,6 +58,16 @@ run = '''
 [ -d node_modules ] || npm ci --no-audit --no-fund
 npm run typecheck
 npm test
+'''
+
+[tasks.test-dart]
+description = "Analyse the generated Dart client, check its formatting, and run its tests. Three gates in one, and each earns its place: `dart analyze --fatal-infos` is where the client's claim lives — a misspelled column, an operator its type does not accept, a sort on a column that did not opt in, and lib/refusals.dart marks each of those with an `// ignore:` that the unnecessary_ignore lint reports if it ever stops being needed. `dart format` must be a no-op, because the emitter reproduces its decisions rather than deferring to it, and a generated file the formatter would rewrite puts a project's format gate and its staleness gate in conflict."
+dir = "example/tasks/mobile"
+run = '''
+dart pub get
+dart analyze --fatal-infos
+dart format --output=none --set-exit-if-changed .
+dart test
 '''
 
 [tasks.test-cli]
@@ -141,6 +159,11 @@ if ! git hash-object --stdin-paths < "$tmp/names" > "$tmp/before" 2>"$tmp/err"; 
 fi
 
 mise run fmt
+# The example's hand-written Dart, for the same reason gofmt runs above: the
+# gate checks formatting and this is where it gets fixed. The generated client
+# is format-stable by construction (ADR-0031), so this only ever touches files
+# a person wrote.
+(cd "$MISE_PROJECT_ROOT/example/tasks/mobile" && dart format . > /dev/null)
 # lint-fix exits non-zero when findings remain that it cannot fix by itself.
 # That is not a failure of healing, and must not abort the report below.
 mise run lint-fix || remaining=1
@@ -332,7 +355,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-ts, test-cli, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run vet
@@ -342,6 +365,7 @@ mise run deps-check
 mise run generate-check
 mise run test-race
 mise run test-ts
+mise run test-dart
 mise run test-cli
 # Last because they are the slowest and the only ones needing Docker. It is in the
 # gate rather than beside it because a check nobody remembers to run is one this

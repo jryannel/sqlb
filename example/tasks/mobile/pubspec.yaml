@@ -1,0 +1,19 @@
+name: tasks_mobile
+description: >-
+  The task manager's Dart client, generated from the same schema declaration the
+  Go server is generated from.
+publish_to: none
+version: 0.0.0
+
+environment:
+  sdk: ^3.9.0
+
+# No runtime dependencies, deliberately. The generated client imports nothing,
+# and the hand-written transport beside it is written against dart:io rather
+# than Dio so that this package can be analysed and tested with the Dart SDK
+# alone — a Flutter toolchain in CI would cost several minutes to check
+# something that has no Flutter in it. lib/README.md has the Dio and Riverpod
+# versions of the same seam, for the app that does have one.
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

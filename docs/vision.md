@@ -108,7 +108,7 @@ speculative and should be reordered as understanding improves.
 
 **1. The generator.** The keystone, and mostly landed: models, typed column
 sets, REST request bodies, the registration that mounts them, a TypeScript
-client, and a cobra CLI. What remains is migrations — the generator can render
+client, a Dart client, and a cobra CLI. What remains is migrations — the generator can render
 DDL but nothing tells it what changed. `example/blog` is generated end to end,
 so every behaviour test in it tests the generator.
 
@@ -121,6 +121,13 @@ model instead, and stops at a key factory the change feed can consume — see
 [ADR-0028](adr/0028-typescript-client.md) and
 [the guide](typescript/README.md). `example/tasks/web` is the worked one,
 and its refusals file asserts what must not compile.
+
+The same vocabulary reached Dart next, for a Flutter app
+([ADR-0031](adr/0031-dart-client.md), [the guide](dart/README.md)). Three of
+ADR-0028's decisions had to go the other way there — camelCase members, a row
+view instead of a data class, and a cursor pager instead of a key factory — and
+each is a language fact rather than a preference, which is what makes the split
+worth reading if a third language ever follows.
 
 The REST handlers turned out not to need generating at all: one generic function
 serves every model, while the *document* is built per resource from the model's

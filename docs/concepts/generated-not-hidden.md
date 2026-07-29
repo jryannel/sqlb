@@ -53,9 +53,10 @@ The generated artefacts, all from one `Generate` call:
 | `rest_gen.go` | Request bodies and a `Register` function, one call per exposed table | when a table is exposed |
 | `sqlb.json` | The manifest: every column, its capabilities, the operator vocabulary | always |
 | `client.gen.ts`, `queries.gen.ts` | [The TypeScript client](../typescript/README.md) | `TSDir` |
+| `client.gen.dart` | [The Dart client](../dart/README.md) | `DartDir` |
 | `cli_gen.go` | [The cobra command tree](../cli/README.md) | `CLIDir` |
 
-The last two are emitted into the repository that consumes them, the way
+The last three are emitted into the repository that consumes them, the way
 `models_gen.go` is. There is no npm package to install, and therefore no way for
 the client to be a version behind the server it talks to.
 

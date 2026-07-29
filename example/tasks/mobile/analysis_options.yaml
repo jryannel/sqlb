@@ -1,0 +1,17 @@
+# The generated client is analysed under the same rules a Flutter app inherits,
+# because that is the claim being checked: a client a project has to exclude
+# from analysis is a client it will not read.
+#
+# package:lints/recommended is what flutter_lints is built on, plus the two
+# rules a Flutter project's own analysis_options almost always adds.
+include: package:lints/recommended.yaml
+
+linter:
+  rules:
+    prefer_single_quotes: true
+    public_member_api_docs: true
+    # What makes lib/refusals.dart a gate rather than a comment: an `// ignore:`
+    # for a diagnostic that is no longer produced is itself reported, so a
+    # generator that widened one of those types fails here. It is Dart's
+    # `@ts-expect-error`, and it is the reason this file turns infos fatal.
+    unnecessary_ignore: true

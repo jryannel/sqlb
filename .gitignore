@@ -12,6 +12,10 @@ coverage.*
 # what it installs is not.
 node_modules/
 
+# Dart, for the example's generated client. Same rule: pubspec.lock is tracked,
+# the package cache and analyser state it produces are not.
+.dart_tool/
+
 # Local environment
 .env
 .env.local

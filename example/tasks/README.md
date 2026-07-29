@@ -52,6 +52,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | [`app/hooks.go`](app/hooks.go) | Also where the comment invariant lives: two writes in one transaction, and `AfterCommit` for the side effect. |
 | [`cmd/migrate/main.go`](cmd/migrate/main.go) | The generated baseline, plus three things the DSL cannot express. |
 | [`web/`](web/) | The generated TypeScript client, and the hand-written transport it takes. The schema reaches the browser without a second declaration. |
+| [`mobile/`](mobile/) | The generated Dart client, plus the cursor pager an infinite-scrolling list needs. The same schema reaches a phone. |
 | [`cli/`](cli/) | The generated cobra command tree, and [`cmd/taskctl`](cmd/taskctl/) — four lines — that runs it. The same schema reaches a shell. |
 | [`app/server_test.go`](app/server_test.go) | Every claim above, asserted against a real Postgres. |
 
@@ -130,6 +131,42 @@ produce it.
 
 Run `mise run test-ts` to typecheck it. [ADR-0028](../../docs/adr/0028-typescript-client.md)
 is the record.
+
+## And so is the Dart client
+
+[`mobile/`](mobile/) holds the same vocabulary for a Flutter app, emitted in the
+same run. Three things could not carry over from TypeScript, and each is a
+language fact rather than a preference: members are camelCase because
+snake_case fails Dart's lowerCamelCase lint everywhere it is read; a projection
+throws `MissingColumn` when the dropped column is read rather than failing to
+compile, because Dart has no `Pick<T, K>`; and the fourth layer is a cursor
+pager rather than a query-key factory, because Dart has no keyed query cache
+for keys to key.
+
+```dart
+final feed = taskPager(
+  transport,
+  params: TaskListParams(
+    where: TaskWhere(
+      status: Cond(isIn: [TaskStatus.todo, TaskStatus.inProgress]),
+      dueAt: NullableCond(notNull: true),
+    ),
+    sort: [TaskSort.priority.desc],
+    perPage: 100,
+  ),
+);
+await feed.loadMore();
+```
+
+That last part is the piece a phone actually needs. Every list response carries
+`next_cursor`, so an infinite-scrolling list needs no page arithmetic — and the
+arithmetic is what hand-written mobile clients reimplement out of `has_more` and
+an offset counter, once per screen.
+
+[`mobile/lib/refusals.dart`](mobile/lib/refusals.dart) asserts sixteen refusals
+the way `refusals.ts` asserts twelve, using the `unnecessary_ignore` lint as
+Dart's `@ts-expect-error`. Run `mise run test-dart`;
+[ADR-0031](../../docs/adr/0031-dart-client.md) is the record.
 
 ## And so is the CLI
 

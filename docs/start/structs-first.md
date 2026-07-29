@@ -72,7 +72,7 @@ generate from:
 | Typed column facade (`PostCols`) | generated | use `sqlb.F("column")` |
 | Request bodies (`PostCreate`, `PostPatch`) | generated | write them, or use `rest.None[T]` |
 | Migrations from a schema diff | yes | your existing runner owns the DDL |
-| TypeScript client, Go CLI | generated | not available |
+| TypeScript client, Dart client, Go CLI | generated | not available |
 | REST resources | one generated `Register` call | one `rest.Resource[T, C, U]` call per table |
 
 The query builder, the filter grammar, the capabilities, the hooks and the
