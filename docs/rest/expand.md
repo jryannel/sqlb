@@ -106,25 +106,49 @@ relations do not expand in turn, and there is no `?expand=list.workspace`. One
 level is a join per relation and a bounded statement; nesting is where a depth
 limit and a cost model have to be argued for, and neither has been.
 
-## Hooks do not follow the join
+## Hooks follow the join
 
-A `BeforeQuery` hook registered on the target model does not run for an
-expansion — the target arrives as a joined subexpression, not as a query of its
-own. Where a hook enforces a boundary the expansion has to respect, **the schema
-has to enforce it too**: `example/tasks` keeps a task and its list in the same
-workspace with a composite foreign key, not with the hook.
+A `BeforeQuery` hook registered on the target model **does** run for an
+expansion. Its predicates are rewritten onto the join alias and added to the
+join condition, so a tenant scope or a soft-delete filter registered against
+`List` confines the `list` an expanded task carries, exactly as it confines
+`GET /lists`:
 
-This is the sharpest edge on this page, and it is sharper than it looks. A table
-that declares `Scoped` has been *proved* to have a confining hook before it
-mounts — so an author who declares it, satisfies the check and sees the resource
-mount has more reason than before to believe the rows are confined everywhere.
-An expansion joins that table from a parent, and no handler for it runs, so the
-hook the check proved exists is precisely the one the join does not call.
+```sql
+LEFT JOIN "lists" AS "__ex_list"
+       ON "__ex_list"."id" = "tasks"."list_id"
+      AND "__ex_list"."workspace_id" = $1      -- List's own BeforeQuery hook
+```
 
-**What confines an expansion is the foreign key, not the declaration.** A
-composite key carrying the scoping column makes a cross-tenant reference
-unrepresentable; a plain single-column key does not, and nothing at mount time
-will say so ([ADR-0030](../adr/0030-declared-scope-is-required.md#consequences)).
+The rewrite is what makes this safe rather than merely present. A hook writes
+`sqlb.F("workspace_id")` — a bare column, because the query it was written for
+has one table — and a bare name inside a join resolves to the *parent* table. So
+each predicate is requalified before it is spliced in, and one that cannot be
+requalified with certainty fails the query rather than being dropped:
+
+- **`RawPred`** is opaque text this package never parsed, so its bare names
+  cannot be rewritten.
+- **A column qualified with another table** names something the expansion did
+  not join — a table the hook reached with its own `Join`.
+
+Both produce an error naming the relation and what to do instead. A dropped
+scope predicate would be a silent leak, which is worse than a loud refusal.
+
+Two things the expansion does not take from the hook: its **ordering and its
+limit** — the hook runs against a throwaway builder, and a collection's order
+and cap belong to the schema — and anything it does at **build time**, since the
+predicates are resolved when the query runs. `SQL()` renders the builder as it
+stands, which is the contract it has always had: the parent's own hooks do not
+run at build time either.
+
+### The composite key is still worth having
+
+`example/tasks` keeps a task and its list in the same workspace with a composite
+foreign key, and that is still the arrangement to reach for. It makes a
+cross-tenant reference **unrepresentable in the data** rather than merely
+unreachable through this query path — a stronger property, and one that survives
+a statement someone writes by hand
+([ADR-0030](../adr/0030-declared-scope-is-required.md#consequences)).
 
 [ADR-0025](../adr/0025-expansion-is-one-statement.md) records why it is one
 statement, why the columns are listed rather than taken wholesale, and what

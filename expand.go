@@ -1,6 +1,7 @@
 package sqlb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -60,59 +61,61 @@ import (
 // snapshot argument above holds unchanged. ADR-0022 has the rest, including why
 // the value is an envelope rather than a bare array.
 //
-// # What an expansion does not carry: the target's query hooks
+// # An expansion carries the target's query hooks
 //
-// This is the one part of expansion worth knowing before relying on it.
+// A BeforeQuery hook on the target runs. `Query[Task]().Expand("list")` joins
+// `lists` on the foreign key *and* on whatever predicates List's hooks add, so
+// a tenant scope or a soft-delete filter registered against List confines the
+// expanded row as well as List's own endpoint.
 //
-// A BeforeQuery hook on the target does not run. `Query[Task]().Expand("list")`
-// joins `lists` on the foreign key and nothing else, so a predicate registered
-// against List — the tenant scope, the soft-delete filter — is not in the join's
-// ON clause. Hidden columns are still honoured, because those are a property of
-// the model rather than of a hook; row-level rules are not.
+// This did not use to be true, and the reason it now is worth stating, because
+// the two obstacles were real. A hook is
+// func(context.Context, *Builder[List]) error and this code holds a *Model
+// reached through a relation, with no static type to instantiate a Builder of:
+// the registry therefore stores a type-erased view of each hook set, created
+// where the type is still known (see queryScoper in hooks.go). And a hook
+// writing sqlb.F("org_id") wrote a bare column, which inside a join would
+// resolve to the *parent* table — so every predicate is rewritten onto the join
+// alias before it is spliced in (see qualify.go).
 //
-// The reason is mechanical rather than considered: a hook is
-// func(context.Context, *Builder[List]) error, and the expansion code holds a
-// *Model reached through a relation, with no static type to instantiate a
-// Builder of. Running them would also mean qualifying every predicate they add
-// with the join alias, which a hook writing sqlb.F("org_id") did not do and
-// RawPred cannot be made to do.
+// Three consequences follow from the second half:
 //
-// So the rows an expansion returns are exactly the rows the parent's own
-// foreign key points at, and what confines them is the foreign key rather than
-// anything registered against the target.
+//   - A predicate this package cannot requalify with certainty — RawPred, or a
+//     column qualified with a table the expansion did not join — fails the
+//     query rather than being dropped. A dropped scope predicate is the leak
+//     this closes, arriving silently by another route.
+//   - Only the hook's *predicates* are read. It runs against a throwaway
+//     builder, so a limit, an ordering or a projection it sets has no effect
+//     here; a collection's order and cap belong to the schema.
+//   - The predicates are resolved on the execution path, not at Expand(),
+//     because a scope reads its tenant from the context. `SQL()` renders the
+//     builder as it stands — which is the contract it has always had, since the
+//     parent's own hooks do not run at build time either.
 //
-// # Scoped does not reach an expansion, and the reason is the same one
+// The scope lands in the join's ON clause for a forward expansion and in the
+// subquery's WHERE for a collection, and the placement is load-bearing in both:
+// in WHERE a forward scope would drop the parent row rather than null its
+// expansion, and in ON a collection scope would count children toward has_more
+// that the caller may never fetch.
+//
+// # Scoped now reaches an expansion
 //
 // [ADR-0030] makes `Scoped` an obligation: a table declaring that its rows are
 // confined will not mount a REST resource until a hook exists to confine them.
-// That check is about the target's *own* endpoint. An expansion is not that
-// endpoint — no handler for the target runs, and the hook the check proved
-// exists is exactly the hook this join does not call.
+// That check is about the target's own endpoint, and for a while the hook it
+// proved existed was precisely the one an expansion did not call — so a
+// declaration that read as a boundary was not one across a join.
 //
-// The distinction is easy to lose, because the declaration now reads as a
-// boundary and mostly is one. ADR-0030's own account of where the boundary is
-// not held names `sqlb.Query[T]()` in application code; expanding a Scoped
-// table from a parent is the second such place, and it is reachable from a
-// request rather than only from code someone wrote on purpose.
+// It is now. The hook that satisfies the mount check is the hook the join
+// carries, so the declaration means the same thing in both places.
 //
-// What actually holds across the join is the shape of the key:
-//
-//   - A composite foreign key carrying the confining column — the arrangement
-//     `example/tasks` uses, where tasks reference `(workspace_id, list_id)`
-//     against `lists (workspace_id, id)` — makes a cross-tenant reference
-//     unrepresentable. The parent cannot point outside its own tenant, so the
-//     expansion cannot either, whether or not any hook runs. This is the
-//     arrangement to reach for, and declaring `Scoped` is a good reason to
-//     reach for it rather than a substitute.
-//   - A plain single-column foreign key leaves the expansion bounded only by
-//     what the parent row happens to reference. If a row can reference a row
-//     its own readers may not see, expanding it shows them that row — and the
-//     `Scoped` declaration on the target will not have stopped it.
-//
-// Neither is a bug in a schema where a parent can only reference rows its own
-// readers may see, which is the usual case. It is a bug in a schema where that
-// is not true, nothing here or at mount time will catch it, and that is why it
-// is stated rather than left to be discovered.
+// A composite foreign key carrying the confining column — the arrangement
+// `example/tasks` uses, where tasks reference `(workspace_id, list_id)` against
+// `lists (workspace_id, id)` — is still worth reaching for, and is now a
+// belt-and-braces measure rather than the only thing holding. It makes a
+// cross-tenant reference unrepresentable in the data rather than merely
+// unreachable through the query, which is a stronger property and the one that
+// still holds if someone writes the query by hand.
 //
 // [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
 
@@ -161,6 +164,58 @@ func (b *Builder[T]) Expand(names ...string) *Builder[T] {
 // Expanded reports the relations this query will resolve.
 func (b *Builder[T]) Expanded() []string { return append([]string(nil), b.expand...) }
 
+// resolveExpansionScopes collects each expanded target's BeforeQuery predicates
+// and requalifies them onto the join alias.
+//
+// It runs where the parent's own hooks run — on the execution path, with a
+// context — because a scope predicate reads its tenant from that context. A
+// builder compiled without it renders the join unscoped, which is the same
+// contract SQL() has always had for the parent's hooks: hooks apply when the
+// query runs, not when it is built.
+//
+// A target with no registered hook contributes nothing and costs one map
+// lookup, so the common case is unaffected.
+func (b *Builder[T]) resolveExpansionScopes(ctx context.Context, exec Executor) error {
+	if len(b.expand) == 0 {
+		return nil
+	}
+	reg := registryOf(exec)
+	for _, name := range b.expand {
+		rel := b.model.Relation(name)
+		if rel == nil {
+			continue // already reported by Expand
+		}
+		target, err := rel.Target()
+		if err != nil {
+			return err
+		}
+		scoper := reg.scoperFor(target.Type)
+		if scoper == nil {
+			continue
+		}
+		preds, err := scoper.queryScope(ctx)
+		if err != nil {
+			return fmt.Errorf("sqlb: running %s's query hooks for expansion %q: %w",
+				target.Type.Name(), name, err)
+		}
+		if len(preds) == 0 {
+			continue
+		}
+		qualified, err := qualifyPreds(preds, target.Table, expandAlias(name))
+		if err != nil {
+			return fmt.Errorf("%w (expanding %q on %s)", err, name, b.model.Type.Name())
+		}
+		if b.expandScope == nil {
+			b.expandScope = make(map[string][]Pred, len(b.expand))
+		}
+		b.expandScope[name] = qualified
+	}
+	return nil
+}
+
+// scopeFor returns the resolved predicates confining one expanded relation.
+func (b *Builder[T]) scopeFor(name string) []Pred { return b.expandScope[name] }
+
 // compileExpansions writes the joins. Called while compiling FROM, so the
 // aliases exist by the time the projection references them.
 //
@@ -194,6 +249,20 @@ func (b *Builder[T]) compileExpansions(c *compiler) {
 		c.column(Column{Table: alias, Name: target.PK.Name})
 		c.write(" = ")
 		c.column(Column{Table: b.from(), Name: rel.FK.Name})
+
+		// The target's scope goes in ON rather than in WHERE, and the
+		// difference is the whole behaviour of a LEFT JOIN: in WHERE it would
+		// discard the parent rows whose target is out of scope, turning the
+		// expansion into a filter on the list being paged. In ON those parents
+		// are returned with a null expansion, which is what "there is a related
+		// row and it is not yours to see" should look like.
+		for _, p := range b.scopeFor(name) {
+			if p.IsZero() {
+				continue
+			}
+			c.write(" AND ")
+			c.operand(p.Expr())
+		}
 	}
 }
 
@@ -344,6 +413,19 @@ func (b *Builder[T]) compileCollection(c *compiler, name string, rel *RelationIn
 	// relying on the statement's default qualifier, because inside this
 	// subquery an unqualified name resolves to the child table first.
 	c.column(Column{Table: b.from(), Name: b.model.PK.Name})
+
+	// The child's own scope. Here it belongs in WHERE rather than beside a
+	// join condition: the subquery *is* the collection, so a row it must not
+	// return is a row that must not be counted either — has_more counts what
+	// this WHERE admits, and a scope in the wrong place would report children
+	// the caller may never fetch.
+	for _, p := range b.scopeFor(name) {
+		if p.IsZero() {
+			continue
+		}
+		c.write(" AND ")
+		c.operand(p.Expr())
+	}
 
 	c.write(" ORDER BY ")
 	order()

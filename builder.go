@@ -28,10 +28,16 @@ type Builder[T any] struct {
 	having []Pred
 	orders []Order
 	expand []string
-	limit  *int
-	offset *int
-	lock   string
-	err    error
+	// expandScope holds the target's BeforeQuery predicates for each expanded
+	// relation, already requalified onto the join alias. It is filled on the
+	// execution path rather than at Expand(), because the predicates depend on
+	// the context a hook reads its tenant from — the same reason the parent's
+	// own hooks do not run at build time either. See expand.go.
+	expandScope map[string][]Pred
+	limit       *int
+	offset      *int
+	lock        string
+	err         error
 }
 
 type joinClause struct {
@@ -88,6 +94,12 @@ func (b *Builder[T]) Clone() *Builder[T] {
 	c.having = append([]Pred(nil), b.having...)
 	c.orders = append([]Order(nil), b.orders...)
 	c.expand = append([]string(nil), b.expand...)
+	if b.expandScope != nil {
+		c.expandScope = make(map[string][]Pred, len(b.expandScope))
+		for k, v := range b.expandScope {
+			c.expandScope[k] = append([]Pred(nil), v...)
+		}
+	}
 	if b.limit != nil {
 		v := *b.limit
 		c.limit = &v

@@ -90,29 +90,26 @@ stopped early because something was missing.
 Ordered by whether it touches a surface that stops being revisable. Everything
 in stream A and B is a blocker. Everything below is negotiable.
 
-### A. The hole that is a security bug, not a gap
+### A. The hole that is a security bug, not a gap — **closed**
 
-**`?expand` does not run the target's hooks.** Both evaluations found it
-independently, and [ADR-0030](adr/0030-declared-scope-is-required.md) records it
-under Consequences: a `BeforeQuery` hook confines a model's own reads, and an
-expansion reaches the target table through a join that hook never sees. On a
-tenant-scoped schema that is a cross-tenant read behind a capability the schema
+**`?expand` did not run the target's hooks.** Both evaluations found it
+independently, and [ADR-0030](adr/0030-declared-scope-is-required.md) recorded
+it under Consequences: a `BeforeQuery` hook confines a model's own reads, and an
+expansion reached the target through a join that hook never saw. On a
+tenant-scoped schema that was a cross-tenant read behind a capability the schema
 declared safe.
 
-It is first on this list rather than in stream E because of what it is. Every
-other item is something sqlb cannot do; this is something it does wrongly. The
-current mitigation is a composite foreign key — `(tenant_id, id)` — written by
-hand in a migration, which works and is documented in
-`example/tasks/taskschema/schema.go`. That is a workaround the *consumer* has to
-know about, which is exactly the class of thing
-[ADR-0006](adr/0006-capabilities-are-opt-in.md) exists to prevent.
+It is fixed. The expansion runs the target's hooks and requalifies their
+predicates onto the join alias, so the hook that satisfies the mount check is
+the hook the join carries. Neither of the two answers this plan proposed — carry
+the scope predicate, or refuse `Expandable` on an unprotected `Scoped` target —
+turned out to be the cheap one; the first is what landed, and it needed no
+judgement about which schemas are confined by something the package cannot see.
 
-**Decision needed:** either the expansion join carries the target's scope
-predicate, or `Expandable` refuses to mount on a `Scoped` target without the
-composite key in place. The second is far cheaper and is in the spirit of
-ADR-0030 — declarations that oblige rather than generate. Either way it is a new
-ADR, and it must land before 1.0 because the alternative is shipping a documented
-tenant leak.
+A predicate that cannot be requalified with certainty fails the query rather
+than being dropped, which is the one new refusal. The composite foreign key
+remains the stronger arrangement and is now belt-and-braces rather than the only
+thing holding.
 
 ### B. The driver question, decided rather than answered
 
@@ -264,7 +261,7 @@ legible to someone who is not the author.
 
 ### Phase 2 — Close the hole and unblock the ports
 
-- **Stream A**: the `?expand` scope fix, whichever form it takes.
+- ~~**Stream A**: the `?expand` scope fix.~~ Done.
 - **Stream C**: type overrides in `codegen.Options`.
 - Whichever of stream E's rows the two target codebases actually hit — decided
   by reading them, not by guessing here.

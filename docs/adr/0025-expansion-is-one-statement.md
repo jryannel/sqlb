@@ -121,15 +121,23 @@ drift from what the target's own endpoint serves.
 
 **What this costs.** Three things, and the first is the one to watch.
 
-*Hooks do not follow the join.* `BeforeQuery` is keyed by model type and runs for
-the query being executed, so a hook on the target does not apply to an
-expansion. In `example/tasks` this means a soft-deleted list still expands: the
-hook filters `deleted_at` for `GET /lists` and cannot for `?expand=list`. Where
-a hook enforces a boundary the expansion must respect, the schema has to enforce
-it too — that example keeps a task and its list in the same workspace with a
-composite foreign key, not with the hook, and that is why it is safe. This is
-the cost of the two-query alternative inverted: it would have got hooks for free
-and consistency never.
+*Hooks follow the join, and getting them there cost something.* This section
+used to say they did not, and that `BeforeQuery` being keyed by model type made
+it structural. It was not: the registry now stores a type-erased view of each
+hook set, and the predicates are rewritten onto the join alias before they are
+spliced into the `ON` clause, so a soft-delete filter registered against List
+applies to `?expand=list` as it does to `GET /lists`.
+
+The bill is a restriction rather than a cost in the plan. A predicate this
+package cannot requalify with certainty — `RawPred`, whose contents it never
+parsed, or a column naming a table the expansion did not join — fails the query
+instead of being dropped, because a dropped scope predicate is the leak this
+closed arriving silently by another route. Writing a scope with `F()` and the
+comparison operators is what keeps it portable across the join.
+
+This was the sharpest edge of choosing one statement over two, and it is now the
+mildest: the two-query alternative would have got hooks for free and consistency
+never.
 
 *The join is unconditional per named relation.* An `?expand` naming three
 relations is three `LEFT JOIN`s in one statement, and there is no budget for
