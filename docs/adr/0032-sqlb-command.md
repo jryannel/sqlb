@@ -7,8 +7,9 @@
 - **Confidence:** Medium on the convention, High on the mechanism — the driver
   compile is exercised end to end against this repository's own blog example, so
   a green test is a real compile against a real module; the convention has one
-  day of use and two projects behind it. Lower on `migrate`, which works and has
-  already surfaced one defect it cannot fix on its own (#24)
+  day of use and two projects behind it. Lower on `migrate`, which works, and
+  whose first real run surfaced a round-trip defect that has since been fixed
+  (#24)
 - **Decided:** 2026-07-29
 - **Last reviewed:** 2026-07-29
 
@@ -187,16 +188,57 @@ caught by a test written to fail:
   failure at the time. The version is now taken from the directory: the
   timestamp is a starting point, and if it does not already sort after every
   version present, the highest one is incremented instead.
-- **A hand-written `schema.Check` never round-trips.** Running `migrate -check`
-  against `example/tasks` proposes dropping and re-adding the same CHECK
+- **A hand-written `schema.Check` never round-tripped.** Running `migrate
+  -check` against `example/tasks` proposed dropping and re-adding the same CHECK
   constraint on every run, because `migrate.Diff` compares constraint
   definitions as strings and Postgres hands back a normalised form —
-  parenthesised, with an explicit `::text` cast. That is a pre-existing defect
-  in the introspect/diff round trip rather than one this command introduced;
-  nothing had previously compared a *declared* CHECK against an *introspected*
-  one. It is [issue #24](https://github.com/jryannel/sqlb/issues/24), and until
-  it is fixed `migrate -check` cannot be a CI gate for a schema that declares
-  one. Enums are unaffected.
+  parenthesised, with an explicit `::text` cast. A pre-existing defect in the
+  introspect/diff round trip rather than one this command introduced; nothing
+  had previously compared a *declared* CHECK against an *introspected* one. It
+  was [issue #24](https://github.com/jryannel/sqlb/issues/24), and it is fixed
+  by `shadow.NormalizeChecks` — see below. Enums were never affected.
+
+### The declared CHECK, and why the fix needed a database
+
+Fixing #24 is where the shape of this command paid for itself a second time.
+
+Postgres does not store a check expression as it was written; it stores a parse
+tree, and renders it back canonically. There is no way to recover the author's
+spelling, so the two sides of the comparison can only be made to agree by
+putting the *declared* expression through the same normalisation — which means
+asking a Postgres.
+
+The obvious alternative was to canonicalise both strings in Go: strip redundant
+parentheses, drop `::type` casts, collapse whitespace. It was rejected on
+consequence asymmetry, the same test [ADR-0014](0014-migrations-and-import.md)
+applies to inferring renames. Stripping parentheses loses information —
+`(a OR b) AND c` and `a OR (b AND c)` reduce to the same string — so a heuristic
+can report two genuinely different constraints as equal, and a diff that says
+"unchanged" about a constraint that changed produces no migration at all. That
+failure is silent and the schema edit never reaches the database. The failure it
+would replace is churn: loud, visible, harmless. Trading a loud wrong answer for
+a quiet one is the wrong direction.
+
+So `shadow.NormalizeChecks` adds each declared expression to the replayed table,
+reads back what Postgres stored, and rolls the whole thing back. Correct by
+construction rather than by approximation, at one round trip per check. It lives
+in `shadow` because that package already exists to answer questions by asking a
+throwaway database, and it runs at the one moment the answer is available: the
+shadow database is open, and the tables the checks refer to are in it.
+
+Three details the implementation forced. Each probe takes a savepoint, because
+Postgres aborts a transaction on any error and one unprobeable check would
+otherwise take every check after it down — making the failure look like a
+property of the next table. A check that cannot be probed is reported and left
+as declared rather than failing the run, since the ordinary reason is that it
+names a column this very migration adds, and such a check is new anyway. And a
+table the replay did not produce is skipped silently, because every check on
+every new table would otherwise arrive as a warning about a comparison nobody
+was going to make.
+
+`migrate.Diff` is untouched and still a pure function over two registries, which
+is the property ADR-0014 rests on. The impurity is in a separate call the caller
+makes first.
 
 ## What would change our mind
 
@@ -273,3 +315,8 @@ ones, which is worse than a compile.
   that the record did not anticipate — that versions have to come from the
   directory rather than the clock, and that a declared CHECK never round-trips
   (#24). Both are in Consequences.
+- 2026-07-29 — #24 fixed with `shadow.NormalizeChecks`, and the reasoning added
+  under Consequences. Worth recording as a revision rather than an edit: the
+  fix is only available because the command already had a database open at the
+  right moment, which was not an argument this record made for the design and
+  is now one of the better ones.
