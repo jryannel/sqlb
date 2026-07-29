@@ -47,7 +47,7 @@ dir = "pgtest"
 run = "go test ./..."
 
 [tasks.test-demo]
-description = "Run the task-manager example's suite against a real Postgres in a container. Needs Docker. Separate from `test` for the same reason `test-pg` is: the engine's inner loop stays database-free. This is the example that proves the pieces compose — schema to migration to DDL Postgres accepts, a JWT workspace boundary that holds across tenants, and a transaction that leaves nothing behind when it aborts."
+description = "Run the task-manager example's suite against a real Postgres in a container. Needs Docker. Separate from `test` for the same reason `test-pg` is: the engine's inner loop stays database-free. This is the example that proves the pieces compose — schema to migration to DDL Postgres accepts, a JWT workspace boundary that holds across tenants, and a transaction that leaves nothing behind when it aborts. It also carries the drift gate `generate-check` cannot be: migrations/drift_test.go replays the checked-in history and requires it to build what taskschema declares, so editing schema.go without adding a migration fails here rather than in production."
 dir = "example/tasks"
 run = "go test ./..."
 

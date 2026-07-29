@@ -88,7 +88,7 @@ func runMigrate(p Project, target *schema.Registry, args []string, stdout, stder
 	}
 
 	ctx := context.Background()
-	current, err := currentSchema(ctx, p, format, stderr)
+	current, err := currentSchema(ctx, p, format, target, stderr)
 	if err != nil {
 		line(stderr, err)
 		return 1
@@ -189,15 +189,25 @@ func runMigrate(p Project, target *schema.Registry, args []string, stdout, stder
 	return 0
 }
 
-// currentSchema is the state the checked-in history builds.
+// currentSchema is the state the checked-in history builds — and, while the
+// same connection is open, the place target is made comparable with it.
+//
+// The second job is here rather than beside the diff because it needs the
+// database this function opens and closes: Postgres stores a CHECK as a parse
+// tree and hands back its own spelling, so a declared check and an introspected
+// one never match as strings, and the only reliable way to compare them is to
+// put the declared one through the same normalisation (issue #24, and
+// shadow.NormalizeChecks at length). Handing the *sql.DB back out instead would
+// widen this function's contract to "and also, close this" for one caller.
 //
 // An empty migration directory is the baseline case — the first migration of a
 // project — and it is answered without a database at all. That is worth the
 // special case: it means adopting sqlb does not require standing up a scratch
 // Postgres before the first `sqlb migrate` will run, and the answer is not a
 // guess. An empty history replays to an empty schema, which is exactly what an
-// empty registry is.
-func currentSchema(ctx context.Context, p Project, format migrate.Format, stderr io.Writer) (*schema.Registry, error) {
+// empty registry is. Nothing needs normalising either, because every check in
+// the declaration is new and nothing is being compared with it.
+func currentSchema(ctx context.Context, p Project, format migrate.Format, target *schema.Registry, stderr io.Writer) (*schema.Registry, error) {
 	empty, err := historyIsEmpty(p.MigrationsDir)
 	if err != nil {
 		return nil, err
@@ -225,16 +235,37 @@ func currentSchema(ctx context.Context, p Project, format migrate.Format, stderr
 	}
 	defer func() { _ = db.Close() }()
 
-	reg, report, res, err := shadow.Build(ctx, db, shadow.Options{
+	opts := shadow.Options{
 		Dir:    p.MigrationsDir,
 		Format: format,
 		Schema: p.PostgresSchema,
 		Module: p.Module,
-	})
+	}
+	reg, report, res, err := shadow.Build(ctx, db, opts)
 	if err != nil {
 		return nil, err
 	}
 	say(stderr, "sqlb: replayed %d migration(s), %d statement(s)\n", len(res.Files), res.Statements)
+
+	// The replayed tables are in the database at this point, which is what
+	// makes the declared expressions probeable at all.
+	unprobed, err := shadow.NormalizeChecks(ctx, db, target, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(unprobed) > 0 {
+		// Not a failure. The ordinary reason a check cannot be probed is that
+		// it names a column this migration is about to add, and such a check is
+		// necessarily new — so the diff reports it as new either way, which is
+		// the right answer. Said out loud because the alternative is a silent
+		// fallback to the comparison that #24 is about.
+		line(stderr, "sqlb: some declared checks could not be normalised against the "+
+			"replayed schema, so they are compared as written and may show up as changed "+
+			"when they are not:")
+		for _, u := range unprobed {
+			line(stderr, "  "+u)
+		}
+	}
 
 	if report != nil && !report.Empty() {
 		// Not a refusal. A trigger or a partial index the DSL cannot express
