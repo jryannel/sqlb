@@ -2,11 +2,13 @@
 
 - **Status:** Working — `sqlb generate` and `sqlb check` produce byte-identical
   output to the hand-written generators they replaced in both examples, and
-  `mise run generate-check` is now the command rather than three bespoke mains
+  `mise run generate-check` is now the command rather than three bespoke mains.
+  `sqlb migrate` is built and exercised against a real Postgres in `pgtest`
 - **Confidence:** Medium on the convention, High on the mechanism — the driver
   compile is exercised end to end against this repository's own blog example, so
   a green test is a real compile against a real module; the convention has one
-  day of use and two projects behind it
+  day of use and two projects behind it. Lower on `migrate`, which works and has
+  already surfaced one defect it cannot fix on its own (#24)
 - **Decided:** 2026-07-29
 - **Last reviewed:** 2026-07-29
 
@@ -92,14 +94,45 @@ default had to be correct for simultaneously and was not.
 
 **`Project` wraps `Options` rather than being it.** `Options` is the emitters;
 `Project` is the repository, and the repository has more in it — the migration
-directory and the scratch database `sqlb migrate` needs are the next fields to
-land there. Widening a struct is invisible to every project; changing what
-`SqlbProject` returns is not.
+directory, the format, the minimum Postgres version, and the scratch database
+`sqlb migrate` replays into. Widening a struct is invisible to every project;
+changing what `SqlbProject` returns is not. Those five fields landed a day after
+the type did, and no project's `SqlbProject` changed shape.
 
 **`check` writes nothing and needs no database.** It is the drift gate, it runs
 on every push, and keeping it free of Postgres is deliberate: the emitter half
 of the loop is the half that fails often and the half every project has, so
 gating it must not require a service container.
+
+**`sqlb migrate` is the second half, and it is the one that needs a database.**
+`check` asks whether the committed output matches what the emitters produce now,
+which is a pure function of the schema. `migrate` asks whether the committed
+migration history *builds* that schema, and the only trustworthy way to answer
+it is to replay the history into an empty Postgres — reading a live database
+reports what it looks like, not whether the migrations produce it
+([ADR-0014](0014-migrations-and-import.md)). Two gates, two costs, kept apart
+for that reason.
+
+Its flags are the modes that write nothing (`-check`, `-dry-run`) and the two
+that change what is written (`-unblock`, `-allow-destructive`). `-name` is
+required for a write and not for the others, because it lands in a filename
+`migrate.Write` refuses to overwrite afterwards.
+
+**The scratch database is a function, not a DSN.** `Project.ShadowDB` opens it,
+and it lives in the project for two reasons that point the same way. sqlb has no
+Postgres driver — the engine is standard library only, and `deps-check` keeps it
+that way — so the driver has to enter through an import in the consuming module.
+And the database has to be *empty*, which `shadow.Build` will not make it:
+creating and dropping databases needs credentials the rest of sqlb never asks
+for, and dropping the wrong one is unrecoverable. The destructive half stays with
+the caller who knows which database is scratch, and `ShadowDB` is exactly where
+that caller lives — so the statement that wipes a database is written out, by
+name, in a file in the repository that owns it.
+
+**The first migration needs no database at all.** An empty history replays to an
+empty schema, which is what an empty registry already is, so the baseline is
+answered without connecting. Adopting sqlb therefore does not cost a scratch
+Postgres until the second migration.
 
 ### Two halves, in two places
 
@@ -136,8 +169,8 @@ The command shells out to `go`, so it needs a Go toolchain on `PATH` — fine fo
 a code generator, and worth stating because it means `sqlb` is not a binary you
 can drop into a container that has no compiler.
 
-**Two things the build changed.** Both were caught by tests that were written to
-fail:
+**What building it changed.** Four things the design did not anticipate, each
+caught by a test written to fail:
 
 - `Project.Validate` refuses an absolute `Dir`, and the first version of the
   test helper handed it `t.TempDir()`. The guard fired on its own author, which
@@ -146,6 +179,24 @@ fail:
   `go run` prints `exit status 1` of its own on a non-zero exit. On a
   `sqlb check` failure that lands underneath the list of stale files and reads
   like a second, unexplained error.
+- **Versions cannot come from the clock.** `migrate.TimestampVersion` has
+  one-second resolution, so two migrations generated in the same second collide
+  — and the symptom is not a duplicate filename but `shadow` refusing to replay
+  the history *at all*, several steps later, because the order the two applied
+  in is recorded nowhere. Nothing about the second `sqlb migrate` looks like a
+  failure at the time. The version is now taken from the directory: the
+  timestamp is a starting point, and if it does not already sort after every
+  version present, the highest one is incremented instead.
+- **A hand-written `schema.Check` never round-trips.** Running `migrate -check`
+  against `example/tasks` proposes dropping and re-adding the same CHECK
+  constraint on every run, because `migrate.Diff` compares constraint
+  definitions as strings and Postgres hands back a normalised form —
+  parenthesised, with an explicit `::text` cast. That is a pre-existing defect
+  in the introspect/diff round trip rather than one this command introduced;
+  nothing had previously compared a *declared* CHECK against an *introspected*
+  one. It is [issue #24](https://github.com/jryannel/sqlb/issues/24), and until
+  it is fixed `migrate -check` cannot be a CI gate for a schema that declares
+  one. Enums are unaffected.
 
 ## What would change our mind
 
@@ -215,4 +266,10 @@ ones, which is worse than a compile.
 
 ## Revisions
 
-- 2026-07-29 — Written, after building it.
+- 2026-07-29 — Written, after building `generate` and `check`.
+- 2026-07-29 — `sqlb migrate` added, and with it `Project`'s migration fields
+  and `ShadowDB`. The wrapper paid for itself exactly as predicted: five fields
+  landed and no project's `SqlbProject` changed shape. Two things were learned
+  that the record did not anticipate — that versions have to come from the
+  directory rather than the clock, and that a declared CHECK never round-trips
+  (#24). Both are in Consequences.

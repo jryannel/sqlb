@@ -18,6 +18,8 @@ package codegen
 // mistakes at run time instead of at compile time (ADR-0032).
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
@@ -64,11 +66,9 @@ const ProjectFunc = "SqlbProject"
 // # Why this wraps Options rather than being it
 //
 // Options is the emitters. Project is the repository, and the repository has
-// more in it than emitter output — the migration directory and the scratch
-// database `sqlb migrate` will need are the next two fields to land here.
-// Putting the wrapper in from the start costs one line per project now and
-// saves changing the signature of every project's SqlbProject later, which is
-// the kind of break a convention cannot absorb quietly.
+// more in it than emitter output — everything from MigrationsDir down exists
+// for `sqlb migrate`, and landed after the type did without changing what any
+// project's SqlbProject returns. That was the point of the wrapper.
 type Project struct {
 	// Options configures the emitters.
 	//
@@ -77,13 +77,80 @@ type Project struct {
 	// it only if the project builds a registry of its own instead of using the
 	// default one.
 	Options Options
+
+	// MigrationsDir is where `sqlb migrate` writes, relative to the module
+	// root. Empty means the project does not generate migrations with sqlb, and
+	// the command says so rather than picking a directory.
+	MigrationsDir string
+
+	// MigrationFormat names the runner's file layout: "goose" (the default),
+	// "golang-migrate", or "plain". Resolved by migrate.ByName, so an unknown
+	// name is refused with the list of the ones that exist.
+	//
+	// A string rather than a migrate.Format because a Format is an interface
+	// with unexported methods on the other side of this package, and a project
+	// that wants a custom one is writing its own generator anyway.
+	MigrationFormat string
+
+	// MinPostgres declares the oldest Postgres major version the generated DDL
+	// must run on. Zero means unset, which is what every migration generated
+	// before the option existed already assumes — see migrate.MinPostgres, and
+	// pass it consistently or don't pass it at all.
+	MinPostgres int
+
+	// PostgresSchema is the Postgres schema the shadow replay reads back.
+	// Empty means "public".
+	PostgresSchema string
+
+	// Module scopes the tables read back from the shadow database to one sqlb
+	// module (ADR-0015). Empty means unscoped, which is right unless the
+	// project's tables carry a module prefix — in which case leaving it empty
+	// gives a `current` that disagrees with the declaration about every table
+	// name, and a diff that proposes recreating all of them.
+	Module string
+
+	// ShadowDB opens a connection to an **empty** scratch database, which is
+	// what migrate.Diff needs to be given a trustworthy `current`: the schema
+	// the checked-in history builds, rather than whatever production drifted
+	// into (ADR-0014).
+	//
+	// It is a function in your code, not a DSN in ours, for two reasons that
+	// point the same way.
+	//
+	// The first is that sqlb cannot open a Postgres connection at all. The
+	// engine depends on the standard library alone — `mise run deps-check`
+	// enforces it — so it has no driver registered, and every project has one.
+	// The driver enters through the import in the file that defines this.
+	//
+	// The second is that the database has to be *empty*, and shadow.Build will
+	// not empty it: creating and dropping databases needs credentials the rest
+	// of sqlb never asks for, and dropping the wrong one is unrecoverable. So
+	// the destructive half stays with the caller who knows which database is
+	// scratch — and this function is exactly where that caller lives. Doing it
+	// here means the statement that wipes a database is written out, by name,
+	// in a file in your repository, against a DSN you chose.
+	//
+	//	ShadowDB: func(ctx context.Context) (*sql.DB, error) {
+	//		db, err := sql.Open("pgx", os.Getenv("SQLB_SHADOW_DSN"))
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//		// Scratch, and this line is the assertion that it is.
+	//		_, err = db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+	//		return db, err
+	//	}
+	//
+	// The command closes what this returns. It is not called at all when the
+	// migration directory is empty, because a baseline diffs against nothing
+	// and there is no history to replay.
+	ShadowDB func(context.Context) (*sql.DB, error)
 }
 
 // Main runs the driver program cmd/sqlb generates, and exits.
 //
-// The verb arrives in os.Args because one driver serves both `generate` and
-// `check`; baking it into the emitted source instead would mean compiling twice
-// to do the two things CI does on every push.
+// The verb and its flags arrive in os.Args because one driver serves every
+// verb; baking the verb into the emitted source instead would mean compiling
+// once per thing CI does on a push.
 func Main(p Project) {
 	code := Run(p, os.Args[1:], os.Stdout, os.Stderr)
 	os.Exit(code)
@@ -95,8 +162,8 @@ func Main(p Project) {
 // stale" is not an error — it is the answer `check` exists to give, and it has
 // to be distinguishable from a schema that would not compile.
 func Run(p Project, args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		say(stderr, "sqlb: driver expected exactly one verb, got %d\n", len(args))
+	if len(args) == 0 {
+		line(stderr, "sqlb: driver expected a verb and got none")
 		return 2
 	}
 
@@ -117,7 +184,19 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		opts.Dir = "."
 	}
 
-	switch args[0] {
+	verb, rest := args[0], args[1:]
+	if verb != "migrate" && len(rest) > 0 {
+		say(stderr, "sqlb: %s takes no flags, got %q\n", verb, rest[0])
+		return 2
+	}
+
+	switch verb {
+	case "migrate":
+		// The target of the diff is the declared schema — the same registry the
+		// emitters read, so a migration and the models it implies cannot be
+		// generated from two different pictures.
+		return runMigrate(p, opts.Registry, rest, stdout, stderr)
+
 	case "generate":
 		written, err := Generate(opts)
 		if err != nil {
@@ -151,7 +230,7 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		return 0
 
 	default:
-		say(stderr, "sqlb: driver does not know the verb %q\n", args[0])
+		say(stderr, "sqlb: driver does not know the verb %q\n", verb)
 		return 2
 	}
 }
@@ -177,16 +256,21 @@ func line(w io.Writer, v any) {
 // against it.
 //
 // Options.validate covers the emitters; this covers the one thing it cannot,
-// which is that Dir means something different here. Options is happy with an
-// absolute path — a caller writing its own generator may well want one — and a
+// which is that a path means something different here. Options is happy with an
+// absolute Dir — a caller writing its own generator may well want one — and a
 // Project is not, because a path that resolves against the module root cannot
 // be absolute and still mean the same thing on another machine.
 func (p Project) Validate() error {
-	if filepath.IsAbs(p.Options.Dir) {
-		return fmt.Errorf(
-			"codegen: Project Options.Dir is %q, which is absolute; paths in a Project "+
-				"resolve against the module root, so this would write outside the repository "+
-				"on the machine that ran it and somewhere else on yours", p.Options.Dir)
+	for _, f := range []struct{ name, path string }{
+		{"Options.Dir", p.Options.Dir},
+		{"MigrationsDir", p.MigrationsDir},
+	} {
+		if filepath.IsAbs(f.path) {
+			return fmt.Errorf(
+				"codegen: Project %s is %q, which is absolute; paths in a Project resolve "+
+					"against the module root, so this would write outside the repository on "+
+					"the machine that ran it and somewhere else on yours", f.name, f.path)
+		}
 	}
 	return nil
 }

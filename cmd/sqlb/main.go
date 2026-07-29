@@ -1,8 +1,20 @@
-// Command sqlb regenerates a project's models, clients and manifest from its
-// schema declaration, and reports when the committed output has drifted from it.
+// Command sqlb keeps a project's generated code and migration history in step
+// with its schema declaration, and reports when either has drifted from it.
 //
-//	sqlb generate ./taskschema     write every artefact the project declares
-//	sqlb check ./taskschema        report stale artefacts, write nothing
+//	sqlb generate ./taskschema              write every artefact the project declares
+//	sqlb check ./taskschema                 report stale artefacts, write nothing
+//	sqlb migrate -name adds_priority ./taskschema   write the next migration
+//	sqlb migrate -check ./taskschema        report whether the schema has moved ahead
+//
+// # Two gates, and only one of them needs a database
+//
+// `check` compares committed output with what the emitters produce now, which
+// is a pure function of the schema. `migrate -check` asks whether the committed
+// migration history *builds* that schema, and the only trustworthy way to
+// answer it is to replay the history into an empty Postgres — reading a live
+// database reports what it looks like, not whether the migrations produce it
+// (ADR-0014). So the first runs on every push and the second needs a scratch
+// database, and they are separate for that reason.
 //
 // # Why this needs a package argument
 //
@@ -30,6 +42,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -53,13 +66,23 @@ type exitCode int
 
 func (c exitCode) Error() string { return fmt.Sprintf("exit status %d", int(c)) }
 
-const usage = `sqlb regenerates a project's models, clients and manifest from its schema.
+const usage = `sqlb keeps a project's generated code and migration history in step with its schema.
 
 Usage:
 
-    sqlb generate <package>    write every artefact the project declares
-    sqlb check <package>       report stale artefacts, write nothing
-    sqlb version               print the version this binary was built from
+    sqlb generate <package>          write every artefact the project declares
+    sqlb check <package>             report stale artefacts, write nothing
+    sqlb migrate [flags] <package>   write the migration that closes the gap
+                                     between the history and the schema
+    sqlb version                     print the version this binary was built from
+
+Flags for migrate:
+
+    -name <name>          what the migration does; becomes part of the filename
+    -check                report whether the schema has moved ahead; write nothing
+    -dry-run              print what would be written; write nothing
+    -unblock              use the concurrent forms of the long-lock statements
+    -allow-destructive    emit destructive statements live, not commented out
 
 <package> is the Go package that declares the schema, in the form go build
 takes — usually ./schema or ./taskschema. It must export:
@@ -68,6 +91,11 @@ takes — usually ./schema or ./taskschema. It must export:
 
 Paths in that Project resolve against the module root, so the commands above
 mean the same thing from a shell, from a //go:generate directive and from CI.
+
+generate and check need no database. migrate reads the current schema by
+replaying the committed history into a scratch Postgres, so it needs the
+Project's ShadowDB — except for the first migration, which diffs against
+nothing and needs no database at all.
 `
 
 // run is main without the exit, so that the tests can drive the whole command.
@@ -90,22 +118,32 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version())
 		return nil
-	case "generate", "check":
+	case "generate", "check", "migrate":
 	default:
 		_, _ = fmt.Fprintf(stderr, "sqlb: unknown command %q\n\n", verb)
 		_, _ = fmt.Fprint(stderr, usage)
 		return exitCode(2)
 	}
 
+	// The package is the last argument rather than the first, so that flags and
+	// their values can sit between the verb and it without this having to know
+	// which flags take a value. The driver parses them; here they are opaque.
 	rest := args[1:]
-	if len(rest) != 1 {
+	if len(rest) == 0 {
 		return fmt.Errorf(
-			"%s takes exactly one package argument, for example: sqlb %s ./schema", verb, verb)
+			"%s needs a package argument, for example: sqlb %s ./schema", verb, verb)
+	}
+	pattern, flags := rest[len(rest)-1], rest[:len(rest)-1]
+	if strings.HasPrefix(pattern, "-") {
+		return fmt.Errorf(
+			"the last argument to %s must be the schema package, and %q is a flag. "+
+				"Flags go between the verb and the package: sqlb %s -name add_priority ./schema",
+			verb, pattern, verb)
 	}
 
-	pkg, err := resolve(rest[0])
+	pkg, err := resolve(pattern)
 	if err != nil {
 		return err
 	}
-	return drive(pkg, verb, stdout, stderr)
+	return drive(pkg, append([]string{verb}, flags...), stdout, stderr)
 }

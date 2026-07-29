@@ -11,10 +11,10 @@ import (
 
 // run drives the driver half of the sqlb command the way cmd/sqlb does, and
 // returns the exit code with everything it printed.
-func run(t *testing.T, p codegen.Project, verb string) (int, string) {
+func run(t *testing.T, p codegen.Project, args ...string) (int, string) {
 	t.Helper()
 	var out, errOut strings.Builder
-	code := codegen.Run(p, []string{verb}, &out, &errOut)
+	code := codegen.Run(p, args, &out, &errOut)
 	return code, out.String() + errOut.String()
 }
 

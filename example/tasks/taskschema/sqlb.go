@@ -2,7 +2,26 @@ package taskschema
 
 //go:generate go run github.com/jryannel/sqlb/cmd/sqlb generate .
 
-import "github.com/jryannel/sqlb/codegen"
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+
+	"github.com/jryannel/sqlb/codegen"
+
+	// Registers "pgx" with database/sql, for ShadowDB below. The server
+	// already takes this import for the same reason; it is here because this
+	// is the file that opens a connection sqlb asked for.
+	_ "github.com/jackc/pgx/v5/stdlib"
+)
+
+// shadowDSNEnv names the scratch database `sqlb migrate` replays the history
+// into. Anything is fine as long as it is not a database anyone cares about:
+//
+//	docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=x postgres:18-alpine
+//	export SQLB_SHADOW_DSN='postgres://postgres:x@localhost:5433/postgres?sslmode=disable'
+const shadowDSNEnv = "SQLB_SHADOW_DSN"
 
 // SqlbProject tells `sqlb generate` what this example emits and where.
 //
@@ -43,5 +62,56 @@ func SqlbProject() codegen.Project {
 			CLIDir:  "cli",
 			CLIName: "taskctl",
 		},
+
+		MigrationsDir: "migrations",
+
+		// The same 18 cmd/migrate passes, and for the same reason: it makes a
+		// UUIDv7 primary key default to the built-in uuidv7() rather than the
+		// pg_uuidv7 extension's spelling, so the DDL applies to a stock
+		// Postgres. Passing it here and not there — or the reverse — would
+		// leave one history with two spellings of the same generator.
+		MinPostgres: 18,
+
+		ShadowDB: shadowDB,
 	}
+}
+
+// shadowDB opens the scratch database `sqlb migrate` replays the committed
+// history into, so that the current side of the diff is what the migrations
+// build rather than what anyone remembers writing.
+//
+// Note what this example does *not* do: replace cmd/migrate. Its second
+// migration is three things the DSL cannot express — two triggers and a pair of
+// composite foreign keys — written as migrate.Change values by hand, and no
+// diff will ever produce them. What `sqlb migrate` adds here is the other
+// direction: `sqlb migrate -check ./taskschema` answers whether the history
+// still builds the declared schema, which is the question that goes stale every
+// time someone edits schema.go.
+//
+// Running it against this history also demonstrates the case the command warns
+// about rather than refuses. Those triggers come back from introspection as
+// constructs the DSL cannot express, so `current` is an incomplete picture and
+// the command says so before showing the diff.
+func shadowDB(ctx context.Context) (*sql.DB, error) {
+	dsn := os.Getenv(shadowDSNEnv)
+	if dsn == "" {
+		return nil, fmt.Errorf(
+			"%s is not set, and replaying the migration history needs a scratch database. "+
+				"Any empty one will do — see the comment on %s in taskschema/sqlb.go",
+			shadowDSNEnv, shadowDSNEnv)
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// The destructive half, written out in the repository that owns the
+	// database rather than hidden in the tool. sqlb will not empty a database
+	// itself, on the grounds that it cannot know which ones are scratch — this
+	// line is this project saying that this one is.
+	if _, err := db.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("emptying the shadow database at %s: %w", shadowDSNEnv, err)
+	}
+	return db, nil
 }

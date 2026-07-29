@@ -117,12 +117,12 @@ func TestNoArgumentsPrintsUsage(t *testing.T) {
 	}
 }
 
-func TestGenerateNeedsExactlyOnePackage(t *testing.T) {
+func TestGenerateNeedsAPackage(t *testing.T) {
 	code, out := invoke(t, "generate")
 	if code == 0 {
 		t.Fatalf("generate with no package succeeded:\n%s", out)
 	}
-	if !strings.Contains(out, "one package argument") {
+	if !strings.Contains(out, "needs a package argument") {
 		t.Errorf("the error did not say what was missing:\n%s", out)
 	}
 }

@@ -166,14 +166,14 @@ import (
 func main() { codegen.Main(schemapkg.%s()) }
 `
 
-// drive builds the driver and runs it with the given verb.
+// drive builds the driver and runs it with the given verb and flags.
 //
 // Build and run are separate steps rather than one `go run` so that the child's
 // exit code arrives here unmodified. `go run` reports a non-zero exit by
 // printing "exit status 1" of its own, which on a `sqlb check` failure lands
 // underneath the list of stale files and reads like a second, unexplained
 // error.
-func drive(p *pkg, verb string, stdout, stderr io.Writer) error {
+func drive(p *pkg, args []string, stdout, stderr io.Writer) error {
 	ok, err := declaresProject(p)
 	if err != nil {
 		return err
@@ -220,7 +220,7 @@ func drive(p *pkg, verb string, stdout, stderr io.Writer) error {
 			p.Module.Path, indent(strings.TrimSpace(buildErr.String())), p.ImportPath)
 	}
 
-	cmd := exec.Command(bin, verb)
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = p.Module.Dir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
