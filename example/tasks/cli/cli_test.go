@@ -89,6 +89,37 @@ func TestListFlagsEncodeTheFilterGrammar(t *testing.T) {
 	}
 }
 
+// An array column's flag carries the containment grammar, and --help states
+// which operators that is — which is the form the guarantee has to take for a
+// caller with no compile step (ADR-0029, ADR-0033).
+func TestArrayColumnFlag(t *testing.T) {
+	var got url.Values
+	_, err := run(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		emptyPage(w)
+	}, "tasks", "list", "--labels", "has.urgent", "--labels", "hasany.backend,infra")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	labels := got["labels"]
+	if len(labels) != 2 || labels[0] != "has.urgent" || labels[1] != "hasany.backend,infra" {
+		t.Errorf("?labels = %v, want the two conditions as two parameters", labels)
+	}
+
+	// The usage names the operators an array takes, and not the ones it does
+	// not: a caller reading --help should not be told about `between`.
+	usage, err := run(t, func(w http.ResponseWriter, _ *http.Request) { emptyPage(w) },
+		"tasks", "list", "--help")
+	if err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	for _, want := range []string{"has, hasany, hasall"} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("--help should name %q for an array column, got:\n%s", want, usage)
+		}
+	}
+}
+
 // --all walks with ?cursor= rather than ?page=, which is what makes the walk
 // cost the same at any depth and stops a concurrent insert from making it read
 // a row twice.

@@ -188,6 +188,26 @@ var Task = schema.Table("tasks",
 	schema.Text("title").Searchable().Sortable(),
 	schema.Text("description").Searchable(),
 
+	// The array column, and the one place in this schema where a capability
+	// costs an index rather than nothing.
+	//
+	// Filterable on an array means ?labels=has.urgent, which without a GIN
+	// index is a sequential scan that returns the right rows — so nothing
+	// reports it and only a plan would show it. schema.Validate refuses the
+	// pairing rather than letting that happen, which is why AddIndex below is
+	// not optional (ADR-0033).
+	//
+	// Not Searchable and not Sortable, and neither is an oversight: search is a
+	// text operation, and a sortable array would have to be encoded into the
+	// keyset cursor, which is wire format.
+	// The default is the empty array rather than NULL, and it is what makes
+	// adding this column to a populated table a non-destructive migration. It
+	// also settles the question a nullable array would keep asking: "no labels"
+	// has one spelling here, not two.
+	schema.Text("labels").Array().Filterable().
+		Default(schema.Value("{}")).
+		Comment("Free-form labels. Filter with has, hasany or hasall."),
+
 	schema.Enum("status", "todo", "in_progress", "blocked", "done").
 		Default(schema.Value("todo")).
 		Filterable().
@@ -217,6 +237,10 @@ var Task = schema.Table("tasks",
 	Index("list_id", "position").
 	Index("assignee_id").
 	Index("due_at").
+	// The index Filterable() on an array column obliges. array_ops is the GIN
+	// default for a text[], so the opclass gap in the index DSL does not bite
+	// here.
+	AddIndex(schema.Index{Columns: []string{"labels"}, Method: "gin"}).
 	// The other half of a tenant-safe composite reference, for comments. See
 	// the note on List.
 	UniqueIndex("workspace_id", "id").

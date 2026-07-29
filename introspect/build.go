@@ -313,16 +313,28 @@ func buildColumn(table string, col columnRow, cons *constraints,
 		return nil, false
 	}
 
-	t, size, ok := columnType(col.Type)
+	elemType, isArray := splitArrayType(col.Type)
+	t, size, ok := columnType(elemType)
 	if !ok {
 		rep.add(table, col.Name, "column type "+col.Type+" has no equivalent in the DSL; "+
 			"importing it as anything else would propose changing the real column", col.Type)
 		return nil, false
 	}
+	// A refusal rather than a demotion to text, for the reason the round trip
+	// exists: a column imported as something it is not produces a Diff that
+	// proposes rewriting production data.
+	if isArray && !schema.IsArrayElement(t) {
+		rep.add(table, col.Name, "an array of "+string(t)+" is not an element type the DSL declares; "+
+			"arrays hold scalars and have one dimension", col.Type)
+		return nil, false
+	}
 
-	f := newField(col, t, size, cons, built, rep, table)
+	f := newField(col, t, size, isArray, cons, built, rep, table)
 	if f == nil {
 		return nil, false
+	}
+	if isArray {
+		f.Array()
 	}
 
 	if !col.NotNull {
@@ -352,10 +364,12 @@ func buildColumn(table string, col columnRow, cons *constraints,
 
 // newField creates the column in whichever of the DSL's forms it belongs to: a
 // reference, an enum, or a plain typed column.
-func newField(col columnRow, t schema.Type, size int, cons *constraints,
+func newField(col columnRow, t schema.Type, size int, isArray bool, cons *constraints,
 	built map[string]*schema.TableDef, rep *Report, table string) *schema.Field {
 
-	if fk, isRef := cons.foreign[col.Name]; isRef {
+	// An array column is never a foreign key — Postgres has no such constraint
+	// — so the reference branch below cannot apply to one.
+	if fk, isRef := cons.foreign[col.Name]; isRef && !isArray {
 		// built holds the tables finished so far, so a target that is missing
 		// from it is either genuinely outside the schema or the table
 		// currently being built — a self-reference, which is common enough

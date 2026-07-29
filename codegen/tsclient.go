@@ -629,7 +629,20 @@ func tsType(typeName string, d *schema.FieldDesc) string {
 	return base
 }
 
+// tsBaseType is the TypeScript type of one column's value. An array column is
+// its element type followed by [], which is the whole reason arrays are not
+// declared as jsonb: `unknown` is what a jsonb column has to emit, and
+// `string[]` is what this one can (ADR-0033).
 func tsBaseType(typeName string, d *schema.FieldDesc) string {
+	if d.Array {
+		return tsElemType(typeName, d) + "[]"
+	}
+	return tsElemType(typeName, d)
+}
+
+// tsElemType is the type of a single value of the column's declared type,
+// ignoring the array flag.
+func tsElemType(typeName string, d *schema.FieldDesc) string {
 	if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
 		return tsEnumName(typeName, d)
 	}
@@ -657,7 +670,7 @@ func tsBaseType(typeName string, d *schema.FieldDesc) string {
 // tsCondType is the filter condition a column accepts: the operator set
 // narrowed by type, which is the part an OpenAPI document cannot say.
 func tsCondType(typeName string, d *schema.FieldDesc) string {
-	value := tsBaseType(typeName, d)
+	value := tsElemType(typeName, d)
 	// A timestamp is a string on the wire and a Date in most application code,
 	// and the encoder accepts either, so both compile here.
 	switch d.Type {
@@ -666,14 +679,27 @@ func tsCondType(typeName string, d *schema.FieldDesc) string {
 	}
 
 	var extras []string
+	if d.Nullable {
+		extras = append(extras, "NullCheck")
+	}
+
+	// An array column takes the containment operators and none of the ordering
+	// or pattern ones, which is the same set the server accepts — so
+	// `{ contains: "x" }` on a tag array fails to compile rather than
+	// producing a request the server answers with a 400.
+	if d.Array {
+		if len(extras) == 0 {
+			return fmt.Sprintf("ArrayCond<%s>", value)
+		}
+		return fmt.Sprintf("ArrayCond<%s, %s>", value, strings.Join(extras, " & "))
+	}
+
 	// Pattern operators need a text column: the server refuses them on
 	// anything else, and an enum is a string in SQL but compared by equality in
 	// practice, so it is excluded here as it is in the typed facade.
 	if d.Type == schema.TypeText || d.Type == schema.TypeVarchar {
-		extras = append(extras, "TextMatch")
-	}
-	if d.Nullable {
-		extras = append(extras, "NullCheck")
+		// Text keeps NullCheck last, as it was before arrays existed.
+		extras = append([]string{"TextMatch"}, extras...)
 	}
 	if len(extras) == 0 {
 		return fmt.Sprintf("Cond<%s>", value)
@@ -931,8 +957,28 @@ export interface TextMatch {
   endswith?: string;
 }
 
+/** Containment operators, offered only by array columns. The substring
+ * operator is absent on purpose: it belongs to text, and one name meaning two
+ * things depending on the column would put back the ambiguity this client
+ * exists to remove. */
+export interface ArrayComparison<E> {
+  /** The whole array, compared element by element. */
+  eq?: readonly E[];
+  ne?: readonly E[];
+  /** The array contains this element. */
+  has?: E;
+  /** The array shares at least one element with these. */
+  hasany?: readonly E[];
+  /** The array contains all of these. */
+  hasall?: readonly E[];
+}
+
 /** One column's filter: a bare value for equality, or an operator object. */
 export type Cond<V, Extra = unknown> = V | (Comparison<V> & Extra);
+
+/** One array column's filter: a bare array for whole-array equality, or an
+ * operator object. */
+export type ArrayCond<E, Extra = unknown> = readonly E[] | (ArrayComparison<E> & Extra);
 
 type Scalar = string | number | boolean | Date;
 
@@ -955,6 +1001,13 @@ function appendCond(out: URLSearchParams, column: string, cond: unknown): void {
     out.append(column, 'isnull');
     return;
   }
+  // A bare array is a whole-array equality, the same way a bare scalar is a
+  // scalar one. It is checked before the object branch because an array is an
+  // object.
+  if (Array.isArray(cond)) {
+    out.append(column, 'eq.' + (cond as Scalar[]).map(encodeMember).join(','));
+    return;
+  }
   if (typeof cond !== 'object' || cond instanceof Date) {
     out.append(column, 'eq.' + encodeScalar(cond as Scalar));
     return;
@@ -970,6 +1023,8 @@ function appendCond(out: URLSearchParams, column: string, cond: unknown): void {
         break;
       case 'in':
       case 'nin':
+      case 'hasany':
+      case 'hasall':
         out.append(column, op + '.' + (value as Scalar[]).map(encodeMember).join(','));
         break;
       case 'between': {
@@ -978,6 +1033,11 @@ function appendCond(out: URLSearchParams, column: string, cond: unknown): void {
         break;
       }
       default:
+        // eq and ne against an array column carry the whole array.
+        if (Array.isArray(value)) {
+          out.append(column, op + '.' + (value as Scalar[]).map(encodeMember).join(','));
+          break;
+        }
         out.append(column, op + '.' + encodeScalar(value as Scalar));
     }
   }

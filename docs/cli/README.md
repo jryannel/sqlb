@@ -86,6 +86,10 @@ $ taskctl tasks list --help
       --completed-at stringArray
                               Filter on completed_at... Operators: eq, ne, gt, gte, lt, lte,
                               in, nin, between, isnull, notnull.
+      --labels stringArray    Free-form labels. Filter on labels, an array column: written
+                              operator.value, or a bare comma-separated list for whole-array
+                              equality. Repeat the flag to conjoin conditions. Operators: eq,
+                              ne, has, hasany, hasall.
       --sort strings          Ordering, most significant first. Prefix a column with - for
                               descending. Columns: title, status, priority, due_at,
                               completed_at, position, comment_count, created_at, updated_at.
@@ -95,8 +99,11 @@ $ taskctl tasks list --help
   A column that never declared `.Filterable()` has no flag, so there is no way
   to spell the request the server would reject.
 - **The operator set is narrowed by column type.** The null tests appear only on
-  a nullable column, the pattern operators only on text. An enum names its
-  values.
+  a nullable column, the pattern operators only on text, and the containment
+  ones — `has`, `hasany`, `hasall` — only on an array. An enum names its values.
+  This is what the guarantee has to look like for a caller with no compile step:
+  an agent reading `--help` is told what the resource accepts without sending a
+  request to find out.
 - **`--sort`, `--select` and `--expand`** list the columns and relations that
   opted in, and complete from them in a shell with completions installed.
 - **Hidden columns have no flag anywhere.** `users.password_hash` is not

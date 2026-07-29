@@ -13,6 +13,7 @@ Map<String, dynamic> taskJson({Map<String, dynamic> extra = const {}}) => {
   'author_id': 'u1',
   'title': 'Ship it',
   'description': '',
+  'labels': ['urgent', 'backend'],
   'status': 'todo',
   'priority': 'high',
   'due_at': '2026-07-28T09:30:00Z',
@@ -35,6 +36,16 @@ void main() {
     expect(task.position, 3);
     expect(task.dueAt, DateTime.utc(2026, 7, 28, 9, 30));
     expect(task.assigneeId, isNull);
+  });
+
+  test('an array column decodes to a typed list', () {
+    final task = Task.fromJson(taskJson());
+    expect(task.labels, ['urgent', 'backend']);
+  });
+
+  test('an empty array is a list of no elements, not a missing column', () {
+    final task = Task.fromJson(taskJson(extra: {'labels': <String>[]}));
+    expect(task.labels, isEmpty);
   });
 
   test('a JSON integer reaches a double column as a double', () {

@@ -1203,6 +1203,7 @@ func newTasksListCommand(c *Client) *cobra.Command {
 		filterAssigneeID   []string
 		filterTitle        []string
 		filterDescription  []string
+		filterLabels       []string
 		filterStatus       []string
 		filterPriority     []string
 		filterDueAt        []string
@@ -1263,6 +1264,9 @@ filtered, sorted or searched by any spelling.`,
 			}
 			for _, v := range filterDescription {
 				q.Add("description", v)
+			}
+			for _, v := range filterLabels {
+				q.Add("labels", v)
 			}
 			for _, v := range filterStatus {
 				q.Add("status", v)
@@ -1328,6 +1332,11 @@ Repeat the flag to conjoin conditions. Operators: eq, ne, gt, gte, lt, lte, in, 
 	flags.StringArrayVar(&filterDescription, "description", nil,
 		`Filter on description, written operator.value, or a bare value for equality.
 Repeat the flag to conjoin conditions. Operators: eq, ne, gt, gte, lt, lte, in, nin, between, like, ilike, contains, startswith, endswith.`)
+	flags.StringArrayVar(&filterLabels, "labels", nil,
+		`Free-form labels. Filter with has, hasany or hasall.
+Filter on labels, an array column: written operator.value, or a bare
+comma-separated list for whole-array equality.
+Repeat the flag to conjoin conditions. Operators: eq, ne, has, hasany, hasall.`)
 	flags.StringArrayVar(&filterStatus, "status", nil,
 		`Filter on status, written operator.value, or a bare value for equality.
 Repeat the flag to conjoin conditions. Operators: eq, ne, gt, gte, lt, lte, in, nin, between, like, ilike, contains, startswith, endswith.
@@ -1354,8 +1363,8 @@ Columns: title, status, priority, due_at, completed_at, position, comment_count,
 	flags.StringSliceVar(&select_, "select", nil,
 		`Columns to return; the primary key is always included. Omitted columns are
 absent from the response rather than present and empty.
-Columns: id, workspace_id, list_id, assignee_id, author_id, title, description, status, priority, due_at, completed_at, position, comment_count, created_at, updated_at, deleted_at.`)
-	registerCompletion(cmd, "select", []string{"id", "workspace_id", "list_id", "assignee_id", "author_id", "title", "description", "status", "priority", "due_at", "completed_at", "position", "comment_count", "created_at", "updated_at", "deleted_at"})
+Columns: id, workspace_id, list_id, assignee_id, author_id, title, description, labels, status, priority, due_at, completed_at, position, comment_count, created_at, updated_at, deleted_at.`)
+	registerCompletion(cmd, "select", []string{"id", "workspace_id", "list_id", "assignee_id", "author_id", "title", "description", "labels", "status", "priority", "due_at", "completed_at", "position", "comment_count", "created_at", "updated_at", "deleted_at"})
 	flags.StringSliceVar(&expand, "expand", nil,
 		"Relations to embed in each row. Relations: list.")
 	registerCompletion(cmd, "expand", []string{"list"})
@@ -1412,6 +1421,7 @@ func newTasksCreateCommand(c *Client) *cobra.Command {
 		valAssigneeID  string
 		valTitle       string
 		valDescription string
+		valLabels      string
 		valStatus      string
 		valPriority    string
 		valDueAt       string
@@ -1442,6 +1452,9 @@ value overwriting it.`,
 			if cmd.Flags().Changed("description") {
 				body["description"] = valDescription
 			}
+			if cmd.Flags().Changed("labels") {
+				body["labels"] = valLabels
+			}
 			if cmd.Flags().Changed("status") {
 				body["status"] = valStatus
 			}
@@ -1469,6 +1482,8 @@ value overwriting it.`,
 	flags.StringVar(&valDescription, "description", "",
 		"Required.")
 	_ = cmd.MarkFlagRequired("description")
+	flags.StringVar(&valLabels, "labels", "",
+		"Free-form labels. Filter with has, hasany or hasall. Optional; left out, the database supplies its default.")
 	flags.StringVar(&valStatus, "status", "",
 		"One of: todo, in_progress, blocked, done. Optional; left out, the database supplies its default.")
 	registerCompletion(cmd, "status", []string{"todo", "in_progress", "blocked", "done"})
@@ -1489,6 +1504,7 @@ func newTasksUpdateCommand(c *Client) *cobra.Command {
 		valAssigneeID  string
 		valTitle       string
 		valDescription string
+		valLabels      string
 		valStatus      string
 		valPriority    string
 		valDueAt       string
@@ -1523,6 +1539,9 @@ once, at create.`,
 			if cmd.Flags().Changed("description") {
 				body["description"] = valDescription
 			}
+			if cmd.Flags().Changed("labels") {
+				body["labels"] = valLabels
+			}
 			if cmd.Flags().Changed("status") {
 				body["status"] = valStatus
 			}
@@ -1553,6 +1572,8 @@ once, at create.`,
 		"Sets title.")
 	flags.StringVar(&valDescription, "description", "",
 		"Sets description.")
+	flags.StringVar(&valLabels, "labels", "",
+		"Free-form labels. Filter with has, hasany or hasall.")
 	flags.StringVar(&valStatus, "status", "",
 		"One of: todo, in_progress, blocked, done.")
 	registerCompletion(cmd, "status", []string{"todo", "in_progress", "blocked", "done"})

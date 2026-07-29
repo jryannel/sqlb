@@ -886,7 +886,12 @@ func cliFilterUsage(d *schema.FieldDesc) string {
 	if c := d.Comment; c != "" {
 		b.WriteString(strings.TrimSuffix(c, ".") + ".\n")
 	}
-	fmt.Fprintf(&b, "Filter on %s, written operator.value, or a bare value for equality.\n", d.Name)
+	if d.Array {
+		fmt.Fprintf(&b, "Filter on %s, an array column: written operator.value, or a bare\n", d.Name)
+		b.WriteString("comma-separated list for whole-array equality.\n")
+	} else {
+		fmt.Fprintf(&b, "Filter on %s, written operator.value, or a bare value for equality.\n", d.Name)
+	}
 	b.WriteString("Repeat the flag to conjoin conditions. Operators: ")
 	b.WriteString(strings.Join(cliOperators(d), ", "))
 	b.WriteString(".")
@@ -898,6 +903,17 @@ func cliFilterUsage(d *schema.FieldDesc) string {
 
 // cliOperators mirrors the set rest documents for a column, and filter parses.
 func cliOperators(d *schema.FieldDesc) []string {
+	// An array column takes containment and whole-array equality, and none of
+	// the ordering or pattern operators. Naming them here is the point of the
+	// CLI: --help states what the resource accepts without a request having to
+	// be sent to find out (ADR-0029).
+	if d.Array {
+		ops := []string{"eq", "ne", "has", "hasany", "hasall"}
+		if d.Nullable {
+			ops = append(ops, "isnull", "notnull")
+		}
+		return ops
+	}
 	ops := []string{"eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "between"}
 	if d.Nullable {
 		ops = append(ops, "isnull", "notnull")

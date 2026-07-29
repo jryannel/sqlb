@@ -48,6 +48,7 @@ final page = await listPosts(
       title: TextCond(contains: search),
       publishedAt: NullableCond(notNull: true),
       viewCount: Cond(gte: 100),
+      labels: ArrayCond(has: 'urgent'),
     ),
     sort: [PostSort.publishedAt.desc, PostSort.title.asc],
     select: [PostColumn.title, PostColumn.status],
@@ -62,8 +63,14 @@ final page = await listPosts(
   not compile; `NullableCond` only on a nullable column, so neither does
   `isNull` on one that is required; and the value type is the column's own, so
   an enum compares against its own members and not against any string.
+- **An array column takes `ArrayCond`** — `has` for one element, `hasAny` and
+  `hasAll` for a list, `eq` for the whole array. It carries no `contains`, which
+  belongs to text, and none of the ordering operators; the element type is the
+  column's own, so `has` on an enum array compares against its members. Reading
+  one back gives a `List<String>`, and a nullable one distinguishes null from
+  the empty list.
 - **`sort` names sortable columns**, and `.asc` / `.desc` are the two terms each
-  one offers.
+  one offers. An array column is never among them.
 - **`select` and `expand` are closed sets**, one enum per resource.
 - **Hidden columns have no spelling anywhere.** Not on the row, not in `select`,
   not in `where`.

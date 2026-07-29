@@ -1,14 +1,14 @@
 # ADR-0033: An array is its element type plus a flag, and the slice stays plain
 
-- **Status:** Exploring — nothing is built. This records the shape before the
-  first line of it, which is the order [the README](README.md) asks for and the
-  same order [ADR-0026](0026-vectors-declare-their-index.md) used
-- **Confidence:** Medium on the shape — the failure points are read off the code
-  rather than guessed, and the two decisions that matter are both forced by
-  constraints this repository already enforces. Low on the operator names, which
-  become wire format on the first request and have nobody's use behind them yet
+- **Status:** Working — all three steps are built. `example/tasks` declares a
+  `text[]`, and a real Postgres round-trips the codec, runs the three operators
+  and reads an array column back through `introspect` unchanged
+- **Confidence:** High on the shape, which survived implementation with one
+  correction (recorded under Revisions). Low, still, on the operator names,
+  which are wire format from the first request and have nobody's use behind them
+  yet
 - **Decided:** 2026-07-29
-- **Last reviewed:** 2026-07-29
+- **Last reviewed:** 2026-07-29 (implemented; the sequencing below is done)
 
 ## Context
 
@@ -306,7 +306,9 @@ ambiguity into the one vocabulary whose entire purpose is that there is none.
 ## Sequencing
 
 Three steps, each shippable on its own, in an order where the first is worth
-having even if the other two never happen:
+having even if the other two never happen. **All three are built** — they landed
+together, because step 1 on its own emits a model with a slice field that step 2
+is what makes scannable:
 
 1. **Declare, render, introspect.** No runtime behaviour: `Array` on the
    descriptor, the DDL arm, the `pg_catalog` mapping and its refusals. This
@@ -326,3 +328,35 @@ having even if the other two never happen:
   spelling and the plain slice — are both forced by things this repository
   already does: the filter parser binds an element, and `deps-check` refuses the
   library that would otherwise supply the codec.
+
+- 2026-07-29 — Implemented, all three steps in one change. The shape above
+  survived; three things it did not anticipate are recorded here rather than
+  edited into the text above, because what a record got wrong is the part worth
+  keeping.
+
+  **The codec was wrong in exactly the way this record predicted, and the fuzz
+  target found it in four seconds.** `strings.TrimSpace` is Unicode-aware and
+  Postgres is not: an element containing U+0085 encoded unquoted and read back a
+  byte shorter. The encoder and the parser now agree on the ASCII set Postgres
+  actually trims. "The kind of code that is wrong in exactly the cases nobody
+  writes a test for" was not a figure of speech.
+
+  **A nil slice binds as NULL, not as `{}`.** The record says the two are
+  different values without saying which Go spelling produces which, and the
+  first implementation encoded both as the empty array — so every unset nullable
+  array column would have been written empty rather than null, silently. A real
+  Postgres caught it; the unit tests could not, because encode and parse agreed
+  with each other about a question neither was asking.
+
+  **`contains` on an array column is refused with a different message than
+  planned.** This record expected the existing `operator %q needs a text column`
+  to keep doing its job. What it does instead is name the operators an array
+  *does* take, because a caller who wrote `?tags=contains.urgent` almost
+  certainly meant `has` — and a 400 that names what would have been accepted is
+  the house rule. The decision it was protecting is unchanged: `contains` is
+  still the text operator and never means containment.
+
+  What arrived unchanged: the element-plus-flag spelling (the filter parser does
+  recover the element type, at exactly the site predicted), the plain slice, the
+  three operator names, the two refusals, and the GIN requirement. The ten switch
+  statements were nine.

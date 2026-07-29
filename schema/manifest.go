@@ -74,8 +74,13 @@ type InverseManifest struct {
 // rather than listed as hidden: the manifest is publishable, and a name is
 // itself information.
 type ColumnManifest struct {
-	Name         string       `json:"name"`
+	Name string `json:"name"`
+	// Type names the element type of an array column, with Array set beside
+	// it — the same split the declaration uses, so a consumer reading the
+	// manifest sees the enum values and the varchar length attached to the
+	// thing that has them.
 	Type         string       `json:"type"`
+	Array        bool         `json:"array,omitempty"`
 	GoType       string       `json:"goType"`
 	Nullable     bool         `json:"nullable,omitempty"`
 	Comment      string       `json:"comment,omitempty"`
@@ -185,6 +190,7 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 		cm := ColumnManifest{
 			Name:       d.Name,
 			Type:       string(d.Type),
+			Array:      d.Array,
 			GoType:     d.GoType(),
 			Nullable:   d.Nullable,
 			Comment:    d.Comment,

@@ -16,11 +16,23 @@ q := sqlb.Query[Post]().
 | `PostCols.ViewCount.Eq("x")` | does not compile — wrong comparand type |
 | `PostCols.ViewCount.Contains("x")` | does not compile — text operator on an integer |
 | `AuthorCols.PasswordHash` | does not exist — hidden columns are omitted |
+| `PostCols.Labels.Contains("x")` | does not compile — an array is not text |
 
-The last two are why `Col[T]` does not embed `Field`: embedding would promote
+The last three are why `Col[T]` does not embed `Field`: embedding would promote
 every operator onto every column, so `Contains` on an integer would compile,
 reach the database, and fail there. Pattern operators live on `TextCol[T
 ~string]` instead.
+
+An array column gets `ArrayCol[E]`, carrying the containment operators and
+nothing else — `Has` takes one element, `HasAny` and `HasAll` take a list:
+
+```go
+q.Where(tasks.TaskCols.Labels.Has("urgent"))
+q.Where(tasks.TaskCols.Labels.HasAll("backend", "infra"))
+```
+
+`Has(42)` does not compile, and neither does an ordering operator: Postgres
+would order arrays, but that is not an ordering the API offers.
 
 Nullable columns are typed as their base type — `published_at` is `*time.Time`
 on the model but `Col[time.Time]` here — so the comparand is a `time.Time` and

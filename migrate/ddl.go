@@ -37,6 +37,20 @@ func sqlString(s string) string {
 // irreversible, unbatchable migration. A CHECK constraint is replaced by
 // dropping and adding it, which the diff engine already knows how to do.
 func sqlType(d *schema.FieldDesc) (string, error) {
+	base, err := scalarSQLType(d)
+	if err != nil {
+		return "", err
+	}
+	if d.Array {
+		if !schema.IsArrayElement(d.Type) {
+			return "", fmt.Errorf("migrate: column %q is an array of %q, which is not an element type", d.Name, d.Type)
+		}
+		return base + "[]", nil
+	}
+	return base, nil
+}
+
+func scalarSQLType(d *schema.FieldDesc) (string, error) {
 	switch d.Type {
 	case schema.TypeText, schema.TypeEnum:
 		return "text", nil
@@ -79,6 +93,12 @@ func sqlType(d *schema.FieldDesc) (string, error) {
 // produces a migration that is commented out until reviewed, a false positive
 // produces one that silently truncates.
 func widens(from, to *schema.FieldDesc) bool {
+	// Adding or removing the array is never a widening: Postgres will not cast
+	// text to text[] without a USING clause, and the reverse discards every
+	// element but one. Both directions need a migration a person wrote.
+	if from.Array != to.Array {
+		return false
+	}
 	switch from.Type {
 	case schema.TypeInt:
 		switch to.Type {
@@ -143,6 +163,11 @@ const notValidRemedy = "Add it NOT VALID first, then VALIDATE CONSTRAINT in a " 
 // Everything else is treated as a rewrite, which is the safe direction — a
 // false positive is a warning nobody needed, a false negative is the outage.
 func rewrites(from, to *schema.FieldDesc) bool {
+	// varchar(n)[] to text[] is the same catalog-only change as varchar(n) to
+	// text; anything that gains or loses the array rewrites.
+	if from.Array != to.Array {
+		return true
+	}
 	if from.Type != schema.TypeVarchar {
 		return true
 	}
@@ -317,10 +342,21 @@ func checkConstraintName(t *schema.TableDef, c schema.Check, i int) string {
 	return fmt.Sprintf("%s_check%d", t.Name(), i+1)
 }
 
+// enumCheckExpr constrains an enum column to its declared values.
+//
+// An enum array is constrained with containment rather than IN: the check has
+// to hold for every element, and `col IN (...)` compares the whole array to
+// each value instead — which is not merely wrong but permissive, admitting any
+// array at all. Containment against the declared set says exactly the intended
+// thing, and it is true of the empty array, which is what an array column with
+// no values in it should be.
 func enumCheckExpr(d *schema.FieldDesc) string {
 	vals := make([]string, len(d.EnumValues))
 	for i, v := range d.EnumValues {
 		vals[i] = sqlString(v)
+	}
+	if d.Array {
+		return quoteIdent(d.Name) + " <@ ARRAY[" + strings.Join(vals, ", ") + "]::text[]"
 	}
 	return quoteIdent(d.Name) + " IN (" + strings.Join(vals, ", ") + ")"
 }

@@ -131,15 +131,24 @@ func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.Tab
 // A nullable column is typed as its base type: nullability is a property of the
 // column, not of the value compared against it, so the comparand is a value and
 // NULL is expressed with IsNull.
+// An array column gets ArrayCol, which carries the containment operators and
+// none of the ordering or pattern ones — so Contains on a tag array does not
+// compile, and the one name is not overloaded by column type (ADR-0033).
 func colType(typeName string, d *schema.FieldDesc) string {
-	if isTextual(d) {
+	switch {
+	case d.Array:
+		return fmt.Sprintf("sqlb.ArrayCol[%s]", enumOrBase(typeName, d))
+	case isTextual(d):
 		return fmt.Sprintf("sqlb.TextCol[%s]", base(d))
 	}
 	return fmt.Sprintf("sqlb.Col[%s]", enumOrBase(typeName, d))
 }
 
 func colCtor(typeName string, d *schema.FieldDesc) string {
-	if isTextual(d) {
+	switch {
+	case d.Array:
+		return fmt.Sprintf("sqlb.ArrayColumn[%s](%q)", enumOrBase(typeName, d), d.Name)
+	case isTextual(d):
 		return fmt.Sprintf("sqlb.TextColumn[%s](%q)", base(d), d.Name)
 	}
 	return fmt.Sprintf("sqlb.Typed[%s](%q)", enumOrBase(typeName, d), d.Name)
@@ -148,7 +157,7 @@ func colCtor(typeName string, d *schema.FieldDesc) string {
 // isTextual reports whether the pattern operators apply. An enum is a string in
 // SQL but is compared by equality in practice, so it is excluded.
 func isTextual(d *schema.FieldDesc) bool {
-	return d.Type == schema.TypeText || d.Type == schema.TypeVarchar
+	return !d.Array && (d.Type == schema.TypeText || d.Type == schema.TypeVarchar)
 }
 
 // base strips the pointer a nullable column carries in the model.

@@ -265,6 +265,47 @@ func (f Field) NotOneOf(values ...any) Pred {
 	return pred(Binary{Op: "NOT IN", Left: f.Column(), Right: List{Items: items}})
 }
 
+// Array containment.
+//
+// The three operators are deliberately not called `contains`. That name is
+// already a text pattern operator here and in the REST grammar, and overloading
+// it by column type would put an ambiguity into the one vocabulary whose whole
+// purpose is that there is none (ADR-0033).
+
+// Array wraps a value list so that it binds as one Postgres array parameter
+// rather than as a list of them. It is what an array-valued comparand needs:
+//
+//	q.Where(sqlb.F("tags").Eq(sqlb.Array("go", "sql")))
+//
+// The elements are encoded by their Go types, so a []string, a []int64 or a
+// mixed list of already-coerced values all work.
+func Array(values ...any) any { return arrayParam{v: values} }
+
+// Has matches rows whose array column contains the element. The operand is a
+// single value, not an array: `$1 = ANY(tags)`.
+func (f Field) Has(v any) Pred {
+	return pred(Binary{Op: "=", Left: Param{Value: v}, Right: Call{Name: "ANY", Args: []Expr{f.Column()}}})
+}
+
+// HasAny matches rows whose array column overlaps the values — `tags && $1`.
+// An empty value set matches nothing, which is what an overlap with nothing is.
+func (f Field) HasAny(values ...any) Pred {
+	if len(values) == 0 {
+		return pred(Raw{SQL: "false"})
+	}
+	return pred(Binary{Op: "&&", Left: f.Column(), Right: Param{Value: Array(values...)}})
+}
+
+// HasAll matches rows whose array column contains every value — `tags @> $1`.
+// An empty value set matches every row, since every array contains the empty
+// one.
+func (f Field) HasAll(values ...any) Pred {
+	if len(values) == 0 {
+		return pred(Raw{SQL: "true"})
+	}
+	return pred(Binary{Op: "@>", Left: f.Column(), Right: Param{Value: Array(values...)}})
+}
+
 // Between matches a closed interval.
 func (f Field) Between(lo, hi any) Pred {
 	return pred(BetweenExpr{Operand: f.Column(), Lo: Param{Value: lo}, Hi: Param{Value: hi}})
@@ -399,6 +440,60 @@ func (c TextCol[T]) Like(pattern string) Pred { return c.f.Like(pattern) }
 
 // ILike is Like, case-insensitively.
 func (c TextCol[T]) ILike(pattern string) Pred { return c.f.ILike(pattern) }
+
+// ArrayCol is a typed reference to an array column, carrying the containment
+// operators and none of the ordering ones. Generated model packages declare one
+// per array column:
+//
+//	var PostTags = sqlb.ArrayColumn[string]("tags")
+//	q.Where(gen.PostTags.Has("urgent"))   // Has(42) does not compile
+//
+// Like Col it does not embed Field, so the pattern and ordering operators an
+// array cannot serve are absent rather than present and failing in Postgres.
+type ArrayCol[E any] struct {
+	f Field
+}
+
+// ArrayColumn declares a typed array column reference.
+func ArrayColumn[E any](name string) ArrayCol[E] { return ArrayCol[E]{f: F(name)} }
+
+// Field returns the untyped reference, for the operators the typed surface does
+// not cover.
+func (c ArrayCol[E]) Field() Field { return c.f }
+
+// Name returns the column name without its table qualifier.
+func (c ArrayCol[E]) Name() string { return c.f.name }
+
+// Qualify attaches a table name to the reference.
+func (c ArrayCol[E]) Qualify(table string) ArrayCol[E] {
+	c.f = c.f.Qualify(table)
+	return c
+}
+
+// Column returns the reference as an expression node.
+func (c ArrayCol[E]) Column() Column { return c.f.Column() }
+
+func (c ArrayCol[E]) exprNode() {}
+
+func (c ArrayCol[E]) selection() Selection { return Selection{expr: c.Column()} }
+
+// Has matches rows whose array contains the element.
+func (c ArrayCol[E]) Has(v E) Pred { return c.f.Has(v) }
+
+// HasAny matches rows whose array overlaps the values.
+func (c ArrayCol[E]) HasAny(values ...E) Pred { return c.f.HasAny(anySlice(values)...) }
+
+// HasAll matches rows whose array contains every value.
+func (c ArrayCol[E]) HasAll(values ...E) Pred { return c.f.HasAll(anySlice(values)...) }
+
+// Eq compares whole arrays, which Postgres does element by element.
+func (c ArrayCol[E]) Eq(v []E) Pred  { return c.f.Eq(v) }
+func (c ArrayCol[E]) Neq(v []E) Pred { return c.f.Neq(v) }
+
+// IsNull distinguishes a NULL column from an empty array, which are different
+// values and compare differently.
+func (c ArrayCol[E]) IsNull() Pred  { return c.f.IsNull() }
+func (c ArrayCol[E]) NotNull() Pred { return c.f.NotNull() }
 
 func anySlice[T any](vs []T) []any {
 	out := make([]any, len(vs))

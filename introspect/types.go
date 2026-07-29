@@ -18,6 +18,20 @@ import (
 // ok is false for a type the DSL has no equivalent for, which is reported
 // rather than guessed at — a column silently imported as text would produce a
 // migration proposing to change the real column's type to text.
+// splitArrayType strips the trailing [] format_type puts on an array column,
+// returning the element spelling and whether there was one.
+//
+// Only one dimension is accepted. `text[][]` is a two-dimensional column, which
+// the DSL cannot declare — and dropping a dimension silently would produce a
+// registry whose next Diff proposes rewriting the real column.
+func splitArrayType(formatted string) (elem string, array bool) {
+	rest, found := strings.CutSuffix(strings.TrimSpace(formatted), "[]")
+	if !found {
+		return formatted, false
+	}
+	return rest, true
+}
+
 func columnType(formatted string) (t schema.Type, size int, ok bool) {
 	base, arg := splitTypeArg(formatted)
 	switch base {
@@ -155,14 +169,14 @@ func unquoteLiteral(s string) (string, bool) {
 // Enums are text with a CHECK rather than a native Postgres enum (ADR-0017),
 // which is what makes recovering them a matter of reading an expression rather
 // than reading a type.
+// An array enum is constrained by containment instead — `labels <@
+// ARRAY['red'::text, 'green'::text]` — because the check has to hold for every
+// element. Both spellings are read here, so an enum array round-trips as an
+// enum array rather than falling back to plain text and diffing forever.
 func enumValues(column, expr string) ([]string, bool) {
 	expr = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(expr), "("), ")"))
-	prefix := column + " = ANY (ARRAY["
-	if !strings.HasPrefix(expr, prefix) || !strings.HasSuffix(expr, "])") {
-		return nil, false
-	}
-	body := expr[len(prefix) : len(expr)-len("])")]
-	if strings.TrimSpace(body) == "" {
+	body, ok := enumCheckBody(column, expr)
+	if !ok || strings.TrimSpace(body) == "" {
 		return nil, false
 	}
 	var out []string
@@ -175,6 +189,63 @@ func enumValues(column, expr string) ([]string, bool) {
 		out = append(out, v)
 	}
 	return out, len(out) > 0
+}
+
+// enumCheckBody returns the ARRAY[...] contents of whichever enum check form
+// the expression is, or false if it is neither.
+func enumCheckBody(column, expr string) (string, bool) {
+	if rest, found := strings.CutPrefix(expr, column+" = ANY (ARRAY["); found {
+		if body, closed := strings.CutSuffix(rest, "])"); closed {
+			return body, true
+		}
+		return "", false
+	}
+	rest, found := strings.CutPrefix(expr, column+" <@ ARRAY[")
+	if !found {
+		return "", false
+	}
+	// The closing bracket is found by scanning rather than by trimming the
+	// last one, because the stored form may carry the cast the DDL layer wrote
+	// — and `::text[]` ends in a bracket of its own.
+	body, tail, closed := untilCloseBracket(rest)
+	if !closed {
+		return "", false
+	}
+	if tail != "" && !strings.HasPrefix(tail, "::") {
+		return "", false
+	}
+	return body, true
+}
+
+// untilCloseBracket splits at the bracket closing the one already open,
+// ignoring brackets inside string literals.
+func untilCloseBracket(s string) (body, tail string, ok bool) {
+	depth := 1
+	inString := false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case inString:
+			if c == '\'' {
+				// A doubled quote is an escaped one and does not end the
+				// literal.
+				if i+1 < len(s) && s[i+1] == '\'' {
+					i++
+					continue
+				}
+				inString = false
+			}
+		case c == '\'':
+			inString = true
+		case c == '[':
+			depth++
+		case c == ']':
+			depth--
+			if depth == 0 {
+				return s[:i], s[i+1:], true
+			}
+		}
+	}
+	return "", "", false
 }
 
 // stripCastAny removes a trailing cast whatever it names.

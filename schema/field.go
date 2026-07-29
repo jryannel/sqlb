@@ -18,8 +18,14 @@ type Field struct {
 // FieldDesc is the resolved description of a column: everything a generator or
 // the runtime needs to know about it.
 type FieldDesc struct {
-	Name    string
-	Type    Type
+	Name string
+	// Type names the *element* type when Array is set, and the column type
+	// otherwise. Keeping the element rather than fusing the two is what lets
+	// the filter parser bind `?tags=has.urgent` as a text value, and what keeps
+	// EnumValues and Size attached to something that has them (ADR-0033).
+	Type Type
+	// Array makes the column a one-dimensional Postgres array of Type.
+	Array   bool
 	Size    int // varchar length; 0 means unbounded
 	Comment string
 
@@ -218,6 +224,25 @@ func ExternalRef(relation, target string) *Field {
 // not the conventional UUID.
 func (f *Field) OfType(t Type) *Field {
 	f.d.Type = t
+	return f
+}
+
+// Array makes the column a one-dimensional Postgres array of the type the
+// constructor named:
+//
+//	schema.Text("tags").Array().Filterable()
+//	schema.Enum("labels", "red", "green").Array()
+//
+// The Go field is the plain slice — []string, not a named wrapper — so a model
+// described over an existing sqlc struct can carry one (ADR-0033). Nullable
+// still refers to the column: a NULL array and an empty array are different
+// values, and the Go side spells them nil and []string{}.
+//
+// Only the scalar element types are permitted, and only one dimension. An
+// array column may not be Sortable or Searchable, and a Filterable one must
+// carry a GIN index; Validate reports each of those.
+func (f *Field) Array() *Field {
+	f.d.Array = true
 	return f
 }
 
@@ -496,12 +521,32 @@ func (f *Field) OnUpdate(a Action) *Field {
 }
 
 // GoType is the Go type codegen emits for this column.
+//
+// An array is the plain slice of its element type, nullable or not: a nil slice
+// already says NULL and an empty one says {}, so a pointer would add a third
+// spelling for a distinction that only has two.
 func (d *FieldDesc) GoType() string {
 	base := d.Type.GoType()
+	if d.Array {
+		return "[]" + base
+	}
 	if d.Nullable && base != "[]byte" && base != "json.RawMessage" {
 		return "*" + base
 	}
 	return base
+}
+
+// IsArrayElement reports whether t may be the element type of an array column.
+//
+// jsonb and bytea are excluded: both already hold a composite value, and an
+// array of either is a shape no generated client can narrow past `unknown`.
+func IsArrayElement(t Type) bool {
+	switch t {
+	case TypeText, TypeVarchar, TypeEnum, TypeInt, TypeBigInt, TypeFloat,
+		TypeNumeric, TypeBool, TypeUUID, TypeTimestamp, TypeDate, TypeTime:
+		return true
+	}
+	return false
 }
 
 // Capabilities renders the column's capabilities as the comma-separated body

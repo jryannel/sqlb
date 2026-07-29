@@ -525,3 +525,55 @@ func TestEnumValues(t *testing.T) {
 		t.Error("a comparison is not an enum")
 	}
 }
+
+// An existing text[] column has to read back as one, or the module carrying it
+// cannot be adopted at all: a dropped column makes the first Diff propose
+// deleting production data, which is the failure the round trip exists to
+// prevent (ADR-0033).
+func TestSplitArrayType(t *testing.T) {
+	tests := []struct {
+		formatted string
+		wantElem  string
+		wantArray bool
+	}{
+		{"text[]", "text", true},
+		{"integer[]", "integer", true},
+		{"character varying(200)[]", "character varying(200)", true},
+		{"timestamp with time zone[]", "timestamp with time zone", true},
+		{"text", "text", false},
+		{"jsonb", "jsonb", false},
+	}
+	for _, tc := range tests {
+		elem, array := splitArrayType(tc.formatted)
+		if elem != tc.wantElem || array != tc.wantArray {
+			t.Errorf("splitArrayType(%q) = %q,%v; want %q,%v",
+				tc.formatted, elem, array, tc.wantElem, tc.wantArray)
+		}
+	}
+
+	// Two dimensions strip to a one-dimensional element spelling that
+	// columnType then refuses, which is the refusal the DSL needs: it declares
+	// one dimension, and importing the inner values would hide the difference.
+	elem, array := splitArrayType("text[][]")
+	if !array {
+		t.Fatal("text[][] did not read as an array")
+	}
+	if _, _, ok := columnType(elem); ok {
+		t.Errorf("columnType(%q) accepted a nested array spelling", elem)
+	}
+}
+
+// An enum array's CHECK is a containment test rather than an ANY comparison, so
+// the recovery has to read both spellings or an enum array round-trips as plain
+// text and diffs forever.
+func TestEnumValuesFromArrayCheck(t *testing.T) {
+	got, ok := enumValues("labels", "(labels <@ ARRAY['red'::text, 'green'::text])")
+	if !ok || strings.Join(got, ",") != "red,green" {
+		t.Errorf("got %v,%v", got, ok)
+	}
+	// With the cast the DDL layer writes still attached.
+	got, ok = enumValues("labels", "(labels <@ ARRAY['red'::text]::text[])")
+	if !ok || strings.Join(got, ",") != "red" {
+		t.Errorf("got %v,%v", got, ok)
+	}
+}

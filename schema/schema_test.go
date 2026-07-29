@@ -512,3 +512,109 @@ func TestAnUnexposedInverseIsNamedButNotExpandable(t *testing.T) {
 		}
 	}
 }
+
+// Array columns. Each refusal below is the cheap direction to be wrong in:
+// allowing one later is additive, withdrawing one is not (ADR-0033).
+
+func TestArrayColumn(t *testing.T) {
+	r := schema.NewRegistry()
+	posts := r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("tags").Array().Filterable(),
+		schema.Enum("labels", "red", "green").Array(),
+	).AddIndex(schema.Index{Columns: []string{"tags"}, Method: "gin"})
+
+	if err := r.Validate(); err != nil {
+		t.Fatalf("valid array schema rejected: %v", err)
+	}
+
+	tags := posts.Field("tags").Desc()
+	if !tags.Array {
+		t.Error("Array() did not set the flag")
+	}
+	// The descriptor keeps naming the element, which is what lets the filter
+	// parser bind `?tags=has.urgent` as text rather than as an array.
+	if tags.Type != schema.TypeText {
+		t.Errorf("element type = %q, want text", tags.Type)
+	}
+	if got := tags.GoType(); got != "[]string" {
+		t.Errorf("GoType() = %q, want []string", got)
+	}
+	// An enum array keeps its value set attached to the element, for free.
+	if labels := posts.Field("labels").Desc(); len(labels.EnumValues) != 2 {
+		t.Errorf("enum values = %v, want two", labels.EnumValues)
+	}
+}
+
+// A nullable array is still the plain slice: nil says NULL and an empty slice
+// says {}, so a pointer would add a third spelling to a two-valued question.
+func TestNullableArrayIsStillASlice(t *testing.T) {
+	f := schema.Text("tags").Array().Nullable()
+	if got := f.Desc().GoType(); got != "[]string" {
+		t.Errorf("GoType() = %q, want []string", got)
+	}
+}
+
+func TestArrayRefusals(t *testing.T) {
+	tests := []struct {
+		name  string
+		field *schema.Field
+		want  string
+	}{
+		{"sortable", schema.Text("tags").Array().Sortable(), "cannot be Sortable"},
+		{"searchable", schema.Text("tags").Array().Searchable(), "requires a text column"},
+		{"primary key", schema.Text("tags").Array().PrimaryKey(), "cannot be the primary key"},
+		{"json elements", schema.JSON("blobs").Array(), "not an array element type"},
+		{"bytea elements", schema.Bytes("chunks").Array(), "not an array element type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := schema.NewRegistry()
+			r.Table("posts", schema.UUIDv7("id").PrimaryKey(), tt.field)
+			err := r.Validate()
+			if err == nil {
+				t.Fatalf("declaration accepted, want a refusal mentioning %q", tt.want)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// A Filterable array with no GIN index is a sequential scan that returns the
+// right rows, so nothing reports it. Validate does. This is ADR-0026's argument
+// arriving at a case that costs a fraction as much to get right.
+func TestFilterableArrayNeedsAGINIndex(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("tags").Array().Filterable(),
+	)
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "needs a GIN index") {
+		t.Fatalf("error = %v, want it to require a GIN index", err)
+	}
+
+	// A btree index does not satisfy it: it is the wrong access method for
+	// containment, so the scan would happen anyway.
+	r2 := schema.NewRegistry()
+	r2.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("tags").Array().Filterable(),
+	).Index("tags")
+	if err := r2.Validate(); err == nil {
+		t.Error("a btree index satisfied the GIN requirement")
+	}
+
+	// A column that is not filterable is not reachable through a filter at
+	// all, so it needs no index.
+	r3 := schema.NewRegistry()
+	r3.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("tags").Array(),
+	)
+	if err := r3.Validate(); err != nil {
+		t.Errorf("an unfilterable array was required to carry an index: %v", err)
+	}
+}

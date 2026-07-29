@@ -145,6 +145,26 @@ abstract class Row {
     return value == null ? null : DateTime.parse(value);
   }
 
+  /// Reads an array column, decoding each element with the decoder its scalar
+  /// form uses. A NULL column and an empty array are different values, which is
+  /// why the nullable form returns null rather than an empty list.
+  List<T> _list<T>(String column, T Function(Object) decode) {
+    final value = _read(column, nullable: false)! as List;
+    return value.map((e) => decode(e as Object)).toList(growable: false);
+  }
+
+  List<T>? _listOrNull<T>(String column, T Function(Object) decode) {
+    final value = _read(column, nullable: true) as List?;
+    if (value == null) return null;
+    return value.map((e) => decode(e as Object)).toList(growable: false);
+  }
+
+  List<T> _enumList<T>(String column, T? Function(String) byWire) =>
+      _list(column, (e) => _asEnum(byWire, e));
+
+  List<T>? _enumListOrNull<T>(String column, T? Function(String) byWire) =>
+      _listOrNull(column, (e) => _asEnum(byWire, e));
+
   Object _any(String column) => _read(column, nullable: false)!;
 
   Object? _anyOrNull(String column) => _read(column, nullable: true);
@@ -479,6 +499,95 @@ class Cond<T extends Object> {
     notIn: notIn,
     between: between,
   );
+}
+
+/// The operators an array column accepts: containment, and whole-array
+/// equality.
+///
+/// The ordering operators and the substring one are absent, because the server
+/// refuses them on an array — array ordering is not a thing an API should
+/// offer, and a substring is a text operation. There is no [contains] here for
+/// the same reason: the name belongs to text, and one name meaning two things
+/// depending on the column is the ambiguity this client exists to remove.
+class ArrayCond<T extends Object> {
+  /// Builds a condition. Every operator is optional; the unset ones are not
+  /// sent.
+  const ArrayCond({this.eq, this.ne, this.has, this.hasAny, this.hasAll});
+
+  /// The whole array, compared element by element.
+  final List<T>? eq;
+
+  /// Not equal to the whole array.
+  final List<T>? ne;
+
+  /// The array contains this element.
+  final T? has;
+
+  /// The array shares at least one element with these.
+  final List<T>? hasAny;
+
+  /// The array contains all of these.
+  final List<T>? hasAll;
+
+  void _encode(_Query out, String column) => _containment(
+    out,
+    column,
+    eq: eq,
+    ne: ne,
+    has: has,
+    hasAny: hasAny,
+    hasAll: hasAll,
+  );
+}
+
+/// An array column that may be NULL: the containment operators, plus the null
+/// tests. A NULL array and an empty one are different values, so both tests
+/// mean something here.
+class NullableArrayCond<T extends Object> {
+  /// Builds a condition. Every operator is optional.
+  const NullableArrayCond({
+    this.eq,
+    this.ne,
+    this.has,
+    this.hasAny,
+    this.hasAll,
+    this.isNull,
+    this.notNull,
+  });
+
+  /// The whole array, compared element by element.
+  final List<T>? eq;
+
+  /// Not equal to the whole array.
+  final List<T>? ne;
+
+  /// The array contains this element.
+  final T? has;
+
+  /// The array shares at least one element with these.
+  final List<T>? hasAny;
+
+  /// The array contains all of these.
+  final List<T>? hasAll;
+
+  /// The column is NULL, which is not the same as holding no elements.
+  final bool? isNull;
+
+  /// The column is not NULL.
+  final bool? notNull;
+
+  void _encode(_Query out, String column) {
+    _containment(
+      out,
+      column,
+      eq: eq,
+      ne: ne,
+      has: has,
+      hasAny: hasAny,
+      hasAll: hasAll,
+    );
+    _nullChecks(out, column, isNull: isNull, notNull: notNull);
+  }
 }
 
 /// The operators a nullable column accepts: the comparisons, plus the null
@@ -854,6 +963,9 @@ int _jsonHash(Object? value) {
 Object? _wire(Object? value) {
   if (value is WireValue) return value.wire;
   if (value is DateTime) return value.toUtc().toIso8601String();
+  // An array column carries a list, whose elements need the same treatment —
+  // an enum array is a list of WireValue, and JSON has no spelling for one.
+  if (value is List) return value.map(_wire).toList(growable: false);
   return value;
 }
 
@@ -896,6 +1008,46 @@ void _comparison(
   if (notIn != null) out.add(column, 'nin.${notIn.map(_member).join(',')}');
   if (between != null) {
     out.add(column, 'between.${_member(between.$1)},${_member(between.$2)}');
+  }
+}
+
+/// Decoders for one element of an array column. They take the value already
+/// pulled out of the JSON list, which is what makes them shareable between the
+/// nullable and non-nullable readers.
+String _asStr(Object v) => v as String;
+
+int _asInt(Object v) => (v as num).toInt();
+
+double _asDouble(Object v) => (v as num).toDouble();
+
+bool _asBool(Object v) => v as bool;
+
+DateTime _asTime(Object v) => DateTime.parse(v as String);
+
+/// Decodes one element of an enum array, naming the type in the error so a
+/// value the schema has since grown is reported as what it is.
+T _asEnum<T>(T? Function(String) byWire, Object v) {
+  final value = v as String;
+  return byWire(value) ?? (throw UnknownEnumValue('$T', value));
+}
+
+void _containment(
+  _Query out,
+  String column, {
+  List<Object?>? eq,
+  List<Object?>? ne,
+  Object? has,
+  List<Object?>? hasAny,
+  List<Object?>? hasAll,
+}) {
+  if (eq != null) out.add(column, 'eq.${eq.map(_member).join(',')}');
+  if (ne != null) out.add(column, 'ne.${ne.map(_member).join(',')}');
+  if (has != null) out.add(column, 'has.${_scalar(has)}');
+  if (hasAny != null) {
+    out.add(column, 'hasany.${hasAny.map(_member).join(',')}');
+  }
+  if (hasAll != null) {
+    out.add(column, 'hasall.${hasAll.map(_member).join(',')}');
   }
 }
 
@@ -1357,6 +1509,9 @@ class Task extends Row {
   /// The tasks.description column.
   String get description => _str('description');
 
+  /// Free-form labels. Filter with has, hasany or hasall.
+  List<String> get labels => _list('labels', _asStr);
+
   /// The tasks.status column.
   TaskStatus get status => _enum('status', TaskStatus.byWire);
 
@@ -1401,6 +1556,7 @@ class TaskCreate {
     this.assigneeId,
     required this.title,
     required this.description,
+    this.labels,
     this.status,
     this.priority,
     this.dueAt,
@@ -1418,6 +1574,9 @@ class TaskCreate {
 
   /// The tasks.description column.
   final String description;
+
+  /// Free-form labels. Filter with has, hasany or hasall.
+  final List<String>? labels;
 
   /// The tasks.status column.
   final TaskStatus? status;
@@ -1437,6 +1596,7 @@ class TaskCreate {
     if (assigneeId != null) 'assignee_id': _wire(assigneeId),
     'title': _wire(title),
     'description': _wire(description),
+    if (labels != null) 'labels': _wire(labels),
     if (status != null) 'status': _wire(status),
     if (priority != null) 'priority': _wire(priority),
     if (dueAt != null) 'due_at': _wire(dueAt),
@@ -1470,6 +1630,11 @@ class TaskPatch {
 
   /// Writes tasks.description.
   void description(String value) => _changes['description'] = _wire(value);
+
+  /// Free-form labels. Filter with has, hasany or hasall.
+  ///
+  /// Writes tasks.labels.
+  void labels(List<String> value) => _changes['labels'] = _wire(value);
 
   /// Writes tasks.status.
   void status(TaskStatus value) => _changes['status'] = _wire(value);
@@ -2363,6 +2528,9 @@ enum TaskColumn implements WireValue {
   /// The tasks.description column.
   description('description'),
 
+  /// The tasks.labels column.
+  labels('labels'),
+
   /// The tasks.status column.
   status('status'),
 
@@ -2462,6 +2630,7 @@ class TaskWhere {
     this.assigneeId,
     this.title,
     this.description,
+    this.labels,
     this.status,
     this.priority,
     this.dueAt,
@@ -2487,6 +2656,11 @@ class TaskWhere {
   /// Conditions on tasks.description.
   final TextCond? description;
 
+  /// Free-form labels. Filter with has, hasany or hasall.
+  ///
+  /// Conditions on tasks.labels.
+  final ArrayCond<String>? labels;
+
   /// Conditions on tasks.status.
   final Cond<TaskStatus>? status;
 
@@ -2509,6 +2683,7 @@ class TaskWhere {
     assigneeId?._encode(out, 'assignee_id');
     title?._encode(out, 'title');
     description?._encode(out, 'description');
+    labels?._encode(out, 'labels');
     status?._encode(out, 'status');
     priority?._encode(out, 'priority');
     dueAt?._encode(out, 'due_at');

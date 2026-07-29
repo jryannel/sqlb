@@ -61,6 +61,45 @@ defaulting to a generated, time-ordered v7 value — the usual primary key.
 The full table, including which filter operators each type admits, is in the
 [column type reference](https://jryannel.github.io/sqlb/reference/column-types/).
 
+### Arrays
+
+`Array()` is a modifier on any of the scalar constructors above, so a `text[]`
+is a text column that says so:
+
+```go
+schema.Text("labels").Array().Filterable().Default(schema.Value("{}")),
+schema.Enum("channels", "web", "email").Array().Nullable(),
+```
+
+The Go field is the plain slice — `[]string`, not a wrapper type — and the
+generated TypeScript and Dart clients get `string[]` and `List<String>`, which
+is precisely what the same column declared as `JSON` could not give them.
+
+The constructor keeps naming the *element*, and that is load-bearing rather than
+cosmetic: `?labels=has.urgent` binds one `text`, so the enum's value set and the
+varchar's length stay attached to the thing that has them.
+
+Nullability is about the column, not the elements. A NULL column and an empty
+array are different values, and the Go side spells them `nil` and `[]string{}`;
+there is no way to declare an array whose *elements* may be NULL, because
+`{a,NULL,b}` and `NULL` are two absences no generated client could tell a UI
+apart.
+
+Three rules, all reported by `schema.Validate`:
+
+- an array column cannot be `Sortable` — the keyset cursor encodes the ordering
+  columns, and an array has no spelling in it;
+- it cannot be `Searchable` — search is a text operation;
+- a `Filterable` one **must** carry a GIN index, or every filter over it is a
+  sequential scan that returns the right rows and reports nothing.
+
+```go
+).AddIndex(schema.Index{Columns: []string{"labels"}, Method: "gin"})
+```
+
+Elements are the scalar types; not `JSON`, not `Bytes`, and one dimension only.
+Filtering one is [`has` / `hasany` / `hasall`](../rest/filtering.md#array-columns-take-containment-and-nothing-else).
+
 ### Groups
 
 `Timestamps()` and `SoftDelete()` insert several columns as a unit:

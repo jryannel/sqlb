@@ -271,6 +271,7 @@ type taskColumns struct {
 	AuthorID     sqlb.Col[string]
 	Title        sqlb.TextCol[string]
 	Description  sqlb.TextCol[string]
+	Labels       sqlb.ArrayCol[string]
 	Status       sqlb.Col[TaskStatus]
 	Priority     sqlb.Col[TaskPriority]
 	DueAt        sqlb.Col[time.Time]
@@ -291,6 +292,7 @@ var TaskCols = taskColumns{
 	AuthorID:     sqlb.Typed[string]("author_id"),
 	Title:        sqlb.TextColumn[string]("title"),
 	Description:  sqlb.TextColumn[string]("description"),
+	Labels:       sqlb.ArrayColumn[string]("labels"),
 	Status:       sqlb.Typed[TaskStatus]("status"),
 	Priority:     sqlb.Typed[TaskPriority]("priority"),
 	DueAt:        sqlb.Typed[time.Time]("due_at"),
@@ -345,6 +347,12 @@ func (u *TaskUpdate) SetTitle(v string) *TaskUpdate {
 // SetDescription sets description.
 func (u *TaskUpdate) SetDescription(v string) *TaskUpdate {
 	u.stmt.Set("description", v)
+	return u
+}
+
+// SetLabels sets labels.
+func (u *TaskUpdate) SetLabels(v []string) *TaskUpdate {
+	u.stmt.Set("labels", v)
 	return u
 }
 
