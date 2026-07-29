@@ -11,6 +11,9 @@ Semantic versioning applies from `v1.0.0`. Until then a minor bump may break a
 surface listed under **Will move**, and each break is described in the release
 notes with the mechanical edit that fixes it.
 
+What has to be true before that version — and why the gating item is evidence
+rather than features — is [the road to 1.0](release-1.0.md).
+
 ## Frozen
 
 These are the surfaces worth freezing early, because they are the ones other
