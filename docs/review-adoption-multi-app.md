@@ -630,6 +630,10 @@ core does not carry.
 4. **A Go client generator** to match the TypeScript one, for the admin CLIs.
    [Answered — [ADR-0029](adr/0029-go-cli.md).]
 5. **Composite primary keys**, or a documented "surrogate key required" stance.
+   [The stance is now recorded — [ADR-0034](adr/0034-one-column-addresses-a-row.md).
+   It also concedes that the refusal is currently wider than its own argument:
+   a table that is never addressed, expanded or cursor-paged does not need a
+   key at all, which covers some of the 15 files below.]
 6. pgvector ([ADR-0026](adr/0026-vectors-declare-their-index.md)) — noted, not
    urgent if `rag` is scoped out.
 
