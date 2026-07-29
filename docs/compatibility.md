@@ -127,6 +127,14 @@ underlying pgx connection — and it is neither tested here nor recommended: it
 puts both libraries on one session under two handles, neither of which knows
 about the other's `BEGIN`.
 
+**This is written by someone who works in pgx.** The applications this library
+is developed alongside are pgx-native, and both outside evaluations of sqlb
+named this constraint as their first blocker. So the position above is not one
+taken by someone who has never met the problem: it is a trade made with the bill
+in view — an engine that inherits nothing, against a transaction boundary a
+pgx-native caller has to plan around. What would overturn it is a unit of work
+that genuinely cannot be written, not a preference for the other driver.
+
 **What would change this.** Not a pgx `Executor` — an optional interface. If
 bulk ingest, or a vector column carrying a binary codec
 ([ADR-0026](adr/0026-vectors-declare-their-index.md)), turns out to need the
