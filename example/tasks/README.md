@@ -46,6 +46,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | | |
 |---|---|
 | [`taskschema/schema.go`](taskschema/schema.go) | The source of truth. Six tables, and a comment on every decision that is not obvious. |
+| [`taskschema/sqlb.go`](taskschema/sqlb.go) | What `sqlb generate` emits and where, and the scratch database `sqlb migrate` replays into. One function, and it replaced the `cmd/gen` this example used to carry. |
 | [`app/hooks.go`](app/hooks.go) | The workspace boundary. One registration per model, and no handler that knows about tenants. |
 | [`auth/jwt.go`](auth/jwt.go) | HS256 in the standard library, with the three checks that make a verifier safe rather than merely working. |
 | [`app/auth_routes.go`](app/auth_routes.go) | Register and login: the endpoints that establish the identity everything else is scoped by. |
@@ -267,9 +268,36 @@ refresh endpoint. Both are noted where they bite.
 ## Regenerating
 
 ```bash
-go generate ./...              # models, typed columns, REST bodies, manifest, TS client, CLI
+sqlb generate ./taskschema     # models, typed columns, REST bodies, manifest, TS client, Dart client, CLI
 go run ./cmd/migrate -force    # migrations, from the schema
 ```
+
+`go generate ./...` runs the first line, because that is the directive in
+[`taskschema/sqlb.go`](taskschema/sqlb.go) — which is also where this example
+declares what it emits and where it lands ([ADR-0032](../../docs/adr/0032-sqlb-command.md)).
+There is no `cmd/gen` any more; the whole of it was that declaration wrapped in
+flag parsing.
+
+`cmd/migrate` stays, and is not an oversight. Its second migration is three
+things the DSL cannot express — two triggers and a pair of composite foreign
+keys — written as `migrate.Change` values by hand, and no diff will ever produce
+them. What `sqlb migrate` adds is the other direction: whether the history still
+builds the schema after someone edits `schema.go`.
+
+```bash
+docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=x postgres:18-alpine
+export SQLB_SHADOW_DSN='postgres://postgres:x@localhost:5433/postgres?sslmode=disable'
+sqlb migrate -check ./taskschema
+```
+
+Two things it reports here are worth seeing, because both are honest answers
+rather than failures of the example. The composite foreign keys come back as
+constructs the DSL cannot express, so it warns that `current` is an incomplete
+picture before showing any diff. And it proposes dropping and re-adding
+`done_tasks_have_a_completion_time` on every run — a declared `Check` never
+round-trips, because Postgres normalises the expression and the comparison is
+textual. That is [issue #24](https://github.com/jryannel/sqlb/issues/24), and
+until it is fixed `migrate -check` is not a gate this example can be held to.
 
 `mise run generate-check` fails if the committed output has drifted from the
 schema. The migrations are *not* checked that way: `migrate.Write` refuses to

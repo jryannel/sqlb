@@ -90,6 +90,28 @@ Go 1.25 or newer, and Postgres.
 [Quickstart](https://jryannel.github.io/sqlb/start/quickstart/) goes
 from here to a running server.
 
+The generator is a command, and the loop is one line each way:
+
+```bash
+go install github.com/jryannel/sqlb/cmd/sqlb@latest
+
+sqlb generate ./schema                # models, typed columns, REST bodies, manifest, clients
+sqlb check ./schema                   # the CI drift gate: writes nothing, fails if stale
+sqlb migrate -name adds_slug ./schema # the migration that closes the gap
+```
+
+The argument is the package that declares your schema, and the package says what
+to emit and where by exporting one function. Because the schema is Go, `sqlb`
+compiles a driver against your module to read it — see
+[ADR-0032](docs/adr/0032-sqlb-command.md) for why that is forced and what it
+costs.
+
+`generate` and `check` need no database. `migrate` works out the current schema
+by replaying your committed migrations into a scratch Postgres, because reading
+a live one tells you what the database looks like rather than whether the
+migrations produce it — so it needs an empty database, except for the very first
+migration, which diffs against nothing.
+
 The schema DSL and code generation are both optional: `sqlb.Describe[T]()`
 layers the same capabilities over structs you already have, including stock
 [sqlc](docs/with-sqlc.md) output, without editing them.

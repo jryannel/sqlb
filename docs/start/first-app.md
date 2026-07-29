@@ -23,8 +23,8 @@ deletes.go             the endpoint the generator cannot produce
 server_test.go         the assembled server, and every claim above asserted
 ```
 
-The generated four are committed, and `go run ./example/blog/gen -check` fails
-if they are stale. That is the whole staleness story: generated code is checked
+The generated four are committed, and
+`sqlb check ./example/blog/blogschema` fails if they are stale. That is the whole staleness story: generated code is checked
 in so it is reviewable in a diff, and a gate makes forgetting to regenerate
 loud.
 
