@@ -164,13 +164,15 @@ const SOURCES = [
     // accident — what belongs on the site is a decision each time.
     //
     // Read in this order: what it is for, how it is built, what it promises,
-    // how it sits beside sqlc, and what an outside reader made of it. The
-    // review is a dated snapshot and says so in its own first paragraph, which
-    // is what makes it publishable rather than misleading.
+    // what it has to do before that promise becomes permanent, how it sits
+    // beside sqlc, and what an outside reader made of it. The review is a dated
+    // snapshot and says so in its own first paragraph, which is what makes it
+    // publishable rather than misleading.
     files: [
       "vision.md",
       "architecture.md",
       "compatibility.md",
+      "release-1.0.md",
       "comparisons.md",
       "with-sqlc.md",
       "review-adoption-readiness.md",
