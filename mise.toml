@@ -7,11 +7,12 @@
 # Tool versions are pinned so every checkout and CI runner builds and lints with
 # the same toolchain.
 [tools]
-# Matches studio-apps, so sqlb is developed against the toolchain it will be
-# consumed by. go.mod deliberately declares a *lower* minimum (1.25): a library
-# should not force its consumers onto a newer toolchain than it needs.
+# Matches the application repository sqlb is developed against, so it is built
+# with the toolchain it will be consumed by. go.mod deliberately declares a
+# *lower* minimum (1.25): a library should not force its consumers onto a newer
+# toolchain than it needs.
 go = "1.26.4"
-# Pinned for the same reason as in studio-apps: a newer golangci-lint can add or
+# Pinned for the same reason as there: a newer golangci-lint can add or
 # redefine analyzers and turn a green tree red, or quietly stop reporting a real
 # finding. Bump deliberately, then run `mise run lint`.
 golangci-lint = "2.12.2"
@@ -297,7 +298,7 @@ description = "Regenerate models, the typed column facade and the manifest from 
 run = "go generate ./..."
 
 [tasks.generate-check]
-description = "Fail if committed generated code does not match what the schema would produce now. Generated code is committed, so it drifts: someone edits a schema, forgets to regenerate, and the models silently describe a table that no longer exists. Part of `ci`, in the same spirit as the sqlc-check gate in studio-apps."
+description = "Fail if committed generated code does not match what the schema would produce now. Generated code is committed, so it drifts: someone edits a schema, forgets to regenerate, and the models silently describe a table that no longer exists. Part of `ci`, in the same spirit as a sqlc-check gate."
 run = '''
 set -e
 go run ./cmd/sqlb check ./example/blog/blogschema

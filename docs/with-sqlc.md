@@ -155,6 +155,33 @@ Both statements land on one connection and commit or roll back together, and
 commit or roll back the returned `*sql.Tx` yourself — `WithTx` owns that
 boundary.
 
+### If your sqlc is generated for pgx
+
+Everything above holds only because sqlc emitted a `DBTX` that `*sql.Tx`
+satisfies. Under `sql_package: pgx/v5` it does not: `DBTX` is
+`Exec`/`Query`/`QueryRow`/`CopyFrom` over `pgconn` and `pgx` types, and
+`Queries.WithTx` takes a `pgx.Tx`. So the example does not compile, and no
+adapter fixes it — the two libraries can share a pool and cannot share a
+transaction ([the driver](compatibility.md#the-driver)).
+
+Two shapes are honest, and only one of them scales:
+
+- **Disjoint tables.** sqlb owns tables sqlc never writes, and no unit of work
+  spans both. This is the right first move: it costs nothing, needs no
+  regeneration, and answers whether the list surface is worth the rest. It stops
+  being viable the moment one module's filterable list and its reports read the
+  same table inside one transaction.
+- **Regenerate sqlc with `sql_package: database/sql`.** Then `DB.Tx` hands the
+  same `*sql.Tx` to both and the split above is a split rather than a fracture.
+  It is mechanical and it is not free: `CopyFrom` disappears, because sqlc emits
+  it for pgx only; per-connection type codecs go with it; and any `overrides`
+  need re-checking against the `database/sql` type set.
+
+Read that as an end state and not as a first step. Proving the list surface on
+disjoint tables costs days and can make the regeneration unnecessary; doing the
+regeneration first is the largest mechanical change available and proves
+nothing on its own.
+
 ## Instead of compile-time column checking
 
 The honest gap: `sqlb.F("titel")` compiles and fails at runtime, where sqlc

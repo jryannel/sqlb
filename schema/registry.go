@@ -259,7 +259,10 @@ func (r *Registry) Validate() error {
 		}
 
 		if pks > 1 {
-			report(t.name, "", "%d primary keys declared, expected at most one (use UniqueIndex for composite keys)", pks)
+			// The reason rather than only the workaround: one column is what
+			// spells a row in a URL, a cursor and a generated cache key, and
+			// each of those is a wire format (ADR-0034).
+			report(t.name, "", "%d primary keys declared, expected at most one; one column is what addresses a row in its URL and its cursor, so declare the composite key with UniqueIndex, and add a surrogate key beside it if the table is exposed", pks)
 		}
 		// Two scope columns would name one hook twice and say nothing more.
 		// There is no matching check for soft delete: the group always
