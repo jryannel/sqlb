@@ -16,6 +16,26 @@ import (
 // migration forwards and an import backwards, and the whole engine is testable
 // without a database (ADR-0014).
 //
+// # One case where the two registries are not comparable as they stand
+//
+// Constraints are compared by their definition text, and for a CHECK that text
+// is not the same on both sides. Postgres stores a check as a parse tree and
+// hands back a canonical spelling — fully parenthesised, with explicit casts on
+// literals — so `status <> 'done'` comes back from introspect as
+// `(status <> 'done'::text)`. Diffing a declared registry against an
+// introspected one therefore proposes dropping and re-adding every check they
+// have in common, forever (issue #24).
+//
+// Call shadow.NormalizeChecks on the declared registry first, which puts its
+// expressions through the same normalisation by asking a Postgres. That is a
+// separate call rather than something Diff does, because doing it here would
+// mean taking a database — and being a pure function over two registries is
+// what the paragraph above is about. `sqlb migrate` makes the call; anything
+// diffing against introspect.Registry output should too.
+//
+// Enums are unaffected: an enum is text plus a CHECK (ADR-0017), and introspect
+// reads the values back out of the normalised form rather than comparing it.
+//
 // # What Destructive means here
 //
 // A change is marked Destructive when applying it can lose data that cannot be

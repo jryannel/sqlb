@@ -259,6 +259,34 @@ func (t *TableDef) Check(name, expr string) *TableDef {
 	return t
 }
 
+// ReplaceCheckExpr rewrites the expression of an already-declared check, and
+// reports whether there was one by that name.
+//
+// This exists for one caller and it is worth naming, because a setter on a
+// declaration is otherwise a smell. Postgres does not store a CHECK expression
+// as it was written: it stores a parse tree, and hands back a normalised
+// spelling — fully parenthesised, with explicit casts on literals. So a
+// registry read back by introspect and a registry declared here disagree about
+// every check they have in common, and a diff between them proposes dropping
+// and re-adding each one forever (issue #24).
+//
+// The only reliable way to compare them is to put the declared expression
+// through the same normalisation, which means asking a Postgres. That is what
+// shadow.NormalizeChecks does, and this is how it writes the answer back.
+// Comparing the two spellings textually instead was rejected: stripping
+// parentheses can make two genuinely different expressions look equal, and a
+// diff that reports "unchanged" for a changed constraint is silently wrong,
+// where churn is merely loud.
+func (t *TableDef) ReplaceCheckExpr(name, expr string) bool {
+	for i := range t.checks {
+		if t.checks[i].Name == name {
+			t.checks[i].Expr = expr
+			return true
+		}
+	}
+	return false
+}
+
 // Describe attaches a table description, emitted into DDL and OpenAPI.
 func (t *TableDef) Describe(s string) *TableDef {
 	t.comment = s

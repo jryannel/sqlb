@@ -290,14 +290,18 @@ export SQLB_SHADOW_DSN='postgres://postgres:x@localhost:5433/postgres?sslmode=di
 sqlb migrate -check ./taskschema
 ```
 
-Two things it reports here are worth seeing, because both are honest answers
-rather than failures of the example. The composite foreign keys come back as
-constructs the DSL cannot express, so it warns that `current` is an incomplete
-picture before showing any diff. And it proposes dropping and re-adding
-`done_tasks_have_a_completion_time` on every run — a declared `Check` never
-round-trips, because Postgres normalises the expression and the comparison is
-textual. That is [issue #24](https://github.com/jryannel/sqlb/issues/24), and
-until it is fixed `migrate -check` is not a gate this example can be held to.
+It reports one thing here and it is worth seeing, because it is an honest answer
+rather than a failure of the example: the composite foreign keys come back as
+constructs the DSL cannot express, so `current` is an incomplete picture and the
+command says so before showing any diff. Then it reports no changes, which is
+the claim — the checked-in history still builds what `schema.go` declares.
+
+That it says nothing about `done_tasks_have_a_completion_time` is the fix for
+[#24](https://github.com/jryannel/sqlb/issues/24). Postgres stores a `Check` as
+a parse tree and hands back its own spelling, so a declared check and an
+introspected one never matched as strings and every run proposed dropping and
+re-adding it. The declared expression is now put through the same normalisation
+by asking the shadow database, which is open anyway at that point.
 
 `mise run generate-check` fails if the committed output has drifted from the
 schema. The migrations are *not* checked that way: `migrate.Write` refuses to
