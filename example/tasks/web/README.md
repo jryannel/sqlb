@@ -21,7 +21,7 @@ npm test            # the encoder, against the grammar the server parses
 | [`src/refusals.ts`](src/refusals.ts) | What does *not* compile, asserted. |
 
 Regenerate with `go generate ./...` from `example/tasks`, or
-`go run ./cmd/gen -dir .`. `mise run generate-check` fails if the committed
+`sqlb generate ./taskschema`. `mise run generate-check` fails if the committed
 output has drifted from the schema, the same gate the Go output is under.
 
 ## The point of it

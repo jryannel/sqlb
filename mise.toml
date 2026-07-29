@@ -300,19 +300,24 @@ run = "go generate ./..."
 description = "Fail if committed generated code does not match what the schema would produce now. Generated code is committed, so it drifts: someone edits a schema, forgets to regenerate, and the models silently describe a table that no longer exists. Part of `ci`, in the same spirit as the sqlc-check gate in studio-apps."
 run = '''
 set -e
-go run ./example/blog/gen -check
+go run ./cmd/sqlb check ./example/blog/blogschema
 # The sqlc example reads a schema.sql rendered from the same declaration. If it
 # drifts, sqlc is typing its queries against a schema the database no longer
 # has, which is the exact failure docs/with-sqlc.md claims this arrangement
 # prevents. Checked here; regenerating the sqlc output itself is not, because
 # that would make sqlc a build dependency of a library whose whole point is not
 # to impose its dependencies on consumers.
+#
+# This one keeps a generator of its own because it emits something codegen does
+# not: plain DDL for sqlc to read. `sqlb generate` runs the emitters a Project
+# declares, and a bespoke fourth artefact is exactly the case ADR-0032 says
+# stays a hand-written main.
 go run ./example/withsqlc/gen -check
-# example/tasks is a module of its own, so its generator cannot be reached from
-# the root module's package list and needs a line here. Forgetting it would
-# leave the larger example's committed output free to drift, which is the exact
+# example/tasks is a module of its own, so its schema cannot be reached from the
+# root module's package list and needs a line here. Forgetting it would leave
+# the larger example's committed output free to drift, which is the exact
 # failure this gate exists to catch.
-cd "$MISE_PROJECT_ROOT/example/tasks" && go run ./cmd/gen -check -dir .
+cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sqlb check ./taskschema
 '''
 
 [tasks.bisect-check]

@@ -32,7 +32,7 @@ same seam over `dart:io` so it can be checked with the Dart SDK alone.
 | [`lib/refusals.dart`](lib/refusals.dart) | What does *not* compile, asserted. |
 
 Regenerate with `go generate ./...` from `example/tasks`, or
-`go run ./cmd/gen -dir .`. `mise run generate-check` fails if the committed
+`sqlb generate ./taskschema`. `mise run generate-check` fails if the committed
 output has drifted from the schema, the same gate the Go and TypeScript output
 are under.
 

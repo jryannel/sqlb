@@ -7,11 +7,6 @@
 // both be called Post.
 package blogschema
 
-// The output directory is passed explicitly because go generate runs this with
-// the working directory set to blogschema, not to the module root.
-//
-//go:generate go run ../gen -dir ..
-
 import "github.com/jryannel/sqlb/schema"
 
 // Org is a tenant. Everything else hangs off it.

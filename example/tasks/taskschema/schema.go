@@ -22,11 +22,6 @@
 //   - a migration history generated from this file and applied by goose.
 package taskschema
 
-// The output directory is passed explicitly because go generate runs this with
-// the working directory set to taskschema, not to the module root.
-//
-//go:generate go run ../cmd/gen -dir ..
-
 import "github.com/jryannel/sqlb/schema"
 
 // Workspace is the tenant. Every other table except User is scoped to one, and
