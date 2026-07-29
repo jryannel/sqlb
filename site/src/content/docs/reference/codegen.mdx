@@ -54,6 +54,61 @@ Set any of them to `"-"` to skip that artefact.
 `RestFile` is written **only when the schema exposes at least one table**, so a
 package with no REST surface does not acquire a dependency on Huma.
 
+## Type overrides
+
+`Types` replaces the Go type emitted for the columns each override matches —
+the sqlc `overrides:` equivalent, and what lets a codebase whose ids are
+`uuid.UUID` generate its models rather than describing hand-written ones.
+
+```go
+codegen.Options{
+    Types: []codegen.TypeOverride{
+        {Type: schema.TypeUUID, GoType: "uuid.UUID", Import: "github.com/google/uuid"},
+        {Table: "invoices", Column: "amount", GoType: "decimal.Decimal",
+         Import: "github.com/shopspring/decimal"},
+    },
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `Type` | Match every column of a logical type |
+| `Table` | Narrow to one table, by its storage name (module prefix included) |
+| `Column` | Narrow to one column name |
+| `GoType` | The type as it should appear in the source: `uuid.UUID` |
+| `Import` | The package path providing it, or empty if it needs none |
+
+At least one matcher is required. **More specific wins** — `Table`+`Column`
+beats `Column`, which beats `Type` — and two rules of equal specificity matching
+one column is an error rather than last-one-wins.
+
+### What an override reaches, and what it does not
+
+This is the part worth reading before using it
+([ADR-0035](https://github.com/jryannel/sqlb/blob/main/docs/adr/0035-type-overrides.md)).
+
+| | An override… |
+|---|---|
+| Models, typed facade, REST bodies, manifest | …changes them |
+| The filter grammar's coercion | …changes it, and has to — `?id=eq.019…` parses into the column's Go type |
+| The SQL type in DDL | …never reaches `migrate` |
+| The wire — JSON, OpenAPI, TypeScript, Dart, CLI | …must not, and cannot: every client emitter maps from the *schema* type |
+
+So a `uuid` overridden to `uuid.UUID` is still `string` in the generated
+TypeScript, still `format: uuid` in the OpenAPI document, and still text on a
+CLI flag. The API did not change; only the Go did.
+
+`Nullable` and `Array` compose on top, so an overridden nullable column is
+`*uuid.UUID` and an overridden array column is `[]uuid.UUID`.
+
+**An enum column cannot be overridden.** The generated string type carries the
+value set — its constants, the TypeScript union, the CLI's `--help` — and an
+override would replace it with a type that has none of that.
+
+**A wrong `GoType` or `Import` fails in your build, not here.** sqlb emits text
+and does not resolve the package, because the package lives in a module sqlb
+does not depend on.
+
 ## TypeScript client
 
 | Field | Default | Notes |

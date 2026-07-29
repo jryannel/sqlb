@@ -133,22 +133,20 @@ stream B is not work to schedule — it is a question the ports answer:
 the work now on a guess is how you acquire a permanent interface for a problem
 you did not have.
 
-### C. Type overrides
+### C. Type overrides — **closed**
 
-`schema.Type.GoType()` is a closed switch with no override mechanism, and the
-first evaluation makes the cost concrete: `uuid → string` where the codebase
-uses `uuid.UUID` touches middleware, every filter registry, and every use-case
-signature. sqlc has `overrides:` in its config; `codegen.Options` has no
-counterpart.
+`schema.Type.GoType()` was a closed switch with no override mechanism, and the
+first evaluation made the cost concrete: `uuid → string` where the codebase uses
+`uuid.UUID` touches middleware, every filter registry, and every use-case
+signature.
 
-This is a **1.0 blocker on the generated-code surface**, not on the runtime one.
-Adding overrides later is additive for the library and a rewrite for anyone who
-already generated against the fixed mapping. Minimum viable: a per-type and
-per-column override in `codegen.Options`, with the import it needs.
-
-There is no ADR for this. There should be, because the interesting part is not
-the mechanism but the boundary: an override changes the Go type and must not
-change the SQL type, the filter coercion, or what the wire says.
+`codegen.Options.Types` is the sqlc `overrides:` equivalent
+([ADR-0035](adr/0035-type-overrides.md)). The record is mostly about the
+boundary rather than the mechanism, because that is the part that would have
+been easy to get wrong: an override reaches the models, the typed facade, the
+REST bodies and the manifest; it reaches filter coercion too, and must; and it
+does not reach the SQL type or the wire, which falls out of every client
+emitter mapping from `schema.Type` rather than from the Go type.
 
 ### D. The wire format, stated as policy
 
@@ -252,8 +250,8 @@ is risky, which is why it goes first: it is the work that makes the next phase
 legible to someone who is not the author.
 
 - Every ADR reaches Working or documents its scope.
-- ADRs written for type overrides, wire-format policy, full text, parent-scoped
-  routes — the *decision*, not necessarily the code.
+- ADRs written for ~~type overrides~~ (done, ADR-0035), wire-format policy,
+  full text, parent-scoped routes — the *decision*, not necessarily the code.
 - `Security` on `rest.Options`.
 - `compatibility.md` gains the envelope and naming rule under *Frozen*.
 
@@ -262,7 +260,7 @@ legible to someone who is not the author.
 ### Phase 2 — Close the hole and unblock the ports
 
 - ~~**Stream A**: the `?expand` scope fix.~~ Done.
-- **Stream C**: type overrides in `codegen.Options`.
+- ~~**Stream C**: type overrides in `codegen.Options`.~~ Done.
 - Whichever of stream E's rows the two target codebases actually hit — decided
   by reading them, not by guessing here.
 
