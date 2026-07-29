@@ -13,10 +13,11 @@
 
 ## Context
 
-The refusal exists and has never been explained. `schema.Validate` reports
-`%d primary keys declared, expected at most one (use UniqueIndex for composite
-keys)` — a message that names the workaround and not the reason, which is the
-one thing [ADR-0011](0011-actionable-errors.md) asks an error not to do.
+The refusal has existed since before `v0.1.0` and went unexplained.
+`schema.Validate` reported `%d primary keys declared, expected at most one (use
+UniqueIndex for composite keys)` — a message that named the workaround and not
+the reason, which is the one thing [ADR-0011](0011-actionable-errors.md) asks an
+error not to do. It names both now; writing this record is what prompted that.
 
 An outside reader noticed. The second evaluation
 ([review-adoption-multi-app.md](../review-adoption-multi-app.md)) asks for
@@ -233,3 +234,7 @@ decision.
   addressing, and only tables that are addressed, expanded or cursor-paged need
   it — so the narrowing is recorded as the first thing that should change rather
   than as a defence of what is there.
+- 2026-07-29 — `schema.Validate`'s message rewritten to carry the reason and
+  both halves of the fix, which is what the Context above says it was missing. A
+  record that names a bad error message and leaves it in place is a note, not a
+  decision.
