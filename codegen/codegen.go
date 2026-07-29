@@ -108,6 +108,19 @@ type Options struct {
 	// cursor pager it emits instead is plain Dart (ADR-0031).
 	DartDir  string
 	DartFile string
+
+	// Types replaces the Go type emitted for the columns each override
+	// matches — the sqlc `overrides:` equivalent, and the reason a codebase
+	// whose ids are uuid.UUID rather than string can generate its models
+	// rather than describing hand-written ones.
+	//
+	// An override reaches the models, the typed column facade, the REST bodies
+	// and the manifest, and reaches nothing else. It does not change the SQL
+	// type, and it does not change the wire: the TypeScript and Dart clients,
+	// the CLI and the OpenAPI document all map from the schema type, so an
+	// override is invisible to them. ADR-0035 records why that split is the
+	// load-bearing part.
+	Types []TypeOverride
 }
 
 func (o Options) modelsFile() string   { return orDefault(o.ModelsFile, "models_gen.go") }
@@ -272,7 +285,15 @@ func render(opts Options) (map[string][]byte, error) {
 		}
 	}
 	if name := opts.manifestFile(); name != "-" {
-		src, err := opts.Registry.BuildManifest().JSON()
+		m := opts.Registry.BuildManifest()
+		// The manifest reports what was generated rather than what the default
+		// mapping would have produced: its goType field exists for a reader
+		// deciding how to call the generated code, and an override changed
+		// that answer (ADR-0035).
+		if err := applyOverridesToManifest(m, opts); err != nil {
+			return nil, err
+		}
+		src, err := m.JSON()
 		if err != nil {
 			return nil, err
 		}

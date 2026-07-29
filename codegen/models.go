@@ -19,9 +19,22 @@ import (
 func renderModels(opts Options) ([]byte, error) {
 	tables := opts.Registry.Tables()
 
+	ov, err := newOverrides(opts.Types, opts.Registry)
+	if err != nil {
+		return nil, err
+	}
+
 	imports := map[string]bool{}
+	for _, path := range ov.imports(opts.Registry) {
+		imports[path] = true
+	}
 	for _, t := range tables {
 		for _, f := range t.Fields() {
+			// The default mapping decides which stdlib import a column needs;
+			// an overridden column brings its own, above.
+			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
+				continue
+			}
 			switch f.Desc().GoType() {
 			case "time.Time", "*time.Time", "[]time.Time":
 				imports["time"] = true
@@ -76,7 +89,7 @@ func renderModels(opts Options) ([]byte, error) {
 		for _, f := range t.Fields() {
 			d := f.Desc()
 			fmt.Fprintf(b, "\t%s %s `db:%q %s%s`",
-				GoName(d.Name), goType(typeName, d), d.Name, jsonTag(d), capTag(d))
+				GoName(d.Name), goType(typeName, t.Name(), d, ov), d.Name, jsonTag(d), capTag(d))
 			if c := d.Comment; c != "" {
 				fmt.Fprintf(b, " // %s", c)
 			}
@@ -270,7 +283,19 @@ func expandableRelations(reg *schema.Registry, t *schema.TableDef) []string {
 
 // goType is the Go type for a column, using the generated enum type where the
 // schema declared one.
-func goType(typeName string, d *schema.FieldDesc) string {
+func goType(typeName, table string, d *schema.FieldDesc, ov *overrides) string {
+	// An override replaces the base type only. Nullable and Array wrap it
+	// afterwards, in the same place they always did, which is why an override
+	// never has to know about either (ADR-0035).
+	if base, replaced := ov.base(table, d); replaced {
+		switch {
+		case d.Array:
+			return "[]" + base
+		case d.Nullable:
+			return "*" + base
+		}
+		return base
+	}
 	if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
 		enum := typeName + GoName(d.Name)
 		switch {

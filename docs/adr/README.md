@@ -134,3 +134,4 @@ nobody finishes reading has failed at its only job.
 | [0032](0032-sqlb-command.md) | The command compiles a driver, and the project declares itself in Go | Working | Medium |
 | [0033](0033-array-columns.md) | An array is its element type plus a flag, and the slice stays plain | Working | High |
 | [0034](0034-one-column-addresses-a-row.md) | A row is addressed by one column, and a composite key becomes a unique index | Working | Medium |
+| [0035](0035-type-overrides.md) | A type override changes the Go type and nothing else | Working | High |

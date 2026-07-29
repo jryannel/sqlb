@@ -33,6 +33,11 @@ func renderREST(opts Options) ([]byte, error) {
 		return nil, nil
 	}
 
+	ov, err := newOverrides(opts.Types, opts.Registry)
+	if err != nil {
+		return nil, err
+	}
+
 	imports := map[string]bool{
 		"github.com/danielgtaylor/huma/v2": true,
 		"github.com/jryannel/sqlb":         true,
@@ -40,6 +45,9 @@ func renderREST(opts Options) ([]byte, error) {
 	}
 	for _, t := range exposed {
 		for _, f := range bodyFields(t, forCreate) {
+			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
+				continue
+			}
 			if strings.Contains(f.Desc().GoType(), "time.Time") {
 				imports["time"] = true
 			}
@@ -50,11 +58,15 @@ func renderREST(opts Options) ([]byte, error) {
 		}
 	}
 
+	for _, path := range ov.imports(opts.Registry) {
+		imports[path] = true
+	}
+
 	b := header(opts.Package, sortedSet(imports))
 
 	for _, t := range exposed {
-		renderCreateBody(b, t)
-		renderUpdateBody(b, t)
+		renderCreateBody(b, t, ov)
+		renderUpdateBody(b, t, ov)
 	}
 	renderRegister(b, opts.Registry, exposed)
 
@@ -110,7 +122,7 @@ func optionalOnCreate(d *schema.FieldDesc) bool {
 	return d.Nullable || d.Default != nil
 }
 
-func renderCreateBody(b *bytes.Buffer, t *schema.TableDef) {
+func renderCreateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {
 	if !t.Rest().Ops.Has(schema.OpCreate) {
 		return
 	}
@@ -125,7 +137,7 @@ func renderCreateBody(b *bytes.Buffer, t *schema.TableDef) {
 	fmt.Fprintf(b, "type %s struct {\n", name)
 	for _, f := range fields {
 		d := f.Desc()
-		fmt.Fprintf(b, "\t%s %s `json:\"%s%s\"%s`", GoName(d.Name), bodyType(typeName, d, forCreate), d.Name, omitEmpty(optionalOnCreate(d)), enumTag(d))
+		fmt.Fprintf(b, "\t%s %s `json:\"%s%s\"%s`", GoName(d.Name), bodyType(typeName, t.Name(), d, forCreate, ov), d.Name, omitEmpty(optionalOnCreate(d)), enumTag(d))
 		if c := d.Comment; c != "" {
 			fmt.Fprintf(b, " // %s", c)
 		}
@@ -153,7 +165,7 @@ func renderCreateBody(b *bytes.Buffer, t *schema.TableDef) {
 	fmt.Fprintln(b, "\treturn row, nil\n}")
 }
 
-func renderUpdateBody(b *bytes.Buffer, t *schema.TableDef) {
+func renderUpdateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {
 	if !t.Rest().Ops.Has(schema.OpUpdate) {
 		return
 	}
@@ -174,7 +186,7 @@ func renderUpdateBody(b *bytes.Buffer, t *schema.TableDef) {
 	fmt.Fprintf(b, "type %s struct {\n", name)
 	for _, f := range fields {
 		d := f.Desc()
-		fmt.Fprintf(b, "\t%s %s `json:\"%s,omitempty\"%s`", GoName(d.Name), bodyType(typeName, d, forUpdate), d.Name, enumTag(d))
+		fmt.Fprintf(b, "\t%s %s `json:\"%s,omitempty\"%s`", GoName(d.Name), bodyType(typeName, t.Name(), d, forUpdate, ov), d.Name, enumTag(d))
 		if c := d.Comment; c != "" {
 			fmt.Fprintf(b, " // %s", c)
 		}
@@ -221,8 +233,8 @@ func renderUpdateBody(b *bytes.Buffer, t *schema.TableDef) {
 
 // bodyType is the Go type of a body field: a pointer wherever the field is
 // optional, so that absent is distinguishable from zero.
-func bodyType(typeName string, d *schema.FieldDesc, kind bodyKind) string {
-	base := goType(typeName, d)
+func bodyType(typeName, table string, d *schema.FieldDesc, kind bodyKind, ov *overrides) string {
+	base := goType(typeName, table, d, ov)
 	if strings.HasPrefix(base, "*") {
 		return base // nullable columns are already pointers
 	}

@@ -18,10 +18,21 @@ import (
 func renderColumns(opts Options) ([]byte, error) {
 	tables := opts.Registry.Tables()
 
+	ov, err := newOverrides(opts.Types, opts.Registry)
+	if err != nil {
+		return nil, err
+	}
+
 	imports := map[string]bool{"github.com/jryannel/sqlb": true}
+	for _, path := range ov.imports(opts.Registry) {
+		imports[path] = true
+	}
 	for _, t := range tables {
 		for _, f := range t.Fields() {
 			if f.Desc().Hidden {
+				continue
+			}
+			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
 				continue
 			}
 			if base(f.Desc()) == "time.Time" {
@@ -45,7 +56,7 @@ func renderColumns(opts Options) ([]byte, error) {
 
 		fmt.Fprintf(b, "\ntype %s struct {\n", setName)
 		for _, f := range visible {
-			fmt.Fprintf(b, "\t%s %s\n", GoName(f.Desc().Name), colType(typeName, f.Desc()))
+			fmt.Fprintf(b, "\t%s %s\n", GoName(f.Desc().Name), colType(typeName, t.Name(), f.Desc(), ov))
 		}
 		fmt.Fprintln(b, "}")
 
@@ -56,11 +67,11 @@ func renderColumns(opts Options) ([]byte, error) {
 		fmt.Fprintf(b, "var %sCols = %s{\n", typeName, setName)
 		for _, f := range visible {
 			d := f.Desc()
-			fmt.Fprintf(b, "\t%s: %s,\n", GoName(d.Name), colCtor(typeName, d))
+			fmt.Fprintf(b, "\t%s: %s,\n", GoName(d.Name), colCtor(typeName, t.Name(), d, ov))
 		}
 		fmt.Fprintln(b, "}")
 
-		renderUpdate(b, t, typeName)
+		renderUpdate(b, t, typeName, ov)
 	}
 
 	return gofmt(opts.columnsFile(), b.Bytes())
@@ -72,7 +83,7 @@ func renderColumns(opts Options) ([]byte, error) {
 // each need their return type re-wrapped, for safety the column set already
 // gives. An update is different: sqlb.Update.Set takes a string and an any, so
 // neither the column name nor the value type is checked without this.
-func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.TableDef, typeName string) {
+func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.TableDef, typeName string, ov *overrides) {
 	w := func(format string, args ...any) { _, _ = b.WriteString(fmt.Sprintf(format, args...)) }
 
 	// Everything but the primary key gets a setter, including ReadOnly and
@@ -109,7 +120,7 @@ func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.Tab
 	for _, f := range writable {
 		d := f.Desc()
 		field := GoName(d.Name)
-		typ := goType(typeName, d)
+		typ := goType(typeName, t.Name(), d, ov)
 		w("\n// Set%s sets %s.\n", field, d.Name)
 		w("func (u *%sUpdate) Set%s(v %s) *%sUpdate {\n", typeName, field, typ, typeName)
 		w("\tu.stmt.Set(%q, v)\n\treturn u\n}\n", d.Name)
@@ -134,24 +145,44 @@ func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.Tab
 // An array column gets ArrayCol, which carries the containment operators and
 // none of the ordering or pattern ones — so Contains on a tag array does not
 // compile, and the one name is not overloaded by column type (ADR-0033).
-func colType(typeName string, d *schema.FieldDesc) string {
+func colType(typeName, table string, d *schema.FieldDesc, ov *overrides) string {
+	elem, textual := facadeElem(typeName, table, d, ov)
 	switch {
 	case d.Array:
-		return fmt.Sprintf("sqlb.ArrayCol[%s]", enumOrBase(typeName, d))
-	case isTextual(d):
-		return fmt.Sprintf("sqlb.TextCol[%s]", base(d))
+		return fmt.Sprintf("sqlb.ArrayCol[%s]", elem)
+	case textual:
+		return fmt.Sprintf("sqlb.TextCol[%s]", elem)
 	}
-	return fmt.Sprintf("sqlb.Col[%s]", enumOrBase(typeName, d))
+	return fmt.Sprintf("sqlb.Col[%s]", elem)
 }
 
-func colCtor(typeName string, d *schema.FieldDesc) string {
+func colCtor(typeName, table string, d *schema.FieldDesc, ov *overrides) string {
+	elem, textual := facadeElem(typeName, table, d, ov)
 	switch {
 	case d.Array:
-		return fmt.Sprintf("sqlb.ArrayColumn[%s](%q)", enumOrBase(typeName, d), d.Name)
-	case isTextual(d):
-		return fmt.Sprintf("sqlb.TextColumn[%s](%q)", base(d), d.Name)
+		return fmt.Sprintf("sqlb.ArrayColumn[%s](%q)", elem, d.Name)
+	case textual:
+		return fmt.Sprintf("sqlb.TextColumn[%s](%q)", elem, d.Name)
 	}
-	return fmt.Sprintf("sqlb.Typed[%s](%q)", enumOrBase(typeName, d), d.Name)
+	return fmt.Sprintf("sqlb.Typed[%s](%q)", elem, d.Name)
+}
+
+// facadeElem is the type parameter a column's facade carries, and whether the
+// pattern operators apply to it.
+//
+// An overridden column loses TextCol even when the schema type is text, because
+// TextCol is constrained to ~string and the replacement almost never is. That
+// is the honest outcome rather than a limitation: Contains on a decimal.Decimal
+// would not have compiled anyway, and one that *is* a string kind still cannot
+// be assumed to want ILIKE.
+func facadeElem(typeName, table string, d *schema.FieldDesc, ov *overrides) (elem string, textual bool) {
+	if base, replaced := ov.base(table, d); replaced {
+		return base, false
+	}
+	if isTextual(d) {
+		return base(d), true
+	}
+	return enumOrBase(typeName, d), false
 }
 
 // isTextual reports whether the pattern operators apply. An enum is a string in
