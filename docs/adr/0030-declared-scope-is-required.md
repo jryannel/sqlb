@@ -5,7 +5,7 @@
 - **Confidence:** High that the hole is real and that startup is where to close
   it; Low that one bit per hook is the final shape of the check
 - **Decided:** 2026-07-28
-- **Last reviewed:** 2026-07-28 (expansion gap recorded under Consequences)
+- **Last reviewed:** 2026-07-29 (the expansion gap is closed; see Revisions)
 
 ## Context
 
@@ -146,26 +146,31 @@ costs on every read, and legitimate unscoped admin paths exist) and it means
 this closes the *generated* hole, not every hole. Hooks still run on those
 queries; nothing verifies that they were registered.
 
-`?expand` reaches a `Scoped` table without running its hooks at all. The check
-above guards the target's own resource; an expansion joins the target from a
-parent and no handler for it runs, so the hook this check proved exists is
-precisely the one the join does not call. Unlike the first case this is
-reachable from a request rather than only from code someone wrote deliberately,
-and it is worse for the reason this ADR exists: the declaration now reads as a
-boundary, so an author who declares `Scoped`, satisfies the check and sees it
-mount has more reason than before to believe the rows are confined everywhere.
+`?expand` used to reach a `Scoped` table without running its hooks at all, and
+that was the sharper of the two holes: unlike the first it was reachable from a
+request rather than only from code someone wrote deliberately, and it was worse
+for the reason this ADR exists — the declaration reads as a boundary, so an
+author who declared `Scoped`, satisfied the check and saw it mount had more
+reason than before to believe the rows were confined everywhere.
 
-What confines an expansion is the foreign key, not the declaration. A composite
-key carrying the scoping column — `tasks` referencing
-`(workspace_id, list_id)` against `lists (workspace_id, id)`, which is what
-`example/tasks` does — makes a cross-tenant reference unrepresentable, so the
-expansion cannot cross a tenant whether or not a hook runs. A plain
-single-column key does not, and nothing at mount time will say so. The
-reasoning is in `expand.go`; the case for making `Scoped` also require the
-composite key, or for refusing `Expandable` on a `Scoped` target that lacks
-one, is real and is not taken here — it would refuse schemas that are correct
-for reasons this package cannot see, and the first thing to establish is
-whether anyone declares the unconfined combination at all.
+**It is now closed.** An expansion runs the target's `BeforeQuery` hooks and
+requalifies their predicates onto the join alias, so the hook that satisfies the
+mount check is the hook the join carries. The two obstacles that made this look
+mechanical rather than merely unbuilt both had answers: the registry stores a
+type-erased view of each hook set so an expansion can reach one without a type
+parameter, and the predicate AST is rewritten so a bare `F("workspace_id")`
+becomes `"__ex_list"."workspace_id"` rather than silently resolving to the
+parent table. A predicate that cannot be requalified with certainty — `RawPred`,
+or a column belonging to a table the expansion did not join — fails the query
+rather than being dropped.
+
+What has *not* changed is the argument for the composite foreign key. A key
+carrying the confining column — `tasks` referencing `(workspace_id, list_id)`
+against `lists (workspace_id, id)`, which is what `example/tasks` does — makes a
+cross-tenant reference unrepresentable in the data rather than merely
+unreachable through this query path. That is the stronger property, it still
+holds for a statement someone writes by hand, and it is now belt-and-braces
+rather than the only thing holding.
 
 **Row-level security remains the floor worth having.** ADR-0008 already called
 RLS complementary. This makes hooks default-deny at the boundary that generates
@@ -192,12 +197,18 @@ rather than everything.
 - If the ordering constraint (register before mount) surprises anyone in a way
   the error does not resolve, the check should move to first use rather than
   mount, at the cost of failing on a request instead of at startup.
-- If a schema declares `Scoped` on a table that is `Expandable` from a parent
+- ~~If a schema declares `Scoped` on a table that is `Expandable` from a parent
   whose foreign key does not carry the scoping column, the expansion gap above
-  stops being theoretical and the validator should refuse the combination.
-  Nothing refuses it today because refusing it would also refuse schemas
-  confined by something this package cannot see; the cheap first step is a lint
-  that reports the pairing rather than an error that forbids it.
+  stops being theoretical.~~ Closed by running the target's hooks rather than by
+  refusing the combination, which is the better of the two answers: it needs no
+  judgement about schemas confined by something this package cannot see, and it
+  makes the declaration mean the same thing in both places rather than making
+  one of them illegal.
+- If hooks on an expansion target turn out to be commonly written with
+  `RawPred`, the refusal added with that fix is a tax rather than a boundary,
+  and the answer is a way to write a scope that survives requalification — not
+  to splice raw SQL in and hope its bare names resolve to the table the author
+  had in mind.
 - If `Scoped` turns out to want a table-level form — a table confined by
   something that is not a column of its own, expressed today by declaring it on
   the key the hook narrows — this becomes a `TableDef` method and the column
@@ -253,3 +264,19 @@ trigger describes.
   as default-open where the model it replaces is default-deny, and by
   `example/tasks`, whose hook file is a correct manual enumeration that nothing
   would have noticed the sixth table missing from.
+
+- 2026-07-29 — **The expansion gap is closed.** This record originally listed it
+  under Consequences as a known hole and offered two possible answers: refuse
+  the combination at validation time, or lint it. Both were about *forbidding*
+  the unsafe schema. The answer taken is neither — the expansion runs the
+  target's hooks — and it is better than what this record proposed, because it
+  removes the need to judge which schemas are confined by something the package
+  cannot see.
+
+  Worth recording that the reason it went unbuilt was a comment in `expand.go`
+  asserting it could not be done: a hook has a type parameter the expansion code
+  does not have, and a hook's predicates name columns without qualifying them.
+  Both were true and neither was fatal — the first is answered by erasing the
+  type where it is still known, the second by rewriting the AST. A note that
+  says "this cannot be done" is worth re-reading occasionally against what it
+  actually claims.

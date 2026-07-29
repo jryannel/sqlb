@@ -31,6 +31,9 @@ func (b *Builder[T]) All(ctx context.Context, db Executor) ([]T, error) {
 	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
 		return nil, err
 	}
+	if err := q.resolveExpansionScopes(ctx, db); err != nil {
+		return nil, err
+	}
 	query, args, err := q.SQL()
 	if err != nil {
 		return nil, err
@@ -85,6 +88,9 @@ func (b *Builder[T]) Count(ctx context.Context, db Executor) (int64, error) {
 	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
 		return 0, err
 	}
+	if err := q.resolveExpansionScopes(ctx, db); err != nil {
+		return 0, err
+	}
 	query, args, err := q.countSQL()
 	if err != nil {
 		return 0, err
@@ -117,6 +123,9 @@ func (b *Builder[T]) Exists(ctx context.Context, db Executor) (bool, error) {
 	if err := hooksFor[T](db).runBeforeQuery(ctx, probe); err != nil {
 		return false, err
 	}
+	if err := probe.resolveExpansionScopes(ctx, db); err != nil {
+		return false, err
+	}
 	query, args, err := probe.SQL()
 	if err != nil {
 		return false, err
@@ -147,6 +156,9 @@ func (b *Builder[T]) Exists(ctx context.Context, db Executor) (bool, error) {
 func Collect[R, T any](ctx context.Context, db Executor, b *Builder[T]) ([]R, error) {
 	q := b.Clone()
 	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
+		return nil, err
+	}
+	if err := q.resolveExpansionScopes(ctx, db); err != nil {
 		return nil, err
 	}
 	query, args, err := q.SQL()

@@ -385,8 +385,15 @@ func TxFrom(ctx context.Context) (*DB, bool) {
 // carries, falling back to the process default. It is the one place that knows
 // hooks can be scoped, so terminal methods keep taking a plain Executor.
 func hooksFor[T any](exec Executor) *Hooks[T] {
+	return OnIn[T](registryOf(exec))
+}
+
+// registryOf is hooksFor without the type parameter, for the one caller that
+// does not have one: an expansion reaches its target through a *Model and looks
+// the target's hooks up by reflect.Type.
+func registryOf(exec Executor) *Registry {
 	if d, ok := exec.(*DB); ok {
-		return OnIn[T](d.hooks)
+		return d.hooks
 	}
-	return On[T]()
+	return defaultRegistry
 }

@@ -93,10 +93,11 @@ Three gaps, all deliberate and all documented where they bite:
 - **`BeforeUpdate` cannot read the assignments it was handed**, so a rule
   depending on what a column is becoming belongs in a `BEFORE` trigger
   ([ADR-0021](../adr/0021-hooks-receive-an-event.md)).
-- **Hooks do not follow an `?expand` join.** The target arrives as a joined
-  subexpression, not as a query of its own, so where a hook enforces a boundary
-  the expansion must respect, the schema has to enforce it too — a composite
-  foreign key rather than a registration.
+- **Hooks follow an `?expand` join, with one restriction.** The target's
+  `BeforeQuery` predicates are requalified onto the join alias and added to the
+  join condition. A predicate that cannot be requalified — `RawPred`, or a
+  column from a table the expansion did not join — fails the query rather than
+  being dropped silently ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
 - **`AfterCommit` is in-process and at-most-once.** A callback that never ran
   because the process died leaves no trace. That is what a transactional outbox
   is for, and it is not built ([ADR-0012](../adr/0012-change-feed-outbox.md)).

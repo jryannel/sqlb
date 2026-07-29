@@ -508,3 +508,102 @@ func TestACollectionUsesTheForeignKeyIndex(t *testing.T) {
 		t.Errorf("no correlated subquery in the plan:\n%s", plan.String())
 	}
 }
+
+// The leak this closes, demonstrated against a real database.
+//
+// A plain single-column foreign key lets a post in one org reference an author
+// in another. Before the target's hooks ran on an expansion, `?expand=author`
+// returned that author's row to a caller scoped to the first org — a
+// cross-tenant read behind a capability the schema declared safe.
+//
+// It is here rather than only in the engine's tests because the engine can only
+// assert what the SQL says. What matters is which rows come back, and only
+// Postgres answers that.
+func TestExpandDoesNotCrossATenantBoundary(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	applySchema(t, raw, schema.DefaultRegistry())
+	db := sqlb.New(raw)
+
+	mine, _ := seedBlog(t, raw)
+
+	// A second org, with an author of its own, and a post in the *first* org
+	// that points at them. The foreign key permits it; nothing in the schema
+	// says a post's author must share its org.
+	var theirs, theirAuthor string
+	if err := raw.QueryRow(
+		`INSERT INTO orgs (name, slug) VALUES ('Other', 'other') RETURNING id`,
+	).Scan(&theirs); err != nil {
+		t.Fatalf("inserting the second org: %v", err)
+	}
+	if err := raw.QueryRow(
+		`INSERT INTO authors (org_id, email, name, password_hash)
+		 VALUES ($1, 'grace@example.com', 'Grace', 'argon2id$v=19$other')
+		 RETURNING id`, theirs,
+	).Scan(&theirAuthor); err != nil {
+		t.Fatalf("inserting the second author: %v", err)
+	}
+	var leaky string
+	if err := raw.QueryRow(
+		`INSERT INTO posts (org_id, author_id, title, body)
+		 VALUES ($1, $2, 'Crosses', 'the boundary') RETURNING id`, mine, theirAuthor,
+	).Scan(&leaky); err != nil {
+		t.Fatalf("inserting the cross-tenant post: %v", err)
+	}
+
+	// The scope, registered on both models exactly as an application would.
+	posts := sqlb.On[blog.Post]()
+	authors := sqlb.On[blog.Author]()
+	defer posts.Reset()
+	defer authors.Reset()
+	posts.BeforeQuery(func(_ context.Context, q *sqlb.Builder[blog.Post]) error {
+		q.Where(sqlb.F("org_id").Eq(mine))
+		return nil
+	})
+	authors.BeforeQuery(func(_ context.Context, q *sqlb.Builder[blog.Author]) error {
+		q.Where(sqlb.F("org_id").Eq(mine))
+		return nil
+	})
+
+	rows, err := sqlb.Query[blog.Post]().
+		Expand("author").
+		OrderBy(sqlb.F("title").Asc()).
+		All(ctx, db)
+	if err != nil {
+		t.Fatalf("expanding author: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d posts, want 2 — the parent scope should not have changed", len(rows))
+	}
+
+	byTitle := map[string]blog.Post{}
+	for _, p := range rows {
+		byTitle[p.Title] = p
+	}
+
+	// The post whose author is out of scope still appears — the scope belongs
+	// in the join condition, so a LEFT JOIN that matches nothing nulls the
+	// expansion rather than dropping the row.
+	crossing, found := byTitle["Crosses"]
+	if !found {
+		t.Fatal("the cross-tenant post vanished; the target's scope reached the WHERE clause rather than the ON clause")
+	}
+	if crossing.Author != nil {
+		t.Errorf("an author from another org was expanded into this org's page: %+v", crossing.Author)
+	}
+	// The foreign key itself is untouched. Hiding the row is the boundary;
+	// rewriting the data is not this layer's business.
+	if crossing.AuthorID != theirAuthor {
+		t.Errorf("author_id = %q, want the reference left alone (%q)", crossing.AuthorID, theirAuthor)
+	}
+
+	// And the in-scope expansion still resolves, so this is a boundary rather
+	// than a blanket refusal.
+	ok, found := byTitle["Hello"]
+	if !found {
+		t.Fatal("the in-org post is missing")
+	}
+	if ok.Author == nil {
+		t.Error("an author in the caller's own org should still expand")
+	}
+}

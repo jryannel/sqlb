@@ -429,17 +429,16 @@ func TestExpandCollectionIsNotAppliedUnlessAsked(t *testing.T) {
 	}
 }
 
-// The claim ADR-0030's Consequences section now makes, pinned so it cannot
-// drift into being false without a failure.
+// The claim ADR-0030 used to record as a gap, now pinned as the fix.
 //
-// A BeforeQuery hook on the *target* does not reach an expansion of it. The
-// parent's own hooks do run, because the parent is the subject of the
-// statement — so this is not "hooks are off", it is "hooks belong to the model
-// being queried" and an expanded relation is not that model.
+// A BeforeQuery hook on the *target* reaches an expansion of it, requalified
+// onto the join alias. The parent's own hooks run too, against the base table —
+// so the statement carries two scopes naming two tables, which is the property
+// that makes the requalification load-bearing rather than cosmetic.
 //
 // Written as an assertion about the compiled SQL rather than about rows,
-// because the point is what does and does not reach the join.
-func TestExpandDoesNotRunTheTargetsQueryHooks(t *testing.T) {
+// because the point is exactly what reaches the join.
+func TestExpandRunsTheTargetsQueryHooks(t *testing.T) {
 	parent := sqlb.On[expTask]()
 	target := sqlb.On[expList]()
 	defer parent.Reset()
@@ -462,13 +461,91 @@ func TestExpandDoesNotRunTheTargetsQueryHooks(t *testing.T) {
 	}
 	stmt := h.lastQuery()
 
-	// The subject's hook is applied.
+	// The subject's hook is applied to the base table.
 	if !contains(stmt, `"tasks"."id" <> $`) {
 		t.Errorf("the queried model's own hook should reach the statement:\n%s", stmt)
 	}
-	// The target's is not, in the ON clause or anywhere else.
-	if contains(stmt, "hidden-list") || contains(stmt, `"name" <> `) {
-		t.Errorf("the expansion target's hook reached the statement; if this now "+
-			"works, ADR-0030 and the note in expand.go both need correcting:\n%s", stmt)
+	// The target's is applied to the join alias, not to the base table. A bare
+	// "name" would resolve to tasks and silently filter the wrong table, which
+	// is the failure requalification exists to prevent.
+	if !contains(stmt, `"__ex_list"."name" <> $`) {
+		t.Errorf("the expansion target's hook should reach the join, qualified:\n%s", stmt)
+	}
+	// And it is in the ON clause rather than the WHERE, or a parent whose list
+	// is out of scope would vanish from the page instead of arriving with a
+	// null expansion.
+	on := stmt[strings.Index(stmt, "LEFT JOIN"):]
+	where := strings.Index(on, "WHERE")
+	if where >= 0 {
+		on = on[:where]
+	}
+	if !contains(on, `"__ex_list"."name" <> $`) {
+		t.Errorf("the target's scope belongs in the join condition:\n%s", stmt)
+	}
+}
+
+// The reverse direction is a correlated subquery rather than a join, so the
+// scope lands in its WHERE — and that placement is what makes has_more count
+// only the children the caller may actually fetch.
+func TestExpandCollectionRunsTheTargetsQueryHooks(t *testing.T) {
+	target := sqlb.On[expTask]()
+	defer target.Reset()
+
+	target.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expTask]) error {
+		q.Where(sqlb.F("title").Neq("secret"))
+		return nil
+	})
+
+	h := newHarness(t, []string{"id", "name", "__expand_tasks"}, nil)
+	defer h.close()
+
+	if _, err := sqlb.Query[expList]().Expand("tasks").All(context.Background(), h.db); err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	stmt := h.lastQuery()
+	if !contains(stmt, `"__ex_tasks"."title" <> $`) {
+		t.Errorf("the collection's scope should reach its subquery, qualified:\n%s", stmt)
+	}
+}
+
+// A hook that cannot be requalified fails the query rather than being dropped.
+// Dropping it would be the original leak arriving by a different route, and
+// silently — which is worse than the leak, because nothing would say so.
+func TestExpandRefusesAnUnqualifiableHook(t *testing.T) {
+	target := sqlb.On[expList]()
+	defer target.Reset()
+
+	target.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expList]) error {
+		q.Where(sqlb.RawPred("name <> ?", "hidden"))
+		return nil
+	})
+
+	h := newHarness(t, []string{"id", "list_id", "title", "__expand_list"}, nil)
+	defer h.close()
+
+	_, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.db)
+	if err == nil {
+		t.Fatal("an unrequalifiable scope predicate was accepted; it would have " +
+			"filtered the parent table instead of the target")
+	}
+	for _, want := range []string{"raw SQL", "requalified", "composite foreign key"} {
+		if !contains(err.Error(), want) {
+			t.Errorf("the error should explain the way out, got: %v", err)
+		}
+	}
+}
+
+// A query with no expansion, or one whose target registered nothing, is
+// unchanged — the resolution costs one map lookup and adds no predicate.
+func TestExpandWithoutTargetHooksIsUnchanged(t *testing.T) {
+	h := newHarness(t, []string{"id", "list_id", "title", "__expand_list"}, nil)
+	defer h.close()
+
+	if _, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.db); err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	stmt := h.lastQuery()
+	if contains(stmt, " AND ") {
+		t.Errorf("an unhooked expansion should carry no extra condition:\n%s", stmt)
 	}
 }

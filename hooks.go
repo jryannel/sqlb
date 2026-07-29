@@ -83,17 +83,18 @@ func OnIn[T any](r *Registry) *Hooks[T] {
 // BeforeQuery runs before every SELECT against T, including those issued by
 // generated REST handlers. The hook may add predicates, joins or ordering.
 //
-// "Every SELECT against T" means every statement whose subject is T. It does
-// not include T reached as the target of another model's expansion: joining
-// `lists` for `?expand=list` does not run List's hooks, so a scope registered
-// here constrains GET /lists and not the `list` an expanded task carries.
+// "Every SELECT against T" means every statement whose subject is T, and also
+// every statement that reaches T as the target of another model's expansion:
+// joining `lists` for `?expand=list` runs List's hooks, requalified onto the
+// join alias, so a scope registered here constrains GET /lists *and* the `list`
+// an expanded task carries.
 //
-// This holds even when [ADR-0030]'s check has confirmed the hook exists — that
-// check guards the target's own resource, and an expansion does not go through
-// it. What bounds an expansion is the foreign key the parent row holds; see the
-// expansion notes in expand.go for when that is and is not enough.
-//
-// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+// Two things about the expansion case are worth knowing before relying on it.
+// Only the predicates are read — the hook runs against a throwaway builder, so
+// an ordering or a limit it sets does not follow. And a predicate that cannot
+// be requalified onto the alias, which means [RawPred] or a column belonging to
+// a table the expansion did not join, fails the query rather than being
+// dropped. See the expansion notes in expand.go.
 func (h *Hooks[T]) BeforeQuery(fn func(context.Context, *Builder[T]) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -227,6 +228,65 @@ func (h *Hooks[T]) runBeforeQuery(ctx context.Context, b *Builder[T]) error {
 		}
 	}
 	return b.err
+}
+
+// queryScoper is the type-erased view of a hook set, and it exists for exactly
+// one caller: an expansion needs the target's BeforeQuery predicates, and it
+// reaches the target through a *Model rather than through a type parameter, so
+// it cannot name Hooks[Target] to call it.
+//
+// The erasure happens here rather than at the call site because this is where
+// the type is still known. *Hooks[T] satisfies it for every T, so a registry
+// lookup by reflect.Type can assert to it.
+type queryScoper interface {
+	// queryScope runs the BeforeQuery hooks against a throwaway builder and
+	// returns the predicates they added, without executing anything.
+	queryScope(ctx context.Context) ([]Pred, error)
+}
+
+// queryScope collects what BeforeQuery would add to a query against T.
+//
+// The builder it runs against is discarded, so a hook that sets a limit, an
+// ordering or a projection has no effect here — only its predicates are read.
+// That is the right subset for an expansion: a join carries a condition, and
+// the collection's order and cap are the schema's rather than a hook's.
+func (h *Hooks[T]) queryScope(ctx context.Context) ([]Pred, error) {
+	h.mu.RLock()
+	fns := h.beforeQuery
+	h.mu.RUnlock()
+	if len(fns) == 0 {
+		return nil, nil
+	}
+	b := Query[T]()
+	for _, fn := range fns {
+		if err := fn(ctx, b); err != nil {
+			return nil, err
+		}
+	}
+	if b.err != nil {
+		return nil, b.err
+	}
+	// filters() rather than where: a hook that called After() set a cursor
+	// seek, which is a predicate about the target's own paging and has no
+	// meaning inside a join. where is the set a scope is written into.
+	return b.where, nil
+}
+
+// scoperFor returns the type-erased hook set registered for t, or nil.
+//
+// It never creates one: an absent entry means no hook was registered, and
+// materialising an empty Hooks[T] here would need the type parameter this
+// function exists to do without.
+func (r *Registry) scoperFor(t reflect.Type) queryScoper {
+	v, found := r.m.Load(t)
+	if !found {
+		return nil
+	}
+	s, ok := v.(queryScoper)
+	if !ok {
+		return nil
+	}
+	return s
 }
 
 func (h *Hooks[T]) runBeforeCreate(ctx context.Context, row *T) error {
