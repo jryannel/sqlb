@@ -22,6 +22,7 @@ optional. A project can take the query builder and nothing else.
 | **Queries & domain logic** | A query is a value, so predicates compose on a branch. Hooks are where the rules live | [Queries](../queries/README.md) |
 | **REST API** | List, read, create, patch and delete per exposed table, with filtering, sorting, search, pagination and an OpenAPI document | [Mounting resources](../rest/README.md) |
 | **TypeScript SDK** | A generated client where `where` admits only filterable columns, `select` narrows the response type, and a hidden column has no spelling | [TypeScript SDK](../typescript/README.md) |
+| **Dart SDK** | The same vocabulary for a Flutter app, plus the cursor pager an infinite-scrolling list needs | [Dart SDK](../dart/README.md) |
 | **Go CLI** | A cobra command tree over the same vocabulary, so `--help` states what a resource accepts without sending a request | [Go CLI](../cli/README.md) |
 
 Alongside them, [Migrations](../migrations/README.md) turns a schema edit into

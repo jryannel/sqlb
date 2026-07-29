@@ -34,6 +34,11 @@ jobs:
       # ADR-0028 promised the TypeScript client would need: the emitted client's
       # guarantees are enforced by tsc, so an unchecked one guarantees nothing.
       - run: mise run test-ts
+      # And the third toolchain, for the same reason: the Dart client's
+      # guarantees are enforced by `dart analyze`, so an unchecked one
+      # guarantees nothing. The Dart SDK alone — the emitted client imports
+      # nothing, so no Flutter is installed here (ADR-0031).
+      - run: mise run test-dart
       # In this job rather than the postgres one because the generated CLI
       # speaks HTTP: its tests drive the command tree against an httptest
       # server, so what they check — that the flags reach the wire as the

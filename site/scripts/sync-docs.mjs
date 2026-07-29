@@ -110,6 +110,15 @@ const SOURCES = [
     label: (slug) => (slug === "index" ? "Overview" : null),
   },
   {
+    dir: "docs/dart",
+    route: "dart",
+    sequence: ["index"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+    label: (slug) => (slug === "index" ? "Overview" : null),
+  },
+  {
     dir: "docs/cli",
     route: "cli",
     sequence: ["index"],

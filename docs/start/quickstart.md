@@ -142,8 +142,9 @@ That writes four files into `blog/`:
 Wire it to `go generate` with a directive in the schema file, and add
 `codegen.Check` to CI — generated code is committed, so it drifts the first time
 someone edits a schema and forgets to regenerate. The
-[TypeScript client](../typescript/README.md) and the
-[Go CLI](../cli/README.md) are two more options on this same call.
+[TypeScript client](../typescript/README.md), the
+[Dart client](../dart/README.md) and the [Go CLI](../cli/README.md) are three
+more options on this same call.
 
 ## 3. Query
 

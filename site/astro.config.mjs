@@ -60,6 +60,10 @@ export default defineConfig({
           items: [{ autogenerate: { directory: "typescript" } }],
         },
         {
+          label: "Dart SDK",
+          items: [{ autogenerate: { directory: "dart" } }],
+        },
+        {
           label: "Go CLI",
           items: [{ autogenerate: { directory: "cli" } }],
         },

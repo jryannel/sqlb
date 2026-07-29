@@ -186,7 +186,7 @@ The generated handlers know nothing about it. That is the argument.
 - [`example/tasks`](../../example/tasks/) is the larger one, for when a page
   here raises a question this size of example cannot answer: a multi-tenant task
   manager, six tables, a workspace boundary held entirely by hooks, JWT
-  authentication, a migration history, a generated TypeScript client and CLI,
+  authentication, a migration history, generated TypeScript, Dart and CLI clients,
   and a runnable server. It is tested against a real Postgres, so its claims
   about locking, triggers and constraints are checked rather than asserted. It
   also documents the two places it had to work around sqlb rather than use it.

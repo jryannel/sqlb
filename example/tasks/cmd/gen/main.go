@@ -38,6 +38,13 @@ func main() {
 		// property models_gen.go already has and a published SDK cannot.
 		TSDir: "web/src/api",
 
+		// The Dart client, into the Flutter app's package. Same argument as the
+		// TypeScript one, and one more that is specific to a phone: a list on a
+		// small screen loads as it is scrolled, which is cursor paging, and
+		// cursor paging is the thing hand-written clients reimplement out of
+		// has_more and an offset counter.
+		DartDir: "mobile/lib/api",
+
 		// The command-line client, for the same reason and for one more: the
 		// caller most likely to drive this API is an agent, and `taskctl tasks
 		// list --help` is a statement of what the resource accepts that costs
