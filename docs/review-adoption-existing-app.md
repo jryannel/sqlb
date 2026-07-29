@@ -1163,9 +1163,193 @@ would have given it for free on day one. That is an argument for using sqlb on
 the *next* project, and for taking from it here only the two pieces that are
 still unbought: the generated typed client, and `?expand`.
 
+## 13. What would make sqlb materially better at this
+
+*Added 2026-07-29. §12 measured how much of the cost of change sqlb actually
+removes and found the answer capped at 20–40% of a real feature commit. This
+section is about **sqlb**, not subject-go: what would raise that ceiling. It is
+recorded here because the evidence for each item is a measurement of this
+codebase, and it belongs next to the measurement.*
+
+### 13.1 The ceiling is coverage, not quality
+
+Every emitter sqlb has is good. The saving is capped because **the registry does
+not know about enough of the surface** — `rest.Resource` covers CRUD and list,
+which is ~40% of subject-go's 238 routes. §12.3's number is arithmetic, not a
+criticism of the generator.
+
+```mermaid
+flowchart LR
+    subgraph known["what the registry knows — ~40% of routes"]
+        K1["list"] --- K2["read"] --- K3["create"] --- K4["update"] --- K5["delete"]
+    end
+    subgraph unknown["what it does not — ~60%"]
+        U1["26 × POST /{id}/verb"]
+        U2["~20 collection verbs"]
+        U3["computed response fields"]
+        U4["uploads · exports · auth · billing · AI"]
+    end
+    known -->|"emitters: Go · TS · CLI · DDL · OpenAPI"| OUT["generated"]
+    unknown -->|"nothing"| HAND["hand-written ×4 artefacts"]
+```
+
+So the lever is **widen what the schema can declare**, not improve what is
+generated from what it already declares. Six candidates, ranked by leverage per
+unit of effort.
+
+### 13.2 A `sqlb` binary that closes the loop — cheapest, do first
+
+The promise is *one edit, one command*. The reality is `cmd/gen/main.go` plus
+`cmd/migrate/main.go`, hand-written per project, with `migrate.Diff` requiring
+the caller to source `current` themselves.
+
+`sqlb generate` = shadow-build the history → diff → write the migration → run
+every emitter → `Check`. `sqlb check` in CI becomes the drift gate. No new
+concepts; it converts a documented workflow into an actual one, and it is what
+makes the tool legible to an agent — which [vision.md](vision.md) already
+argues for under item 5.
+
+**Effort:** low. **Effect:** makes the existing claim literally true.
+
+### 13.3 Computed fields — the item that decides whether the claim survives a real domain
+
+Today **one derived field pushes an entity off the generated path entirely.**
+
+subject-go's core entities all have them, and its own subject ADR-0004
+*mandates* the pattern — "add computed fields in the response, not the DB":
+
+| Field | Entity | Source |
+|---|---|---|
+| `isOverdue` | Project | derived from dates vs user-set status |
+| `progress` | Project, WorkPackage | % of done tasks |
+| `nextDueDate` | Task | computed from the recurrence rule |
+
+The consequence is `internal/taskview/taskview.go` — **416 lines of
+hand-written view over the row** — and then the TypeScript type by hand on top
+of that. sqlb's model *is* the row, so there is no slot for any of this.
+
+```go
+schema.Computed("is_overdue", schema.TypeBool,
+    schema.FromSQL("due_at < now() AND status <> 'done'"))   // filterable + sortable
+schema.Computed("next_due_date", schema.TypeDate,
+    schema.FromGo(nextDue))                                   // projection only
+```
+
+The SQL form can be `Filterable()` and `Sortable()`, because it is an expression
+the compiler can emit into `WHERE` and `ORDER BY`. The Go form cannot, and
+should not pretend — note that `internal/platform/filterexpr/registry.go:204`
+records exactly this limitation about `isOverdue` today, so the constraint is
+already understood here. Either way the field lands in the row type, the JSON,
+the TS type and the CLI column set, which is where the value is.
+
+**Effort:** moderate. **Effect:** without it, every entity forks off the
+generated path at the moment it stops being a toy. This is the one to build if
+only one gets built.
+
+### 13.4 Declared actions — the biggest single win, and the one with a trap
+
+subject-go has **26 distinct `POST /{id}/<verb>` routes** plus roughly 20
+collection-level verbs. In `internal/handlers/core/tasks.go` the verbs total
+**780 LOC against 464 for all of CRUD** — the part sqlb does not generate is
+larger than the part it does.
+
+Every one of them opens the same way. `CompleteTask`
+(`internal/handlers/core/tasks.go:709`) spends its first ~30 lines on parse id
+→ org-scoped fetch → 404 → decode optional body, before reaching anything about
+completing a task. Across ~46 endpoints that is roughly 1,400 lines of pure
+envelope.
+
+```go
+schema.Action("complete", schema.POST, "/{id}/complete").
+    Body[CompleteTaskInput]().
+    Writes("status", "closed_at", "custom_field_values").
+    Do(completeTask)     // func(ctx, *Task, CompleteTaskInput) error
+```
+
+Generate the **envelope only**: route, body type, id parse, scoped fetch,
+transaction, response, OpenAPI operation, **TS client function + invalidation
+key, CLI subcommand**. The `Do` stays hand-written Go.
+
+**The trap.** [vision.md](vision.md) names the failure mode itself: *"if
+generated handlers get copied out and edited by hand, the seams are in the
+wrong place."* Domain verbs are where logic is most idiosyncratic, so an action
+DSL that tries to *express* the transition will be fought and ejected. The
+design above does not — it generates the envelope and calls a plain Go func,
+which is the seam `BeforeCreate` already uses. That distinction is the
+difference between this working and it being the thing people leave.
+
+**Effort:** high. **Effect:** route coverage ~40% → ~90%, and — more
+importantly — the verbs enter the *client* emitters, which is where the drift
+measured in §12.4 actually lives.
+
+### 13.5 More emitters, Dart first
+
+The architecture is already one registry → N emitters, and `codegen/tsclient.go`
+proves the shape in a single file. Each additional emitter multiplies the value
+of *every* schema edit at fixed cost.
+
+Dart specifically: §11 and §12.6 both land on the same gap — the un-updatable
+Flutter client is the highest-stakes hand-maintained artefact in this system and
+currently gets nothing. The argument that carries the TypeScript client ("emitted
+into the repository that consumes it, so it cannot be a version behind the
+server") transfers verbatim.
+
+**Effort:** low per emitter. **Effect:** closes the one leg of subject-go's
+ceremony that no other item touches.
+
+### 13.6 An eject path — the best available answer to the adoption objection
+
+The strongest objection to sqlb is not a missing feature, it is §12.6: sqlc and
+chi are cheap to reverse because they own almost nothing, and sqlb owns the
+schema, the migrations, the wire format, the client and the CLI.
+
+`sqlb eject` — render the generated resources as plain handlers and the schema
+as SQL — turns *hard to reverse* into *reversible on demand*. It is an emitter,
+so it is cheap, and it is the most credible thing a pre-1.0 library with no
+consumers can offer: **the exit is generated, and it is tested in CI.**
+
+**Effort:** low–moderate. **Effect:** disproportionate on adoption, which is
+sqlb's actual bottleneck.
+
+### 13.7 `sqlb impact` — make the claim measurable
+
+*"This schema edit touches these 3 endpoints, these 2 client types, these 4 DDL
+statements."* Turns cost-of-change from an assertion into a number, gives code
+review something to read, and is the natural artefact for an agent to check
+before editing. The `sqlb.json` manifest is most of the input already.
+
+**Effort:** low. **Effect:** small on cost, large on legibility.
+
+### 13.8 What not to build for this goal
+
+Stated because a roadmap that mixes axes gets set by whichever item shouts
+loudest.
+
+| Item | Why not |
+|---|---|
+| **The change feed** ([ADR-0012](adr/0012-change-feed-outbox.md)) | Genuinely valuable and reduces cost of change by **zero**. A different axis. subject-go should build its own on River (§11.4) |
+| **Nested `?expand`, backwards cursors** | Depth, not breadth. Neither appears in the ceremony measurement |
+| **Window functions, recursive CTEs** | Correctly a non-goal. `Raw` and sqlc are the right answers |
+| **pgvector** | Worth being precise: it unblocks *subject-go's* adoption (§6.B) but reduces nobody's cost of change. Removing a blocker and removing ceremony are different projects — conflating them lets a blocker set the roadmap |
+
+### 13.9 Order
+
+```mermaid
+flowchart LR
+    A["1 · sqlb binary<br/><i>low effort · makes the claim true</i>"] --> B["2 · computed fields<br/><i>decides if it survives a real domain</i>"]
+    B --> C["3 · declared actions<br/><i>40% → 90% coverage</i>"]
+    C --> D["4 · eject path"]
+    D --> E["5 · Dart emitter"]
+    E --> F["6 · sqlb impact"]
+```
+
+If only one is built, build **computed fields**. A data layer that cannot
+express a derived field loses every real entity at the same moment — and it is
+the failure that looks like the framework working right up until it does not.
+
 ---
 
 *Written 2026-07-29 against sqlb `cc312aa` and subject-go at its then-current
 `main`. sqlb is moving quickly — findings B, C and H in particular are
 properties of a snapshot, and should be re-checked before any decision is made
-on them.*
+on them. §13 is a proposal about sqlb, not a decision about subject-go.*
