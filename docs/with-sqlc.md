@@ -54,6 +54,30 @@ declaration, which is the part that makes this an arrangement rather than a
 convention — otherwise someone edits the schema, forgets to re-render, and sqlc
 types its queries against a database that no longer exists in that shape.
 
+### Regenerating, and which half is automatic
+
+The first arrow is a `go:generate` directive. The second is not:
+
+```bash
+go generate ./example/withsqlc/...      # renders schema.sql from the declaration
+cd example/withsqlc && sqlc generate    # retypes sqlcgen against it
+```
+
+`sqlc` is deliberately not in `mise.toml`'s pinned toolchain, so behind a
+directive the second step broke `go generate ./...` — and with it `mise run
+heal`, the command [CONTRIBUTING.md](../CONTRIBUTING.md) puts in front of a new
+contributor — on every checkout that had not installed sqlc separately. Pinning
+a fourth toolchain would have bought that back by making sqlc a build dependency
+of a library whose whole argument is that it imposes none. That is the same
+trade `generate-check` already refused above.
+
+So it is a manual step after a schema change, and the honest cost is that
+nothing catches a stale `sqlcgen` — not a gate, and not the tests, which assert
+the mapping against a column list written alongside the structs. That cost is
+unchanged by making the step manual; no gate ever covered it. What the gate does
+cover is the file the two tools share, `schema.sql`, and that is still rendered
+by the directive.
+
 The reverse direction also works, and is how an existing sqlc project adopts
 sqlb: `introspect.Registry` reads `pg_catalog` into a registry and
 `codegen.RenderSchema` turns it into the `schema.go` you edit from then on. Your

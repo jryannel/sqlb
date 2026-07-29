@@ -1,7 +1,12 @@
 # sqlc reads the schema sqlb generated. There is one schema declaration in this
 # repository — example/blog/blogschema — and this is downstream of it.
 #
-#   go generate ./example/withsqlc/...   regenerate schema.sql, then run sqlc
+#   go generate ./example/withsqlc/...   regenerate schema.sql
+#   sqlc generate                        retype sqlcgen against it, by hand
+#
+# The second is not a go:generate directive: sqlc is not a pinned toolchain
+# here, and making it one would make it a build dependency of the library. See
+# doc.go.
 version: "2"
 sql:
   - engine: postgresql
