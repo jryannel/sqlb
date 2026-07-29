@@ -625,7 +625,8 @@ core does not carry.
    scheme into the OpenAPI document (the TS client does not need it — it never
    reads the document).
 3. **Array columns** — the cheapest of the schema gaps and the one with 8 real
-   call sites here.
+   call sites here. [Shape recorded in [ADR-0033](adr/0033-array-columns.md);
+   nothing built. The ask is what prompted it.]
 4. **A Go client generator** to match the TypeScript one, for the admin CLIs.
    [Answered — [ADR-0029](adr/0029-go-cli.md).]
 5. **Composite primary keys**, or a documented "surrogate key required" stance.

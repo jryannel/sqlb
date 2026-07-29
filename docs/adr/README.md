@@ -132,3 +132,4 @@ nobody finishes reading has failed at its only job.
 | [0030](0030-declared-scope-is-required.md) | A declaration that rows are confined is an obligation, not a comment | Working | High |
 | [0031](0031-dart-client.md) | The Dart client keeps the vocabulary and gives up the narrowing | Working | Medium |
 | [0032](0032-sqlb-command.md) | The command compiles a driver, and the project declares itself in Go | Working | Medium |
+| [0033](0033-array-columns.md) | An array is its element type plus a flag, and the slice stays plain | Exploring | Medium |
