@@ -16,6 +16,15 @@ node_modules/
 # the package cache and analyser state it produces are not.
 .dart_tool/
 
+# The scratch directory `sqlb` compiles its driver in. It lives inside the
+# target module rather than in /tmp, because Go refuses an internal/ import from
+# a file outside the module (cmd/sqlb/driver.go says why at length) — so it
+# appears in whichever module was generated from, including the examples here.
+# The command removes it on the way out and on a signal, and sweeps stale ones
+# left by a kill it could not observe; this rule is what keeps the window
+# between those from ending in a commit, which has already happened once.
+.sqlb-driver-*/
+
 # Local environment
 .env
 .env.local
