@@ -17,9 +17,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/jryannel/sqlb/codegen"
 )
@@ -166,6 +169,110 @@ import (
 func main() { codegen.Main(schemapkg.%s()) }
 `
 
+// driverPrefix names the scratch directory the driver is compiled in. It is one
+// constant rather than a literal in three places because .gitignore has a rule
+// spelling it out, and the sweep below has to agree with what MkdirTemp wrote.
+const driverPrefix = ".sqlb-driver-"
+
+// staleAfter is how old an abandoned scratch directory must be before a later
+// run removes it. Two sqlb runs in one module share the directory the sweep
+// walks, so this is set far beyond any plausible cold compile: deleting a live
+// run's driver out from under it would produce a failure nobody could explain.
+const staleAfter = time.Hour
+
+// newScratch creates the directory the driver is written to and returns the
+// function that removes it.
+//
+// The removal is wired to signals as well as to the returned function, because
+// the compile in the middle of drive is the longest thing this command does and
+// therefore the likeliest moment for someone to lose patience with it. A
+// deferred RemoveAll does not run when the process is killed by SIGINT, so
+// without this a Ctrl-C during `sqlb generate` leaves a directory behind in a
+// tree the user is about to `git add`. That is not hypothetical: one of them
+// reached a commit and had to be caught by hand.
+func newScratch(moduleDir string) (string, func(), error) {
+	tmp, err := os.MkdirTemp(moduleDir, driverPrefix)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// Only signals that would otherwise kill this process. A shell starting a
+	// command in the background sets SIGINT to ignored in the child, and
+	// signal.Notify would quietly undo that — turning `sqlb generate &` in a
+	// script from something a Ctrl-C leaves running into something it kills.
+	// Nothing is lost by respecting it: a signal that is ignored does not end
+	// the process, so the deferred cleanup still runs.
+	var want []os.Signal
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
+		if !signal.Ignored(sig) {
+			want = append(want, sig)
+		}
+	}
+
+	sigs := make(chan os.Signal, 1)
+	// Guarded, because signal.Notify with an empty list means the opposite of
+	// what the loop above computed: it relays *every* signal.
+	if len(want) > 0 {
+		signal.Notify(sigs, want...)
+	}
+	go func() {
+		sig, ok := <-sigs
+		if !ok {
+			// The channel was closed by the cleanup below: drive finished
+			// on its own and there is nothing left to remove.
+			return
+		}
+		_ = os.RemoveAll(tmp)
+		// Exit the way a shell expects a signalled process to, rather than
+		// with a bare 1. `sqlb check` in a script reports staleness with an
+		// exit code, and an interrupted run must stay distinguishable from
+		// a run that found something.
+		code := 1
+		if s, ok := sig.(syscall.Signal); ok {
+			code = 128 + int(s)
+		}
+		os.Exit(code)
+	}()
+
+	return tmp, func() {
+		// Stop before closing: signal.Stop guarantees nothing further is
+		// sent on the channel once it returns, which is what makes the
+		// close safe rather than a race with a delivery.
+		signal.Stop(sigs)
+		close(sigs)
+		_ = os.RemoveAll(tmp)
+	}, nil
+}
+
+// sweepScratch removes scratch directories abandoned by earlier runs.
+//
+// newScratch covers every exit this process can observe. It cannot cover the
+// ones it cannot: SIGKILL, a panic in the runtime, a laptop that loses power
+// mid-compile, or the narrow window where `go build` is still writing into the
+// directory as the signal handler removes it. Those leave a .sqlb-driver-* in
+// the user's tree that nothing else would ever clean up, so the next run does.
+//
+// Best effort throughout. A leftover that cannot be read or removed — a
+// permissions problem, or another user's — is not a reason to refuse to
+// generate, and saying so would be a message about housekeeping in front of the
+// work someone actually asked for.
+func sweepScratch(moduleDir string) {
+	entries, err := os.ReadDir(moduleDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), driverPrefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || time.Since(info.ModTime()) < staleAfter {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(moduleDir, e.Name()))
+	}
+}
+
 // drive builds the driver and runs it with the given verb and flags.
 //
 // Build and run are separate steps rather than one `go run` so that the child's
@@ -208,8 +315,10 @@ func drive(p *pkg, args []string, stdout, stderr io.Writer) error {
 	// to do, and had to keep the hand-written cmd/gen/main.go ADR-0032 removed.
 	//
 	// The directory is dot-prefixed so that the go tool ignores it if a build
-	// races with one that is still on disk, and removed on the way out.
-	tmp, err := os.MkdirTemp(p.Module.Dir, ".sqlb-driver-")
+	// races with one that is still on disk. Removing it is newScratch's job,
+	// which is more than a defer because it is somebody's working tree.
+	sweepScratch(p.Module.Dir)
+	tmp, done, err := newScratch(p.Module.Dir)
 	if err != nil {
 		return fmt.Errorf(
 			"could not create a temporary directory in %s, which is where the driver has "+
@@ -217,7 +326,7 @@ func drive(p *pkg, args []string, stdout, stderr io.Writer) error {
 				"module, so a schema package under internal/ cannot be read from anywhere "+
 				"else: %w", p.Module.Dir, err)
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
+	defer done()
 
 	src := filepath.Join(tmp, "main.go")
 	body := fmt.Sprintf(driverSource, p.ImportPath, codegen.ProjectFunc)
