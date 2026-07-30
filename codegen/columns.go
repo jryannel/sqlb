@@ -35,8 +35,11 @@ func renderColumns(opts Options) ([]byte, error) {
 			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
 				continue
 			}
-			if base(f.Desc()) == "time.Time" {
+			switch base(f.Desc()) {
+			case "time.Time":
 				imports["time"] = true
+			case "json.RawMessage":
+				imports["encoding/json"] = true
 			}
 		}
 	}

@@ -151,10 +151,17 @@ func renderCreateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {
 	for _, f := range fields {
 		d := f.Desc()
 		field := GoName(d.Name)
+		// Whether the *model* field is a pointer, not whether the column is
+		// nullable: a nullable json.RawMessage / []byte column is nullable yet
+		// its model field is non-pointer (null is the zero value). Keying on
+		// d.Nullable here would assign a *json.RawMessage body field to a
+		// json.RawMessage model field. bodyType makes the body a pointer for any
+		// optional non-pointer model type, so those go through the deref branch.
+		modelIsPointer := strings.HasPrefix(goType(typeName, t.Name(), d, ov), "*")
 		switch {
-		case d.Nullable:
-			// The model field is already a pointer, so absent and null are the
-			// same thing and both mean NULL.
+		case modelIsPointer:
+			// The model field is a pointer, so absent and null are the same
+			// thing and both mean NULL.
 			fmt.Fprintf(b, "\trow.%s = c.%s\n", field, field)
 		case optionalOnCreate(d):
 			fmt.Fprintf(b, "\tif c.%s != nil {\n\t\trow.%s = *c.%s\n\t}\n", field, field, field)
