@@ -53,6 +53,14 @@ type compiler struct {
 	// statement names one table, which is the common case and the one whose
 	// SQL should stay readable. See qualifyTo.
 	base string
+
+	// shared maps a sharedParam's identity onto the placeholder it was given
+	// earlier in this statement, so that a value appearing in the projection,
+	// the WHERE and the ORDER BY is sent once rather than three times. Keyed by
+	// identity rather than by value: two equal vectors that arrived separately
+	// are two parameters, and deduplicating them would be a different and much
+	// larger promise.
+	shared map[*sharedValue]int
 }
 
 func newCompiler(d Dialect) *compiler {
@@ -160,6 +168,21 @@ func (c *compiler) expr(e Expr) {
 
 	case Param:
 		c.bind(n.Value)
+
+	case sharedParam:
+		// The second and later appearances of one value reuse its placeholder.
+		// An embedding is about twenty kilobytes and a similarity search names
+		// it three times; without this the wire carries all three.
+		if idx, ok := c.shared[n.slot]; ok {
+			c.write(c.d.Placeholder(idx))
+			break
+		}
+		c.args = append(c.args, n.slot.value)
+		if c.shared == nil {
+			c.shared = make(map[*sharedValue]int, 1)
+		}
+		c.shared[n.slot] = len(c.args)
+		c.write(c.d.Placeholder(len(c.args)))
 
 	case List:
 		c.write("(")

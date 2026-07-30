@@ -25,8 +25,16 @@ type FieldDesc struct {
 	// EnumValues and Size attached to something that has them (ADR-0033).
 	Type Type
 	// Array makes the column a one-dimensional Postgres array of Type.
-	Array   bool
-	Size    int // varchar length; 0 means unbounded
+	Array bool
+	Size  int // varchar length; 0 means unbounded
+	// Dim is the number of components in a TypeVector column, and is part of
+	// the type rather than a constraint on it: Postgres will not store a
+	// 768-component value in a vector(1536). Zero for every other type.
+	//
+	// It is a Go expression at the call site, which is the whole answer to the
+	// substitution sentinel a migration file needs otherwise — the dimension
+	// wants to be a value and SQL text has nowhere to put one (ADR-0026).
+	Dim     int
 	Comment string
 
 	Nullable   bool
@@ -163,6 +171,38 @@ func Bytes(name string) *Field     { return newField(name, TypeBytes) }
 func Varchar(name string, size int) *Field {
 	f := newField(name, TypeVarchar)
 	f.d.Size = size
+	return f
+}
+
+// Vector is a pgvector embedding of dim components.
+//
+// The dimension is an ordinary Go expression, so it can come from wherever the
+// embedder's width comes from:
+//
+//	schema.Vector("embedding", ragcfg.Dim)
+//
+// That is deliberately stricter than reading it from the environment at
+// startup, which is what a project does when the schema cannot hold it: the
+// dimension is fixed when the code is generated, so one binary can no longer
+// serve a 768- and a 1,536-component embedder. What it buys is that the
+// dimension is in the declaration, so `Diff` proposes a migration when it
+// changes instead of a comment asking someone to remember (ADR-0026).
+//
+// The column is Hidden and not optionally so. An embedding is twenty kilobytes
+// of float that no client has a use for, and serialising one by accident is the
+// kind of mistake that shows up as a bandwidth bill. Go callers reading through
+// the query engine still get it.
+//
+// A vector is storable and orderable and nothing else yet: there is no index
+// kind, no metric declaration and no REST search operation, which ADR-0026
+// stages as a second decision to be taken when a corpus outgrows an exact scan.
+// Until then a similarity search is an exact scan over the rows a filter
+// already selected, which is the shape the module this was designed against
+// actually runs.
+func Vector(name string, dim int) *Field {
+	f := newField(name, TypeVector)
+	f.d.Dim = dim
+	f.d.Hidden = true
 	return f
 }
 

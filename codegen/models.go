@@ -40,12 +40,17 @@ func renderModels(opts Options) ([]byte, error) {
 				imports["time"] = true
 			case "json.RawMessage":
 				imports["encoding/json"] = true
+			case "sqlb.Vector":
+				// The second thing in this file that is not a plain Go type,
+				// and the first that is a *column*. An embedding needs the
+				// codec that moves it in binary, so the model cannot be
+				// importable without sqlb the way the rest of them are.
+				imports["github.com/jryannel/sqlb"] = true
 			}
 		}
-		// An expanded collection lands in a sqlb.Collection, which is the one
-		// thing in this file that is not a plain Go type. Models are otherwise
-		// importable without sqlb, and a table with no reverse relation stays
-		// that way.
+		// An expanded collection lands in a sqlb.Collection. Models are
+		// otherwise importable without sqlb — a table with neither a reverse
+		// relation nor a vector column stays that way.
 		for _, inv := range opts.Registry.Inverses(t) {
 			if inv.Expandable {
 				imports["github.com/jryannel/sqlb"] = true

@@ -229,6 +229,9 @@ func (r *Registry) Validate() error {
 			if d.Array {
 				r.validateArray(t, d, report)
 			}
+			if d.Type == TypeVector {
+				r.validateVector(t, d, report)
+			}
 			if d.Type == TypeEnum && len(d.EnumValues) == 0 {
 				report(t.name, d.Name, "Enum declares no values")
 			}
@@ -438,6 +441,64 @@ func (r *Registry) validateArray(t *TableDef, d *FieldDesc, report func(string, 
 		// filter with no GIN index still returns the right rows, by scanning
 		// the table for them. ADR-0026 made the same argument for vectors.
 		report(t.name, d.Name, "a Filterable array column needs a GIN index, or every filter over it is a sequential scan: add t.AddIndex(schema.Index{Columns: []string{%q}, Method: \"gin\"})", d.Name)
+	}
+}
+
+// validateVector refuses the arrangements a vector column cannot be part of.
+//
+// Every one of these is a thing Postgres would accept and answer wrongly or
+// uselessly, which is the pattern this whole file exists for. None of them is
+// about the index, because there is no index kind yet — ADR-0026 stages that as
+// a second decision, and an unindexed vector column is a complete
+// configuration rather than a half-built one.
+func (r *Registry) validateVector(t *TableDef, d *FieldDesc, report func(string, string, string, ...any)) {
+	if d.Dim <= 0 {
+		report(t.name, d.Name, "a vector column needs a dimension: schema.Vector(%q, n) where n is the width your embedder produces", d.Name)
+	}
+	// pgvector's own ceiling for a stored value. The lower limit that applies
+	// to an *indexed* column is not checked here, because nothing declares an
+	// index yet; when something does, that check belongs with the declaration
+	// that carries the metric.
+	if d.Dim > 16000 {
+		report(t.name, d.Name, "a vector column is limited to 16000 dimensions, got %d", d.Dim)
+	}
+	if d.Array {
+		report(t.name, d.Name, "a vector column cannot be an array: pgvector has no array-of-vector type, and one embedding per row is the shape every consumer of this has")
+	}
+	if d.PrimaryKey {
+		report(t.name, d.Name, "a vector column cannot be the primary key: one column addresses a row in its URL and its cursor, and an embedding has no spelling in either")
+	}
+	if d.Unique {
+		report(t.name, d.Name, "a vector column cannot be Unique: equality on an embedding is a comparison of floats, and two rows meaning the same thing do not produce the same vector")
+	}
+	if d.Ref != nil {
+		report(t.name, d.Name, "a vector column cannot be a reference")
+	}
+	// The capabilities all fail for the same reason: the REST surface has no
+	// spelling for a vector. A URL cannot carry one — 1,536 float32s is about
+	// twenty kilobytes — which is why ADR-0026 makes similarity search its own
+	// operation rather than a query parameter.
+	if d.Filterable {
+		report(t.name, d.Name, "a vector column cannot be Filterable: a filter value travels in a URL and an embedding does not fit in one. Similarity search is its own operation")
+	}
+	if d.Sortable {
+		report(t.name, d.Name, "a vector column cannot be Sortable: ?sort names a column and a similarity ordering needs a vector to be near to")
+	}
+	if d.Searchable {
+		report(t.name, d.Name, "a vector column cannot be Searchable: ?search is a text fan-out, and matching an embedding against a search term is the operation the embedder performs, not the database")
+	}
+	if !d.Hidden {
+		// Reachable only by clearing it after construction, since Vector sets
+		// it. Said out loud because the alternative is a REST response
+		// carrying twenty kilobytes of float per row and nobody noticing until
+		// the bill.
+		report(t.name, d.Name, "a vector column must stay Hidden: an embedding has no use on the wire and serialising one is a mistake with no symptom except its size")
+	}
+	if d.Scoped {
+		report(t.name, d.Name, "a vector column cannot be Scoped: a tenant predicate compares one value to a constant")
+	}
+	if d.SoftDelete {
+		report(t.name, d.Name, "a vector column cannot carry the soft-delete marker")
 	}
 }
 

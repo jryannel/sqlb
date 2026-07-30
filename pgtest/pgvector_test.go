@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/schema"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -109,10 +112,15 @@ func vectorDB(t *testing.T) *pgxpool.Pool {
 	})
 
 	// The extension ADR-0026 orders ahead of every table. Here it doubles as the
-	// assertion that the image is the one this file thinks it is.
+	// assertion that the image is the one this file thinks it is. The tests
+	// that exercise sqlb's own DDL drop it again first, so that what runs is
+	// what a project's first migration would run.
 	if _, err := pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
 		t.Fatalf("creating the vector extension: %v", err)
 	}
+	// The same uuid_generate_v7 shim freshDB installs, and for the same reason
+	// — see bootstrap.
+	bootstrap(t, pool)
 	return pool
 }
 
@@ -550,5 +558,225 @@ func mustExecPool(t *testing.T, pool *pgxpool.Pool, stmt string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), stmt); err != nil {
 		t.Fatalf("exec failed: %v\n%s", err, strings.TrimSpace(stmt))
+	}
+}
+
+// --- the column ------------------------------------------------------------
+//
+// Everything above measures pgvector. What follows measures sqlb's vector
+// column against it: the DDL it renders, the codec it registers, the round trip
+// through introspect, and a similarity search built from Near.
+//
+// This is the increment ADR-0026 calls complete on its own — a declared column
+// and an exact search, with no index kind, no metric declaration and no REST
+// search operation. Those are the second decision, taken when a corpus outgrows
+// an exact scan.
+
+type Embedded struct {
+	ID    string      `db:"id" sqlb:"pk,default"`
+	Body  string      `db:"body"`
+	Embed sqlb.Vector `db:"embedding" sqlb:"hidden"`
+}
+
+func (Embedded) TableName() string { return "embedded" }
+
+func embeddedSchema() *schema.Registry {
+	r := schema.NewRegistry()
+	r.Table("embedded",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("body"),
+		schema.Vector("embedding", 4),
+	)
+	return r
+}
+
+// codecPool is a pool with the vector codec registered, which is what makes
+// values move in binary rather than as text.
+func codecPool(t *testing.T, base *pgxpool.Pool) *pgxpool.Pool {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig(base.Config().ConnString())
+	if err != nil {
+		t.Fatalf("parsing the connection string: %v", err)
+	}
+	cfg.AfterConnect = sqlb.RegisterVectorType
+	// Statement caching off for the same reason the measurement pool has it
+	// off: these tests set session state per connection.
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("opening a pool with the vector codec: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// The generated DDL applies, which is the claim a golden test cannot make: the
+// extension statement runs first, the dimension reaches the column, and
+// Postgres accepts the whole thing.
+func TestVectorSchemaAppliesAndRoundTrips(t *testing.T) {
+	base := vectorDB(t)
+	// The extension is created by the migration rather than by the harness, so
+	// what runs here is what a project's first migration would run.
+	mustExecPool(t, base, `DROP EXTENSION IF EXISTS vector`)
+
+	target := embeddedSchema()
+	applySchema(t, base, target)
+
+	// Reading it back closes the loop ADR-0014 is about: a schema rendered,
+	// applied, and imported must diff to nothing. A vector column that
+	// introspect could not name would show up here as a proposal to drop the
+	// embedding.
+	current := importRegistry(t, base)
+	changes := diff(t, current, target)
+	if len(changes) != 0 {
+		var b strings.Builder
+		for _, c := range changes {
+			fmt.Fprintf(&b, "-- %s\n%s\n", c.Comment, c.Up)
+		}
+		t.Errorf("the schema does not round-trip; importing it and diffing proposes:\n%s", b.String())
+	}
+
+	// And the imported column is Hidden, which the constructor sets and which
+	// an adopted database must not lose — otherwise importing a pgvector schema
+	// starts serialising embeddings into REST responses.
+	imported := current.Get("embedded")
+	if imported == nil {
+		t.Fatal("the table did not import")
+	}
+	f := imported.Field("embedding")
+	if f == nil {
+		t.Fatal("the embedding column did not import")
+	}
+	d := f.Desc()
+	if d.Type != schema.TypeVector || d.Dim != 4 {
+		t.Errorf("imported as %s(%d), want vector(4)", d.Type, d.Dim)
+	}
+	if !d.Hidden {
+		t.Error("an imported vector column is not Hidden, so an adopted database would serialise its embeddings")
+	}
+}
+
+// A vector written through sqlb comes back as the same vector, in binary.
+//
+// The values are the ones a float codec gets wrong — a component that is not
+// exactly representable, a negative, a zero — because "it round-trips" over
+// [1,2,3] would pass with a codec that silently went through float64.
+func TestVectorValuesRoundTripThroughTheCodec(t *testing.T) {
+	base := vectorDB(t)
+	mustExecPool(t, base, `DROP EXTENSION IF EXISTS vector`)
+	applySchema(t, base, embeddedSchema())
+
+	pool := codecPool(t, base)
+	db := sqlb.New(pool)
+	ctx := context.Background()
+
+	want := sqlb.Vector{0.1, -2.5, 0, 3.4028235e38}
+	row := &Embedded{Body: "first", Embed: want}
+	if _, err := sqlb.InsertRows(row).One(ctx, db); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	got, err := sqlb.Query[Embedded]().One(ctx, db)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !reflect.DeepEqual(got.Embed, want) {
+		t.Errorf("embedding = %v, want %v", got.Embed, want)
+	}
+
+	// The insert wrote the value back into the caller's struct, as every insert
+	// does — so the codec ran in both directions on the same statement.
+	if !reflect.DeepEqual(row.Embed, want) {
+		t.Errorf("the returned embedding = %v, want %v", row.Embed, want)
+	}
+}
+
+// Near produces a search Postgres runs, and the rows come back in the order the
+// scores say they are in.
+//
+// The ordering assertion is the point. A score computed one way and an ordering
+// computed another is the failure the handle exists to make impossible, and it
+// is invisible in any test that checks only which rows came back.
+func TestNearSearchesAgainstARealDatabase(t *testing.T) {
+	base := vectorDB(t)
+	mustExecPool(t, base, `DROP EXTENSION IF EXISTS vector`)
+	applySchema(t, base, embeddedSchema())
+
+	pool := codecPool(t, base)
+	db := sqlb.New(pool)
+	ctx := context.Background()
+
+	// Three rows at known angles from the probe: identical, orthogonal, and
+	// opposite. Cosine similarity is then 1, 0 and -1, which is arithmetic
+	// rather than a measurement.
+	rows := []*Embedded{
+		{Body: "same", Embed: sqlb.Vector{1, 0, 0, 0}},
+		{Body: "orthogonal", Embed: sqlb.Vector{0, 1, 0, 0}},
+		{Body: "opposite", Embed: sqlb.Vector{-1, 0, 0, 0}},
+	}
+	if _, err := sqlb.InsertRows(rows...).Exec(ctx, db); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	type hit struct {
+		Body       string  `db:"body"`
+		Similarity float64 `db:"similarity"`
+	}
+	near := sqlb.Near(sqlb.F("embedding"), sqlb.Vector{1, 0, 0, 0})
+	hits, err := sqlb.Collect[hit](ctx, db, sqlb.Query[Embedded]().
+		Select(sqlb.F("body"), near.Similarity()).
+		OrderBy(near.Nearest()))
+	if err != nil {
+		t.Fatalf("similarity search: %v", err)
+	}
+
+	if len(hits) != 3 {
+		t.Fatalf("got %d hits, want 3: %+v", len(hits), hits)
+	}
+	if hits[0].Body != "same" || hits[len(hits)-1].Body != "opposite" {
+		t.Errorf("hits are not ordered nearest first: %+v", hits)
+	}
+	// Larger is closer, which is what "similarity, not distance" means.
+	for i := 1; i < len(hits); i++ {
+		if hits[i].Similarity > hits[i-1].Similarity {
+			t.Errorf("hit %d scores above the one before it, so the ordering and the score disagree: %+v", i, hits)
+		}
+	}
+	if d := hits[0].Similarity - 1; d > 1e-6 || d < -1e-6 {
+		t.Errorf("an identical vector scored %v, want 1", hits[0].Similarity)
+	}
+
+	// The threshold uses the same score, so it agrees with the ordering by
+	// construction rather than by the caller keeping two expressions in step.
+	above, err := sqlb.Collect[hit](ctx, db, sqlb.Query[Embedded]().
+		Select(sqlb.F("body"), near.Similarity()).
+		Where(near.AtLeast(0.5)).
+		OrderBy(near.Nearest()))
+	if err != nil {
+		t.Fatalf("thresholded search: %v", err)
+	}
+	if len(above) != 1 || above[0].Body != "same" {
+		t.Errorf("AtLeast(0.5) returned %+v, want only the identical row", above)
+	}
+}
+
+// The column refuses a vector of the wrong width, and the refusal is Postgres's
+// rather than something sqlb had to check.
+//
+// Worth pinning because it is the guarantee the declaration buys: the dimension
+// is part of the type, so a model swap that changes the width fails loudly on
+// the first write instead of storing vectors that mean nothing.
+func TestAWrongWidthVectorIsRefused(t *testing.T) {
+	base := vectorDB(t)
+	mustExecPool(t, base, `DROP EXTENSION IF EXISTS vector`)
+	applySchema(t, base, embeddedSchema())
+
+	db := sqlb.New(codecPool(t, base))
+	_, err := sqlb.InsertRows(&Embedded{Body: "wrong", Embed: sqlb.Vector{1, 2}}).One(context.Background(), db)
+	if err == nil {
+		t.Fatal("a two-component vector was accepted into a vector(4) column")
+	}
+	if !strings.Contains(err.Error(), "dimensions") {
+		t.Errorf("the refusal does not mention the dimension: %v", err)
 	}
 }

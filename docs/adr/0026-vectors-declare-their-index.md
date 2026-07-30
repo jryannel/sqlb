@@ -1,8 +1,11 @@
 # ADR-0026: A vector column declares its index, and similarity search is its own operation
 
-- **Status:** Exploring — nothing is built, and **it is not in 1.0**. The driver
-  flip it was waiting on ([ADR-0040](0040-the-driver-is-a-dependency.md)) has
-  landed, so it is now buildable as designed rather than as an approximation
+- **Status:** Working for the column, Exploring for the index. The unindexed
+  half is **built** — `schema.Vector(name, dim)`, `vector(n)` in `Diff` with the
+  extension ahead of it, the introspect mapping, `sqlb.Vector` with pgvector's
+  binary codec, and `Near` — and that half is a complete configuration rather
+  than a half-built feature. The index kind, the metric declaration and
+  `POST /resource/search` are unbuilt and **not in 1.0**
 - **Confidence:** Medium, raised from Low. The three physical claims this record
   reasons from have been measured against pgvector 0.8.6
   ([`pgtest/pgvector_test.go`](../../pgtest/pgvector_test.go)) and all three
@@ -228,10 +231,18 @@ thing the driver had no spelling for. The measurement that made the case: 2.7×
 the time and 21× the memory for a 50-row page of 1536-dimension embeddings,
 through the text form. The rest of this record is unaffected either way.
 
-**What this record is still waiting on** is therefore nothing external. The
-blocker named in the status above is gone; what remains is the three places in
-`migrate` and `introspect` that do not know the type, and the index half, which
-this record deliberately leaves as a second decision.
+**What this record is still waiting on** is therefore nothing external, and the
+three places that did not know the type now do. What remains is the index half,
+which this record deliberately leaves as a second decision — and which the
+measurement above says should stay unbuilt until a corpus has outgrown an exact
+scan, because every failure mode it introduces is silent.
+
+**One cross-reference in this record was wrong** and is worth correcting rather
+than quietly deleting: the score-as-projection bullet cites `GroupBySelection`
+as an existing precedent for `date_trunc`. No such thing exists in the tree. The
+argument it was making is sound and is what `Near` implements — write the
+expression once, get the projection, the predicate and the ordering from it —
+but it was not standing on a precedent.
 
 ## Consequences
 
@@ -371,6 +382,28 @@ text.
   noticing a width change gives false comfort, and a column should be able to
   declare a space identity. Reported rather than observed; this project has not
   run that codebase's queries.
+- 2026-07-30 — **The column is built**, which is the whole of what this record
+  calls a complete configuration on its own: `schema.Vector(name, dim)` with the
+  dimension as a Go expression, `vector(n)` rendered by `Diff` with
+  `CREATE EXTENSION` ordered ahead of it, the introspect mapping that closes the
+  round trip, `sqlb.Vector` with pgvector's binary codec written against pgx
+  rather than taken from pgvector-go, and `Near` yielding the projection, the
+  threshold and the ordering from one handle. Verified against pgvector 0.8.6:
+  the DDL applies, an imported schema diffs to nothing, values round-trip in
+  binary, and a search returns rows in the order its scores claim.
+
+  Three things decided while building it that the record did not say. `Near`
+  binds the vector **once** however many times it is mentioned, which needed a
+  shared-parameter node in the compiler — an embedding is twenty kilobytes and a
+  search names it three times. The metric is cosine and is **not an argument**,
+  on this record's own asymmetry: adding one later is additive, removing one is
+  not. And a vector column is refused as a primary key, as Unique, as an array
+  element, and as Filterable, Sortable or Searchable — each because the REST
+  surface has no spelling for a vector, which is the same reason search is its
+  own operation.
+
+  The index half stays unbuilt, and the measurement above is now an argument for
+  keeping it that way until a corpus has outgrown an exact scan.
 - 2026-07-30 — Two smaller corrections while folding the above in. The score is a
   projection as well as an ordering, so `Near(vec)` yields select, predicate and
   order together rather than three call sites that must agree. And making the
