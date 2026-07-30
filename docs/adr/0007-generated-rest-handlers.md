@@ -3,7 +3,7 @@
 - **Status:** Working
 - **Confidence:** Medium
 - **Decided:** 2026-07-27
-- **Last reviewed:** 2026-07-30
+- **Last reviewed:** 2026-07-30 (module-graph cost measured; see Revisions)
 
 ## Context
 
@@ -77,6 +77,27 @@ document could state a `minimum` or `enum` that nothing enforces before the
 write). The module-graph cost is accepted as the smaller price. The paths weighed
 are under *Alternatives considered*, and what would reopen the question is under
 *What would change our mind*.
+
+**What that cost is, measured (2026-07-30).** Both ports described it as version
+selection — huma and chi appearing in the graph and getting bumped by MVS — and
+that is the smaller half. The larger half is the `go` directive: huma v2.39.0
+declares `go 1.25.0`, and because `rest` shares this module, **1.25 becomes the
+floor for every consumer of the engine.** The engine's own code does not need it.
+All eight non-`rest` packages build at `go 1.21.0`; the module's directive is set
+by its HTTP adapter's dependency, four minor versions above what the engine uses.
+
+So the module boundary is not only about which packages a consumer inherits — it
+decides which *toolchain* they must run. That sharpens the nested-`rest`-module
+fallback rather than changing the decision: a consumer stuck below 1.25 has no
+workaround short of that split, where one stuck on an older huma merely has a
+version to reconcile. Nothing has asked for it yet, which is why this is recorded
+under the accepted cost rather than as a reason to reopen.
+
+One part of that cost was not a cost at all and is gone: the directive read
+`go 1.25.7`, a patch-pinned version that forced consumers onto that exact
+toolchain — the single-app port was bumped from `1.25.0` — and that came from
+`go mod init` writing whatever was installed, not from a requirement. It is now
+`go 1.25.0`, which is huma's actual floor.
 
 ## Consequences
 
@@ -195,3 +216,17 @@ since it is a road not taken.
   it flagged — an OpenAPI schema for a compositional grammar — dissolved once we
   stopped trying to describe the grammar and described the columns instead.
 - 2026-07-27 — Written.
+- 2026-07-30 — Measured the module-graph cost the two ports complained about, and
+  found half of it was free. The `go` directive read `go 1.25.7` — patch-pinned,
+  so every consumer had to run that exact toolchain, which is what bumped the
+  single-app port from `1.25.0`. Nothing required it: it is what `go mod init`
+  writes. Now `go 1.25.0`, verified against `tidy-check`, `deps-check`, build,
+  vet and the suite, in all three modules.
+
+  The half that is not free is worth stating, because both ports framed this as
+  version selection and it is more than that: 1.25 is huma's floor, not the
+  engine's. The eight non-`rest` packages build at `go 1.21.0`. Sharing one module
+  with the HTTP adapter therefore sets the minimum toolchain for consumers who
+  never mount a REST surface — an argument for the nested module that is sharper
+  than the version-bump one, and still not urgent, since nobody has been blocked
+  by it.

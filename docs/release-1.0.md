@@ -261,7 +261,7 @@ completeness rather than re-argued; one belongs to the platform, not to sqlb.
 | **`$N`-form raw predicate** — `RawPred` is positional, `$N` is referential | single-app | #4 | 1.1, documented now |
 | **Registry-aware coercion** — `filter.Coerce` is string→type only | single-app | #5 | 1.1 |
 | **`Describe` panics after first use** (`InUse`) | multi-app | Low | 1.1, documented now |
-| Module-graph MVS bump (huma/chi, `go` directive) | both | #3 / Low | Answered — [ADR-0007](adr/0007-generated-rest-handlers.md), reviewed 2026-07-30 |
+| Module-graph MVS bump (huma/chi, `go` directive) | both | #3 / Low | Answered — [ADR-0007](adr/0007-generated-rest-handlers.md). The `go` directive half is **fixed**: it was patch-pinned at `1.25.7` for no reason and is now `1.25.0`. The remaining 1.25 floor is huma's, not the engine's — the non-`rest` packages build at `1.21.0` |
 | `pgtype` scanning unverified in sqlb's own tests | single-app | — | **Done** — `pgtest/pgtype_test.go`, both directions and NULLs |
 | Composite primary key | multi-app | Medium | Stream E above; not a blocker |
 | Local `replace` is machine-specific | multi-app | landing blocker | The platform's, not sqlb's |
