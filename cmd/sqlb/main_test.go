@@ -56,6 +56,36 @@ func TestCheckAgreesWithTheCommittedOutput(t *testing.T) {
 	}
 }
 
+// A schema package under internal/ must be readable, and for a long time it was
+// not: the driver was written to the system temp directory, and Go refuses an
+// internal/ import from a file outside the module, so the command failed with
+// "use of internal package … not allowed" before any emitter ran.
+//
+// That ruled the command out for repositories that group their modules under
+// internal/ — a common layout, and the one that most wants a generator — which
+// is a large hole to leave to a fixture nobody would think to write. The
+// subject is internal/internalschema, a real package in this module; nothing
+// else here lives under internal/, so nothing else would catch a regression.
+func TestSchemaPackageUnderInternalIsReadable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles a driver against the module; not part of the inner loop")
+	}
+
+	const internal = "./internal/internalschema"
+	code, out := invoke(t, "check", internal)
+	if code != 0 {
+		t.Fatalf("sqlb check %s reported exit %d:\n%s", internal, code, out)
+	}
+	// Naming the symptom, because the generic failure above would also fire for
+	// an unrelated compile error and read as the same thing.
+	if strings.Contains(out, "use of internal package") {
+		t.Errorf("the driver was compiled from outside the module again:\n%s", out)
+	}
+	if !strings.Contains(out, "current") {
+		t.Errorf("check passed without saying so, so a CI log would show nothing:\n%s", out)
+	}
+}
+
 // ADR-0016: the test above passes for a command that silently does nothing, so
 // this one proves the driver is really being compiled and run. A package with
 // no SqlbProject must be refused, by name.
