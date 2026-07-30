@@ -162,12 +162,22 @@ module sharing a transaction with pgx-native code "needs the whole platform on
 `database/sql` first". Leaf and disjoint modules are cheap either way. The
 decision is only forced where a unit of work crosses the two.
 
-One thing the ports surface that this record should own regardless of its
-outcome: pgtype scanning is load-bearing for the whole structs-first-over-sqlc
-story and is **currently unverified in sqlb's own tests** — the `with-sqlc`
-adoption test uses `sql.NullTime`, not pgtype. Going pgx-native makes that moot;
-until then it is unguarded, and a pgx release that dropped `sql.Scanner` would
-be caught by a consumer rather than by CI.
+One thing the ports surface that this record owns regardless of its outcome:
+pgtype scanning is load-bearing for the whole structs-first-over-sqlc story, and
+was unverified in sqlb's own tests — the `with-sqlc` adoption test uses
+`sql.NullTime`, not pgtype. It is now covered by `pgtest/pgtype_test.go`, in
+both directions and including NULLs, plus compile-time assertions that fail the
+build if a pgx release ever drops `sql.Scanner`/`driver.Valuer` from pgtype.
+
+It went into `pgtest` rather than `example/withsqlc`, where the port report
+asked for it and where the rest of the sqlc story lives, because it cannot go
+there: `example/withsqlc` is in the root module, whose direct requirements
+`deps-check` pins to huma by name so that a test file cannot quietly grow a
+driver. That is the guard working as designed, and it is worth noting here
+because it is a small, concrete instance of the tension this whole record is
+about — the stdlib invariant deciding where a pgx-shaped fact is allowed to be
+tested. Going pgx-native would make the question disappear along with the
+constraint.
 
 ## Decision
 
