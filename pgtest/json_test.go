@@ -158,11 +158,21 @@ func TestJSONContainmentCanUseTheGINIndex(t *testing.T) {
 		t.Fatalf("SQL(): %v", err)
 	}
 
-	if _, err := raw.Exec(ctx, "SET enable_seqscan = off"); err != nil {
+	// One connection for both statements. SET is per-session, and a pool is
+	// free to answer the EXPLAIN on a different connection than it answered
+	// the SET on — which would leave seqscan enabled and quietly turn this
+	// into the table scan the test exists to rule out.
+	conn, err := raw.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquiring a connection: %v", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, "SET enable_seqscan = off"); err != nil {
 		t.Fatalf("disabling seqscan: %v", err)
 	}
 
-	rows, err := raw.Query(ctx, "EXPLAIN "+sqlText, args...)
+	rows, err := conn.Query(ctx, "EXPLAIN "+sqlText, args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN: %v", err)
 	}
@@ -180,7 +190,7 @@ func TestJSONContainmentCanUseTheGINIndex(t *testing.T) {
 		t.Fatalf("reading the plan: %v", err)
 	}
 
-	if !strings.Contains(plan.String(), "docs_metadata_idx") {
+	if !strings.Contains(plan.String(), "jsondocs_metadata_idx") {
 		t.Errorf("containment did not reach the GIN index, so it is a table scan wearing the right answer:\n%s", plan.String())
 	}
 }
