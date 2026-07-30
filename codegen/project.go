@@ -83,6 +83,13 @@ type Project struct {
 	// the command says so rather than picking a directory.
 	MigrationsDir string
 
+	// ContractFile is where `sqlb impact` records the REST contract snapshot it
+	// diffs against, relative to the module root. Empty defaults to
+	// "restcontract.json" beside the generated code (Options.Dir). It is a
+	// committed artefact — the answer to "backward compatible relative to what?"
+	// (ADR-0039) — so it belongs in the repository like the migration history.
+	ContractFile string
+
 	// MigrationFormat names the runner's file layout: "goose" (the default),
 	// "golang-migrate", or "plain". Resolved by migrate.ByName, so an unknown
 	// name is refused with the list of the ones that exist.
@@ -185,7 +192,7 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 	}
 
 	verb, rest := args[0], args[1:]
-	if verb != "migrate" && len(rest) > 0 {
+	if verb != "migrate" && verb != "impact" && len(rest) > 0 {
 		say(stderr, "sqlb: %s takes no flags, got %q\n", verb, rest[0])
 		return 2
 	}
@@ -228,6 +235,13 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		}
 		line(stderr, "sqlb: generated files are current")
 		return 0
+
+	case "impact":
+		// The REST contract the current schema generates, diffed against the
+		// checked-in snapshot. It reads capabilities the migration diff ignores,
+		// because the sharpest API breaks — un-exposing a column, dropping an
+		// operation, a rename — produce no DDL (ADR-0039).
+		return runImpact(p, opts, opts.Registry, rest, stdout, stderr)
 
 	default:
 		say(stderr, "sqlb: driver does not know the verb %q\n", verb)

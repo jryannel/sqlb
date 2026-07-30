@@ -1,0 +1,425 @@
+{
+  "version": 1,
+  "resources": [
+    {
+      "path": "/comments",
+      "ops": [
+        "create",
+        "read",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "workspace_id",
+          "rel": "workspace",
+          "type": "uuid",
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "task_id",
+          "rel": "task",
+          "type": "uuid",
+          "immutable": true,
+          "filterable": true
+        },
+        {
+          "name": "author_id",
+          "rel": "author",
+          "type": "uuid",
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "read_only": true
+        }
+      ]
+    },
+    {
+      "path": "/lists",
+      "ops": [
+        "create",
+        "read",
+        "update",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "workspace_id",
+          "rel": "workspace",
+          "type": "uuid",
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "color",
+          "type": "text",
+          "has_default": true,
+          "filterable": true
+        },
+        {
+          "name": "position",
+          "type": "int",
+          "has_default": true,
+          "sortable": true
+        },
+        {
+          "name": "archived",
+          "type": "bool",
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "read_only": true
+        }
+      ]
+    },
+    {
+      "path": "/memberships",
+      "ops": [
+        "create",
+        "read",
+        "delete",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "workspace_id",
+          "rel": "workspace",
+          "type": "uuid",
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "user_id",
+          "rel": "user",
+          "type": "uuid",
+          "filterable": true
+        },
+        {
+          "name": "role",
+          "type": "enum",
+          "enum": [
+            "owner",
+            "admin",
+            "member"
+          ],
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/tasks",
+      "ops": [
+        "create",
+        "read",
+        "update",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "workspace_id",
+          "rel": "workspace",
+          "type": "uuid",
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "list_id",
+          "rel": "list",
+          "type": "uuid",
+          "filterable": true,
+          "expandable": true
+        },
+        {
+          "name": "assignee_id",
+          "rel": "assignee",
+          "type": "uuid",
+          "nullable": true,
+          "filterable": true
+        },
+        {
+          "name": "author_id",
+          "rel": "author",
+          "type": "uuid",
+          "read_only": true
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "labels",
+          "type": "text",
+          "array": true,
+          "has_default": true,
+          "filterable": true
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "enum": [
+            "todo",
+            "in_progress",
+            "blocked",
+            "done"
+          ],
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "priority",
+          "type": "enum",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "urgent"
+          ],
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "due_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "read_only": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "position",
+          "type": "int",
+          "has_default": true,
+          "sortable": true
+        },
+        {
+          "name": "comment_count",
+          "type": "int",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "read_only": true
+        }
+      ]
+    },
+    {
+      "path": "/users",
+      "ops": [
+        "read",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "password_hash",
+          "type": "text",
+          "hidden": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/workspaces",
+      "ops": [
+        "read",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    }
+  ]
+}
