@@ -6,6 +6,11 @@
 > is answered by [ADR-0007](adr/0007-generated-rest-handlers.md) (#1, the module
 > graph), the bind-parameter cast (#2) lands before 1.0, and #3 and #4 are
 > scheduled for 1.1 with the documentation they owe landing before the tag.
+> Finding #1's second half — "keep the engine's `go` directive as low as it
+> actually needs" — is **done**: it was `go 1.25.7`, patch-pinned by `go mod init`
+> rather than by any requirement, and is now `go 1.25.0`, so this port's
+> `1.25.0 → 1.25.7` bump no longer happens. The residual 1.25 floor is huma's;
+> the engine's own packages build at `go 1.21.0`.
 > This report's own ranked list of missing features is triaged in the same place.
 
 **The subject is anonymised.** It is called `subject-go` throughout — the same
