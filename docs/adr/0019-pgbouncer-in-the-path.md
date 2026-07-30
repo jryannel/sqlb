@@ -1,218 +1,114 @@
 # ADR-0019: Connections go through PgBouncer, except the ones that cannot
 
 - **Status:** Working — the query path assumes nothing session-scoped, and
-  `pgtest` runs it through a real PgBouncer in transaction pooling mode alongside
-  the two carve-outs
-- **Confidence:** High on the carve-out list, which is now tested rather than
-  reasoned: the pooler tests prove queries pass through, that `LISTEN` needs a
-  direct connection, and that `NOTIFY` does not
+  `pgtest` runs it through a real PgBouncer in transaction pooling mode
+- **Confidence:** High on the carve-out list, which is tested rather than reasoned
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-30 (read against ADR-0040)
 
 ## Context
 
-The target deployment runs PgBouncer in front of Postgres, in **transaction
-pooling** mode. Session pooling would make most of this record unnecessary, but
-it also gives up the connection multiplexing that is the reason to deploy a
-pooler at all, so transaction pooling is what we assume.
+The target deployment runs PgBouncer in **transaction pooling** mode. sqlb
+assumed a direct connection everywhere and never said so — an assumption that is
+invisible in the code, because sqlb takes an `Executor` from the caller and would
+not notice a pooled one until it misbehaved in production.
 
-Until now sqlb assumed a direct connection everywhere, and never said so. That
-assumption is invisible in the code because sqlb does not own connections — it
-takes an `Executor` from the caller — which means nothing in the codebase would
-notice being handed a pooled one until it misbehaved in production.
+Transaction pooling returns the server connection at transaction end, so anything
+whose state outlives a transaction breaks: `LISTEN` for the change feed
+([ADR-0012](0012-change-feed-outbox.md)), `CREATE INDEX CONCURRENTLY` and session
+advisory locks in migration runners, and pgx v5's prepared-statement cache — the
+last being the entire query path, not a corner.
 
-Transaction pooling returns the server connection to the pool at transaction
-end. Anything whose state outlives a transaction therefore breaks, and three
-parts of this project depend on exactly that:
-
-- `LISTEN` needs a session that survives past commit. It is how
-  [ADR-0012](0012-change-feed-outbox.md)'s dispatcher avoids polling, and
-  [ADR-0001](0001-postgres-only.md) cites `LISTEN/NOTIFY` as one of the features
-  justifying Postgres-only.
-- `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block, and
-  migration runners typically take *session* advisory locks to serialise
-  themselves. The entire `Unblock` apparatus in `migrate` — the concurrent index
-  build, the `NOT VALID` plus `VALIDATE` split — is built for a connection that
-  behaves like a session.
-- pgx v5 defaults to caching prepared statements, which is a documented
-  incompatibility with transaction pooling below PgBouncer 1.21. This one is not
-  a corner: it is the entire query path.
-
-### What was measured
-
-The three claims above were written from documentation. They are now tested in
-`pgtest/pgbouncer_test.go`, against PgBouncer 1.24.1 in transaction pooling in
-front of Postgres 18, with pgx v5.10 at its default settings.
+**Measured**, in `pgtest/pgbouncer_test.go`, against PgBouncer 1.24.1 in
+transaction pooling in front of Postgres 18 with pgx v5.10 at defaults:
 
 | Claim | Result |
 |---|---|
-| The query path works through the pooler | **Yes**, at pgx's defaults — but see below |
-| `LISTEN` survives the pooler | **No.** The pooler accepts the `LISTEN` and the notification never arrives |
+| The query path works through the pooler | **Yes**, at pgx's defaults |
+| `LISTEN` survives the pooler | **No.** Accepted, and the notification never arrives |
 | `NOTIFY` survives the pooler | **Yes**, including inside a transaction |
 
-Two of these are more useful than a bare yes/no.
-
-**The query path works for a reason that is a deployment setting, not a property
-of pgx.** PgBouncer 1.24.1 defaults `max_prepared_statements` to 200, and that
-tracking is what lets pgx's statement cache survive being multiplexed. On a
-PgBouncer older than 1.21, or any version with `max_prepared_statements = 0`,
-every query sqlb issues fails. The test asks the running pooler for that number
-rather than asserting it, so the day it changes the explanation changes with it.
-
-**A `LISTEN` through the pooler is not refused — it is accepted and silently
-useless.** That is the worse of the two possible outcomes, and it is what makes
-the misconfiguration in the Consequences section below a real risk rather than a
-theoretical one: nothing anywhere reports an error.
+Two details matter more than the yes/no. The query path works because PgBouncer
+1.24.1 defaults `max_prepared_statements` to 200 — a deployment setting, not a
+property of pgx; below 1.21 or at 0, every query fails. And a pooled `LISTEN` is
+*accepted and silently useless*, which makes the misconfiguration below a real
+risk rather than a theoretical one.
 
 ## Decision
 
-**The pooler is the default path, and sqlb's query path may assume nothing
-session-scoped.** Reads, writes, REST handlers and hooks all run through
-PgBouncer. No feature may rely on a `SET` outliving its transaction, a session
-advisory lock, a temp table, or a cursor held across transactions.
+**The pooler is the default path, and the query path may assume nothing
+session-scoped.** No feature may rely on a `SET` outliving its transaction, a
+session advisory lock, a temp table, or a cursor held across transactions.
 
-**Three components connect direct, and are named rather than discovered:**
-
-1. **The change-feed dispatcher's `LISTEN` connection** (ADR-0012). Note the
-   asymmetry that makes this cheap: `NOTIFY` is transactional and fire-and-forget,
-   so it works fine through the pooler from whichever connection did the
-   mutation. Only `LISTEN` needs the carve-out. The blast radius is one
-   connection, not the application.
-2. **The migration runner**, for the concurrent-index and advisory-lock reasons
-   above. sqlb emits DDL and does not apply it, so this is a constraint on the
-   caller's runner, and it belongs in the generated file header rather than only
-   here.
-3. **Nothing else.** `introspect` issues ordinary queries and works through the
-   pooler; it is listed only to record that it was considered and does not need
-   the exception.
+**Two components connect direct, and are named rather than discovered:** the
+change-feed dispatcher's `LISTEN` connection, and the migration runner. `NOTIFY`
+is transactional and fire-and-forget, so it works from any pooled connection —
+the blast radius is one connection, not the application. `introspect` issues
+ordinary queries and needs no exception; it is listed to record that it was
+considered.
 
 **sqlb does not manage this.** It takes a handle from the caller and will not
-grow a pooled-versus-direct abstraction. What sqlb owes its users is
-documentation of which component needs which connection — not a seam that
-pretends to arrange it. This half stands regardless of what the handle's type
-is: a pooler-aware sqlb would be sqlb deciding a deployment topology it cannot
-see.
+grow a pooled-versus-direct abstraction. What it owes users is documentation of
+which component needs which connection, not a seam that pretends to arrange it —
+a pooler-aware sqlb would be deciding a deployment topology it cannot see.
 
-**pgx is the assumed driver** — and, under
-[ADR-0040](0040-the-driver-is-a-dependency.md), the depended-upon one. The
-original wording here said "not a dependency of the engine," and gave the
-`deps-check` invariant as the reason sqlb could not own connections. That reason
-is being retired: the constraint was never what made connection management a bad
-idea, it just happened to also forbid it. Owning connections stays refused on its
-own merits.
+**pgx is the assumed driver**, and under
+[ADR-0040](0040-the-driver-is-a-dependency.md) the depended-upon one. Owning
+connections stays refused on its own merits, not because of the old
+stdlib-only invariant.
 
 ## Consequences
 
-**What this buys.** The assumption becomes visible and testable instead of
-latent. The carve-outs are two connections in a deployment, not a constraint on
-the application. And forbidding session state in the query path is good hygiene
-on its own terms — it is what makes the query path horizontally scalable whether
-or not a pooler is present.
+**Buys.** The assumption is visible and testable instead of latent. The carve-outs
+are two connections in a deployment, not a constraint on the application.
+Forbidding session state is good hygiene anyway — it is what makes the query path
+horizontally scalable with or without a pooler.
 
-**What this costs.** Two connection paths to configure and operate, and a
-misconfiguration is *silent*: point the dispatcher at the pooler and it simply
-never wakes. ADR-0012's fallback poll exists so that this degrades to latency
-rather than data loss, which means the fallback is also capable of hiding the
+**Costs.** Two connection paths to operate, and a misconfiguration is *silent*:
+point the dispatcher at the pooler and it never wakes. ADR-0012's fallback poll
+turns that into latency rather than data loss, which also means it can hide the
 mistake indefinitely. The prepared-statement mode is a per-deployment setting
-sqlb can neither see nor verify. And the `pgtest` gate now needs a second
-container and a network, which makes it slower and more Docker-dependent than a
-single-Postgres gate would have been.
+sqlb can neither see nor verify. `pgtest` now needs a second container.
 
 ## What would change our mind
 
-- **Deployment moves to session pooling, or to a pooler that supports `LISTEN`**
-  (pgcat, supavisor). Every carve-out above collapses and this record shrinks to
-  a paragraph.
-- **The statement-cache setting costs measurable throughput** against exec mode.
-  That is a real number, and this record should carry it rather than the current
-  hand-wave.
-- **A deployment turns up on a PgBouncer that does not track prepared
-  statements**, whether by age or by configuration. Then the query path needs
-  pgx in exec mode, which is a connection-string change for every consumer and
-  belongs in the README rather than only here.
-
-  [ADR-0040](0040-the-driver-is-a-dependency.md) changes the shape of this
-  trigger without removing it. If the engine depends on pgx directly, exec mode
-  stops being something a DSN has to carry and becomes a `QueryExecMode` sqlb
-  sets in code and can default safely — which turns "every consumer edits a
-  connection string" into a library default. The trigger stays worth watching,
-  because a wrong default is then sqlb's to own rather than a deployment's.
-- **A second component turns out to need session state.** Two named exceptions
-  is a list; four is a missing abstraction, and the answer would then be a real
-  seam rather than more prose.
-- **Generated writes now open a transaction**
-  ([ADR-0021](0021-hooks-receive-an-event.md)), which changes what this record is
-  about for the write path: in transaction pooling a server connection is held
-  for the whole `BEGIN`…`COMMIT` rather than for one statement. That is a change
-  in occupancy, and it is unmeasured. If `avg_xact_time` diverges from
-  `avg_query_time` under load, this is the first place to look, and
+- Deployment moves to session pooling or a pooler that supports `LISTEN` — every
+  carve-out collapses and this record shrinks to a paragraph.
+- A deployment turns up on a PgBouncer that does not track prepared statements —
+  the query path needs pgx in exec mode. Under ADR-0040 that becomes a
+  `QueryExecMode` sqlb sets in code rather than a DSN every consumer must get
+  right, which makes a wrong default sqlb's to own.
+- A second component needs session state. Two named exceptions is a list; four is
+  a missing abstraction.
+- Generated writes now open a transaction
+  ([ADR-0021](0021-hooks-receive-an-event.md)), so a server connection is held
+  for the whole `BEGIN`…`COMMIT`. That occupancy change is unmeasured — if
+  `avg_xact_time` diverges from `avg_query_time` under load, look here first;
   `rest.Options.DisableTransactions` is the per-resource lever.
-- **Someone points the dispatcher at the pooler and nobody notices for a week.**
-  That means the fallback poll is masking a misconfiguration rather than
-  tolerating a fault, and the dispatcher needs a startup assertion that its
-  connection can actually hold a `LISTEN`.
-- **A `LISTEN` through the pooler starts arriving.** `pgtest` asserts it does
-  not, and says in the failure message that this would be good news: the
-  dispatcher would need no carve-out and both this record and ADR-0012 would
-  shrink. The test is written so nobody deletes it to make it pass.
+- Someone points the dispatcher at the pooler and nobody notices for a week — the
+  fallback poll is masking a misconfiguration, and the dispatcher needs a startup
+  assertion.
+- A `LISTEN` through the pooler starts arriving. `pgtest` asserts it does not, and
+  its failure message says this would be good news, so nobody deletes the test to
+  make it pass.
 
 ## Cost of change
 
-**Cheap now**, and this is the reason to write it before the change feed exists.
-Nothing is built against it, and the change is mostly *which connection a
-component is handed* — configuration, not code.
-
-**Expensive in one specific direction.** If the change feed ships assuming it
-can hold a direct `LISTEN`, and the deployment later moves somewhere that only
-exposes a pooler — which several managed Postgres offerings do — then the
-dispatcher has no way to bypass it. Polling becomes the only option, which is
-ADR-0012's explicitly rejected alternative returning as the sole survivor. The
-fallback poll is what makes that a degradation rather than a rewrite, which is
-most of its justification.
-
-Reversing the no-session-state rule in the query path is the expensive one in
-the other direction: it is cheap to keep and costly to reintroduce, because
-finding out which feature quietly started depending on session state means
-auditing the whole query path.
-
-## Alternatives considered
-
-**No pooler; connect direct everywhere.** Simplest, and what the code silently
-assumed until this record. Lost to the deployment reality rather than on merit —
-it remains the right model for a small single-process consumer, and such a
-consumer can ignore every carve-out here.
-
-**Session pooling.** Preserves `LISTEN`, prepared statements and advisory locks,
-and would delete most of this document. Genuinely close, and the honest reason
-it loses is that it gives up most of the connection multiplexing that justifies
-running a pooler — not that anything here is impossible under it.
-
-**sqlb owns the pool and routes session-needing work to a direct connection
-itself.** Attractive, because it would make the carve-outs automatic instead of
-operational. Rejected: sqlb takes `*sql.DB` from the caller precisely so the
-driver stays the caller's ([ADR-0014](0014-migrations-and-import.md)), and
-owning connections would make the engine inherit a Postgres driver that every
-consumer then inherits too.
-
-**Drop `LISTEN/NOTIFY` and poll.** Rejected by ADR-0012 on the latency-versus-load
-curve. Worth noting it is not gone — it is the fallback, running slowly.
+Cheap now — nothing is built against it, and the change is mostly which
+connection a component is handed. Expensive in one direction: if the change feed
+ships assuming a direct `LISTEN` and the deployment later exposes only a pooler,
+polling becomes the only option. The fallback poll is what makes that a
+degradation rather than a rewrite. Reversing the no-session-state rule is the
+expensive one the other way, since finding what quietly depends on session state
+means auditing the whole query path.
 
 ## Revisions
 
 - 2026-07-27 — Written, after PgBouncer turned out to be part of the target
   deployment and appeared nowhere in the codebase or the record.
-- 2026-07-27 — Measured. All three Context claims now have tests in `pgtest`
-  against PgBouncer 1.24.1 and Postgres 18, and the section reports results
-  rather than citations. Confidence Low → Medium: the behaviour is observed, but
-  nothing is yet *built* on it, so the carve-outs remain untested by use. Two
-  findings the documented version did not have — the query path survives only
-  because the pooler tracks prepared statements (a setting, not a property), and
-  a pooled `LISTEN` is accepted rather than refused, so the misconfiguration is
-  silent.
-- 2026-07-30 — Read against [ADR-0040](0040-the-driver-is-a-dependency.md), which
-  cites this record's exec-mode trigger as one of the things a direct pgx
-  dependency answers. The trigger is rewritten rather than removed: under a pgx
-  engine, exec mode is a library default instead of a DSN every consumer has to
-  get right, which moves the failure from a deployment's silence to sqlb's
-  choice. Nothing measured here changes — the carve-outs are a property of
-  transaction pooling, not of the driver's spelling.
+- 2026-07-27 — Measured against PgBouncer 1.24.1 and Postgres 18. Two findings
+  the documented version did not have: the query path survives only because the
+  pooler tracks prepared statements, and a pooled `LISTEN` fails silently.
+- 2026-07-30 — Rewrote the exec-mode trigger under ADR-0040. Nothing measured
+  changes — the carve-outs are a property of transaction pooling, not the driver.
+- 2026-07-30 — Condensed.

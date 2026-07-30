@@ -8,28 +8,19 @@
 ## Context
 
 `Executor` is `QueryContext` + `ExecContext`, which `*sql.Tx` satisfies, so a
-caller could always run sqlb statements inside a transaction by threading the
-`*sql.Tx` through every terminal call. Nothing sat on top of that:
+caller could always thread a `*sql.Tx` through terminal calls. Nothing sat on top
+of that: no `WithTx`, so every caller wrote its own begin/commit/rollback and its
+own panic handling — and forgetting the rollback-on-panic leaks a connection with
+an open transaction. The hook registry was a package-level `sync.Map`, so hooks
+could not be scoped and, worse, a hook had no way to learn it was inside a unit
+of work: a `BeforeQuery` needing rows written earlier in the same transaction
+would find the pool.
 
-- No `WithTx`, so every caller wrote its own begin/commit/rollback and its own
-  panic handling. The rollback-on-panic case is the one people forget, and
-  forgetting it leaks a connection with an open transaction.
-- The hook registry was a package-level `sync.Map`
-  ([ADR-0008](0008-hooks-as-domain-seam.md)), so hooks could not be scoped and
-  — the sharper problem — a hook had no way to learn it was inside a unit of
-  work. A `BeforeQuery` that needed to see rows written earlier in the same
-  transaction could not reach them: whatever executor it found would be the
-  pool, and the rows were not committed yet.
-
-The README deferred all of this to Go 1.27, on the grounds that `db.Query[T]()`
-needs methods to declare type parameters. That reasoning is right about the
-*ergonomics* and wrong about the *scoping*. The object graph — a handle holding
-an executor and a registry — needs no new language feature. Only the call syntax
-does.
-
-Waiting was therefore not a neutral choice. Every month of deferral adds call
-sites written against the process-global registry, and those are what a later
-migration has to find.
+The README deferred this to Go 1.27, because `db.Query[T]()` needs methods with
+type parameters. That is right about the *ergonomics* and wrong about the
+*scoping* — a handle holding an executor and a registry needs no new language
+feature. Waiting was not neutral: every month adds call sites written against the
+process-global registry.
 
 ## Decision
 
@@ -45,140 +36,74 @@ err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
 })
 ```
 
-Four things follow from `*DB` being an `Executor`:
-
-1. **No call site breaks.** Every terminal already takes an `Executor`, so a
-   `*DB` goes wherever a `*sql.DB` went. `rest.Resource` needed no change at
-   all — the report that prompted this expected it to grow a `*DB` parameter,
-   and it did not, because it already accepts the interface.
-2. **Hooks resolve from the executor.** One unexported `hooksFor[T]` asks
-   whether the executor is a `*DB` and uses its registry if so, falling back to
-   the process default. Terminal signatures are untouched.
-3. **`sqlb.On[T]()` keeps working**, now as a wrapper over a default registry.
-   Existing registrations compile and behave identically.
-4. **Go 1.27 stays additive.** The methods that arrive then hang off this same
-   handle; the package-level functions remain as wrappers, exactly as the
-   README's table predicts.
+Four things follow from `*DB` being an `Executor`: no call site breaks, since
+every terminal already takes the interface (`rest.Resource` needed no change at
+all); hooks resolve from the executor through one unexported `hooksFor[T]`, so
+terminal signatures are untouched; `sqlb.On[T]()` keeps working as a wrapper over
+a default registry; and Go 1.27's methods stay additive, hanging off this same
+handle.
 
 `WithTx` commits on nil, rolls back on error, and rolls back and re-raises on
-panic. It requires the underlying executor to implement `Beginner` — asserted
-for, not required of `Executor`, so the two-method interface stays frozen and
-every existing wrapper stays valid.
+panic. It asserts the executor implements `Beginner` rather than requiring it of
+`Executor`, so the two-method interface stays frozen.
 
 **Nesting joins rather than nests.** `WithTx` on a handle already in a
 transaction runs the function on that transaction and leaves the commit to the
-outermost call. A function that opens a transaction therefore stays callable
-from inside one.
-
-**`TxFrom(ctx)` is how a hook joins the unit of work.** `WithTx` passes its
-function a context carrying the transaction handle, so a hook that needs to read
-uncommitted rows reads through it.
+outermost call, so a function that opens a transaction stays callable from inside
+one. **`TxFrom(ctx)` is how a hook joins the unit of work** — deliberately an
+explicit ask, not an implicit context read, which would make the connection a
+statement runs on invisible at the call site.
 
 ## Consequences
 
-**What this buys.** A multi-statement unit of work is one call with correct
-rollback semantics, including on panic. Hooks can be scoped to a handle, which
-makes test isolation a fresh `Registry` rather than a `Reset` in a teardown, and
-makes two sets of domain rules in one process expressible. A hook can tell it is
-inside a transaction and read what that transaction has written — the case that
-was previously not expressible at all. `AfterCommit` got an obvious home and was
-built on top of this: `WithTx` is the only code that knows a commit succeeded,
-so it holds the callback list and drains it once, after `Commit` returns nil.
+**Buys.** A multi-statement unit of work is one call with correct rollback
+semantics, including on panic. Hooks can be scoped to a handle, making test
+isolation a fresh `Registry` rather than a teardown `Reset`. A hook can tell it is
+inside a transaction and read what that transaction wrote — previously not
+expressible. `AfterCommit` got an obvious home: `WithTx` is the only code that
+knows a commit succeeded.
 
-**What this costs.** `sqlb.QueryIn[T](tx)` is not offered, so the executor is
-still threaded through terminal calls — `All(ctx, tx)` rather than
-`tx.Query[T]().All(ctx)`. That is the ergonomic half that genuinely does need
-1.27, and it is still ugly until then.
+**Costs.** `sqlb.QueryIn[T](tx)` is not offered, so the executor is still threaded
+through terminals — `All(ctx, tx)` rather than `tx.Query[T]().All(ctx)`. That is
+the ergonomic half that genuinely needs 1.27.
 
-`*DB` being an `Executor` means `New(New(x))` type-checks. It is harmless — the
-inner handle is just another executor — but it is a shape that admits a
-meaningless call.
-
-Hook resolution now depends on the *dynamic type* of the executor. Passing the
-raw `*sql.DB` where a `*DB` was intended silently uses the default registry
-rather than the scoped one. The compiler cannot catch it, because both satisfy
-`Executor`; that is the price of not breaking call sites.
-
-Nesting-joins means an inner failure rolls back the whole outer unit of work.
-That is the right default and it can still surprise someone who expected the
-inner block to be independent.
+Hook resolution depends on the executor's *dynamic type*: passing a raw `*sql.DB`
+where a `*DB` was intended silently uses the default registry. The compiler
+cannot catch it, because both satisfy `Executor` — the price of not breaking call
+sites. Nesting-joins also means an inner failure rolls back the whole outer unit
+of work.
 
 ## What would change our mind
 
-- **If someone needs partial rollback** — retrying one leg of a unit of work
-  without discarding the rest — savepoints become necessary and joining is no
-  longer sufficient. That is a real feature request, not a bug in this design,
-  and the seam for it is `WithTxOptions`.
-- **If the dynamic-type hook resolution bites** — someone passes a `*sql.DB`
-  where they meant a scoped `*DB` and gets the wrong registry without noticing
-  — the answer is to stop having terminals accept a bare `Executor` for models
-  whose hooks are scoped, which is a breaking change worth making only once it
-  has actually happened.
-- **If `Beginner` proves too narrow** — a driver that wants its own transaction
-  type rather than `*sql.Tx` cannot implement it. `pgx` through its stdlib
-  adapter does, which is the case that matters today.
-
-  **This has fired.** It is not a hypothetical driver: it is a caller who has
-  already opened a `pgx.Tx` and wants sqlb's writes inside it, which `Beginner`
-  cannot express and which the adoption reviews count 25 sites of.
-  [ADR-0040](0040-the-driver-is-a-dependency.md) is the answer, and it is a
-  larger one than this bullet anticipated — `Beginner` is redefined along with
-  `Executor` rather than widened, because the narrowness is the driver's and not
-  the interface's. Nothing else in this record moves: the handle stays
-  transaction-scoped and the registry scoping is orthogonal to what the
-  transaction type is.
-- **If nobody uses `WithHooks`** after a few months, the registry scoping is
-  complexity without a customer, and `Registry` should collapse back into the
-  global with only `TxFrom` retained.
+- Someone needs partial rollback — savepoints become necessary and joining is no
+  longer sufficient. The seam for it is `WithTxOptions`.
+- The dynamic-type hook resolution bites — then terminals should stop accepting a
+  bare `Executor` for models whose hooks are scoped, a breaking change worth
+  making only once it has actually happened.
+- **`Beginner` proves too narrow — this has fired.** Not a hypothetical driver: a
+  caller holding an already-open `pgx.Tx`, which the adoption reviews count 25
+  sites of. [ADR-0040](0040-the-driver-is-a-dependency.md) redefines `Beginner`
+  alongside `Executor` rather than widening it, because the narrowness is the
+  driver's. Nothing else here moves.
+- Nobody uses `WithHooks` after a few months — registry scoping is complexity
+  without a customer, and `Registry` should collapse back into the global with
+  only `TxFrom` retained.
 
 ## Cost of change
 
-Low in the additive direction and moderate in reverse. Adding savepoints,
-`AfterCommit`, or 1.27 methods are all additions to `DB` that break nothing.
-
-Removing the handle would mean deciding what happens to `TxFrom` — the hook
-capability it enables has no other home — so the reverse direction is not
-symmetric with the forward one.
-
-Removing `Registry` while keeping `DB` is cheap: `hooksFor` collapses to
-`On[T]()` and `WithHooks` goes away.
-
-## Alternatives considered
-
-**Wait for Go 1.27.** The status quo, and genuinely close — the end-state API is
-nicer and arrives without an intermediate step. It lost because the intermediate
-step is not a step: the handle built now *is* the object 1.27's methods hang
-off, so nothing is thrown away. Meanwhile three years of call sites would be
-written against a global registry.
-
-**`QueryIn[T](d *DB) *Builder[T]`**, as the review that prompted this suggested.
-Rejected as unnecessary once `*DB` satisfies `Executor` — it would add a second
-way to start every statement while the existing way already works, and the
-1.27 method form makes both obsolete.
-
-**Put the transaction in the context and read it implicitly**, so terminals pick
-it up without being passed it. Rejected: it makes which connection a statement
-runs on invisible at the call site, which is the same action-at-a-distance
-ADR-0008 already lists as the cost of global hooks. `TxFrom` deliberately makes
-the caller ask.
-
-**Savepoints for nesting.** Rejected for now, not on principle. Partial rollback
-changes what "the unit of work succeeded" means, and no caller needs it yet.
+Low additively — savepoints, `AfterCommit` and 1.27 methods all break nothing.
+Moderate in reverse: removing the handle means deciding what happens to `TxFrom`,
+which has no other home. Removing `Registry` while keeping `DB` is cheap.
 
 ## Revisions
 
 - 2026-07-27 — Written, closing finding 1 of
   [the adoption review](../review-adoption-readiness.md).
-- 2026-07-27 — `AfterCommit` built on top of the handle, closing finding 2.
-  Registering outside a transaction is refused rather than run immediately:
-  under autocommit sqlb does not own the commit, so the callback's timing would
-  depend on which hook happened to register it. `ErrAfterCommit` distinguishes
-  "committed, side effect failed" from "the unit of work failed", because the
-  two call for opposite responses. See [ADR-0012](0012-change-feed-outbox.md)
-  for why this is not the change feed.
-- 2026-07-30 — The `Beginner` trigger fired, and is recorded above.
-  [ADR-0040](0040-the-driver-is-a-dependency.md) is the answer: the case is not a
-  hypothetical driver but a caller holding a `pgx.Tx`, which the adoption reviews
-  count 25 sites of, and the fix is a redefinition of `Beginner` alongside
-  `Executor` rather than a widening. The transaction-scoped design this record
-  argues for is unaffected — what changes is the concrete type the handle wraps.
+- 2026-07-27 — `AfterCommit` built on the handle, closing finding 2. Registering
+  outside a transaction is refused, since under autocommit sqlb does not own the
+  commit. `ErrAfterCommit` distinguishes "committed, side effect failed" from
+  "the unit of work failed".
+- 2026-07-30 — The `Beginner` trigger fired; ADR-0040 is the answer. The
+  transaction-scoped design is unaffected — what changes is the concrete type the
+  handle wraps.
+- 2026-07-30 — Condensed.
