@@ -132,7 +132,7 @@ the section it bears on, and move on.
 | [0023](0023-mixins-carry-behaviour.md) | A mixin contributes columns; carrying behaviour needs codegen | Working | High |
 | [0024](0024-no-annotation-slot.md) | No annotation slot until something can consume one | Working | Medium |
 | [0025](0025-expansion-is-one-statement.md) | Expansion is one statement, and Hidden survives the join | Working | Medium |
-| [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation † | Exploring | Low |
+| [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation † | Exploring | Medium |
 | [0027](0027-keyset-pagination.md) | A page is a position, not a distance | Working | High |
 | [0028](0028-typescript-client.md) | The TypeScript client is generated from the model, and stops at the query key | Working | Medium |
 | [0029](0029-go-cli.md) | The CLI is generated too, and its help text is the type system | Working | Medium |
