@@ -9,10 +9,9 @@ import (
 )
 
 // An array column is a plain Go slice. `Tags []string` maps to `text[]`, and
-// scanning decodes the Postgres array literal into the slice — there is no
-// wrapper type to adopt and no driver-specific `pq.StringArray` in the model,
-// which matters because the model is also what a generated client is shaped
-// from.
+// pgx decodes it into the slice — there is no wrapper type to adopt and no
+// `pq.StringArray` in the model, which matters because the model is also what a
+// generated client is shaped from.
 func Example_arrayScansIntoASlice() {
 	post, err := sqlb.Query[recipes.Post]().First(context.Background(), recordingDB())
 	if err != nil {
@@ -40,9 +39,9 @@ func Example_arrayContainment() {
 	// WHERE $1 = ANY("tags")
 	// args: [go]
 	// WHERE "tags" && $1
-	// args: [{go,rust}]
+	// args: [[go rust]]
 	// WHERE "tags" @> $1
-	// args: [{go,postgres}]
+	// args: [[go postgres]]
 }
 
 // The empty cases follow from what the operators mean rather than from a
@@ -59,21 +58,29 @@ func Example_arrayEmptyValueSets() {
 	// WHERE true
 }
 
-// Writing an array is the same slice going the other way. Array encodes a Go
-// value as a Postgres array literal for the cases where the value is not
-// already a slice of the column's element type.
+// Writing an array is the same slice going the other way, and it reaches the
+// database as a slice: pgx encodes the array, so nothing here builds a `{a,b}`
+// literal and nothing has to escape a value containing a comma or a quote.
+//
+// That is one of the things taking pgx bought ([ADR-0040]). sqlb used to carry
+// its own array codec because the standard library has none.
+//
+// [ADR-0040]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0040-the-driver-is-a-dependency.md
 func Example_arrayWritten() {
 	show(sqlb.UpdateRows[recipes.Post]().
-		Set("tags", []string{"go", "postgres"}).
+		Set("tags", []string{"go", "a,b", `quote"d`}).
 		Where(sqlb.F("id").Eq("p1")))
-
-	literal, err := sqlb.EncodeArray([]string{"go", "a,b", `quote"d`})
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("encoded:", literal)
 	// Output:
 	// UPDATE "posts" SET "tags" = $1 WHERE "id" = $2 RETURNING "id", "org_id", "author_id", "title", "body", "status", "view_count", "tags", "metadata", "published_at", "deleted_at", "created_at"
-	// args: [{go,postgres} p1]
-	// encoded: {go,"a,b","quote\"d"}
+	// args: [[go a,b quote"d] p1]
+}
+
+// Array is the variadic spelling of that slice, for a comparand assembled from
+// loose values rather than held in one. It is nothing more than that: passing a
+// []string directly binds the same way.
+func Example_arrayAsAComparand() {
+	showWhere(sqlb.Query[recipes.Post]().Where(sqlb.F("tags").Eq(sqlb.Array("go", "sql"))))
+	// Output:
+	// WHERE "tags" = $1
+	// args: [[go sql]]
 }

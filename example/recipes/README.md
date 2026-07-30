@@ -81,7 +81,7 @@ Wiring
 
 Support, not a recipe: [`models.go`](models.go) holds the three models every
 file queries, and [`helpers_test.go`](helpers_test.go) holds the print helpers
-and the recording driver.
+and the recording executor.
 
 ## Adding one
 
@@ -100,4 +100,7 @@ the comment is still true.
 Most recipes need no database: compiling the statement is the honest way to show
 a query builder, and it is why this suite runs in under a second. Reach for
 `recordingDB` only when the thing being shown is execution itself — a hook fires
-on execution, and a transaction is not a statement.
+on execution, and a transaction is not a statement. Since [ADR-0040](../../docs/adr/0040-the-driver-is-a-dependency.md)
+an `Executor` is pgx-shaped, so the canned result set behind it comes from
+`internal/pgfake` rather than from a `database/sql` driver this package
+registers.

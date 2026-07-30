@@ -2,18 +2,17 @@ package recipes_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/filter"
+	"github.com/jryannel/sqlb/internal/pgfake"
 )
 
 // The support code the recipes share. Nothing here is part of sqlb's API;
@@ -24,7 +23,7 @@ import (
 // to demonstrate a query builder and the reason these examples need no
 // database. The few recipes that must *execute* something — hooks fire on
 // execution, and a transaction is not a statement — run against the recording
-// driver below.
+// executor below.
 
 // compiled is what Builder, Insert, Update and Delete all satisfy: something
 // that renders SQL text and bind parameters without running them.
@@ -66,30 +65,21 @@ func showWhere(c compiled) {
 	}
 }
 
-// formatArgs renders bind parameters the way the driver will receive them
-// rather than the way Go prints them. A value that knows how to encode itself
-// — an array parameter, which is a driver.Valuer — is asked to, and a byte
-// slice is shown as text, so a jsonb document reads as a document instead of as
-// a list of numbers.
+// formatArgs renders bind parameters as text rather than as Go values, so a
+// jsonb document reads as a document instead of as a list of byte numbers.
+// Everything else is already the value pgx will encode: since ADR-0040 an
+// array parameter is a plain slice rather than something pre-encoded.
 func formatArgs(args []any) string {
 	parts := make([]string, len(args))
 	for i, arg := range args {
-		v := arg
-		if valuer, ok := v.(driver.Valuer); ok {
-			encoded, err := valuer.Value()
-			if err != nil {
-				parts[i] = fmt.Sprintf("!%v", err)
-				continue
-			}
-			v = encoded
-		}
-		switch b := v.(type) {
+		switch v := arg.(type) {
 		case json.RawMessage:
-			v = string(b)
+			parts[i] = string(v)
 		case []byte:
-			v = string(b)
+			parts[i] = string(v)
+		default:
+			parts[i] = fmt.Sprint(v)
 		}
-		parts[i] = fmt.Sprint(v)
 	}
 	return "[" + strings.Join(parts, " ") + "]"
 }
@@ -159,31 +149,48 @@ func count(ss []string, want string) int {
 	return n
 }
 
+func showArgCount(args []any) {
+	if len(args) == 1 {
+		fmt.Println("1 bind parameter")
+		return
+	}
+	fmt.Printf("%d bind parameters\n", len(args))
+}
+
 // postColumns is the projection Query[Post] produces by default, in declaration
-// order. The recording driver replays a row this wide.
+// order. The recording executor replays a row this wide.
 var postColumns = []string{
 	"id", "org_id", "author_id", "title", "body", "status",
 	"view_count", "tags", "metadata", "published_at", "deleted_at", "created_at",
 }
 
-// postRow is one canned row matching postColumns. The values are driver types —
-// what a database/sql driver is allowed to hand back — so the scanner sees
-// exactly what Postgres would give it, including the array and the document as
-// their wire encodings.
-func postRow() []driver.Value {
-	return []driver.Value{
+// postRow is one canned row matching postColumns. The values are Go values
+// rather than wire encodings, which is what pgx hands a scanner: an array
+// column arrives as a slice and a document as its bytes, so neither needs
+// decoding on the way in.
+func postRow() []any {
+	published := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
+	return []any{
 		"p1", "acme", "a1", "Hello", "Body text", "published",
-		int64(12), []byte(`{go,sql}`), []byte(`{"lang":"en"}`),
-		time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC), nil,
+		int64(12), []string{"go", "sql"}, json.RawMessage(`{"lang":"en"}`),
+		&published, (*time.Time)(nil),
 		time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
 	}
 }
 
-// recordingDB opens a handle over the recording driver and clears the log. The
-// canned result is one Post; pass different columns for a query that projects
-// something else.
+// recordingDB returns a handle over the recording executor and clears the log.
+// The canned result is one Post; pass different columns for a query that
+// projects something else.
 func recordingDB() *sqlb.DB {
 	return recordingDBWith(postColumns, postRow())
+}
+
+func recordingDBWith(cols []string, rows ...[]any) *sqlb.DB {
+	log = nil
+	replay.cols = cols
+	replay.rows = rows
+	replay.err = nil
+	return sqlb.New(recordingExec{})
 }
 
 // failingDB is a handle whose every statement fails with err, for the recipes
@@ -194,19 +201,7 @@ func failingDB(err error) *sqlb.DB {
 	return db
 }
 
-func recordingDBWith(cols []string, rows ...[]driver.Value) *sqlb.DB {
-	log = nil
-	replay.cols = cols
-	replay.rows = rows
-	replay.err = nil
-	db, err := sql.Open(driverName, "")
-	if err != nil {
-		panic(err)
-	}
-	return sqlb.New(db)
-}
-
-// statements returns every statement the driver saw, including BEGIN and
+// statements returns every statement the executor saw, including BEGIN and
 // COMMIT. A recipe about transactions is a recipe about that sequence.
 func statements() []string { return log }
 
@@ -225,103 +220,54 @@ func lastWhere() string {
 	return predicate
 }
 
-// The recording driver. It is the smallest thing that can stand behind
-// sqlb.Executor: it records every statement and replays canned rows. No
-// Postgres, and no pretending to be one — a recipe that needs a real planner
-// says so and lives in pgtest instead.
-
-const driverName = "sqlb-recipes"
+// The recording executor. Since ADR-0040 an Executor is pgx-shaped, so a canned
+// result has to be a pgx.Rows — nine methods — and a transaction a pgx.Tx,
+// which is eleven. internal/pgfake owns that boilerplate so the packages
+// needing it cannot drift apart; what stays here is the policy: what a
+// statement answers, and what gets recorded.
 
 var (
 	log    []string
 	replay struct {
 		cols []string
-		rows [][]driver.Value
-		// err, when set, is what the driver returns instead of a result. It is
-		// how a recipe about a refused write gets one to be about.
+		rows [][]any
+		// err, when set, is what the executor returns instead of a result. It
+		// is how a recipe about a refused write gets one to be about.
 		err error
 	}
 )
 
-func init() { sql.Register(driverName, recordingDriver{}) }
+type recordingExec struct{}
 
-type recordingDriver struct{}
-
-func (recordingDriver) Open(string) (driver.Conn, error) { return recordingConn{}, nil }
-
-type recordingConn struct{}
-
-func (recordingConn) Close() error { return nil }
-
-func (recordingConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("recording driver: prepared statements are not used")
+func (recordingExec) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	log = append(log, sql)
+	if replay.err != nil {
+		return nil, replay.err
+	}
+	// A count is one column whatever the model is, so the canned projection
+	// would not fit it.
+	if strings.HasPrefix(sql, "SELECT count(") {
+		return &pgfake.Rows{Cols: []string{"count"}, Data: [][]any{{int64(len(replay.rows))}}}, nil
+	}
+	return &pgfake.Rows{Cols: replay.cols, Data: replay.rows}, nil
 }
 
-func (recordingConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("recording driver: use BeginTx")
+func (recordingExec) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	log = append(log, sql)
+	if replay.err != nil {
+		return pgconn.CommandTag{}, replay.err
+	}
+	return pgconn.NewCommandTag(fmt.Sprintf("DELETE %d", len(replay.rows))), nil
 }
 
-func (recordingConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+// BeginTx is what makes WithTx work through this executor. Beginner is asserted
+// for rather than required, so Executor stays two methods and a wrapper that
+// wants transactions to pass through implements this alongside them.
+func (e recordingExec) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	log = append(log, "BEGIN")
-	return recordingTx{}, nil
-}
-
-func (recordingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	log = append(log, query)
-	if replay.err != nil {
-		return nil, replay.err
-	}
-	// The result has to match the projection or database/sql rejects the scan
-	// before sqlb sees it. A count is one column whatever the model is.
-	if strings.HasPrefix(query, "SELECT count(") {
-		return &recordedRows{cols: []string{"count"}, rows: [][]driver.Value{{int64(len(replay.rows))}}}, nil
-	}
-	return &recordedRows{cols: replay.cols, rows: replay.rows}, nil
-}
-
-func (recordingConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	log = append(log, query)
-	if replay.err != nil {
-		return nil, replay.err
-	}
-	return driver.RowsAffected(1), nil
-}
-
-type recordingTx struct{}
-
-func (recordingTx) Commit() error {
-	log = append(log, "COMMIT")
-	return nil
-}
-
-func (recordingTx) Rollback() error {
-	log = append(log, "ROLLBACK")
-	return nil
-}
-
-type recordedRows struct {
-	cols []string
-	rows [][]driver.Value
-	n    int
-}
-
-func (r *recordedRows) Columns() []string { return r.cols }
-
-func (*recordedRows) Close() error { return nil }
-
-func (r *recordedRows) Next(dest []driver.Value) error {
-	if r.n >= len(r.rows) {
-		return io.EOF
-	}
-	copy(dest, r.rows[r.n])
-	r.n++
-	return nil
-}
-
-func showArgCount(args []any) {
-	if len(args) == 1 {
-		fmt.Println("1 bind parameter")
-		return
-	}
-	fmt.Printf("%d bind parameters\n", len(args))
+	return &pgfake.Tx{
+		Statements: e,
+		OnCommit:   func() error { log = append(log, "COMMIT"); return nil },
+		OnRollback: func() error { log = append(log, "ROLLBACK"); return nil },
+	}, nil
 }

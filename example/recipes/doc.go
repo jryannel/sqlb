@@ -11,8 +11,8 @@
 // recipe describing an API that changed fails the build rather than misleading
 // its next reader. Nothing here needs Docker or a database — the few recipes
 // that must execute a statement rather than compile one run against a
-// recording driver, for the reason [Builder.SQL] exists: the compiled text and
-// its bind parameters are the thing worth showing.
+// recording executor, for the reason [Builder.SQL] exists: the compiled text
+// and its bind parameters are the thing worth showing.
 //
 // # Finding one
 //
