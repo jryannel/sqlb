@@ -118,7 +118,7 @@ func TestAfterCommitIsDiscardedWhenTheUnitOfWorkFails(t *testing.T) {
 
 	// And neither half of the write survived.
 	var comments int
-	if err := db.QueryRow(`SELECT count(*) FROM comments`).Scan(&comments); err != nil {
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM comments`).Scan(&comments); err != nil {
 		t.Fatalf("counting comments: %v", err)
 	}
 	if comments != 0 {
@@ -126,7 +126,7 @@ func TestAfterCommitIsDiscardedWhenTheUnitOfWorkFails(t *testing.T) {
 	}
 
 	var count int32
-	if err := db.QueryRow(
+	if err := db.QueryRow(context.Background(),
 		`SELECT comment_count FROM tasks WHERE id = $1`, task).Scan(&count); err != nil {
 		t.Fatalf("reading comment_count: %v", err)
 	}

@@ -2,7 +2,6 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -108,7 +108,8 @@ func pooler(t *testing.T) (pooledDSN, directDSN string) {
 	name := databaseName(t)
 	mustExec(t, admin, `CREATE DATABASE `+quoteIdent(name))
 	t.Cleanup(func() {
-		_, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`)
+		_, _ = admin.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`)
 	})
 
 	return pooledDSNFor(name), dsn(name)
@@ -123,14 +124,14 @@ func pooler(t *testing.T) (pooledDSN, directDSN string) {
 func TestTheQueryPathWorksThroughThePooler(t *testing.T) {
 	pooledDSN, directDSN := pooler(t)
 
-	direct, err := sql.Open("pgx", directDSN)
+	direct, err := pgxpool.New(context.Background(), directDSN)
 	if err != nil {
 		t.Fatalf("open direct: %v", err)
 	}
 	defer direct.Close()
 	mustExec(t, direct, `CREATE TABLE items (id int primary key, name text not null)`)
 
-	through, err := sql.Open("pgx", pooledDSN)
+	through, err := pgxpool.New(context.Background(), pooledDSN)
 	if err != nil {
 		t.Fatalf("open pooled: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestTheQueryPathWorksThroughThePooler(t *testing.T) {
 	// failure is a cached prepared statement reused on a server connection that
 	// never saw it, which needs several round trips through the pool to appear.
 	for i := range 25 {
-		if _, err := through.Exec(
+		if _, err := through.Exec(context.Background(),
 			`INSERT INTO items (id, name) VALUES ($1, $2)`, i, fmt.Sprintf("item-%d", i),
 		); err != nil {
 			t.Fatalf("insert %d through the pooler: %v\n\n"+
@@ -151,7 +152,8 @@ func TestTheQueryPathWorksThroughThePooler(t *testing.T) {
 	}
 
 	var count int
-	if err := through.QueryRow(`SELECT count(*) FROM items WHERE id >= $1`, 0).Scan(&count); err != nil {
+	if err := through.QueryRow(context.Background(),
+		`SELECT count(*) FROM items WHERE id >= $1`, 0).Scan(&count); err != nil {
 		t.Fatalf("select through the pooler: %v", err)
 	}
 	if count != 25 {
@@ -233,7 +235,7 @@ func TestListenNeedsADirectConnection(t *testing.T) {
 
 	notify := func(t *testing.T) {
 		t.Helper()
-		db, err := sql.Open("pgx", directDSN)
+		db, err := pgxpool.New(context.Background(), directDSN)
 		if err != nil {
 			t.Fatalf("open notifier: %v", err)
 		}
@@ -315,20 +317,20 @@ func TestNotifyWorksThroughThePooler(t *testing.T) {
 	}
 
 	// Notify through the pooler, inside a transaction, as a mutation would.
-	through, err := sql.Open("pgx", pooledDSN)
+	through, err := pgxpool.New(ctx, pooledDSN)
 	if err != nil {
 		t.Fatalf("open pooled: %v", err)
 	}
 	defer through.Close()
 
-	tx, err := through.Begin()
+	tx, err := through.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin through the pooler: %v", err)
 	}
-	if _, err := tx.Exec(`SELECT pg_notify('outbox', 'ping')`); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_notify('outbox', 'ping')`); err != nil {
 		t.Fatalf("pg_notify through the pooler: %v", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit through the pooler: %v", err)
 	}
 

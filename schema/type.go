@@ -34,6 +34,11 @@ const (
 	TypeJSON      Type = "jsonb"
 	TypeBytes     Type = "bytea"
 	TypeEnum      Type = "enum"
+	// TypeVector is a pgvector embedding. Unlike every other type here it
+	// carries a parameter that is part of the type rather than a constraint on
+	// it — a vector(768) and a vector(1536) are different types to Postgres,
+	// and the dimension is FieldDesc.Dim (ADR-0026).
+	TypeVector Type = "vector"
 )
 
 // GoType returns the Go type that codegen emits for a non-null column of this
@@ -56,6 +61,8 @@ func (t Type) GoType() string {
 		return "json.RawMessage"
 	case TypeBytes:
 		return "[]byte"
+	case TypeVector:
+		return "sqlb.Vector"
 	}
 	return "any"
 }

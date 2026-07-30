@@ -1,14 +1,15 @@
 package withsqlc_test
 
 import (
-	"database/sql"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/withsqlc/sqlcgen"
 	"github.com/jryannel/sqlb/filter"
+	"github.com/jryannel/sqlb/internal/pgfake"
 )
 
 // The load-bearing claim: stock sqlc output carries no db tags, and sqlb maps
@@ -49,7 +50,8 @@ func TestDescribeMapsStockSqlcStructs(t *testing.T) {
 		}
 	}
 
-	// sql.NullTime is a Scanner/Valuer, so a nullable column needs no special
+	// pgtype.Timestamptz is what sqlc emits for a nullable timestamp under
+	// pgx, and it is a Scanner/Valuer, so a nullable column needs no special
 	// handling on the sqlb side.
 	if col := m.Column("published_at"); col == nil {
 		t.Error("published_at was not mapped")
@@ -105,29 +107,32 @@ func TestFilteredListOverSqlcStructs(t *testing.T) {
 	}
 }
 
-// docs/with-sqlc.md claims one transaction can carry both sides. The two
-// interfaces are not the same — Executor is two methods, DBTX is four — so the
-// claim rests on *sql.Tx satisfying both and on DB.Tx reaching it. Asserting it
-// here means the document cannot drift from what compiles.
+// docs/with-sqlc.md claims one transaction can carry both sides, and since
+// ADR-0040 that claim is about one interface rather than two that happen to
+// share a receiver: sqlb.Executor is a subset of DBTX, and a pgx.Tx is both.
+// Asserting it here means the document cannot drift from what compiles.
 func TestOneTransactionCarriesBothSides(t *testing.T) {
-	var tx *sql.Tx
+	var tx pgx.Tx
 
 	var _ sqlb.Executor = tx
 	var _ sqlcgen.DBTX = tx
 
 	// And the route from a sqlb handle back to it, which is what makes WithTx
 	// usable rather than forcing callers to manage the boundary themselves.
-	handle := sqlb.New(tx)
+	handle := sqlb.New(&pgfake.Tx{})
 	if _, ok := handle.Tx(); !ok {
-		t.Error("DB.Tx did not reach the *sql.Tx it was built over")
+		t.Error("DB.Tx did not reach the pgx.Tx it was built over")
 	}
 
 	// A pool is not a transaction, and must not claim to be one.
-	var pool *sql.DB
-	if _, ok := sqlb.New(pool).Tx(); ok {
+	if _, ok := sqlb.New(notATx{}).Tx(); ok {
 		t.Error("DB.Tx returned a transaction for a pool")
 	}
 }
+
+// notATx is an Executor that is not a transaction, which is what a pool is from
+// sqlb's side of the interface.
+type notATx struct{ sqlb.Executor }
 
 // An undeclared capability is still refused, over sqlc structs as over
 // generated ones. The guard has to hold on this path too, or adoption would be

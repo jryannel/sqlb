@@ -36,14 +36,22 @@ package shadow
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/introspect"
 	"github.com/jryannel/sqlb/migrate"
 	"github.com/jryannel/sqlb/schema"
 )
+
+// DB is what a replay needs: statements, and a transaction to group each file's
+// statements in. *pgxpool.Pool and *pgx.Conn both satisfy it.
+type DB interface {
+	sqlb.Executor
+	sqlb.Beginner
+}
 
 // Options configures a replay.
 type Options struct {
@@ -85,7 +93,7 @@ type Result struct {
 // The introspect.Report is the same one introspect.Registry returns: a
 // non-empty one means the replayed schema uses constructs the DSL cannot
 // express, so the registry does not describe it completely.
-func Build(ctx context.Context, db *sql.DB, opts Options) (*schema.Registry, *introspect.Report, *Result, error) {
+func Build(ctx context.Context, db DB, opts Options) (*schema.Registry, *introspect.Report, *Result, error) {
 	if db == nil {
 		return nil, nil, nil, fmt.Errorf("shadow: Build needs a database connection")
 	}
@@ -136,28 +144,28 @@ func Build(ctx context.Context, db *sql.DB, opts Options) (*schema.Registry, *in
 // In a transaction unless the file said not to, which mirrors what a runner
 // does and is what makes a failure leave the shadow database at a file
 // boundary rather than halfway through one.
-func apply(ctx context.Context, db *sql.DB, f file) error {
+func apply(ctx context.Context, db DB, f file) error {
 	if f.NoTransaction {
 		for i, stmt := range f.Statements {
-			if _, err := db.ExecContext(ctx, stmt); err != nil {
+			if _, err := db.Exec(ctx, stmt); err != nil {
 				return statementError(f, i, stmt, err)
 			}
 		}
 		return nil
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("shadow: %s: beginning a transaction: %w", f.Name, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	for i, stmt := range f.Statements {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
 			return statementError(f, i, stmt, err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("shadow: %s: committing: %w", f.Name, err)
 	}
 	return nil
@@ -169,12 +177,12 @@ func statementError(f file, i int, stmt string, err error) error {
 }
 
 // requireEmpty refuses a database that already has tables in it.
-func requireEmpty(ctx context.Context, db *sql.DB, schemaName string) error {
+func requireEmpty(ctx context.Context, db DB, schemaName string) error {
 	if schemaName == "" {
 		schemaName = "public"
 	}
 
-	rows, err := db.QueryContext(ctx, `
+	rows, err := db.Query(ctx, `
 		SELECT c.relname
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace

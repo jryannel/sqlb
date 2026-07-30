@@ -272,14 +272,16 @@ func (f Field) NotOneOf(values ...any) Pred {
 // it by column type would put an ambiguity into the one vocabulary whose whole
 // purpose is that there is none (ADR-0033).
 
-// Array wraps a value list so that it binds as one Postgres array parameter
-// rather than as a list of them. It is what an array-valued comparand needs:
+// Array gathers a value list into one Postgres array parameter rather than a
+// list of them. It is what an array-valued comparand needs:
 //
 //	q.Where(sqlb.F("tags").Eq(sqlb.Array("go", "sql")))
 //
-// The elements are encoded by their Go types, so a []string, a []int64 or a
-// mixed list of already-coerced values all work.
-func Array(values ...any) any { return arrayParam{v: values} }
+// The elements are encoded by their Go types against the column's element type,
+// so a []string, a []int64 or a mixed list of already-coerced values all work.
+// It is a variadic spelling of the slice and nothing more — passing a []string
+// directly binds the same way (ADR-0040).
+func Array(values ...any) any { return values }
 
 // Has matches rows whose array column contains the element. The operand is a
 // single value, not an array: `$1 = ANY(tags)`.

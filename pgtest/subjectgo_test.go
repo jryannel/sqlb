@@ -18,13 +18,14 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 )
 
@@ -265,9 +266,9 @@ func TestBulkInsertIsRefusedInTermsOfParametersRatherThanRows(t *testing.T) {
 // statement, and the write has no builder form.
 //
 // The read side is sqlb's — ForUpdate over the siblings, in the order the user
-// sees them — and so is the array encoding. The statement between them is
-// hand-written, because Update.Set writes one value to every matched row and
-// there is no `UpdateFrom`. The cost of writing it row by row is not only N
+// sees them — and the arrays are two ordinary bind parameters. The statement
+// between them is hand-written, because Update.Set writes one value to every
+// matched row and there is no `UpdateFrom`. The cost of writing it row by row is not only N
 // round trips: it is N round trips *while holding the lock the SELECT took*.
 func TestABulkRepositionIsOneStatementUnderOneLock(t *testing.T) {
 	ctx := context.Background()
@@ -277,11 +278,11 @@ func TestABulkRepositionIsOneStatementUnderOneLock(t *testing.T) {
 
 	seedSubjectTasks(t, raw, "acme", "p1", 5)
 
-	tx, err := raw.BeginTx(ctx, nil)
+	tx, err := raw.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Read the siblings in the order the user is dragging inside, and hold
 	// them. This is the half sqlb writes today.
@@ -305,33 +306,22 @@ func TestABulkRepositionIsOneStatementUnderOneLock(t *testing.T) {
 		ids[i] = s.ID
 		positions[i] = fmt.Sprintf("a%d", len(siblings)-1-i)
 	}
-	encodedIDs, err := sqlb.EncodeArray(ids)
-	if err != nil {
-		t.Fatalf("EncodeArray(ids): %v", err)
-	}
-	encodedPositions, err := sqlb.EncodeArray(positions)
-	if err != nil {
-		t.Fatalf("EncodeArray(positions): %v", err)
-	}
-
 	// The half that is hand-written. One statement, two binds, any number of
-	// rows — which is what `sqlb.UpdateFrom[T]` would render.
-	res, err := tx.ExecContext(ctx, `
+	// rows — which is what `sqlb.UpdateFrom[T]` would render. The slices go
+	// over as text[] with nothing in between: under database/sql this needed
+	// sqlb.EncodeArray, and ADR-0040 removed both the need and the function.
+	res, err := tx.Exec(ctx, `
 		UPDATE tasks SET position = u.position
 		FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS position) u
 		WHERE tasks.id = u.id AND tasks.org_id = $3`,
-		encodedIDs, encodedPositions, "acme")
+		ids, positions, "acme")
 	if err != nil {
 		t.Fatalf("the reposition: %v", err)
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		t.Fatalf("RowsAffected: %v", err)
-	}
-	if affected != int64(len(siblings)) {
+	if affected := res.RowsAffected(); affected != int64(len(siblings)) {
 		t.Fatalf("one statement moved %d rows, want %d", affected, len(siblings))
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
@@ -396,7 +386,7 @@ func TestAReorderUnderACursorCanRepeatARow(t *testing.T) {
 	// Somebody drags the first task to the end. It is behind the client's
 	// boundary and it is now ahead of it.
 	moved := first[0]
-	if _, err := raw.ExecContext(ctx,
+	if _, err := raw.Exec(ctx,
 		`UPDATE tasks SET position = 'z9' WHERE id = $1`, moved.ID); err != nil {
 		t.Fatalf("the reorder: %v", err)
 	}
@@ -439,7 +429,7 @@ func TestAReorderUnderACursorCanRepeatARow(t *testing.T) {
 	if skipped.ID == "" {
 		t.Fatal("the second page holds nothing but the row the first reorder moved")
 	}
-	if _, err := raw.ExecContext(ctx,
+	if _, err := raw.Exec(ctx,
 		`UPDATE tasks SET position = 'a0' WHERE id = $1`, skipped.ID); err != nil {
 		t.Fatalf("the second reorder: %v", err)
 	}
@@ -549,7 +539,7 @@ func TestAJSONKeyFilterReachesPostgresAsData(t *testing.T) {
 		if err != nil {
 			t.Fatalf("building the values object: %v", err)
 		}
-		if _, err := raw.ExecContext(ctx,
+		if _, err := raw.Exec(ctx,
 			`INSERT INTO submissions (id, org_id, form_id, custom_field_values)
 			 VALUES ($1, 'acme', 'f1', $2::jsonb)`,
 			fmt.Sprintf("s%d", i), values); err != nil {
@@ -587,7 +577,7 @@ func TestAJSONKeyFilterReachesPostgresAsData(t *testing.T) {
 	// And the table is still there, which is the crude version of the same
 	// assertion and the one a reader believes without reading the args.
 	var n int
-	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM submissions`).Scan(&n); err != nil {
+	if err := raw.QueryRow(ctx, `SELECT count(*) FROM submissions`).Scan(&n); err != nil {
 		t.Fatalf("counting submissions: %v", err)
 	}
 	if n != len(hostile)+1 {
@@ -606,7 +596,7 @@ func oneKeyJSON(key string, value int) (string, error) {
 	return string(b), nil
 }
 
-func createSubjectEvents(t *testing.T, db *sql.DB) {
+func createSubjectEvents(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 	mustExec(t, db, `
 		CREATE TABLE analytics_events (
@@ -621,12 +611,12 @@ func createSubjectEvents(t *testing.T, db *sql.DB) {
 
 // seedSubjectEvents writes pageviews and clicks for one page of one org, each from a
 // distinct user so that the distinct count differs from the total.
-func seedSubjectEvents(t *testing.T, db *sql.DB, org, page string, pageviews, clicks int) {
+func seedSubjectEvents(t *testing.T, db *pgxpool.Pool, org, page string, pageviews, clicks int) {
 	t.Helper()
 	write := func(kind string, n int) {
 		for i := range n {
 			id := fmt.Sprintf("%s-%s-%s-%d", org, strings.TrimPrefix(page, "/"), kind, i)
-			if _, err := db.Exec(
+			if _, err := db.Exec(context.Background(),
 				`INSERT INTO analytics_events (id, org_id, page_url, event_type, user_id, duration_ms)
 				 VALUES ($1, $2, $3, $4, $5, $6)`,
 				id, org, page, kind, fmt.Sprintf("u%d", i), 100+i,
@@ -639,7 +629,7 @@ func seedSubjectEvents(t *testing.T, db *sql.DB, org, page string, pageviews, cl
 	write("click", clicks)
 }
 
-func createSubjectTasks(t *testing.T, db *sql.DB) {
+func createSubjectTasks(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 	mustExec(t, db, `
 		CREATE TABLE tasks (
@@ -654,10 +644,10 @@ func createSubjectTasks(t *testing.T, db *sql.DB) {
 
 // seedSubjectTasks writes n tasks whose positions sort in insertion order, which is
 // what a list looks like before anybody has dragged anything.
-func seedSubjectTasks(t *testing.T, db *sql.DB, org, project string, n int) {
+func seedSubjectTasks(t *testing.T, db *pgxpool.Pool, org, project string, n int) {
 	t.Helper()
 	for i := range n {
-		if _, err := db.Exec(
+		if _, err := db.Exec(context.Background(),
 			`INSERT INTO tasks (id, org_id, project_id, title, position, created_at)
 			 VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6))`,
 			fmt.Sprintf("t%02d", i), org, project, fmt.Sprintf("Task %02d", i),

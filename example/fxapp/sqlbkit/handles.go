@@ -1,11 +1,11 @@
 package sqlbkit
 
 import (
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"sort"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 
 	"github.com/jryannel/sqlb/example/fxapp/dbbase"
@@ -47,12 +47,12 @@ type HookSet struct {
 // The Migrated parameter is not used. It is here because this handle is how
 // the boot-time provisioning reaches the database, and a query against a table
 // that does not exist yet is the failure it rules out.
-func NewUnscoped(db *sql.DB, _ dbbase.Migrated) *sqlb.DB {
+func NewUnscoped(pool *pgxpool.Pool, _ dbbase.Migrated) *sqlb.DB {
 	// WithHooks on a fresh registry rather than sqlb.New alone: New resolves
 	// against the process-wide default registry, which nothing in this
 	// application registers into but a library in some future dependency
 	// might. An empty registry says "no rules apply here" out loud.
-	return sqlb.New(db).WithHooks(sqlb.NewRegistry())
+	return sqlb.New(pool).WithHooks(sqlb.NewRegistry())
 }
 
 // NewScoped is the handle everything else uses: the same connection, with

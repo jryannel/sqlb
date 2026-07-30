@@ -74,8 +74,13 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   `--help` states what a resource accepts without a request — which is the form
   the guarantee has to take for a caller with no compile step, such as an agent
   ([guide](https://jryannel.github.io/sqlb/cli/)).
-- **No dependencies to inherit.** The engine depends on the standard library
-  alone, and a CI gate enforces it. Only the REST adapter pulls in
+- **One dependency, and it is the one you already have.** The engine is written
+  on [pgx](https://github.com/jackc/pgx) and takes nothing else; a CI gate fails
+  on anything that is not pgx or something pgx itself pulls in. That is a
+  deliberate reversal — sqlb used to depend on the standard library alone, and
+  [ADR-0040](docs/adr/0040-the-driver-is-a-dependency.md) says what it bought:
+  sqlb writes join a `pgx.Tx` your own code opened, arrays need no codec, and
+  pgvector's binary format is reachable. Only the REST adapter pulls in
   [Huma](https://huma.rocks), and only if you use it. The generated TypeScript,
   the generated Dart and the generated CLI are separate toolchains and separate
   opt-ins; the emitters produce text, so `codegen` itself takes nothing.
@@ -152,6 +157,7 @@ server over the manifest.
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
 | [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
 | [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx: hooks arriving through a value group, and a resource that refuses to mount without them |
+| [`example/computed`](example/computed/) | Four ways to get a derived value out of Postgres — generated columns, trigger counters, projected expressions, views — and where sqlb's ceiling is today ([ADR-0041](docs/adr/0041-computed-fields.md)) |
 
 ## Development
 
@@ -163,9 +169,9 @@ mise tasks       # everything else
 
 Tool versions are pinned in `mise.toml`, so a green run locally and a green run
 in CI use the same Go and the same linter. The engine's tests run against an
-in-memory `database/sql` driver, which keeps the inner loop fast; `test-pg`
-answers what that cannot — whether the generated SQL is *valid* rather than
-merely expected — and is part of `ci`.
+in-memory executor rather than a database, which keeps the inner loop fast;
+`test-pg` answers what that cannot — whether the generated SQL is *valid* rather
+than merely expected — and is part of `ci`.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has what a change is expected to carry, and
 where to argue with a decision record rather than around it.

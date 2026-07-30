@@ -53,7 +53,7 @@ Almost everything else follows from those two.
 | `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`. | stdlib only |
 | `filter` | URL grammar → predicates, validated against model capabilities. | `sqlb` |
 | `migrate` | Diffs two schemas into changes, renders them as Postgres DDL, and writes migration files for goose, golang-migrate or plain SQL. Does not apply them. | `schema` |
-| `introspect` | Reads `pg_catalog` back into a `*schema.Registry`, and reports every construct the DSL cannot express. Design-time; connects through `*sql.DB`, so the driver is the caller's. | `schema`, stdlib |
+| `introspect` | Reads `pg_catalog` back into a `*schema.Registry`, and reports every construct the DSL cannot express. Design-time; connects through a `sqlb.Executor`, so the handle is the caller's. | `schema`, `sqlb` |
 | `codegen` | Generates models, the typed column facade, the REST request bodies, the manifest, the TypeScript and Dart clients, and the cobra CLI. `Check` is the dry-run mode wired into CI. | `schema` |
 | `rest` | Mounts a model on a Huma API: handlers, and an OpenAPI operation built from the model's capabilities. | `sqlb`, `filter`, huma |
 | `shadow` | Replays a checked-in migration history into an empty database, so the current side of a diff can come from the history rather than from a live schema. Design-time. | `schema`, `migrate` |
@@ -82,20 +82,24 @@ separation is what keeps `migrate` a pure function over two data structures, and
 it is why the two can be checked against each other: render a schema, apply it,
 read it back, and the diff between what went in and what came out must be empty.
 
-`sqlb` has no third-party dependencies, and neither does anything else on the
+`sqlb` depends on pgx and nothing else, and neither does anything else on the
 request path. `rest` is the single exception: it depends on huma, and nothing
-depends on `rest`, so importing the engine still costs nothing. `mise run
-deps-check` proves this per package rather than per module, and ends by checking
-that it can still see huma in `rest` — a guard that cannot fail is worse than no
-guard ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+depends on `rest`. `mise run deps-check` proves this per package rather than per
+module — the allowed set is computed from what pgx itself pulls in, so it cannot
+go stale — and it ends by checking that it can still see huma in `rest` and that
+it still *refuses* huma everywhere else. A guard that cannot fail is worse than
+no guard ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
 
-`Executor` is the two-method subset of `*sql.DB` that the engine needs, so pgx
-works through its stdlib adapter and any instrumenting wrapper works unchanged.
-`sqlb.DB` is a handle over one, adding `WithTx` and a scoped hook registry; it
-satisfies `Executor` itself, which is what lets it be adopted without touching
-call sites ([ADR-0020](adr/0020-transaction-scoped-handle.md)). `DB.Tx` reaches
-the underlying `*sql.Tx`, which is how a unit of work is shared with a library
-wanting more than two methods — sqlc's generated `DBTX` wants four.
+`Executor` is the two-method subset of pgx that the engine needs — `Query` and
+`Exec` — so a `*pgxpool.Pool`, a `*pgx.Conn` and any instrumenting wrapper all
+work unchanged. So does a `pgx.Tx`, which is the point of taking pgx at all:
+sqlb writes join a transaction the application opened
+([ADR-0040](adr/0040-the-driver-is-a-dependency.md)). `sqlb.DB` is a handle over
+an `Executor`, adding `WithTx` and a scoped hook registry; it satisfies
+`Executor` itself, which is what lets it be adopted without touching call sites
+([ADR-0020](adr/0020-transaction-scoped-handle.md)). `DB.Tx` reaches the
+underlying `pgx.Tx`, which is how a unit of work is shared with code wanting
+more than two methods — `CopyFrom`, `SendBatch`, or sqlc's generated `DBTX`.
 `rest` takes a `huma.API`, not a router, so the choice of chi, gin, echo or
 `net/http` — and all of that router's middleware — stays the application's. It
 wraps each generated write in a transaction, which is what gives a hook a commit
@@ -236,10 +240,16 @@ match the projection.
 
 ## Testing
 
-The engine's tests run against an in-memory `database/sql` driver that records
-statements and replays canned rows, so hooks, scanning and the mutation paths
-are covered end to end without a live Postgres. SQL-string assertions cover the
-compiler.
+The engine's tests run against an in-memory `Executor` that records statements
+and replays canned rows, so hooks, scanning and the mutation paths are covered
+end to end without a live Postgres. The pgx shapes that stands on —
+`pgx.Rows` and `pgx.Tx` — are in `internal/pgfake`, written once and used by
+every test package that needs them. SQL-string assertions cover the compiler.
+
+What a fake cannot cover, `pgtest` does, and the driver flip made that split
+sharper rather than softer: both bugs ADR-0040's port introduced were cases
+where pgx hands back exactly what Postgres sent, and neither was reachable from
+a canned result set.
 
 The typed facade is checked by attempting to compile the cases that should fail
 and confirming they do — a test that passes vacuously if the facade stops

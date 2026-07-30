@@ -26,12 +26,12 @@ package migrations_test
 
 import (
 	"context"
-	"database/sql"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb/migrate"
 	"github.com/jryannel/sqlb/schema"
 	"github.com/jryannel/sqlb/shadow"
@@ -68,7 +68,7 @@ func TestATriggerIsInvisibleToTheDiff(t *testing.T) {
 	// that has no triggers in it, which is the failure mode a test like this
 	// is most likely to rot into.
 	installed := map[string]bool{}
-	rows, err := db.QueryContext(ctx, `
+	rows, err := db.Query(ctx, `
 		SELECT tgname FROM pg_trigger WHERE NOT tgisinternal`)
 	if err != nil {
 		t.Fatalf("listing triggers: %v", err)
@@ -158,7 +158,7 @@ func TestTheDatabaseOverrulesAValueGoWrote(t *testing.T) {
 	stale := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	var id string
 	var written time.Time
-	if err := db.QueryRowContext(ctx, `
+	if err := db.QueryRow(ctx, `
 		INSERT INTO workspaces (name, slug, updated_at) VALUES ('Acme', 'acme', $1)
 		RETURNING id, updated_at`, stale).Scan(&id, &written); err != nil {
 		t.Fatalf("inserting a workspace: %v", err)
@@ -171,13 +171,13 @@ func TestTheDatabaseOverrulesAValueGoWrote(t *testing.T) {
 
 	// A write that names one column. The row a caller is holding now has two
 	// wrong fields in it, and only one of them was mentioned.
-	if _, err := db.ExecContext(ctx,
+	if _, err := db.Exec(ctx,
 		`UPDATE workspaces SET name = 'Acme Inc' WHERE id = $1`, id); err != nil {
 		t.Fatalf("updating the workspace: %v", err)
 	}
 
 	var after time.Time
-	if err := db.QueryRowContext(ctx,
+	if err := db.QueryRow(ctx,
 		`SELECT updated_at FROM workspaces WHERE id = $1`, id).Scan(&after); err != nil {
 		t.Fatalf("re-reading the workspace: %v", err)
 	}
@@ -214,10 +214,11 @@ func assertNoTriggerStatements(t *testing.T, what string, changes []migrate.Chan
 // drift_test.go opens the container's own database and replays into it once.
 // Every test here needs an empty one of its own, because a replay is only
 // meaningful against a database with nothing in it.
-func freshDatabase(t *testing.T, name string) *sql.DB {
+func freshDatabase(t *testing.T, name string) *pgxpool.Pool {
 	t.Helper()
+	ctx := context.Background()
 
-	admin, err := sql.Open("pgx", dsn)
+	admin, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("opening the container's database: %v", err)
 	}
@@ -225,10 +226,10 @@ func freshDatabase(t *testing.T, name string) *sql.DB {
 
 	// Dropped first so a crashed run leaves nothing that makes the next one
 	// fail with "already exists" instead of with its real problem.
-	if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`); err != nil {
+	if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`); err != nil {
 		t.Fatalf("dropping %s: %v", name, err)
 	}
-	if _, err := admin.Exec(`CREATE DATABASE ` + quoteIdent(name)); err != nil {
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+quoteIdent(name)); err != nil {
 		t.Fatalf("creating %s: %v", name, err)
 	}
 
@@ -238,20 +239,21 @@ func freshDatabase(t *testing.T, name string) *sql.DB {
 	}
 	u.Path = "/" + name
 
-	db, err := sql.Open("pgx", u.String())
+	pool, err := pgxpool.New(ctx, u.String())
 	if err != nil {
 		t.Fatalf("opening %s: %v", name, err)
 	}
 	t.Cleanup(func() {
-		db.Close()
-		cleanup, err := sql.Open("pgx", dsn)
+		pool.Close()
+		cleanup, err := pgxpool.New(context.Background(), dsn)
 		if err != nil {
 			return
 		}
 		defer cleanup.Close()
-		_, _ = cleanup.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`)
+		_, _ = cleanup.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`)
 	})
-	return db
+	return pool
 }
 
 func quoteIdent(s string) string {

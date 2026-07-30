@@ -2,15 +2,15 @@ package rest_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jryannel/sqlb/internal/pgfake"
 )
 
 // The models under test mirror what codegen emits: db tags for column names,
@@ -106,22 +106,24 @@ func (Archived) TableName() string { return "archived" }
 type reply struct {
 	match string
 	cols  []string
-	rows  [][]driver.Value
+	rows  [][]any
 	err   error
-	// rowsErr is reported after the rows, standing in for a driver that raises
-	// a statement's failure while the result is being read rather than when it
-	// is sent. pgx does this on the extended protocol, so a check that only
-	// looks at what QueryContext returned would classify a constraint
-	// violation under one driver and not under another.
+	// rowsErr is reported after the rows, standing in for a statement that
+	// fails while its result is being read rather than when it is sent. pgx
+	// does this on the extended protocol, so a check that only looked at what
+	// Query returned would miss a constraint violation entirely.
 	rowsErr error
 }
 
 // fakeDB is a database that answers from a script. Each reply matches the first
 // statement containing its substring, so a test can distinguish the page query
 // from the count query without a real database.
+//
+// It is the Executor itself — db points back at it — because ADR-0040 made pgx
+// the contract and there is no driver to register any more.
 type fakeDB struct {
 	t  *testing.T
-	db *sql.DB
+	db *fakeDB
 
 	mu      sync.Mutex
 	replies []reply
@@ -131,39 +133,19 @@ type fakeDB struct {
 	args [][]any
 }
 
-var fakeSeq struct {
-	sync.Mutex
-	n int
-}
-
 func newFakeDB(t *testing.T, replies ...reply) *fakeDB {
 	t.Helper()
-	fakeSeq.Lock()
-	fakeSeq.n++
-	name := fmt.Sprintf("resttest%d", fakeSeq.n)
-	fakeSeq.Unlock()
-
 	f := &fakeDB{t: t, replies: replies}
-	sql.Register(name, &fakeDriver{f: f})
-	db, err := sql.Open(name, "")
-	if err != nil {
-		t.Fatalf("opening the fake driver: %v", err)
-	}
-	f.db = db
-	t.Cleanup(func() { _ = db.Close() })
+	f.db = f
 	return f
 }
 
 // answer picks the reply for a statement, recording the statement either way.
-func (f *fakeDB) answer(query string, args []driver.NamedValue) (reply, bool) {
+func (f *fakeDB) answer(query string, args []any) (reply, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log = append(f.log, query)
-	values := make([]any, 0, len(args))
-	for _, a := range args {
-		values = append(values, a.Value)
-	}
-	f.args = append(f.args, values)
+	f.args = append(f.args, args)
 	for _, r := range f.replies {
 		if r.match == "" || strings.Contains(query, r.match) {
 			return r, true
@@ -226,91 +208,48 @@ func (f *fakeDB) lastRealLocked() int {
 	return -1
 }
 
-type fakeDriver struct{ f *fakeDB }
-
-func (d *fakeDriver) Open(string) (driver.Conn, error) { return &fakeConn{f: d.f}, nil }
-
-type fakeConn struct{ f *fakeDB }
-
-func (c *fakeConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("fake driver: prepared statements are not used")
-}
-func (c *fakeConn) Close() error { return nil }
-
 // Generated writes run in a transaction by default, so the fake has to be able
 // to open one. BEGIN, COMMIT and ROLLBACK go into the same statement log as
 // everything else, which is what lets a test assert that a write was wrapped —
 // and, for a failing write, that it rolled back rather than committing.
-func (c *fakeConn) Begin() (driver.Tx, error) {
-	c.f.record("BEGIN")
-	return &fakeTx{f: c.f}, nil
+func (f *fakeDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+	f.record("BEGIN")
+	return &pgfake.Tx{
+		Statements: f,
+		OnCommit:   func() error { f.record("COMMIT"); return nil },
+		OnRollback: func() error { f.record("ROLLBACK"); return nil },
+	}, nil
 }
 
-func (c *fakeConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return c.Begin()
-}
-
-type fakeTx struct{ f *fakeDB }
-
-func (t *fakeTx) Commit() error   { t.f.record("COMMIT"); return nil }
-func (t *fakeTx) Rollback() error { t.f.record("ROLLBACK"); return nil }
-
-func (c *fakeConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	r, ok := c.f.answer(query, args)
+func (f *fakeDB) Query(_ context.Context, query string, args ...any) (pgx.Rows, error) {
+	r, ok := f.answer(query, args)
 	if !ok {
-		return &fakeRows{}, nil
+		return &pgfake.Rows{}, nil
 	}
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &fakeRows{cols: r.cols, data: r.rows, err: r.rowsErr}, nil
+	return &pgfake.Rows{Cols: r.cols, Data: r.rows, Fail: r.rowsErr}, nil
 }
 
-func (c *fakeConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	r, ok := c.f.answer(query, args)
+func (f *fakeDB) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	r, ok := f.answer(query, args)
 	if !ok {
-		return fakeResult{}, nil
+		return pgconn.NewCommandTag("DELETE 0"), nil
 	}
 	if r.err != nil {
-		return nil, r.err
+		return pgconn.CommandTag{}, r.err
 	}
-	return fakeResult{n: int64(len(r.rows))}, nil
+	return pgconn.NewCommandTag(fmt.Sprintf("DELETE %d", len(r.rows))), nil
 }
-
-type fakeRows struct {
-	cols []string
-	data [][]driver.Value
-	i    int
-	err  error
-}
-
-func (r *fakeRows) Columns() []string { return r.cols }
-func (r *fakeRows) Close() error      { return nil }
-
-func (r *fakeRows) Next(dest []driver.Value) error {
-	if r.i >= len(r.data) {
-		if r.err != nil {
-			return r.err
-		}
-		return io.EOF
-	}
-	copy(dest, r.data[r.i])
-	r.i++
-	return nil
-}
-
-type fakeResult struct{ n int64 }
-
-func (r fakeResult) LastInsertId() (int64, error) { return 0, nil }
-func (r fakeResult) RowsAffected() (int64, error) { return r.n, nil }
 
 // postRow is the column set and one row of it, as the page query returns them.
 func postCols() []string {
 	return []string{"id", "org_id", "title", "body", "excerpt", "status", "view_count", "created_at"}
 }
 
-func postRow(id, title string) []driver.Value {
-	return []driver.Value{id, "acme", title, "body text", "excerpt text", "draft", int64(3), time.Unix(0, 0).UTC()}
+func postRow(id, title string) []any {
+	return []any{id, "acme", title, "body text", "excerpt text", "draft", int64(3), time.Unix(0, 0).UTC()}
 }
 
 // Tenanted is the shape the ReadOnly-plus-hook pattern needs, and the one the
@@ -347,8 +286,8 @@ func (c SmugglingCreate) Row() (*Tenanted, error) {
 
 func tenantedCols() []string { return []string{"id", "tenant_id", "title"} }
 
-func tenantedRow(id, tenant, title string) []driver.Value {
-	return []driver.Value{id, tenant, title}
+func tenantedRow(id, tenant, title string) []any {
+	return []any{id, tenant, title}
 }
 
 func archivedCols() []string {
@@ -357,8 +296,8 @@ func archivedCols() []string {
 
 // archivedRow carries a non-null deleted_at, which is the row an unfiltered
 // read is expected to return.
-func archivedRow(id, title string) []driver.Value {
-	return []driver.Value{id, title, time.Unix(0, 0).UTC()}
+func archivedRow(id, title string) []any {
+	return []any{id, title, time.Unix(0, 0).UTC()}
 }
 
 // Expandable models, for ?expand. The relation is the two-field shape the
@@ -383,8 +322,8 @@ func (Doc) TableName() string { return "docs" }
 
 func docCols() []string { return []string{"id", "org_id", "title", "__expand_org"} }
 
-func docRow(id, title string, org []byte) []driver.Value {
-	return []driver.Value{id, "acme", title, org}
+func docRow(id, title string, org []byte) []any {
+	return []any{id, "acme", title, org}
 }
 
 // Ledger has no primary key, which a list-only resource is allowed to have.

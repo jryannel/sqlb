@@ -19,10 +19,11 @@ package codegen
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 	"path/filepath"
 
 	"github.com/jryannel/sqlb/schema"
@@ -124,10 +125,9 @@ type Project struct {
 	// It is a function in your code, not a DSN in ours, for two reasons that
 	// point the same way.
 	//
-	// The first is that sqlb cannot open a Postgres connection at all. The
-	// engine depends on the standard library alone — `mise run deps-check`
-	// enforces it — so it has no driver registered, and every project has one.
-	// The driver enters through the import in the file that defines this.
+	// The first is that the DSN is the project's. sqlb depends on pgx and could
+	// dial one itself (ADR-0040), but it has no idea which database is safe to
+	// replay into, and that question has exactly one right answerer.
 	//
 	// The second is that the database has to be *empty*, and shadow.Build will
 	// not empty it: creating and dropping databases needs credentials the rest
@@ -137,20 +137,20 @@ type Project struct {
 	// here means the statement that wipes a database is written out, by name,
 	// in a file in your repository, against a DSN you chose.
 	//
-	//	ShadowDB: func(ctx context.Context) (*sql.DB, error) {
-	//		db, err := sql.Open("pgx", os.Getenv("SQLB_SHADOW_DSN"))
+	//	ShadowDB: func(ctx context.Context) (*pgxpool.Pool, error) {
+	//		pool, err := pgxpool.New(ctx, os.Getenv("SQLB_SHADOW_DSN"))
 	//		if err != nil {
 	//			return nil, err
 	//		}
 	//		// Scratch, and this line is the assertion that it is.
-	//		_, err = db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-	//		return db, err
+	//		_, err = pool.Exec(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+	//		return pool, err
 	//	}
 	//
 	// The command closes what this returns. It is not called at all when the
 	// migration directory is empty, because a baseline diffs against nothing
 	// and there is no history to replay.
-	ShadowDB func(context.Context) (*sql.DB, error)
+	ShadowDB func(context.Context) (*pgxpool.Pool, error)
 }
 
 // Main runs the driver program cmd/sqlb generates, and exits.

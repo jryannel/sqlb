@@ -19,7 +19,6 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"strings"
 	"testing"
 	"time"
@@ -300,13 +299,13 @@ func TestBulkInsertRendersPastTheBindParameterCeilingWithoutSayingSo(t *testing.
 // Set and SetExpr write one value to every matched row, which is the correct
 // shape for "archive these" and the wrong one for "here is each row's new
 // position". The corpus writes the difference as a join against two unnested
-// arrays, and every piece of that is present except the statement: the array
-// encoder is array.go's, and the lock the write runs under is the ForUpdate the
-// next test walks. `sqlb.UpdateFrom[T]` would be the write-side twin of the
-// multi-row insert that already exists.
+// arrays, and every piece of that is present except the statement: the arrays
+// are two ordinary bind parameters, and the lock the write runs under is the
+// ForUpdate the next test walks. `sqlb.UpdateFrom[T]` would be the write-side
+// twin of the multi-row insert that already exists.
 //
-// So this test pins two things: what Update does write, and the encoder the
-// hand-written statement leans on.
+// So this test pins two things: what Update does write, and that the arrays the
+// hand-written statement leans on need no help to be bound.
 func TestABulkRepositionIsOneValuePerStatementOrItIsHandWritten(t *testing.T) {
 	// What the builder can say: one position for every matching row.
 	got, args, err := sqlb.UpdateRows[subjectTask]().
@@ -330,18 +329,29 @@ func TestABulkRepositionIsOneValuePerStatementOrItIsHandWritten(t *testing.T) {
 	// it moves three rows or three thousand — which is the entire argument,
 	// since the transaction holding this write is also holding a FOR UPDATE
 	// over every sibling.
+	//
+	// They are bound as the slices themselves. Under database/sql this needed
+	// sqlb.EncodeArray, a public function whose whole job was rendering
+	// `{t3,t1,t2}` because the driver had no other spelling; pgx encodes a
+	// slice as an array, so the function is gone and nothing replaced it
+	// (ADR-0040).
 	ids := []string{"t3", "t1", "t2"}
 	positions := []string{"a0", "a1", "a2"}
-	encodedIDs, err := sqlb.EncodeArray(ids)
+	_, args, err = sqlb.Query[subjectTask]().
+		Select(sqlb.F("id")).
+		Where(sqlb.RawPred(`"id" = ANY(?) AND "position" = ANY(?)`, ids, positions)).
+		SQL()
 	if err != nil {
-		t.Fatalf("EncodeArray(ids): %v", err)
+		t.Fatalf("SQL: %v", err)
 	}
-	encodedPositions, err := sqlb.EncodeArray(positions)
-	if err != nil {
-		t.Fatalf("EncodeArray(positions): %v", err)
+	if len(args) != 2 {
+		t.Fatalf("bound %d parameters for two arrays, want 2: %#v", len(args), args)
 	}
-	if encodedIDs != `{t3,t1,t2}` || encodedPositions != `{a0,a1,a2}` {
-		t.Errorf("encoded arrays = %q, %q", encodedIDs, encodedPositions)
+	if got, ok := args[0].([]string); !ok || len(got) != 3 {
+		t.Errorf("the id array reached the driver as %#v, want the []string itself", args[0])
+	}
+	if got, ok := args[1].([]string); !ok || len(got) != 3 {
+		t.Errorf("the position array reached the driver as %#v, want the []string itself", args[1])
 	}
 }
 
@@ -507,7 +517,7 @@ func TestAListAndItsCountCannotDrift(t *testing.T) {
 	// which is the whole point.
 	list := newHarness(t, []string{"id", "org_id", "page_url", "event_type", "user_id", "duration_ms", "created_at"}, nil)
 	defer list.close()
-	counter := newHarness(t, []string{"count"}, [][]driver.Value{{int64(0)}})
+	counter := newHarness(t, []string{"count"}, [][]any{{int64(0)}})
 	defer counter.close()
 
 	// Every one of these is optional, and every one of them is one line. If is

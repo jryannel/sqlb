@@ -4,16 +4,11 @@ package taskschema
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb/codegen"
-
-	// Registers "pgx" with database/sql, for ShadowDB below. The server
-	// already takes this import for the same reason; it is here because this
-	// is the file that opens a connection sqlb asked for.
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // shadowDSNEnv names the scratch database `sqlb migrate` replays the history
@@ -92,7 +87,7 @@ func SqlbProject() codegen.Project {
 // about rather than refuses. Those triggers come back from introspection as
 // constructs the DSL cannot express, so `current` is an incomplete picture and
 // the command says so before showing the diff.
-func shadowDB(ctx context.Context) (*sql.DB, error) {
+func shadowDB(ctx context.Context) (*pgxpool.Pool, error) {
 	dsn := os.Getenv(shadowDSNEnv)
 	if dsn == "" {
 		return nil, fmt.Errorf(
@@ -101,7 +96,7 @@ func shadowDB(ctx context.Context) (*sql.DB, error) {
 			shadowDSNEnv, shadowDSNEnv)
 	}
 
-	db, err := sql.Open("pgx", dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +104,9 @@ func shadowDB(ctx context.Context) (*sql.DB, error) {
 	// database rather than hidden in the tool. sqlb will not empty a database
 	// itself, on the grounds that it cannot know which ones are scratch — this
 	// line is this project saying that this one is.
-	if _, err := db.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		_ = db.Close()
+	if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("emptying the shadow database at %s: %w", shadowDSNEnv, err)
 	}
-	return db, nil
+	return pool, nil
 }

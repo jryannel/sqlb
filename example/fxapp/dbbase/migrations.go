@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"go.uber.org/fx"
 )
@@ -44,7 +46,7 @@ type Migrated struct{}
 type migrationsParam struct {
 	fx.In
 
-	DB   *sql.DB
+	Pool *pgxpool.Pool
 	Cfg  Config
 	Log  *slog.Logger
 	Sets []MigrationSet `group:"migrations"`
@@ -68,7 +70,7 @@ type migrationsParam struct {
 func runMigrations(p migrationsParam) (Migrated, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.Cfg.ConnectTimeout)
 	defer cancel()
-	if err := p.DB.PingContext(ctx); err != nil {
+	if err := p.Pool.Ping(ctx); err != nil {
 		return Migrated{}, fmt.Errorf("dbbase: connecting to the database: %w", err)
 	}
 
@@ -86,8 +88,15 @@ func runMigrations(p migrationsParam) (Migrated, error) {
 	sets := append([]MigrationSet(nil), p.Sets...)
 	sort.Slice(sets, func(i, j int) bool { return sets[i].Module < sets[j].Module })
 
+	// goose is a database/sql runner and stays one. It gets a handle over the
+	// pool the application already opened rather than a second connection of
+	// its own, which is what keeps "the migrations ran" and "the queries run"
+	// statements about one client (ADR-0040).
+	gooseDB := stdlib.OpenDBFromPool(p.Pool)
+	defer func() { _ = gooseDB.Close() }()
+
 	for _, set := range sets {
-		if err := apply(p.DB, set, p.Log); err != nil {
+		if err := apply(gooseDB, set, p.Log); err != nil {
 			return Migrated{}, err
 		}
 	}

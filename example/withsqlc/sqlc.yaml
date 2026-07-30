@@ -16,7 +16,10 @@ sql:
       go:
         package: sqlcgen
         out: sqlcgen
-        sql_package: database/sql
+        # pgx, because sqlb is pgx (ADR-0040). This is the line that makes the
+        # two halves share a transaction rather than merely share a database:
+        # one pgx.Tx satisfies sqlb.Executor and the DBTX below at once.
+        sql_package: pgx/v5
         # Left off deliberately. The claim under test is that sqlb.Describe
         # reads *stock* sqlc output, mapping Go field names to columns by
         # snake_case when there is no db tag. Turning this on would make the

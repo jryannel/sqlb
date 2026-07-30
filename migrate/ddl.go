@@ -83,6 +83,15 @@ func scalarSQLType(d *schema.FieldDesc) (string, error) {
 		return "jsonb", nil
 	case schema.TypeBytes:
 		return "bytea", nil
+	case schema.TypeVector:
+		// The dimension is part of the type name, which is why it is on the
+		// declaration rather than being a constraint: Postgres will not store a
+		// vector(768) value in a vector(1536) column, and the two are different
+		// types in the catalog (ADR-0026).
+		if d.Dim <= 0 {
+			return "", fmt.Errorf("migrate: vector column %q has no dimension", d.Name)
+		}
+		return fmt.Sprintf("vector(%d)", d.Dim), nil
 	}
 	return "", fmt.Errorf("migrate: column %q has unknown type %q", d.Name, d.Type)
 }

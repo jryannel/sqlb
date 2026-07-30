@@ -2,12 +2,12 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
 )
 
@@ -21,23 +21,23 @@ type tracer struct {
 	log   func(op, query string, args []any, dur time.Duration, err error)
 }
 
-func (t tracer) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+func (t tracer) Query(ctx context.Context, q string, args ...any) (pgx.Rows, error) {
 	start := time.Now()
-	rows, err := t.inner.QueryContext(ctx, q, args...)
+	rows, err := t.inner.Query(ctx, q, args...)
 	t.log("query", q, args, time.Since(start), err)
 	return rows, err
 }
 
-func (t tracer) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+func (t tracer) Exec(ctx context.Context, q string, args ...any) (pgconn.CommandTag, error) {
 	start := time.Now()
-	res, err := t.inner.ExecContext(ctx, q, args...)
+	tag, err := t.inner.Exec(ctx, q, args...)
 	t.log("exec", q, args, time.Since(start), err)
-	return res, err
+	return tag, err
 }
 
 func TestExecutorWrappingObservesEveryStatement(t *testing.T) {
 	h := newHarness(t, []string{"id", "email", "name", "age", "org_id", "password_hash", "created_at"},
-		[][]driver.Value{{"u1", "a@example.com", "Ada", nil, "acme", "", time.Time{}}})
+		[][]any{{"u1", "a@example.com", "Ada", nil, "acme", "", time.Time{}}})
 	defer h.close()
 
 	var seen []string
@@ -66,6 +66,6 @@ func TestExecutorWrappingObservesEveryStatement(t *testing.T) {
 	// The wrapper sees the compiled SQL, which is the thing a filter produced
 	// and the thing an EXPLAIN would be run against.
 	if h.lastQuery() == "" {
-		t.Error("the wrapper should have passed statements through to the driver")
+		t.Error("the wrapper should have passed statements through to the executor")
 	}
 }

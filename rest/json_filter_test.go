@@ -1,7 +1,6 @@
 package rest_test
 
 import (
-	"database/sql/driver"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,7 +36,7 @@ func listWithTree(t *testing.T, tree, extra string) string {
 }
 
 func TestListCompilesJSONTreeFilter(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	tree := `{"op":"and","children":[
@@ -62,7 +61,7 @@ func TestListCompilesJSONTreeFilter(t *testing.T) {
 }
 
 func TestListJSONTreeConjoinsWithParams(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	// A query-parameter filter and a tree in the same request AND together.
@@ -81,7 +80,7 @@ func TestListJSONTreeConjoinsWithParams(t *testing.T) {
 }
 
 func TestListJSONTreeNesting(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	// status = draft AND (view_count < 3 OR view_count >= 100) — the disjunction
@@ -104,7 +103,7 @@ func TestListJSONTreeNesting(t *testing.T) {
 }
 
 func TestListJSONTreeArrayFilter(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	// tags is an array column; hasany goes through applyOp's array arm.
@@ -200,7 +199,7 @@ func TestListTreeColumnNamedFilterIsNotShadowed(t *testing.T) {
 	// ?filter= is reserved, so a request without it still lists normally: the
 	// reservation is what lets the tree share the request, and this guards that
 	// it did not turn the empty case into an error.
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	if resp := api.Get("/posts"); resp.Code != http.StatusOK {

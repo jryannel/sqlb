@@ -11,7 +11,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,10 +21,11 @@ import (
 	"syscall"
 	"time"
 
-	// The driver, registered under "pgx". sqlb itself depends on the standard
-	// library alone and takes an Executor, so which driver is here is entirely
-	// this program's business.
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
+	// The bridge back to database/sql, for goose. sqlb runs on the pool
+	// directly (ADR-0040); the migration runner wants a *sql.DB, and this
+	// hands it one over the same pool rather than a second one.
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/jryannel/sqlb/example/tasks/app"
 	"github.com/jryannel/sqlb/example/tasks/migrations"
@@ -62,37 +62,46 @@ func run(log *slog.Logger) error {
 		addr = ":8080"
 	}
 
-	db, err := sql.Open("pgx", dsn)
+	// The pool is configured here rather than in sqlb, which never opens a
+	// connection of its own. Behind PgBouncer in transaction pooling mode these
+	// numbers mean something different again — see ADR-0019.
+	poolCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("reading the database URL: %w", err)
+	}
+	poolCfg.MaxConns = 20
+	poolCfg.MinIdleConns = 10
+	poolCfg.MaxConnLifetime = time.Hour
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return fmt.Errorf("opening the database: %w", err)
 	}
 	// The error is deliberately dropped: this runs as the process exits, there
 	// is nothing left to do about a failure, and the alternative is a log line
 	// after the logger's last useful reader has gone.
-	defer func() { _ = db.Close() }()
-
-	// The pool is configured here rather than in sqlb, which never opens a
-	// connection of its own. Behind PgBouncer in transaction pooling mode these
-	// numbers mean something different again — see ADR-0019.
-	db.SetMaxOpenConns(20)
-	db.SetMaxIdleConns(10)
-	db.SetConnMaxLifetime(time.Hour)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	defer pool.Close()
 
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := db.PingContext(pingCtx); err != nil {
+	if err := pool.Ping(pingCtx); err != nil {
 		return fmt.Errorf("connecting to the database: %w", err)
 	}
 
-	if err := migrations.Apply(ctx, db); err != nil {
+	// goose is a database/sql runner and stays one. It gets a handle over this
+	// pool rather than a connection of its own, so the migrations and the
+	// application are the same client to Postgres.
+	gooseDB := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = gooseDB.Close() }()
+	if err := migrations.Apply(ctx, gooseDB); err != nil {
 		return err
 	}
 	log.Info("schema is up to date")
 
-	srv, err := app.New(app.Config{DB: db, Secret: secret, Log: log})
+	srv, err := app.New(app.Config{DB: pool, Secret: secret, Log: log})
 	if err != nil {
 		return err
 	}

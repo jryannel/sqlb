@@ -52,10 +52,12 @@ grow a pooled-versus-direct abstraction. What it owes users is documentation of
 which component needs which connection, not a seam that pretends to arrange it —
 a pooler-aware sqlb would be deciding a deployment topology it cannot see.
 
-**pgx is the assumed driver**, and under
-[ADR-0040](0040-the-driver-is-a-dependency.md) the depended-upon one. Owning
-connections stays refused on its own merits, not because of the old
-stdlib-only invariant.
+**pgx is the driver**, since [ADR-0040](0040-the-driver-is-a-dependency.md) —
+assumed before, depended upon now. Owning connections stays refused on its own
+merits, not because of the old stdlib-only invariant. What did change is that the
+exec-mode question below is a library default sqlb could set rather than a DSN
+every deployment has to get right; it has not been set, and the pooler tests pass
+on pgx's own default.
 
 ## Consequences
 

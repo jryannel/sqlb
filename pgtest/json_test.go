@@ -2,12 +2,12 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/filter"
 	"github.com/jryannel/sqlb/schema"
@@ -62,14 +62,14 @@ func jsonDocsRegistry() *schema.Registry {
 // seedJSONDocs inserts three rows whose metadata overlaps deliberately: one exact
 // match for the filter below, one superset of it, and one that shares the key
 // but not the value.
-func seedJSONDocs(t *testing.T, db *sql.DB) {
+func seedJSONDocs(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 	for _, row := range []struct{ title, metadata string }{
 		{"exact", `{"lang":"de"}`},
 		{"superset", `{"lang":"de","tier":"pro","tags":["urgent"]}`},
 		{"same key, other value", `{"lang":"fr"}`},
 	} {
-		if _, err := db.Exec(
+		if _, err := db.Exec(context.Background(),
 			`INSERT INTO jsondocs (title, metadata) VALUES ($1, $2::jsonb)`, row.title, row.metadata,
 		); err != nil {
 			t.Fatalf("inserting %q: %v", row.title, err)
@@ -158,11 +158,11 @@ func TestJSONContainmentCanUseTheGINIndex(t *testing.T) {
 		t.Fatalf("SQL(): %v", err)
 	}
 
-	if _, err := raw.ExecContext(ctx, "SET enable_seqscan = off"); err != nil {
+	if _, err := raw.Exec(ctx, "SET enable_seqscan = off"); err != nil {
 		t.Fatalf("disabling seqscan: %v", err)
 	}
 
-	rows, err := raw.QueryContext(ctx, "EXPLAIN "+sqlText, args...)
+	rows, err := raw.Query(ctx, "EXPLAIN "+sqlText, args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN: %v", err)
 	}

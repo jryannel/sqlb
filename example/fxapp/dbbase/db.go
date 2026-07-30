@@ -2,18 +2,12 @@ package dbbase
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
-
-	// The driver, registered under "pgx". It is imported here, in the module
-	// that opens the connection, and nowhere else — sqlb depends on the
-	// standard library alone, so the driver is a dependency of the
-	// application rather than of the library it uses (ADR-0040).
-	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/jryannel/sqlb/example/fxapp/config"
 )
@@ -65,25 +59,31 @@ func NewConfig() (Config, error) {
 // registers its own shutdown, and no main has to remember the order fx
 // already knows.
 //
-// There is no OnStart hook, and its absence is deliberate. sql.Open does not
-// connect, so something has to establish that the database is reachable — but
-// an OnStart hook runs *after* every constructor, and the migrations below
+// There is no OnStart hook, and its absence is deliberate. Opening a pool does
+// not connect, so something has to establish that the database is reachable —
+// but an OnStart hook runs *after* every constructor, and the migrations below
 // have already used the connection by then. The ping therefore lives in
 // runMigrations, which is the first thing that needs one.
-func NewDB(lc fx.Lifecycle, cfg Config, log *slog.Logger) (*sql.DB, error) {
-	db, err := sql.Open("pgx", cfg.DSN)
+func NewDB(lc fx.Lifecycle, cfg Config, log *slog.Logger) (*pgxpool.Pool, error) {
+	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("dbbase: reading the database URL: %w", err)
+	}
+	poolCfg.MaxConns = int32(cfg.MaxOpenConns)
+	poolCfg.MinIdleConns = int32(cfg.MaxIdleConns)
+	poolCfg.MaxConnLifetime = cfg.ConnMaxLifetime
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("dbbase: opening the database: %w", err)
 	}
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	log.Debug("dbbase: pool opened", "max_open_conns", cfg.MaxOpenConns)
 
 	lc.Append(fx.Hook{
 		OnStop: func(context.Context) error {
-			return db.Close()
+			pool.Close()
+			return nil
 		},
 	})
-	return db, nil
+	return pool, nil
 }
