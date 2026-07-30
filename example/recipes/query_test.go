@@ -2,7 +2,6 @@ package recipes_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 
@@ -102,7 +101,7 @@ func Example_queryProjectDifferentType() {
 
 	rows, err := sqlb.Collect[titleOnly](
 		context.Background(),
-		recordingDBWith([]string{"id", "title"}, []driver.Value{"p1", "Hello"}),
+		recordingDBWith([]string{"id", "title"}, []any{"p1", "Hello"}),
 		q,
 	)
 	if err != nil {

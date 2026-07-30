@@ -2,7 +2,6 @@ package recipes_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 
 	"github.com/jryannel/sqlb"
@@ -33,7 +32,7 @@ const seqScanPlan = `[{"Plan":{
 // It does not execute the statement, so it is safe on a mutation.
 // ExplainAnalyze does execute; run that inside a transaction you roll back.
 func Example_explainAQuery() {
-	db := recordingDBWith([]string{"QUERY PLAN"}, []driver.Value{[]byte(seqScanPlan)})
+	db := recordingDBWith([]string{"QUERY PLAN"}, []any{[]byte(seqScanPlan)})
 
 	plan, err := sqlb.Explain(context.Background(), db, sqlb.Query[recipes.Post]().
 		Where(sqlb.F("status").Eq("published")).
@@ -61,7 +60,7 @@ func Example_explainAQuery() {
 // This is what makes a plan usable as a test assertion: a query whose plan
 // regresses fails a build instead of a pager.
 func Example_explainDiagnostics() {
-	db := recordingDBWith([]string{"QUERY PLAN"}, []driver.Value{[]byte(seqScanPlan)})
+	db := recordingDBWith([]string{"QUERY PLAN"}, []any{[]byte(seqScanPlan)})
 
 	plan, err := sqlb.Explain(context.Background(), db, sqlb.Query[recipes.Post]().
 		Where(sqlb.F("status").Eq("published")).
@@ -79,7 +78,7 @@ func Example_explainDiagnostics() {
 // The tree, in the shape a reader — or an agent comparing two runs — can scan
 // quickly.
 func Example_explainPlanTree() {
-	db := recordingDBWith([]string{"QUERY PLAN"}, []driver.Value{[]byte(seqScanPlan)})
+	db := recordingDBWith([]string{"QUERY PLAN"}, []any{[]byte(seqScanPlan)})
 
 	plan, err := sqlb.Explain(context.Background(), db, sqlb.Query[recipes.Post]().
 		Where(sqlb.F("status").Eq("published")))

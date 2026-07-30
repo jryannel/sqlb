@@ -2,7 +2,6 @@ package recipes_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 
 	"github.com/jryannel/sqlb"
@@ -43,8 +42,8 @@ func Example_aggregateCollectIntoAStruct() {
 
 	db := recordingDBWith(
 		[]string{"status", "posts", "views"},
-		[]driver.Value{"published", int64(2), int64(31)},
-		[]driver.Value{"draft", int64(1), int64(0)},
+		[]any{"published", int64(2), int64(31)},
+		[]any{"draft", int64(1), int64(0)},
 	)
 
 	totals, err := sqlb.Collect[statusTotal](context.Background(), db, q)
