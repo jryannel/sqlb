@@ -111,27 +111,43 @@ than being dropped, which is the one new refusal. The composite foreign key
 remains the stronger arrangement and is now belt-and-braces rather than the only
 thing holding.
 
-### B. The driver question, decided rather than answered
+### B. The driver question — **decided, and it goes the other way**
 
-[compatibility.md](compatibility.md#the-driver) now *answers* this — pgx works
-through `database/sql`, and that is the contract. It is a good answer and it is
-not the same thing as a decision, because both evaluations independently call
-the flip **the single largest mechanical cost of adoption**, and one names a pgx
-path as one of three things that would change its verdict.
+This was the one item the plan deliberately refused to pre-decide, on the
+grounds that doing the work on a guess is how you acquire a permanent interface
+for a problem you did not have. The gate was both ports run and both reports
+exist. That gate is met, and the answer is
+[ADR-0040](adr/0040-the-driver-is-a-dependency.md): **the engine depends on pgx
+v5, `database/sql` stops being the contract, and there is one driver rather than
+two.** It lands before the freeze or not at all, because it breaks `Executor`.
 
-The port is what settles it. Both target codebases are pgx-native today, so
-stream B is not work to schedule — it is a question the ports answer:
+Neither branch this plan wrote down is what happened, and the reason is worth
+recording. The two branches were "the flip is cheap, so the answer stands" and
+"the flip degrades something, so `Executor` grows an optional interface." The
+ports split the first branch in half: the *bridge* is cheap — one report calls
+the pgxpool bridge "a non-event" and finds pgx's `pgtype` values scanning
+through it with zero model edits — while the *flip*, moving a platform onto
+`database/sql` so a transaction can span a sqlb module and a pgx-native one, is
+the expensive half. And the second branch's remedy lost on positioning rather
+than on capability: an optional interface delivers pgvector's binary codec only
+to callers who opt in, and a codec that is not on by default does not fix the
+module that could not port.
 
-- If flipping to `database/sql` costs a day per app and regresses nothing, the
-  answer stands and `compatibility.md` gets a paragraph saying it was measured.
-- If it degrades pooling, or `pgvector`, or a background job runner, then
-  `Executor` needs the optional interface its own doc says it grows by — and
-  that has to land **before** the freeze, because afterwards it is a major
-  version.
+What settled it was the multi-app port classifying the driver split as
+*architectural* — its first finding — with two pools per process, no shared
+transaction, and pgvector's `AfterConnect` codec absent from the sqlb handle, so
+its `rag` and `memory` modules "can't port this way". A benchmark
+(`mise run bench-pg`) then narrowed the performance claim rather than supporting
+it: ordinary CRUD is ~30%, bulk insert is an API gap rather than a driver one,
+and the real number is wide float arrays at 2.7× time and 21× memory. The case
+rests on the two structural blockers, not on speed.
 
-**This is the one item where the plan deliberately does not pre-decide.** Doing
-the work now on a guess is how you acquire a permanent interface for a problem
-you did not have.
+**What this obliges.** `Executor` is redefined over pgx's types, the
+`database/sql` path is removed rather than kept alongside, `deps-check` is
+rewritten to enforce pgx-and-nothing-else, and
+[compatibility.md](compatibility.md#the-driver) and
+[with-sqlc.md](with-sqlc.md) both need rewriting rather than amending —
+`compatibility.md` is already updated to say the contract is changing and why.
 
 ### C. Type overrides — **closed**
 
@@ -178,18 +194,32 @@ Not all of these block. The test is whether a port can complete without them.
 | Gap | Blocks a port? | Position for 1.0 |
 |---|---|---|
 | **Array columns** | Was yes | **Done** — [ADR-0033](adr/0033-array-columns.md) |
-| **pgvector** | Yes, for one module | Scope that module out of the port, or build it. [ADR-0026](adr/0026-vectors-declare-their-index.md) is Exploring/Low and the shape is recorded |
+| **pgvector** | Yes, for one module — **confirmed**, and the blocker is not this row | **Not in 1.0.** The port scoped `rag`/`memory` out, and what stopped them is the driver rather than the missing DSL: a text-form vector cannot host pgvector's binary codec however well the schema declares its index. [ADR-0026](adr/0026-vectors-declare-their-index.md) records the closure; stream B owns the fix |
 | **`tsvector` / full text** | Probably | **Decided: not in 1.0** ([ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md)). The blocker is not the column type, it is that a `tsvector` is database-maintained and `migrate` renders neither generated columns nor triggers |
-| **Composite primary keys** | Yes, ~15 tables | [ADR-0034](adr/0034-one-column-addresses-a-row.md) states the refusal and concedes it is wider than its own argument. Narrow it: a table never addressed, expanded or cursor-paged needs no key |
+| **Composite primary keys** | ~~Yes, ~15 tables~~ **No** — the multi-app port hit one and it "didn't block me" | **Not in 1.0, and no longer a candidate to hold it.** [ADR-0034](adr/0034-one-column-addresses-a-row.md) stands as written; the narrowing it concedes is additive and can land after the tag |
 | **Generated columns, triggers, backfills** | No | `migrate.Diff` renders DDL only; hand-written migrations interleave. Document the asterisk rather than close it |
 | ~~**`Security` on `rest.Options`**~~ | No | **Done** — every generated operation carries the resource's requirement. It documents; middleware still enforces |
 | **Parent-scoped routes** (`/projects/{id}/tasks`) | No, but every consumer notices | **Decided: flat, deliberately** ([ADR-0038](adr/0038-collections-are-flat.md)). The one real cost is that a missing parent is an empty page rather than a 404 |
 
-The row still worth arguing about is **composite primary keys**. ADR-0034's own
-text concedes the refusal is wider than its own argument — a table never
-addressed, expanded or cursor-paged needs no key at all — and narrowing it is
-cheaper than defending it. It is additive, so it can land after 1.0 if a port
-shows the narrow form is enough.
+**The row this section expected to argue about was composite primary keys, and
+the ports settled it the cheap way.** The prediction was that ~15 tables would
+block. What the multi-app port found instead is that its composite-key table
+ported fine — the upsert names the conflict target explicitly, so the missing
+declaration cost it a helper rather than the table. It is ranked Medium, third
+of its findings, and its own recommendation is a doc note now and the
+declaration later.
+
+So the narrowing ADR-0034 concedes — a table never addressed, expanded or
+cursor-paged needs no key at all — stays worth doing and stops being a 1.0
+question. It is additive in both directions: nothing that compiles today breaks
+when it lands.
+
+What is left over is the doc note, which is smaller than the feature and is what
+the port actually asked for: a composite-key table can be written against —
+`OnConflictUpdate` takes multiple columns and the upsert worked — but it cannot
+*declare* its real key, so every PK-derived affordance is off, starting with REST
+single-row addressing. Today a reader discovers that per affordance instead of
+once. That belongs in the schema docs before the tag.
 
 ### F. ADR hygiene — the records must be true at 1.0 — **closed**
 
@@ -205,7 +235,7 @@ from a confidence line.
 | [0019](adr/0019-pgbouncer-in-the-path.md) PgBouncer | Exploring/Low | **Working** — the carve-outs are tested against a real pooler, not reasoned |
 | [0023](adr/0023-mixins-carry-behaviour.md) mixins | Exploring | **Working as a decision** — the column half ships, the behaviour half is out of scope |
 | [0012](adr/0012-change-feed-outbox.md) change feed | Exploring/Low | **Not in 1.0**, said in the status |
-| [0026](adr/0026-vectors-declare-their-index.md) vectors | Exploring/Low | **Not in 1.0** unless a port needs it |
+| [0026](adr/0026-vectors-declare-their-index.md) vectors | Exploring/Low | **Not in 1.0.** A port did need it; what it needed was the driver, not this — see stream B |
 
 Four decisions had **no record at all**. All four now have one: type overrides
 ([0035](adr/0035-type-overrides.md)), the wire-format policy
@@ -215,6 +245,52 @@ Four decisions had **no record at all**. All four now have one: type overrides
 
 **The index now has no Exploring row whose subject is shipped**, which was Phase
 1's gate.
+
+### G. Port findings, triaged — two land, four are written down
+
+Phase 5's gate asks that every finding from both ports be triaged: fixed before
+1.0, scheduled for 1.1, or written down as a known limitation. This is that
+triage. Three findings are already answered elsewhere and are listed for
+completeness rather than re-argued; one belongs to the platform, not to sqlb.
+
+| Finding | Port | Their rank | Disposition |
+|---|---|---|---|
+| **Bind-parameter cast** — no `$1::date`; `cmp` wraps even an `Expr` in `Param{}` | single-app | #1, "highest-value single addition" | **Before 1.0** |
+| **Expressions in `ON CONFLICT DO UPDATE`** — only `EXCLUDED.<col>` | multi-app | "highest-value sqlb change surfaced by this port", High | **Before 1.0** |
+| **Null-aware negation** — `IsDistinctFrom`, NULL-inclusive `NotOneOf` | single-app | #2 | 1.1, documented now |
+| **`$N`-form raw predicate** — `RawPred` is positional, `$N` is referential | single-app | #4 | 1.1, documented now |
+| **Registry-aware coercion** — `filter.Coerce` is string→type only | single-app | #5 | 1.1 |
+| **`Describe` panics after first use** (`InUse`) | multi-app | Low | 1.1, documented now |
+| Module-graph MVS bump (huma/chi, `go` directive) | both | #3 / Low | Answered — [ADR-0007](adr/0007-generated-rest-handlers.md), reviewed 2026-07-30 |
+| `pgtype` scanning unverified in sqlb's own tests | single-app | — | **Done** — `pgtest/pgtype_test.go`, both directions and NULLs |
+| Composite primary key | multi-app | Medium | Stream E above; not a blocker |
+| Local `replace` is machine-specific | multi-app | landing blocker | The platform's, not sqlb's |
+
+**Why those two and not the other four.** Both are additive, so neither is
+pre-1.0-or-never in the way stream B is — the reason to take them now is that
+each was independently named the top ask by a port that had just spent real
+effort, which is the strongest evidence this plan set out to buy. The bind cast
+is also the only one of the six that the report ties to a *wrong answer* rather
+than an inconvenience: it names "a latent non-UTC-TZ date bug" on a ported
+endpoint, and the workaround it forced — `RawPred` — discards the typed facade
+at precisely the filterable-column case the facade exists for.
+
+**One of these is a second sighting, and that is the argument for it.** The
+[2026-07-28 review](review-2026-07-28.md) left "an arithmetic upsert" among its
+still-open ergonomics items — parked, unscoped, LOW. A port then hit it in *both*
+of its upsert modules and rated it High, because the workaround moves a timestamp
+from the database clock to the application clock and forces the column into the
+INSERT list. A thing dismissed as ergonomics once and re-found as High by someone
+doing real work is a thing that was mis-ranked the first time, and that is a
+better reason to schedule it than either report alone gives.
+
+**The four deferred ones are not free**, and the honest cost is documentation
+rather than code. Null-aware negation and the `RawPred` positional-vs-referential
+mismatch are both *traps*: the first silently drops NULL rows, and the second
+500s in production if a `$N` repeats — the port caught it only in a conformance
+test, not in its happy-path units. Deferring the API is defensible; leaving the
+behaviour unstated is not, so the doc note lands before the tag even though the
+feature does not.
 
 ## Deliberately not in 1.0
 
@@ -237,7 +313,11 @@ Named so that "it is missing" is not mistaken for "it was forgotten".
   **`sqlb impact`** ([#21](https://github.com/jryannel/sqlb/issues/21)). Both are
   adoption arguments rather than features. Worth building; not worth blocking a
   freeze.
-- **A pgx-native `Executor`** — unless stream B says otherwise.
+- ~~**A pgx-native `Executor`** — unless stream B says otherwise.~~ Stream B said
+  otherwise. It is now the opposite of a deferral: it is the one item that has to
+  land **before** the tag, because it breaks `Executor` and afterwards that is a
+  major version. See stream B above and
+  [ADR-0040](adr/0040-the-driver-is-a-dependency.md).
 
 ## Sequencing
 
@@ -262,28 +342,60 @@ legible to someone who is not the author.
 
 - ~~**Stream A**: the `?expand` scope fix.~~ Done.
 - ~~**Stream C**: type overrides in `codegen.Options`.~~ Done.
-- Whichever of stream E's rows the two target codebases actually hit — decided
-  by reading them, not by guessing here.
+- ~~Whichever of stream E's rows the two target codebases actually hit — decided
+  by reading them, not by guessing here.~~ Array columns shipped
+  ([ADR-0033](adr/0033-array-columns.md)) and were the row that had to move
+  first. The rest were answered by the ports rather than before them — see the
+  stream E table, which now records which predictions held.
 
-**Gate:** a port can begin without a known blocker in front of it. Not "without
-friction" — without a blocker.
+**Gate: passed.** Both ports began and completed. That is the only real proof
+this gate could have: it asks for the absence of a blocker, and a blocker would
+have stopped Phase 3 rather than been spotted here. What the ports found is
+friction plus one architectural finding (stream B), not a wall.
 
 ### Phase 3 — The two ports, in parallel
 
 They are independent and answer different questions, so running them in sequence
 buys nothing but calendar time. Each produces a written report.
 
-**Gate:** both branches run, both reports exist. Stream B is decided by what
-they measured.
+**Gate: passed.** Both branches ran, both reports exist
+([port](review-adoption-port.md), [multi-app](review-adoption-port-multi-app.md)),
+and stream B is decided by what they measured — see B above.
 
-### Phase 4 — Freeze
+### Phase 4 — The one sanctioned break
 
-- Every finding from both ports triaged: fixed before 1.0, scheduled for 1.1, or
-  written down as a known limitation.
+Stream B's answer breaks a *Frozen* surface, so it gets its own phase rather than
+being folded into the freeze. Doing it the other way round would mean tagging and
+then breaking, which is the failure the freeze exists to prevent.
+
+- `Executor` redefined over pgx, the `database/sql` path removed, `deps-check`
+  rewritten to enforce pgx-and-nothing-else with its positive controls intact
+  ([ADR-0040](adr/0040-the-driver-is-a-dependency.md)).
+- `compatibility.md` and `with-sqlc.md` rewritten to match — `with-sqlc.md`
+  inverts, since the advice it gives pgx-generated sqlb users now applies to
+  `database/sql`-generated ones.
+- ADR-0040's revisit triggers checked *before* the work, not after: reversal
+  costs a second `Executor` break on top of the first, so this is the cheap
+  moment to find out the answer was wrong.
+
+**Gate:** ADR-0040 reaches Working, and no *other* frozen surface has moved.
+
+### Phase 5 — Freeze
+
+- ~~Every finding from both ports triaged: fixed before 1.0, scheduled for 1.1,
+  or written down as a known limitation.~~ **Done** — stream G above. Two land
+  before the tag, four are written down.
+- The two that land: a bind-parameter cast, and expression assignments in
+  `ON CONFLICT DO UPDATE`. Both additive, so they can follow Phase 4 rather than
+  wait for it, and neither touches a frozen surface.
+- The documentation the four deferred findings owe: NULL semantics per operator,
+  and `RawPred`'s positional-versus-referential contract. Both are traps today,
+  and a trap that is deferred silently is a trap that is shipped.
 - `compatibility.md` rewritten from "what `v0.1.0` promises" to the 1.0 contract.
 - Tag.
 
-**Gate:** nothing in the *Frozen* list has changed since Phase 1, or if it has,
+**Gate:** nothing in the *Frozen* list has changed since Phase 4 — the driver
+break is the one exception and it is spent by then. If anything else has moved,
 the freeze restarts. That is the whole purpose of the phase.
 
 ## What would delay 1.0
@@ -293,8 +405,15 @@ Stated in advance, so the decision to slip is a decision rather than a drift:
 - **A port cannot complete** for a reason that is a sqlb design flaw rather than
   a missing feature. A missing feature is a scheduling problem; a design flaw
   found at 1.0 is the system working.
-- **Stream B goes the other way** — the ports show `database/sql` is not enough.
-  `Executor` gains an optional interface, and that has to settle before a freeze.
+- ~~**Stream B goes the other way** — the ports show `database/sql` is not enough.
+  `Executor` gains an optional interface, and that has to settle before a
+  freeze.~~ **This happened**, and further than written: the remedy is not an
+  optional interface but a redefinition, which is Phase 4. The delay is therefore
+  real and is now scheduled rather than hypothetical. What would delay 1.0
+  *further* is that work finding something the benchmark and the ports did not —
+  the honest candidate is the scan path's NULL and type-mapping behaviour
+  differing from `database/sql`'s conversion rules in a way the existing tests do
+  not pin.
 - **A frozen surface is found to be wrong.** The filter grammar, the cursor
   payload and the response envelope are the three that would hurt most, and all
   three get their first real exercise during the ports.

@@ -1,5 +1,13 @@
 # Porting subject-go to sqlb — first slice + issues report  (2026-07-30)
 
+> **Status: all five findings are triaged**, in
+> [release-1.0.md stream G](release-1.0.md#g-port-findings-triaged--two-land-four-are-written-down).
+> One is done (#5, pgtype scanning — now covered by `pgtest/pgtype_test.go`), one
+> is answered by [ADR-0007](adr/0007-generated-rest-handlers.md) (#1, the module
+> graph), the bind-parameter cast (#2) lands before 1.0, and #3 and #4 are
+> scheduled for 1.1 with the documentation they owe landing before the tag.
+> This report's own ranked list of missing features is triaged in the same place.
+
 **The subject is anonymised.** It is called `subject-go` throughout — the same
 subject as [the first evaluation](review-adoption-existing-app.md), here actually
 *ported* rather than assessed (same `internal/platform/filterexpr` +

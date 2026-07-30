@@ -8,7 +8,8 @@
   which are wire format from the first request and have nobody's use behind them
   yet
 - **Decided:** 2026-07-29
-- **Last reviewed:** 2026-07-29 (implemented; the sequencing below is done)
+- **Last reviewed:** 2026-07-30 (implemented; the codec's rationale is now
+  superseded by ADR-0040, the decision is not)
 
 ## Context
 
@@ -62,6 +63,16 @@ exist and are already single choke points: `compiler.bind`
 passes through, and the scan target assignment in
 [`exec.go`](../../exec.go) is the one place a result column is pointed at a
 struct field.
+
+**The invariant that forced all of this is being inverted.**
+[ADR-0040](0040-the-driver-is-a-dependency.md) decides that the engine depends on
+pgx, which decodes arrays natively — so the codec becomes deletable, along with
+its test matrix, and this subsection becomes a historical explanation of 449
+lines that no longer exist. That does not make the work wasted or this record
+wrong: the codec is what let arrays ship at all under the constraint that held
+when it was written, and every decision below — the element type plus a flag,
+the plain slice, the three operators — is independent of who does the decoding
+and survives unchanged.
 
 ### Why the jsonb answer does not work here
 
@@ -360,3 +371,10 @@ is what makes scannable:
   recover the element type, at exactly the site predicted), the plain slice, the
   three operator names, the two refusals, and the GIN requirement. The ten switch
   statements were nine.
+- 2026-07-30 — Noted that the constraint which produced the codec is being
+  inverted. [ADR-0040](0040-the-driver-is-a-dependency.md) takes a direct pgx
+  dependency, pgx decodes arrays natively, and `array.go` becomes deletable —
+  which this record's Context now says, since it spends a section explaining why
+  the codec had to be hand-written. The decision itself is untouched: element
+  type plus a flag, a plain slice, three operators, and neither the wire format
+  nor the schema DSL knows which library does the decoding.

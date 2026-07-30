@@ -111,7 +111,7 @@ nobody finishes reading has failed at its only job.
 | [0009](0009-typed-column-facade.md) | A generated typed column facade; predicates stay untyped | Working | Medium |
 | [0010](0010-codegen-is-optional.md) | Code generation is optional | Working | Medium |
 | [0011](0011-actionable-errors.md) | Rejections name what would have been accepted | Working | High |
-| [0012](0012-change-feed-outbox.md) | Change notification via a transactional outbox | Not in 1.0 | Low |
+| [0012](0012-change-feed-outbox.md) | Change notification via a transactional outbox † | Exploring | Low |
 | [0013](0013-no-internal-split.md) | No public/internal package split | Working | Medium |
 | [0014](0014-migrations-and-import.md) | Migrations by diff, adoption by import | Working | High |
 | [0015](0015-module-isolation.md) | Modules own their tables, and do not reference each other's | Working | Medium |
@@ -125,7 +125,7 @@ nobody finishes reading has failed at its only job.
 | [0023](0023-mixins-carry-behaviour.md) | A mixin contributes columns; carrying behaviour needs codegen | Working | High |
 | [0024](0024-no-annotation-slot.md) | No annotation slot until something can consume one | Working | Medium |
 | [0025](0025-expansion-is-one-statement.md) | Expansion is one statement, and Hidden survives the join | Working | Medium |
-| [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation | Not in 1.0 | Low |
+| [0026](0026-vectors-declare-their-index.md) | A vector column declares its index, and search is its own operation † | Exploring | Low |
 | [0027](0027-keyset-pagination.md) | A page is a position, not a distance | Working | High |
 | [0028](0028-typescript-client.md) | The TypeScript client is generated from the model, and stops at the query key | Working | Medium |
 | [0029](0029-go-cli.md) | The CLI is generated too, and its help text is the type system | Working | Medium |
@@ -136,7 +136,16 @@ nobody finishes reading has failed at its only job.
 | [0034](0034-one-column-addresses-a-row.md) | A row is addressed by one column, and a composite key becomes a unique index | Working | Medium |
 | [0035](0035-type-overrides.md) | A type override changes the Go type and nothing else | Working | High |
 | [0036](0036-the-wire-is-the-column-name.md) | The wire spells a column the way the schema does | Working | High |
-| [0037](0037-search-is-ilike-until-it-cannot-be.md) | `?search` is ILIKE, and a `tsvector` column is not in 1.0 | Not in 1.0 | High |
+| [0037](0037-search-is-ilike-until-it-cannot-be.md) | `?search` is ILIKE, and a `tsvector` column is not in 1.0 † | Working | High |
 | [0038](0038-collections-are-flat.md) | A collection has one path, and the parent is a filter | Working | High |
 | [0039](0039-a-schema-edit-is-an-api-edit.md) | A schema edit is an API edit, and the break is diffed | Exploring | Medium |
-| [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Exploring | Medium |
+| [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam ‡ | Exploring | Medium |
+
+† **Deliberately not in 1.0.** The decision is recorded; the feature is out of
+scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.
+Scope is not a status — a record can be Working as a decision and unbuilt as a
+feature, which 0037 is.
+
+‡ **Obligates work before the tag.** This is the only record that does. It
+breaks `Executor`, which `compatibility.md` freezes, so it lands before 1.0 or
+not at all; it is Phase 4 of [the road to 1.0](../release-1.0.md).

@@ -1,10 +1,12 @@
 # ADR-0026: A vector column declares its index, and similarity search is its own operation
 
-- **Status:** Exploring — nothing is built, and **it is not in 1.0** unless one
-  of the ports needs it to complete; [the road to 1.0](../release-1.0.md) says
-  to scope the module out instead. This records the shape before the
-  first line of it, which is the order [the README](README.md) asks for and the
-  opposite of [ADR-0025](0025-expansion-is-one-statement.md)
+- **Status:** Exploring — nothing is built, and **it is not in 1.0**. The
+  condition that qualifier carried has now been tested: a port did need it, and
+  the answer is still not-in-1.0, because what blocked the port was the driver
+  rather than this record's design. See the 2026-07-30 revision. This records
+  the shape before the first line of it, which is the order
+  [the README](README.md) asks for and the opposite of
+  [ADR-0025](0025-expansion-is-one-statement.md)
 - **Confidence:** Low — nothing here is built. The unindexed half is grounded in
   a working module (`core/rag` in `subject-mono`, an anonymised application
   repository) rather than reasoned about, which
@@ -13,7 +15,7 @@
   kind of claim [ADR-0025](0025-expansion-is-one-statement.md) learned not to
   trust until a real database has seen it
 - **Decided:** 2026-07-28
-- **Last reviewed:** 2026-07-28
+- **Last reviewed:** 2026-07-30 (read against the two port reports and ADR-0040)
 
 ## Context
 
@@ -295,6 +297,17 @@ declaring it idempotent — and `sqlb.Vector`, a `[]float32` with `Scan` and
 `Value` over pgvector's `[1,2,3]` text form, since `[]float32` implements
 neither and `Executor` is `database/sql`.
 
+**That last clause is superseded.** [ADR-0040](0040-the-driver-is-a-dependency.md)
+decides that the engine depends on pgx and `database/sql` stops being the
+contract, which removes the constraint that forced the text form — and it cites
+this record as its strongest evidence, since the compromise here was the clearest
+case of the driver bending a design rather than merely inconveniencing one. When
+this is built, `sqlb.Vector` is pgvector's binary codec registered on the pool,
+not a text literal parsed element by element in Go. The measured difference on a
+50-row page of 1536-dimension embeddings is 2.7× the time and 21× the memory.
+The rest of this record — metric in the schema, the index as the second
+declaration, search as its own operation — is unaffected either way.
+
 ## Consequences
 
 **What this buys.** The schema stays the single source of truth for a project
@@ -489,3 +502,23 @@ because the shape of the ask determines whether they are types or an option on
   moved the two-declarations argument from predicted to observed, and made the
   dimension's being a Go expression a stated part of the decision rather than an
   incidental consequence of the DSL.
+- 2026-07-30 — **The scope qualifier's condition fired, and the answer did not
+  change.** This record's status said "not in 1.0 unless one of the ports needs
+  it to complete." One did: the multi-app port finds pgvector's `AfterConnect`
+  codec is not on the sqlb `sql.DB` and concludes its `rag` and `memory` modules
+  "can't port this way." The other port reaches the opposite verdict from the
+  other direction, listing RAG/pgvector as out of sqlb's scope.
+
+  They are not in conflict, and reading them together is what closes this. What
+  the port hit is not a missing vector DSL — it is the driver, which
+  [ADR-0040](0040-the-driver-is-a-dependency.md) now owns. Building this record
+  would not have unblocked that module; a text-form `sqlb.Vector` cannot host a
+  binary codec no matter how well the schema declares its index. So the
+  qualifier resolves to **still not in 1.0**, and the dependency is now stated:
+  this is buildable as designed only after the driver flip, which is also what
+  would let it move off Confidence: Low.
+
+  What this changes in the record itself: the `sqlb.Vector` text-form clause is
+  marked superseded above rather than deleted, since the reasoning for it was
+  sound under the constraint it was written against and the constraint is what
+  moved.

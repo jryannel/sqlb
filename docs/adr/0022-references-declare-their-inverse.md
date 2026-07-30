@@ -386,9 +386,16 @@ row's response size a function of data nobody bounded. Rejected above.
 **Do nothing and ship forward expansion only.** The strongest of the four, and
 not exclusive with this record: forward expansion is unblocked today and could
 land first. It is listed here because it may turn out to be the whole answer.
-**This is what happened** — see the revision below. It has not yet turned out to
-be the whole answer, but it has not turned out not to be either, and that is the
-open question this record is now waiting on.
+
+**This is what happened, and then it stopped being the answer.** Forward
+expansion shipped first and on its own, exactly as this alternative proposed —
+and for a few days the record sat waiting to see whether anything would want the
+other direction. Something did: `example/tasks` had a screen that was an N+1 the
+client had to write, and collections were designed and built the same day. So
+this alternative was right about sequencing and wrong about sufficiency, which
+is the most useful way for an alternative to lose. What it correctly predicted
+is that the two directions are separable — forward needed no inverse, no
+declaration and no part of this record, which is why it could land first at all.
 
 ## Revisions
 

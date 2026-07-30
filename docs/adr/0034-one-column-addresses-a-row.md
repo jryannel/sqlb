@@ -9,7 +9,7 @@
   the tuple work everywhere else is mechanical and merely unbuilt, and nobody
   has yet paid the surrogate-key migration this record tells them to pay
 - **Decided:** 2026-07-29
-- **Last reviewed:** 2026-07-29
+- **Last reviewed:** 2026-07-30 (the first trigger fired; see Revisions)
 
 ## Context
 
@@ -160,6 +160,21 @@ first item below.
   cheapest revision available and the one most likely to be right. It has not
   been made yet only because one rule in one place beats three rules in three
   places until somebody needs the third.
+
+  **This has now happened, and it did less damage than expected.** The multi-app
+  port's `llmcatalog` module has exactly that table — a `(provider, model_id)`
+  key, written to and never addressed over REST — and reports that it "didn't
+  block me", because `OnConflictUpdate` takes a column list and the upsert names
+  the composite conflict target itself. So the trigger fired and the prediction
+  that it would be *expensive* did not: what the table loses is the ability to
+  declare the key it has, and with it every PK-derived affordance, rather than
+  the ability to work. `release-1.0.md` had this row down as blocking ~15 tables
+  and now records it as non-blocking.
+
+  The revision therefore stands as the right one and stops being urgent. It is
+  additive, so it can land after 1.0. What should not wait is saying this out
+  loud in the schema documentation: today a reader finds out one affordance at a
+  time, at the call site.
 - **The surrogate-key migration stopping an adoption.** If a team walks away at
   this step rather than paying it, the constraint is being paid by the wrong
   party and the tuple work stops being theoretical.
@@ -238,3 +253,10 @@ decision.
   both halves of the fix, which is what the Context above says it was missing. A
   record that names a bad error message and leaves it in place is a note, not a
   decision.
+- 2026-07-30 — The first revisit trigger fired, and the record survives it in
+  better shape than it went in. A port carried a real composite-key table that is
+  never addressed over REST, which is precisely the case this record predicted
+  would expose the refusal as too wide — and the port completed anyway, because
+  the constraint costs a *declaration* rather than a capability. The narrowing
+  stays the right first change and moves out of the 1.0 conversation, since
+  `release-1.0.md` had this row down as a blocker and can now stop.

@@ -1,5 +1,15 @@
 # Review — adopting sqlb into an existing codebase  (2026-07-29)
 
+> **Status: reconciled 2026-07-30.** Of the ten frictions, three are closed
+> outright (C, D, and F — the tenant-leak edge, which was a security bug), five
+> have moved substantially (A, B, E, H, I), one is unchanged and belongs to the
+> subject rather than to sqlb (G), and one changed in kind (J: "no observed
+> consumers" is no longer true). The report's closing note said findings B, C and
+> H were properties of a snapshot and should be re-checked — it was right about
+> all three. The same subject was subsequently *ported* rather than assessed:
+> [review-adoption-port.md](review-adoption-port.md). Nothing below is edited;
+> see [What has changed since](#what-has-changed-since) at the foot.
+
 The first outside evaluation of sqlb against a real, seven-month-old
 application — a multi-tenant product with 238 routes, 84 tables, a React web
 client and a Flutter app in the field. The question asked was whether sqlb could
@@ -1351,6 +1361,48 @@ flowchart LR
 If only one is built, build **computed fields**. A data layer that cannot
 express a derived field loses every real entity at the same moment — and it is
 the failure that looks like the framework working right up until it does not.
+
+---
+
+## What has changed since
+
+Reconciled 2026-07-30, one day after the review and after the same subject was
+ported for real. The report told the reader to re-check B, C and H before
+deciding anything, and all three moved — so this is that re-check rather than a
+correction.
+
+### The frictions
+
+| | Friction | Where it stands |
+|---|---|---|
+| 🔴 A | `database/sql` vs pgx transaction wall | **Decided, in this report's favour.** [ADR-0040](adr/0040-the-driver-is-a-dependency.md) takes the pgx dependency rather than asking the subject to flip sqlc. The report called (ii) "not recommended"; sqlb agreed and moved instead. Not built — it is Phase 4 of [the road to 1.0](release-1.0.md) |
+| 🔴 B | pgvector not expressible | **Split.** Arrays are **built** ([ADR-0033](adr/0033-array-columns.md)) — `TEXT[]`/`VARCHAR(n)[]` declare, render, introspect, scan and filter. `tsvector` is **decided out** ([ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md)). Composite PKs have a recorded stance ([ADR-0034](adr/0034-one-column-addresses-a-row.md)) and the port found them non-blocking. pgvector itself is unchanged and now known to be gated on A ([ADR-0026](adr/0026-vectors-declare-their-index.md)). `INTERVAL` remains absent |
+| 🔴 C | `rest` requires huma | **Answered, narrower than feared.** chi left the library graph in [#32](https://github.com/jryannel/sqlb/pull/32), and `rest.NewServer` builds the API on `net/http` — so the `humachi.New(...)`-over-existing-chi mount this report describes is no longer the shape. huma stays, deliberately: both escapes were scoped in full on 2026-07-30 and declined ([ADR-0007](adr/0007-generated-rest-handlers.md)) |
+| 🟡 D | Type mapping fixed and narrow, no override | **Closed.** [ADR-0035](adr/0035-type-overrides.md) ships type overrides in `codegen.Options` — the `sqlc.yaml` `overrides:` counterpart this report found missing. `uuid → uuid.UUID` is now declarable, which was the row that "touches everything" |
+| 🟡 E | Wire format, three simultaneous breaks | **Two of three answered.** The wire spelling is now a stated policy rather than an accident ([ADR-0036](adr/0036-the-wire-is-the-column-name.md)), and parent-scoped routes are decided rather than absent ([ADR-0038](adr/0038-collections-are-flat.md)) — flat, deliberately, with the 404-versus-empty-page cost named. **"sqlb emits no Dart" is no longer true**: [ADR-0031](adr/0031-dart-client.md) ships a Dart client, so the 10 hand-written Flutter model files are a regeneration rather than hand work. The envelope and grammar breaks stand as costed |
+| 🟡 F | Hooks do not follow an expansion — a real tenant-leak edge | **Fixed, and it was a security bug.** This was the highest-value finding in the report. The expansion now runs the target's hooks and requalifies their predicates onto the join alias, so the composite-FK workaround is belt-and-braces rather than the only thing holding ([ADR-0030](adr/0030-declared-scope-is-required.md), stream A of the release plan). The report's instruction — add composite keys *before* declaring `Expandable()` — is no longer a precondition |
+| 🟡 G | Conformance kit and archtest need re-founding | Unchanged, and the subject's, not sqlb's |
+| 🟡 H | CLI story half-built, points a different direction | **Half closed.** There **is** an `sqlb` binary now ([ADR-0032](adr/0032-sqlb-command.md)) — `sqlb generate` and `sqlb check` — so "no `sqlb generate` / `sqlb migrate`" is stale, and the generated cobra CLI is merged rather than sitting on a branch. The *philosophical* conflict this report identifies is untouched and is the real finding: a generated CLI exposes every exposed resource by construction, which is the opposite of a human-curated surface with a golden per endpoint |
+| 🟡 I | Migration adoption has two hand-cranks | **Narrowed.** The "report of what the DSL cannot express" is shorter by the arrays. The vector column, the tsvector columns, the triggers, the composite PKs and the partial indexes still appear in it |
+| 🟡 J | Maturity | **Changed in kind, not in degree.** "No observed consumers" is no longer true — two ports have run, this subject's among them. That is days of someone else's use, not the six months the exit criterion asks for |
+
+### The build order this report proposed
+
+§13 ranked six things and said that if only one were built it should be computed
+fields. Two of the six have shipped, and neither is that one:
+
+- **1 · sqlb binary** — built ([ADR-0032](adr/0032-sqlb-command.md)).
+- **5 · Dart emitter** — built ([ADR-0031](adr/0031-dart-client.md)).
+- **2 · computed fields** ([#17](https://github.com/jryannel/sqlb/issues/17)),
+  **3 · declared actions** ([#18](https://github.com/jryannel/sqlb/issues/18)),
+  **4 · eject** ([#19](https://github.com/jryannel/sqlb/issues/19)),
+  **6 · impact** ([#21](https://github.com/jryannel/sqlb/issues/21)) — open, and
+  all four are named 1.1 candidates rather than 1.0 blockers.
+
+The recommendation stands unmet and unchallenged: computed fields remain the
+thing that "decides if it survives a real domain", and
+[release-1.0.md](release-1.0.md) reaches the same conclusion independently while
+declining to hold the tag for it.
 
 ---
 

@@ -3,7 +3,7 @@
 - **Status:** Working
 - **Confidence:** Medium
 - **Decided:** 2026-07-27
-- **Last reviewed:** 2026-07-27
+- **Last reviewed:** 2026-07-30 (the `Beginner` trigger fired; see Revisions)
 
 ## Context
 
@@ -117,6 +117,16 @@ inner block to be independent.
 - **If `Beginner` proves too narrow** — a driver that wants its own transaction
   type rather than `*sql.Tx` cannot implement it. `pgx` through its stdlib
   adapter does, which is the case that matters today.
+
+  **This has fired.** It is not a hypothetical driver: it is a caller who has
+  already opened a `pgx.Tx` and wants sqlb's writes inside it, which `Beginner`
+  cannot express and which the adoption reviews count 25 sites of.
+  [ADR-0040](0040-the-driver-is-a-dependency.md) is the answer, and it is a
+  larger one than this bullet anticipated — `Beginner` is redefined along with
+  `Executor` rather than widened, because the narrowness is the driver's and not
+  the interface's. Nothing else in this record moves: the handle stays
+  transaction-scoped and the registry scoping is orthogonal to what the
+  transaction type is.
 - **If nobody uses `WithHooks`** after a few months, the registry scoping is
   complexity without a customer, and `Registry` should collapse back into the
   global with only `TxFrom` retained.
@@ -166,3 +176,9 @@ changes what "the unit of work succeeded" means, and no caller needs it yet.
   "committed, side effect failed" from "the unit of work failed", because the
   two call for opposite responses. See [ADR-0012](0012-change-feed-outbox.md)
   for why this is not the change feed.
+- 2026-07-30 — The `Beginner` trigger fired, and is recorded above.
+  [ADR-0040](0040-the-driver-is-a-dependency.md) is the answer: the case is not a
+  hypothetical driver but a caller holding a `pgx.Tx`, which the adoption reviews
+  count 25 sites of, and the fix is a redefinition of `Beginner` alongside
+  `Executor` rather than a widening. The transaction-scoped design this record
+  argues for is unaffected — what changes is the concrete type the handle wraps.
