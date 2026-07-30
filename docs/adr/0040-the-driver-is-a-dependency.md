@@ -131,6 +131,44 @@ Doing it costs the "importing sqlb is free" property permanently and locks out
 anyone who wanted this engine on a driver other than pgx. That is a real
 audience, deliberately abandoned.
 
+### What the ports found
+
+[release-1.0.md](../release-1.0.md)'s stream B said the ports would answer this
+better than reasoning would, and it was right. Both are now in-tree
+([port](../review-adoption-port.md),
+[multi-app](../review-adoption-port-multi-app.md)) and they cut both ways.
+
+**They confirm the two structural blockers, observed rather than predicted.**
+The multi-app port classifies the driver split as *architectural* — its first
+finding, not a footnote — and records the consequences precisely: two pools per
+process, no shared transaction between a sqlb module and a pgx/sqlc one, and
+pgvector's `AfterConnect` codec "**not** on the sqlb `sql.DB`", so the `rag` and
+`memory` modules "can't port this way". That is this record's strongest argument
+and its second-strongest, hit by the first real port to go looking.
+
+**They also narrow it, in a way the benchmark did not reach.** The single-app
+port calls the pgxpool bridge "a **non-event**" and reports that sqlc's
+pgx-typed models — `pgtype.Date`, `pgtype.Timestamptz`, `pgtype.UUID` — scanned
+through sqlb with *zero* model edits, because pgx's pgtype implements
+`sql.Scanner`/`driver.Valuer`. The benchmark above measured plain Go types and
+so says nothing about this path; the read story over a pgx-native codebase is
+better than an argument from protocols would guess.
+
+**And they correct this record's own revisit trigger.** "A port measures the
+flip as cheap" conflated two things the ports keep apart: the *bridge* is cheap,
+and the *flip* — moving a platform onto `database/sql` so that transactions can
+be shared — is the large one. The multi-app port states the boundary exactly: a
+module sharing a transaction with pgx-native code "needs the whole platform on
+`database/sql` first". Leaf and disjoint modules are cheap either way. The
+decision is only forced where a unit of work crosses the two.
+
+One thing the ports surface that this record should own regardless of its
+outcome: pgtype scanning is load-bearing for the whole structs-first-over-sqlc
+story and is **currently unverified in sqlb's own tests** — the `with-sqlc`
+adoption test uses `sql.NullTime`, not pgtype. Going pgx-native makes that moot;
+until then it is unguarded, and a pgx release that dropped `sql.Scanner` would
+be caught by a consumer rather than by CI.
+
 ## Decision
 
 **The engine depends on pgx v5, and `database/sql` stops being the contract.**
@@ -196,11 +234,14 @@ audience, deliberately abandoned.
 
 ## What would change our mind
 
-- **A port measures the flip as cheap.** release-1.0.md's stream B is still the
-  better evidence than anything reasoned here. If porting an application to
-  `database/sql` costs a day and regresses nothing — no pooling degradation, no
-  pgvector loss, no job-runner breakage — then the transaction argument was
-  overweighted and this record should be reopened before the break is paid for.
+- **The modules that need a shared transaction turn out to be few.** This
+  replaces the trigger the first draft carried ("a port measures the flip as
+  cheap"), which the ports showed to be two questions wearing one name. The
+  bridge is already known to be cheap; that is settled and is not a reason to
+  revisit. What is still open is how much code sits on the boundary. If the
+  modules whose writes must be atomic with pgx-native code stay a short list
+  that can hold its own `pgx` handle, the coexistence path is sufficient and
+  this record is an expensive answer to a narrow problem.
 - **pgvector support stops mattering.** If the RAG tables stay permanently
   outside the registry, as [ADR-0026](0026-vectors-declare-their-index.md)
   allows, the strongest technical argument here evaporates and only transaction
@@ -267,3 +308,11 @@ same mistake one layer down.
   bulk insert is not a driver gap at all — sqlb's `VALUES` matches hand-written
   pgx, and the whole difference is `CopyFrom`'s absence. The vector row is now
   the strongest evidence here; it was previously listed alongside weaker ones.
+- 2026-07-30 — Read against the two port reports, which landed on `main` the
+  same day. They confirm both structural blockers from a real port — the
+  multi-app one classifies the driver split as architectural and finds
+  pgvector's codec missing from the sqlb handle — and narrow the read-path
+  argument, since pgx's pgtype scans through the bridge with zero model edits,
+  a path the benchmark did not cover. The revisit trigger was rewritten as a
+  result: "a port measures the flip as cheap" turned out to be two questions,
+  and the ports answered the cheap one already.
