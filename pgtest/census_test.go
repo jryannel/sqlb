@@ -27,7 +27,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/migrate"
 	"github.com/jryannel/sqlb/schema"
@@ -122,7 +121,7 @@ func TestUpsertCannotExpressAnIncrement(t *testing.T) {
 	// Workaround two: the whole statement in Raw, which is what a producer that
 	// cannot assume the row exists is left with. It leaves the builder entirely
 	// — no model, no hooks, no RETURNING into a struct.
-	if _, err := db.ExecContext(ctx, `
+	if _, err := db.Exec(ctx, `
 		INSERT INTO meters (tenant, kind, count) VALUES ($1, $2, $3)
 		ON CONFLICT (tenant, kind) DO UPDATE SET count = meters.count + EXCLUDED.count
 	`, "acme", "api_call", 4); err != nil {
@@ -240,7 +239,7 @@ func TestRelativeTimeWindowNeedsRawOrAGoComputedInstant(t *testing.T) {
 		t.Fatalf("seed recent: %v", err)
 	}
 	// A row deliberately outside every window below.
-	if _, err := db.ExecContext(ctx,
+	if _, err := db.Exec(ctx,
 		`INSERT INTO meters (tenant, kind, at) VALUES ($1, $2, now() - interval '2 days')`,
 		"acme", "old"); err != nil {
 		t.Fatalf("seed old: %v", err)
@@ -534,37 +533,19 @@ func (Invitation) TableName() string { return "invitations" }
 // Half of that turns out to be already true. The violation arrives as a
 // *ConstraintError carrying the index name, which is a name the schema chose —
 // so a handler can match on `one_pending_invitation_per_email` and answer with
-// the rule rather than with "duplicate key". The other half stands: reaching
-// the name needs a driver-aware classifier, because the standard library
-// defines no way to read a constraint name off an error. This test registers
-// one, which is also the only worked example of SetErrorClassifier in the
-// repository.
+// the rule rather than with "duplicate key".
+//
+// The other half used to stand: reaching the name needed a driver-aware
+// SetErrorClassifier, and this test was the repository's only worked example of
+// one. ADR-0040 retired that — sqlb reads *pgconn.PgError itself now — so the
+// registration is gone from this test and what it asserts is stronger for it:
+// the fields below are filled with nothing registered at all.
 //
 // Deliberately not: the schema-side declaration the census argues for. Whether
 // a partial unique index should be a named declaration like Check is the open
 // design question; this settles what the runtime already gives that design to
 // build on.
 func TestAnInvariantInAPartialIndexArrivesAsANamedConstraint(t *testing.T) {
-	// Process-wide, so it is restored before any later test reads an error.
-	sqlb.SetErrorClassifier(func(err error) (sqlb.ConstraintError, bool) {
-		var pg *pgconn.PgError
-		if !errors.As(err, &pg) {
-			return sqlb.ConstraintError{}, false
-		}
-		kind, ok := sqlb.ConstraintKindOf(pg.SQLState())
-		if !ok {
-			return sqlb.ConstraintError{}, false
-		}
-		return sqlb.ConstraintError{
-			Kind:       kind,
-			Constraint: pg.ConstraintName,
-			Table:      pg.TableName,
-			Column:     pg.ColumnName,
-			Detail:     pg.Detail,
-		}, true
-	})
-	t.Cleanup(func() { sqlb.SetErrorClassifier(nil) })
-
 	ctx := context.Background()
 	raw := freshStockDB(t)
 	mustExec(t, raw, `
@@ -604,7 +585,8 @@ func TestAnInvariantInAPartialIndexArrivesAsANamedConstraint(t *testing.T) {
 	if ce.Kind != sqlb.ConstraintUnique {
 		t.Errorf("kind = %q, want %q", ce.Kind, sqlb.ConstraintUnique)
 	}
-	// This is the assertion the 409 would be built on.
+	// This is the assertion the 409 would be built on, and since ADR-0040 it
+	// holds with no classifier registered.
 	if ce.Constraint != "one_pending_invitation_per_email" {
 		t.Errorf("constraint = %q, want the index name the schema chose", ce.Constraint)
 	}
@@ -697,7 +679,7 @@ func TestSelfReferenceIsAPlainColumnWithoutAForeignKey(t *testing.T) {
 
 	// The column is there.
 	var columns int
-	if err := db.QueryRow(`
+	if err := db.QueryRow(context.Background(), `
 		SELECT count(*) FROM information_schema.columns
 		WHERE table_name = 'categories' AND column_name = 'parent_id'
 	`).Scan(&columns); err != nil {
@@ -709,7 +691,7 @@ func TestSelfReferenceIsAPlainColumnWithoutAForeignKey(t *testing.T) {
 
 	// The foreign key is not.
 	var fks int
-	if err := db.QueryRow(`
+	if err := db.QueryRow(context.Background(), `
 		SELECT count(*) FROM pg_constraint c
 		JOIN pg_class t ON t.oid = c.conrelid
 		WHERE t.relname = 'categories' AND c.contype = 'f'
@@ -724,7 +706,7 @@ func TestSelfReferenceIsAPlainColumnWithoutAForeignKey(t *testing.T) {
 	// Which is not a theoretical loss: the database accepts a parent that is
 	// not there, and a real FK would have refused it.
 	var id string
-	if err := db.QueryRow(`
+	if err := db.QueryRow(context.Background(), `
 		INSERT INTO categories (name, parent_id)
 		VALUES ('orphan', '00000000-0000-7000-8000-000000000000')
 		RETURNING id

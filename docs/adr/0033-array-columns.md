@@ -25,18 +25,25 @@ expensive one, because the adoption loop needs `Diff` to come back empty and a
 dropped column makes it non-empty forever. One `text[]` anywhere in a module
 means that module cannot be adopted at all.
 
-**The half that is not obvious:** `database/sql` cannot scan a Postgres array
+**The half that was not obvious:** `database/sql` cannot scan a Postgres array
 literal into a `[]string` and cannot bind one either. `pq.Array` was unavailable
 under the stdlib-only invariant, so supporting arrays meant writing the
 array-literal codec in both directions — bounded work, landing in two places that
 are already single choke points, `compiler.bind` and the scan assignment.
 
-**That invariant is being inverted.**
-[ADR-0040](0040-the-driver-is-a-dependency.md) takes a direct pgx dependency, and
-pgx decodes arrays natively, so the codec becomes deletable. That does not make
-the work wasted or this record wrong: the codec is what let arrays ship under the
-constraint that held when it was written, and every decision below is independent
-of who does the decoding.
+**That invariant was inverted, and the codec is gone.**
+[ADR-0040](0040-the-driver-is-a-dependency.md) took a direct pgx dependency, pgx
+decodes and encodes arrays natively, and `array.go` was deleted along with the
+449 lines and the public `sqlb.EncodeArray` that went with it. A `[]string` is
+now bound and scanned with nothing in between.
+
+That does not make the work wasted or this record wrong. The codec is what let
+arrays ship under the constraint that held when it was written, and every
+decision below — the element-type-with-a-flag shape, the three operators, the
+refusal of NULL elements — is independent of who does the decoding and survived
+the deletion unchanged. What did change is where arrays are tested: the engine's
+own suite cannot test a codec it no longer contains, so `pgtest/array_test.go`
+is the whole of their coverage now.
 
 **Why jsonb does not answer this.** For a greenfield schema it is defensible. An
 adoption target already has `text[]`, and declaring it `jsonb` makes `Diff`

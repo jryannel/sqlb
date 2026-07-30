@@ -51,8 +51,8 @@ func newWriter(db sqlb.Executor, opts Options) (writer, error) {
 	if !handle.CanBeginTx() {
 		return writer{}, fmt.Errorf(
 			"rest: %s wraps its writes in a transaction, but %T cannot begin one; "+
-				"pass the *sql.DB (or a *sqlb.DB over it), implement "+
-				"BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error) on the wrapper, "+
+				"pass the *pgxpool.Pool (or a *sqlb.DB over it), implement "+
+				"BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) on the wrapper, "+
 				"or set Options.DisableTransactions to run writes under autocommit",
 			opts.Path, db)
 	}

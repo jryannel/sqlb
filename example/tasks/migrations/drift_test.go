@@ -27,14 +27,13 @@ package migrations_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 	"testing"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
@@ -107,11 +106,11 @@ var unexpressible = []string{
 func TestTheHistoryStillBuildsTheDeclaredSchema(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := sql.Open("pgx", dsn)
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("opening the database: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(pool.Close)
 
 	// shadow.Build rather than migrations.Apply, and the difference is not
 	// stylistic. goose records what it has applied in a goose_db_version table
@@ -124,7 +123,7 @@ func TestTheHistoryStillBuildsTheDeclaredSchema(t *testing.T) {
 	//
 	// It is also what `sqlb migrate -check` does, so this stays a test of the
 	// command rather than of something adjacent to it.
-	current, report, res, err := shadow.Build(ctx, db, shadow.Options{Dir: "."})
+	current, report, res, err := shadow.Build(ctx, pool, shadow.Options{Dir: "."})
 	if err != nil {
 		t.Fatalf("replaying the migration history: %v", err)
 	}
@@ -140,7 +139,7 @@ func TestTheHistoryStillBuildsTheDeclaredSchema(t *testing.T) {
 	// declaration in the author's, and the diff below is never empty — issue
 	// #24, which is exactly the failure this gate would otherwise report every
 	// run and train everyone to ignore.
-	unprobed, err := shadow.NormalizeChecks(ctx, db, target, shadow.Options{})
+	unprobed, err := shadow.NormalizeChecks(ctx, pool, target, shadow.Options{})
 	if err != nil {
 		t.Fatalf("normalising the declared checks: %v", err)
 	}

@@ -45,11 +45,11 @@ package shadow
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jryannel/sqlb/schema"
 )
 
@@ -89,7 +89,7 @@ const probeName = "sqlb_normalize_probe"
 // this rewrites declarations underneath them. The rewritten expression is
 // semantically identical and Postgres stores the same thing either way, so what
 // changes is the text, not the schema; but it does change.
-func NormalizeChecks(ctx context.Context, db *sql.DB, reg *schema.Registry, opts Options) ([]string, error) {
+func NormalizeChecks(ctx context.Context, db DB, reg *schema.Registry, opts Options) ([]string, error) {
 	if db == nil {
 		return nil, fmt.Errorf("shadow: NormalizeChecks needs a database connection")
 	}
@@ -97,13 +97,13 @@ func NormalizeChecks(ctx context.Context, db *sql.DB, reg *schema.Registry, opts
 		return nil, nil
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("shadow: normalising checks: %w", err)
 	}
 	// Always. The commit path does not exist: every statement below is a probe
 	// whose only product is the string it returns.
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var unprobed []string
 	for _, t := range reg.Tables() {
@@ -139,12 +139,12 @@ func NormalizeChecks(ctx context.Context, db *sql.DB, reg *schema.Registry, opts
 
 // tableExists asks whether the name resolves, without raising the error a cast
 // to regclass raises when it does not.
-func tableExists(ctx context.Context, tx *sql.Tx, table string) (bool, error) {
-	var oid sql.NullString
-	if err := tx.QueryRowContext(ctx, "SELECT to_regclass($1)::text", table).Scan(&oid); err != nil {
+func tableExists(ctx context.Context, tx pgx.Tx, table string) (bool, error) {
+	var oid *string
+	if err := tx.QueryRow(ctx, "SELECT to_regclass($1)::text", table).Scan(&oid); err != nil {
 		return false, err
 	}
-	return oid.Valid, nil
+	return oid != nil, nil
 }
 
 // probe adds the expression as a constraint, reads back what Postgres stored,
@@ -155,14 +155,14 @@ func tableExists(ctx context.Context, tx *sql.Tx, table string) (bool, error) {
 // reference to a column that does not exist yet is the ordinary case — would
 // take every check after it down with it, and the failure would look like a
 // property of the *next* table.
-func probe(ctx context.Context, tx *sql.Tx, table, expr string) (string, error) {
-	if _, err := tx.ExecContext(ctx, "SAVEPOINT "+probeName); err != nil {
+func probe(ctx context.Context, tx pgx.Tx, table, expr string) (string, error) {
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+probeName); err != nil {
 		return "", err
 	}
 
 	out, err := probeInner(ctx, tx, table, expr)
 	if err != nil {
-		if _, rbErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+probeName); rbErr != nil {
+		if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+probeName); rbErr != nil {
 			// The transaction is unusable from here, and saying so beats
 			// reporting every remaining check as unprobeable.
 			return "", errors.Join(err, rbErr)
@@ -170,17 +170,17 @@ func probe(ctx context.Context, tx *sql.Tx, table, expr string) (string, error) 
 		return "", err
 	}
 
-	_, err = tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+probeName)
+	_, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+probeName)
 	return out, err
 }
 
-func probeInner(ctx context.Context, tx *sql.Tx, table, expr string) (string, error) {
+func probeInner(ctx context.Context, tx pgx.Tx, table, expr string) (string, error) {
 	// NOT VALID because the point is what Postgres *stores*, not whether the
 	// rows satisfy it. The shadow database has no rows, so this buys nothing
 	// today and keeps the probe cheap on a database that is not empty.
 	add := fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s) NOT VALID",
 		table, quoteIdent(probeName), expr)
-	if _, err := tx.ExecContext(ctx, add); err != nil {
+	if _, err := tx.Exec(ctx, add); err != nil {
 		return "", err
 	}
 
@@ -190,7 +190,7 @@ func probeInner(ctx context.Context, tx *sql.Tx, table, expr string) (string, er
 		WHERE con.conname = $1 AND con.conrelid = $2::regclass`
 
 	var normalised string
-	if err := tx.QueryRowContext(ctx, read, probeName, table).Scan(&normalised); err != nil {
+	if err := tx.QueryRow(ctx, read, probeName, table).Scan(&normalised); err != nil {
 		return "", err
 	}
 	if normalised == "" {

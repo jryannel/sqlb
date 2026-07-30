@@ -53,7 +53,7 @@ running Postgres, and say what it did rather than what the source implies.
 | `GROUP BY` / `date_trunc` rollup | 19 / 5 | **Half,** measured, and worse than reported. `GroupBy`, `Having`, `Sum`, `Count`, `Coalesce` exist, but the natural `Sel(Call{…})` bucket *fails*: a `Param` unit is numbered `$1` in the projection and `$2` in the `GROUP BY`, so Postgres sees two expressions and refuses the query. The unit has to be a `Raw` literal. The REST surface has no aggregate shape at all |
 | Polymorphic owner (`tenant_kind` + `tenant_id`) | 9 | **Not expressible as a reference.** Works as two plain columns; loses `?expand` and the FK |
 | `LEFT JOIN LATERAL` per-row aggregate | 8 | **Mostly covered** by inverse expansion ([ADR-0022](adr/0022-references-declare-their-inverse.md)) for count/latest-child; anything else is `Raw` |
-| Partial index carrying an invariant | 6 | **Works** via `AddIndex(Index{Where: …})` — but only the struct form, and the predicate is a hand-written string the diff compares textually. Measured, and better than reported: the violation arrives as a `*ConstraintError` carrying the index name, so a 409 *can* say which rule was hit — given a driver-aware `SetErrorClassifier` |
+| Partial index carrying an invariant | 6 | **Works** via `AddIndex(Index{Where: …})` — but only the struct form, and the predicate is a hand-written string the diff compares textually. Measured, and better than reported: the violation arrives as a `*ConstraintError` carrying the index name, so a 409 *can* say which rule was hit, with nothing to register |
 | `soft delete` (`deleted_at`) | 5 | **Works** — `SoftDelete()` + a hook. [FEEDBACK](../FEEDBACK.md) finding 2 argues a view is the better answer |
 | `FOR UPDATE` | 4 | **Works,** plus `ForShare` and `SkipLocked` — measured under contention, not merely compiled: four workers over twelve rows claim each row exactly once, and dropping the two calls makes every row claimed four times. Still undocumented; still no example walks it |
 | `vector(n)` | 3 | **Not expressible** — [ADR-0026](adr/0026-vectors-declare-their-index.md), and `introspect` refuses the column, so it cannot even round-trip |
@@ -104,13 +104,14 @@ raises the `meter` example's value: it would have hit this on its first chart.
 is that nothing lets the REST layer turn a violation into a 409 naming the rule.
 The runtime half is there: the violation arrives as a `*ConstraintError` whose
 `Constraint` is the index name the schema chose, so a handler can match on
-`one_pending_invitation_per_email` rather than on "duplicate key". The catch is
-that reaching the name needs a driver-aware `SetErrorClassifier` — the standard
-library defines no way to read a constraint name off an error, which is exactly
-why that seam exists. So the open question is narrower than it looked: not "can
-the layer know which rule was hit" but "should the schema declare the rule by
-name, the way `Check` does". The test doubles as the repository's only worked
-`SetErrorClassifier`.
+`one_pending_invitation_per_email` rather than on "duplicate key". Reaching the
+name used to need a driver-aware `SetErrorClassifier`, because the standard
+library defines no way to read a constraint name off an error; sqlb reads
+`*pgconn.PgError` itself since
+[ADR-0040](adr/0040-the-driver-is-a-dependency.md), so that catch is gone. The
+open question is therefore narrower than it looked: not "can the layer know
+which rule was hit" but "should the schema declare the rule by name, the way
+`Check` does".
 
 **The missing bind-parameter cast produces a silent wrong answer, and cannot be
 worked around in the builder.** `?day=eq.2026-07-30` against a `timestamptz`

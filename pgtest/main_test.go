@@ -2,7 +2,6 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -10,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -23,7 +22,7 @@ const image = "postgres:18-alpine"
 // admin is the connection to the container's default database. Tests do not
 // use it directly; freshDB creates a database of its own through it, which is
 // far cheaper than a container each and keeps tests independent anyway.
-var admin *sql.DB
+var admin *pgxpool.Pool
 
 // dsn renders a connection string for a database in the running container,
 // reachable from the host.
@@ -78,7 +77,7 @@ func run(m *testing.M) (int, error) {
 			host, port.Port(), database)
 	}
 
-	admin, err = sql.Open("pgx", dsn("sqlb"))
+	admin, err = pgxpool.New(ctx, dsn("sqlb"))
 	if err != nil {
 		return 0, fmt.Errorf("opening admin connection: %w", err)
 	}
@@ -97,7 +96,7 @@ func run(m *testing.M) (int, error) {
 // and returns a connection to it, dropped when the test ends. A database per
 // test rather than a container per test: container startup dominates, and
 // CREATE DATABASE is milliseconds.
-func freshDB(t testing.TB) *sql.DB {
+func freshDB(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	db := freshStockDB(t)
 	bootstrap(t, db)
@@ -109,7 +108,7 @@ func freshDB(t testing.TB) *sql.DB {
 // extension, which is a claim the shimmed database cannot test — with
 // uuid_generate_v7() defined, both spellings work and the difference is
 // invisible.
-func freshStockDB(t testing.TB) *sql.DB {
+func freshStockDB(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 
 	name := databaseName(t)
@@ -118,18 +117,19 @@ func freshStockDB(t testing.TB) *sql.DB {
 	mustExec(t, admin, `DROP DATABASE IF EXISTS `+quoteIdent(name))
 	mustExec(t, admin, `CREATE DATABASE `+quoteIdent(name))
 
-	db, err := sql.Open("pgx", dsn(name))
+	pool, err := pgxpool.New(context.Background(), dsn(name))
 	if err != nil {
 		t.Fatalf("opening %s: %v", name, err)
 	}
 	t.Cleanup(func() {
-		db.Close()
-		// A dropped database cannot have open connections, and database/sql
-		// pools them, so the close above is not always enough on its own.
-		_, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`)
+		pool.Close()
+		// A dropped database cannot have open connections, and a pool holds
+		// them, so the close above is not always enough on its own.
+		_, _ = admin.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`)
 	})
 
-	return db
+	return pool
 }
 
 // bootstrap installs what the generated DDL assumes exists but Postgres does
@@ -143,7 +143,7 @@ func freshStockDB(t testing.TB) *sql.DB {
 // Worth stating plainly, because the test cannot: generated DDL for a UUIDv7
 // primary key does not apply to a stock Postgres. That is a real gap in what
 // sqlb emits, not an artefact of this harness.
-func bootstrap(t testing.TB, db *sql.DB) {
+func bootstrap(t testing.TB, db *pgxpool.Pool) {
 	t.Helper()
 	mustExec(t, db, `
 		CREATE FUNCTION uuid_generate_v7() RETURNS uuid
@@ -178,9 +178,9 @@ func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-func mustExec(t testing.TB, db *sql.DB, query string) {
+func mustExec(t testing.TB, db *pgxpool.Pool, query string) {
 	t.Helper()
-	if _, err := db.Exec(query); err != nil {
+	if _, err := db.Exec(context.Background(), query); err != nil {
 		t.Fatalf("exec failed: %v\n%s", err, strings.TrimSpace(query))
 	}
 }

@@ -1,7 +1,8 @@
 # ADR-0026: A vector column declares its index, and similarity search is its own operation
 
-- **Status:** Exploring — nothing is built, and **it is not in 1.0**. Buildable as
-  designed only after the driver flip ([ADR-0040](0040-the-driver-is-a-dependency.md))
+- **Status:** Exploring — nothing is built, and **it is not in 1.0**. The driver
+  flip it was waiting on ([ADR-0040](0040-the-driver-is-a-dependency.md)) has
+  landed, so it is now buildable as designed rather than as an approximation
 - **Confidence:** Low — the unindexed half is grounded in a working module
   (`core/rag` in `subject-mono`); the indexed half is argument, and its sharpest
   claims are about how Postgres behaves under a filter
@@ -109,10 +110,17 @@ one global name, owned by nobody, idempotent), and `sqlb.Vector`.
 
 **Superseded:** the original `sqlb.Vector` was a text-form `[]float32` because
 `Executor` was `database/sql`. [ADR-0040](0040-the-driver-is-a-dependency.md)
-removes that constraint and cites this record as its strongest evidence. When
-built, `sqlb.Vector` is pgvector's binary codec on the pool — measured at 2.7×
-the time and 21× the memory for a 50-row page of 1536-dimension embeddings. The
-rest of this record is unaffected either way.
+removed that constraint — it cites this record as its strongest evidence — and
+it is built. `sqlb.Vector` is therefore specified as pgvector's binary codec
+registered on the pool, which is now an ordinary thing to write rather than a
+thing the driver had no spelling for. The measurement that made the case: 2.7×
+the time and 21× the memory for a 50-row page of 1536-dimension embeddings,
+through the text form. The rest of this record is unaffected either way.
+
+**What this record is still waiting on** is therefore nothing external. The
+blocker named in the status above is gone; what remains is the three places in
+`migrate` and `introspect` that do not know the type, and the index half, which
+this record deliberately leaves as a second decision.
 
 ## Consequences
 

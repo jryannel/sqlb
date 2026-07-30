@@ -7,8 +7,10 @@
 
 ## Context
 
-`Executor` is `QueryContext` + `ExecContext`, which `*sql.Tx` satisfies, so a
-caller could always thread a `*sql.Tx` through terminal calls. Nothing sat on top
+`Executor` is the two-method subset a transaction satisfies — `QueryContext` and
+`ExecContext` when this was written, `Query` and `Exec` over pgx since
+[ADR-0040](0040-the-driver-is-a-dependency.md) — so a caller could always thread
+a transaction through terminal calls. Nothing sat on top
 of that: no `WithTx`, so every caller wrote its own begin/commit/rollback and its
 own panic handling — and forgetting the rollback-on-panic leaks a connection with
 an open transaction. The hook registry was a package-level `sync.Map`, so hooks
@@ -67,7 +69,7 @@ knows a commit succeeded.
 through terminals — `All(ctx, tx)` rather than `tx.Query[T]().All(ctx)`. That is
 the ergonomic half that genuinely needs 1.27.
 
-Hook resolution depends on the executor's *dynamic type*: passing a raw `*sql.DB`
+Hook resolution depends on the executor's *dynamic type*: passing a raw pool
 where a `*DB` was intended silently uses the default registry. The compiler
 cannot catch it, because both satisfy `Executor` — the price of not breaking call
 sites. Nesting-joins also means an inner failure rolls back the whole outer unit

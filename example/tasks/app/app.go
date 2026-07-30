@@ -8,7 +8,6 @@
 package app
 
 import (
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/tasks"
@@ -27,7 +27,7 @@ import (
 // Config is what New needs.
 type Config struct {
 	// DB is the database. Required.
-	DB *sql.DB
+	DB *pgxpool.Pool
 
 	// Secret signs and verifies tokens. Required, at least 32 bytes.
 	Secret []byte

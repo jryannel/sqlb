@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrConstraint is the class of every write a database constraint refused.
@@ -66,10 +68,11 @@ func kindOfSQLState(code string) (ConstraintKind, bool) {
 // text of a message — which no rename survives, and which every application
 // with a unique index otherwise ends up writing.
 //
-// Kind is always set. The remaining fields are filled only as far as the
-// driver reports them: the standard library defines no way to read a
-// constraint name from an error, so the built-in classification recovers the
-// kind alone. Registering a driver-aware SetErrorClassifier fills in the rest.
+// Every field is filled from what Postgres reported. That is a change: the
+// built-in classification used to recover the kind alone, because reading a
+// constraint name meant naming a driver and sqlb named none. It names pgx now
+// (ADR-0040), so a caller can branch on Constraint without registering
+// anything.
 type ConstraintError struct {
 	// Kind is the integrity rule that was broken.
 	Kind ConstraintKind
@@ -120,37 +123,20 @@ type ErrorClassifier func(error) (ConstraintError, bool)
 
 var classifier atomic.Pointer[ErrorClassifier]
 
-// SetErrorClassifier installs a driver-aware classifier, which supersedes the
-// built-in one.
+// SetErrorClassifier installs a classifier that supersedes the built-in one.
 //
-// The built-in classification is deliberately dependency-free: it reads
-// SQLSTATE through an interface a driver error may satisfy, which recovers the
-// kind and nothing else. The constraint *name* is the field carrying the value
-// — it is what lets an application branch on which rule was broken — and every
-// driver exposes it as a struct field rather than as a method, so reaching it
-// means naming the driver. This library depends on the standard library alone
-// and will not do that, so the seam is here instead:
+// It is rarely needed now. This used to be the only way to reach the constraint
+// *name* — the field that lets an application branch on which rule was broken —
+// because that name is a struct field on the driver's error type rather than a
+// method, and sqlb depended on the standard library alone and would not name a
+// driver. ADR-0040 settled which driver, so the built-in classifier reads
+// *pgconn.PgError directly and fills every field. Users who registered a
+// classifier for exactly that reason can delete it.
 //
-//	sqlb.SetErrorClassifier(func(err error) (sqlb.ConstraintError, bool) {
-//	        var pg *pgconn.PgError
-//	        if !errors.As(err, &pg) {
-//	                return sqlb.ConstraintError{}, false
-//	        }
-//	        kind, ok := sqlb.ConstraintKindOf(pg.SQLState())
-//	        if !ok {
-//	                return sqlb.ConstraintError{}, false
-//	        }
-//	        return sqlb.ConstraintError{
-//	                Kind:       kind,
-//	                Constraint: pg.ConstraintName,
-//	                Table:      pg.TableName,
-//	                Column:     pg.ColumnName,
-//	                Detail:     pg.Detail,
-//	        }, true
-//	})
-//
-// Call it once at startup, before serving. Passing nil restores the built-in
-// classification.
+// What remains is a seam for errors that reach sqlb wrapped in something
+// errors.As cannot see through, or for an application that wants its own
+// mapping. Call it once at startup, before serving; passing nil restores the
+// built-in classification.
 func SetErrorClassifier(fn ErrorClassifier) {
 	if fn == nil {
 		classifier.Store(nil)
@@ -166,9 +152,10 @@ func ConstraintKindOf(sqlstate string) (ConstraintKind, bool) {
 	return kindOfSQLState(sqlstate)
 }
 
-// sqlStater is the interface a driver error satisfies when it carries a
-// SQLSTATE code. pgx's *pgconn.PgError does, as a method rather than a field,
-// which is the whole reason the class is reachable without importing it.
+// sqlStater is the interface an error satisfies when it carries a SQLSTATE
+// code. *pgconn.PgError does, and so do the wrappers some pools put around it,
+// which is why the fallback below is worth keeping now that the concrete type
+// is checked first.
 type sqlStater interface{ SQLState() string }
 
 // classifyConstraint reports whether err is a constraint violation, using the
@@ -188,6 +175,26 @@ func classifyConstraint(err error) (*ConstraintError, bool) {
 		// driver and be handed an error from another, so the built-in check
 		// still runs below.
 	}
+	// The driver's own error first, because it is the only thing carrying the
+	// constraint name, the table and the column — the fields an application
+	// branches on.
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		kind, ok := kindOfSQLState(pg.SQLState())
+		if !ok {
+			return nil, false
+		}
+		return &ConstraintError{
+			Kind:       kind,
+			Constraint: pg.ConstraintName,
+			Table:      pg.TableName,
+			Column:     pg.ColumnName,
+			Detail:     pg.Detail,
+		}, true
+	}
+
+	// Anything else that can state a SQLSTATE: a pool's wrapper, or a test
+	// double. The kind is recoverable, and nothing else is.
 	var s sqlStater
 	if !errors.As(err, &s) {
 		return nil, false

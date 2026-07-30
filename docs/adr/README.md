@@ -146,13 +146,13 @@ the section it bears on, and move on.
 | [0037](0037-search-is-ilike-until-it-cannot-be.md) | `?search` is ILIKE, and a `tsvector` column is not in 1.0 † | Working | High |
 | [0038](0038-collections-are-flat.md) | A collection has one path, and the parent is a filter | Working | High |
 | [0039](0039-a-schema-edit-is-an-api-edit.md) | A schema edit is an API edit, and the break is diffed | Exploring | Medium |
-| [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam ‡ | Exploring | Medium |
+| [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Accepted | High |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.
 Scope is not a status — a record can be Working as a decision and unbuilt as a
 feature, which 0037 is.
 
-‡ **Obligates work before the tag.** This is the only record that does. It
-breaks `Executor`, which `compatibility.md` freezes, so it lands before 1.0 or
-not at all; it is Phase 4 of [the road to 1.0](../release-1.0.md).
+No record now obligates work before the tag. 0040 did — it breaks `Executor`,
+which `compatibility.md` freezes, so it was land-before-1.0-or-never — and it is
+built.

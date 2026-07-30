@@ -2,7 +2,6 @@ package app_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -10,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
@@ -34,7 +34,7 @@ import (
 const image = "postgres:18-alpine"
 
 var (
-	admin *sql.DB
+	admin *pgxpool.Pool
 	dsn   func(database string) string
 )
 
@@ -77,7 +77,7 @@ func run(m *testing.M) (int, error) {
 			host, port.Port(), database)
 	}
 
-	admin, err = sql.Open("pgx", dsn("tasks"))
+	admin, err = pgxpool.New(ctx, dsn("tasks"))
 	if err != nil {
 		return 0, fmt.Errorf("opening the admin connection: %w", err)
 	}
@@ -92,7 +92,7 @@ func run(m *testing.M) (int, error) {
 // A database per test rather than a container per test: starting Postgres
 // dominates, CREATE DATABASE is milliseconds, and a test that shares tables
 // with another eventually depends on the order they run in.
-func freshDB(t *testing.T) *sql.DB {
+func freshDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
 	name := databaseName(t)
@@ -101,23 +101,29 @@ func freshDB(t *testing.T) *sql.DB {
 	mustExec(t, admin, `DROP DATABASE IF EXISTS `+quoteIdent(name))
 	mustExec(t, admin, `CREATE DATABASE `+quoteIdent(name))
 
-	db, err := sql.Open("pgx", dsn(name))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dsn(name))
 	if err != nil {
 		t.Fatalf("opening %s: %v", name, err)
 	}
 	t.Cleanup(func() {
-		db.Close()
-		// A database with open connections cannot be dropped, and database/sql
-		// pools them, so closing is not always enough on its own.
-		_, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`)
+		pool.Close()
+		// A database with open connections cannot be dropped, and a pool holds
+		// them, so closing is not always enough on its own.
+		_, _ = admin.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`)
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	if err := migrations.Apply(ctx, db); err != nil {
+	// goose is a database/sql runner; it gets a handle over this pool rather
+	// than a second connection to the same database.
+	gooseDB := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = gooseDB.Close() }()
+	if err := migrations.Apply(ctx, gooseDB); err != nil {
 		t.Fatalf("applying migrations: %v", err)
 	}
-	return db
+	return pool
 }
 
 // databaseName derives a legal, unique database name from the test name.
@@ -147,9 +153,9 @@ func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-func mustExec(t *testing.T, db *sql.DB, query string) {
+func mustExec(t *testing.T, pool *pgxpool.Pool, query string) {
 	t.Helper()
-	if _, err := db.Exec(query); err != nil {
+	if _, err := pool.Exec(context.Background(), query); err != nil {
 		t.Fatalf("exec failed: %v\n%s", err, strings.TrimSpace(query))
 	}
 }

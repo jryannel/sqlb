@@ -103,11 +103,11 @@ func TestWithTxKeepsBothLegsOnOneConnection(t *testing.T) {
 		}
 		// A LOCAL setting is scoped to the transaction, so reading it back
 		// non-zero proves the second statement is on the same one.
-		if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '31s'`); err != nil {
+		if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = '31s'`); err != nil {
 			return err
 		}
 		var timeout string
-		rows, err := tx.QueryContext(ctx, `SHOW statement_timeout`)
+		rows, err := tx.Query(ctx, `SHOW statement_timeout`)
 		if err != nil {
 			return err
 		}
@@ -180,7 +180,7 @@ func TestAfterCommitFiresOnlyForDurableWrites(t *testing.T) {
 	ctx := context.Background()
 	db := accountsDB(t)
 	// The handle is an Executor, so DDL goes through it like anything else.
-	if _, err := db.ExecContext(ctx, `ALTER TABLE accounts ADD CONSTRAINT owner_unique UNIQUE (owner)`); err != nil {
+	if _, err := db.Exec(ctx, `ALTER TABLE accounts ADD CONSTRAINT owner_unique UNIQUE (owner)`); err != nil {
 		t.Fatalf("adding the unique constraint: %v", err)
 	}
 

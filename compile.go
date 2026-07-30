@@ -2,7 +2,6 @@ package sqlb
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 )
@@ -73,26 +72,15 @@ func (c *compiler) write(s string) { c.sb.WriteString(s) }
 
 // bind appends a value as the next bind parameter.
 //
-// It is the one function every value passes through on its way out, which is
-// why the array encoding lands here rather than at each operator that can take
-// one: a slice the driver would refuse becomes a driver.Valuer rendering the
-// Postgres array literal, and everything else is passed on untouched
-// (ADR-0033). A []byte stays a []byte — that is bytea, and the driver has
-// always handled it.
+// It is the one function every value passes through on its way out, and it
+// passes them all on untouched. That is worth a sentence, because it used to be
+// where the array encoding lived: database/sql has no array case in either
+// direction, so a slice had to be wrapped in a driver.Valuer rendering the
+// Postgres literal (ADR-0033). pgx encodes slices natively, so the wrapping and
+// the codec behind it are gone (ADR-0040).
 func (c *compiler) bind(v any) {
-	c.args = append(c.args, bindValue(v))
+	c.args = append(c.args, v)
 	c.write(c.d.Placeholder(len(c.args)))
-}
-
-// bindValue wraps a value the driver cannot take as it stands.
-func bindValue(v any) any {
-	if v == nil {
-		return nil
-	}
-	if _, isArray := arrayElemKind(reflect.TypeOf(v)); isArray {
-		return arrayParam{v: v}
-	}
-	return v
 }
 
 func (c *compiler) ident(s string) {

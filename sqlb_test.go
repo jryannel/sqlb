@@ -2,17 +2,17 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/internal/pgfake"
 	"github.com/jryannel/sqlb/schema"
 )
 
@@ -236,7 +236,7 @@ func TestLikeEscaping(t *testing.T) {
 }
 
 func TestCountSQL(t *testing.T) {
-	h := newHarness(t, []string{"count"}, [][]driver.Value{{int64(3)}})
+	h := newHarness(t, []string{"count"}, [][]any{{int64(3)}})
 	defer h.close()
 
 	q := sqlb.Query[User]().Where(sqlb.F("org_id").Eq("acme")).
@@ -262,7 +262,7 @@ func TestCountSQL(t *testing.T) {
 // too high — so ?count=exact would report more rows than the client can ever
 // page through.
 func TestCountOfADistinctQueryCountsDistinctRows(t *testing.T) {
-	h := newHarness(t, []string{"count"}, [][]driver.Value{{int64(2)}})
+	h := newHarness(t, []string{"count"}, [][]any{{int64(2)}})
 	defer h.close()
 
 	q := sqlb.Query[User]().Distinct().
@@ -323,7 +323,7 @@ func TestUpsert(t *testing.T) {
 // structs by position, which is only sound because a VALUES insert returns one
 // row per row written, in order.
 func TestInsertWritesStoredValuesBack(t *testing.T) {
-	h := newHarness(t, storedUserColumns, [][]driver.Value{
+	h := newHarness(t, storedUserColumns, [][]any{
 		storedUser("gen-1", "ada@example.com"),
 		storedUser("gen-2", "bob@example.com"),
 	})
@@ -346,7 +346,7 @@ func TestInsertWritesStoredValuesBack(t *testing.T) {
 // written back at all in that case, and the returned slice is the account.
 func TestInsertDoesNotWriteBackWhenAConflictSkippedARow(t *testing.T) {
 	// Three rows in; the middle one conflicts, so the database returns two.
-	h := newHarness(t, storedUserColumns, [][]driver.Value{
+	h := newHarness(t, storedUserColumns, [][]any{
 		storedUser("gen-ada", "ada@example.com"),
 		storedUser("gen-cy", "cy@example.com"),
 	})
@@ -384,8 +384,8 @@ func TestInsertDoesNotWriteBackWhenAConflictSkippedARow(t *testing.T) {
 // storedUserColumns is the RETURNING order writeReturning emits for User.
 var storedUserColumns = []string{"id", "email", "name", "age", "org_id", "password_hash", "created_at"}
 
-func storedUser(id, email string) []driver.Value {
-	return []driver.Value{id, email, "", nil, "acme", "", time.Time{}}
+func storedUser(id, email string) []any {
+	return []any{id, email, "", nil, "acme", "", time.Time{}}
 }
 
 func TestUnscopedMutationsAreRefused(t *testing.T) {
@@ -427,7 +427,7 @@ func TestBeforeQueryHook(t *testing.T) {
 		return nil
 	})
 
-	h := newHarness(t, []string{"id", "org_id", "title"}, [][]driver.Value{{"p1", "acme", "Hello"}})
+	h := newHarness(t, []string{"id", "org_id", "title"}, [][]any{{"p1", "acme", "Hello"}})
 	defer h.close()
 
 	posts, err := sqlb.Query[Post]().Where(sqlb.F("title").Eq("Hello")).All(context.Background(), h.db)
@@ -553,7 +553,7 @@ func TestCollectIntoAggregateShape(t *testing.T) {
 		OrgID string `db:"org_id"`
 		N     int64  `db:"n"`
 	}
-	h := newHarness(t, []string{"org_id", "n"}, [][]driver.Value{
+	h := newHarness(t, []string{"org_id", "n"}, [][]any{
 		{"acme", int64(12)}, {"globex", int64(4)},
 	})
 	defer h.close()
@@ -571,7 +571,7 @@ func TestCollectIntoAggregateShape(t *testing.T) {
 func TestScanIgnoresUnmappedColumns(t *testing.T) {
 	h := newHarness(t,
 		[]string{"id", "email", "name", "age", "org_id", "password_hash", "created_at", "row_number"},
-		[][]driver.Value{{"u1", "ada@example.com", "Ada", int64(36), "acme", "", time.Time{}, int64(1)}})
+		[][]any{{"u1", "ada@example.com", "Ada", int64(36), "acme", "", time.Time{}, int64(1)}})
 	defer h.close()
 
 	users, err := sqlb.Query[User]().All(context.Background(), h.db)
@@ -588,7 +588,7 @@ func TestScanIgnoresUnmappedColumns(t *testing.T) {
 
 func TestOneReportsAmbiguity(t *testing.T) {
 	h := newHarness(t, []string{"id", "email", "name", "age", "org_id", "password_hash", "created_at"},
-		[][]driver.Value{
+		[][]any{
 			{"u1", "a@example.com", "A", nil, "acme", "", time.Time{}},
 			{"u2", "b@example.com", "B", nil, "acme", "", time.Time{}},
 		})
@@ -678,49 +678,42 @@ func TestTypedColumnsCarryTheirType(t *testing.T) {
 
 // --- test harness -----------------------------------------------------------
 
-// harness is a database/sql driver that records statements and replays canned
+// harness is a pgx-shaped executor that records statements and replays canned
 // rows, so the builder, hooks and scanner can be tested end to end without a
 // live Postgres.
+//
+// It used to be a registered database/sql driver. ADR-0040 made pgx the
+// contract, so what a test needs to stand in for is an Executor rather than a
+// driver — which is less machinery, not more: no registration, no name
+// sequence, and the statement arrives as text rather than through a prepared
+// statement nobody was asserting on.
 type harness struct {
 	t    *testing.T
-	db   *sql.DB
-	name string
+	db   *fakeDB
 	mu   sync.Mutex
 	log  []string
 	cols []string
-	rows [][]driver.Value
+	rows [][]any
 	err  error
 	// Transaction control, used by db_test.go. BEGIN, COMMIT and ROLLBACK are
 	// appended to log alongside statements so a test can assert on the shape
 	// of a whole unit of work.
 	txErr      error
 	commitErr  error
-	lastTxOpts driver.TxOptions
+	lastTxOpts pgx.TxOptions
 }
 
-var harnessSeq struct {
-	sync.Mutex
-	n int
-}
-
-func newHarness(t *testing.T, cols []string, rows [][]driver.Value) *harness {
+func newHarness(t *testing.T, cols []string, rows [][]any) *harness {
 	t.Helper()
-	harnessSeq.Lock()
-	harnessSeq.n++
-	name := fmt.Sprintf("sqlbtest%d", harnessSeq.n)
-	harnessSeq.Unlock()
-
-	h := &harness{t: t, name: name, cols: cols, rows: rows}
-	sql.Register(name, &fakeDriver{h: h})
-	db, err := sql.Open(name, "")
-	if err != nil {
-		t.Fatalf("opening the fake driver: %v", err)
-	}
-	h.db = db
+	h := &harness{t: t, cols: cols, rows: rows}
+	h.db = &fakeDB{h: h}
 	return h
 }
 
-func (h *harness) close() { _ = h.db.Close() }
+// close is kept for the call sites that defer it. There is no pool to release
+// now that the harness is not a driver, and a test that stops calling it should
+// not have to be found and edited to say so.
+func (h *harness) close() {}
 
 // failWith makes the next statements fail, standing in for a database that
 // rejects a query.
@@ -738,10 +731,8 @@ func (h *harness) failWithErr(err error) {
 	h.err = err
 }
 
-// pgErr stands in for a driver's error type. It carries SQLState as a method,
-// which is how pgx exposes it and the reason the class is reachable without
-// importing a driver, and the constraint name as a field, which is why it is
-// not.
+// pgErr stands in for pgconn.PgError. It carries SQLState as a method, which is
+// how the classifier reaches the class, and the constraint name as a field.
 type pgErr struct {
 	code       string
 	constraint string
@@ -766,56 +757,56 @@ func (h *harness) lastQuery() string {
 	return h.log[len(h.log)-1]
 }
 
-type fakeDriver struct{ h *harness }
+// fakeDB is the Executor the tests run against. It is also a Beginner, so
+// WithTx works through it.
+type fakeDB struct{ h *harness }
 
-func (d *fakeDriver) Open(string) (driver.Conn, error) { return &fakeConn{h: d.h}, nil }
-
-type fakeConn struct{ h *harness }
-
-func (c *fakeConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("fake driver: prepared statements are not used")
-}
-func (c *fakeConn) Close() error              { return nil }
-func (c *fakeConn) Begin() (driver.Tx, error) { return nil, errors.New("fake driver: no transactions") }
-
-func (c *fakeConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	c.h.record(query)
-	c.h.mu.Lock()
-	err := c.h.err
-	c.h.mu.Unlock()
+func (d *fakeDB) Query(_ context.Context, query string, _ ...any) (pgx.Rows, error) {
+	d.h.record(query)
+	d.h.mu.Lock()
+	err := d.h.err
+	d.h.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return &fakeRows{cols: c.h.cols, data: c.h.rows}, nil
+	return &pgfake.Rows{Cols: d.h.cols, Data: d.h.rows}, nil
 }
 
-func (c *fakeConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	c.h.record(query)
-	return fakeResult{n: int64(len(c.h.rows))}, nil
-}
-
-type fakeRows struct {
-	cols []string
-	data [][]driver.Value
-	i    int
-}
-
-func (r *fakeRows) Columns() []string { return r.cols }
-func (r *fakeRows) Close() error      { return nil }
-
-func (r *fakeRows) Next(dest []driver.Value) error {
-	if r.i >= len(r.data) {
-		return io.EOF
+func (d *fakeDB) Exec(_ context.Context, query string, _ ...any) (pgconn.CommandTag, error) {
+	d.h.record(query)
+	d.h.mu.Lock()
+	err := d.h.err
+	d.h.mu.Unlock()
+	if err != nil {
+		return pgconn.CommandTag{}, err
 	}
-	copy(dest, r.data[r.i])
-	r.i++
-	return nil
+	return pgconn.NewCommandTag(fmt.Sprintf("DELETE %d", len(d.h.rows))), nil
 }
 
-type fakeResult struct{ n int64 }
-
-func (r fakeResult) LastInsertId() (int64, error) { return 0, nil }
-func (r fakeResult) RowsAffected() (int64, error) { return r.n, nil }
+func (d *fakeDB) BeginTx(_ context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
+	d.h.mu.Lock()
+	if d.h.txErr != nil {
+		err := d.h.txErr
+		d.h.mu.Unlock()
+		return nil, err
+	}
+	d.h.lastTxOpts = opts
+	d.h.mu.Unlock()
+	d.h.record("BEGIN")
+	return &pgfake.Tx{
+		Statements: d,
+		OnCommit: func() error {
+			d.h.record("COMMIT")
+			d.h.mu.Lock()
+			defer d.h.mu.Unlock()
+			return d.h.commitErr
+		},
+		OnRollback: func() error {
+			d.h.record("ROLLBACK")
+			return nil
+		},
+	}, nil
+}
 
 // normalise makes bound arguments comparable across integer widths, which the
 // builder does not narrow.
@@ -928,7 +919,7 @@ func TestCollectRejectsUnmatchedFields(t *testing.T) {
 		Total  float64 `db:"revenue"`
 	}
 	// The query aliases "revenu" — one character off.
-	h := newHarness(t, []string{"status", "revenu"}, [][]driver.Value{{"published", 1234.5}})
+	h := newHarness(t, []string{"status", "revenu"}, [][]any{{"published", 1234.5}})
 	defer h.close()
 
 	_, err := sqlb.Collect[Revenue](context.Background(), h.db,
@@ -949,7 +940,7 @@ func TestCollectAcceptsAnExactMatch(t *testing.T) {
 		Status string  `db:"status"`
 		Total  float64 `db:"revenue"`
 	}
-	h := newHarness(t, []string{"status", "revenue"}, [][]driver.Value{{"published", 1234.5}})
+	h := newHarness(t, []string{"status", "revenue"}, [][]any{{"published", 1234.5}})
 	defer h.close()
 
 	rows, err := sqlb.Collect[Revenue](context.Background(), h.db,
@@ -965,7 +956,7 @@ func TestCollectAcceptsAnExactMatch(t *testing.T) {
 // All stays permissive: a projection legitimately leaves fields unfilled, which
 // is what ?select=id,name is.
 func TestAllToleratesPartialProjection(t *testing.T) {
-	h := newHarness(t, []string{"id", "name"}, [][]driver.Value{{"u1", "Ada"}})
+	h := newHarness(t, []string{"id", "name"}, [][]any{{"u1", "Ada"}})
 	defer h.close()
 
 	users, err := sqlb.Query[User]().Select(sqlb.F("id"), sqlb.F("name")).All(context.Background(), h.db)

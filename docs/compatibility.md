@@ -20,18 +20,19 @@ These are the surfaces worth freezing early, because they are the ones other
 code and other *systems* couple to. Breaking them would invalidate stored data
 or deployed clients, not just call sites.
 
-- **`Executor`** — `QueryContext` and `ExecContext`, and nothing more. Every
-  wrapper, tracer and pool adapter written against it stays valid. Widening this
-  interface would break every implementation at once, so it grows by adding
-  optional interfaces that are type-asserted for, never by adding methods.
+- **`Executor`** — `Query` and `Exec` over pgx's types, and nothing more.
+  `*pgxpool.Pool`, `*pgx.Conn` and `pgx.Tx` satisfy it as they stand, and so does
+  any wrapper written over them. Widening this interface would break every
+  implementation at once, so it grows by adding optional interfaces that are
+  type-asserted for, never by adding methods.
 
-  **This is the one entry here that is going to break before 1.0, deliberately.**
-  [ADR-0040](adr/0040-the-driver-is-a-dependency.md) redefines `Executor` over
-  pgx's types and removes the `database/sql` path entirely, because the driver
-  is structurally blocking two things sqlb has already committed to. That is a
-  pre-1.0-or-never change: after the tag the same work is a major version and a
-  hand migration for every consumer. The signature above is what ships until it
-  lands. What changes, and what it costs, is [below](#the-driver).
+  **This entry broke once, deliberately, before 1.0.** It used to be
+  `QueryContext` and `ExecContext` over `database/sql`.
+  [ADR-0040](adr/0040-the-driver-is-a-dependency.md) redefined it, because the
+  driver was structurally blocking two things sqlb had already committed to.
+  That was a pre-1.0-or-never change: after the tag the same work is a major
+  version and a hand migration for every consumer. What it bought, and what it
+  cost, is [below](#the-driver).
 - **The filter grammar** — the URL syntax (`?status=eq.draft`, `?order=`,
   `?select=`, `?limit=`) and its operator names. This is a wire format: a
   deployed client or an agent driving the API off `sqlb.json` has requests built
@@ -107,11 +108,10 @@ they change with less ceremony.
 
 ## The driver
 
-**`database/sql` is the contract today, and it is being replaced before 1.0.**
-[ADR-0040](adr/0040-the-driver-is-a-dependency.md) decides that the engine
-depends on pgx v5 and that `database/sql` stops being the contract — one driver,
-not two. Nothing of it is built yet, so what follows describes what ships now,
-and the paragraphs after it say what changes.
+**sqlb depends on pgx v5, and `database/sql` is not the contract.**
+[ADR-0040](adr/0040-the-driver-is-a-dependency.md) decides it and the engine is
+built that way: `Executor` is `Query` and `Exec` over `pgx.Rows` and
+`pgconn.CommandTag`, and there is one driver rather than two.
 
 This document previously said the opposite, in as many words, and that reversal
 is the point rather than an embarrassment: the answer it gave was correct for a
@@ -119,71 +119,54 @@ library that extends the standard library, and sqlb turned out to be aiming at
 something else. Every evaluation of sqlb so far has asked the driver question
 first, which is why it is answered here at length in both directions.
 
-**pgx works today, through `database/sql`.** `github.com/jackc/pgx/v5/stdlib`
-registers a driver, and `sql.Open("pgx", dsn)` — or `stdlib.OpenDBFromPool` over
-a `pgxpool` you already have — produces a `*sql.DB` that satisfies `Executor`.
-That is not a fallback nobody runs: it is how sqlb's own Postgres suite runs.
-[`pgtest`](../pgtest/) opens every connection that way, including the
-transaction-pooling tests [ADR-0019](adr/0019-pgbouncer-in-the-path.md) exists
-for. The driver underneath every real-database claim this project makes is pgx.
+**What you pass.** A `*pgxpool.Pool` is the ordinary case. A `pgx.Tx` is the
+interesting one: it is an `Executor` like any other, so sqlb writes join a unit
+of work the application opened itself, rather than opening a second transaction
+against the same pool. `sqlb.New(tx)` knows it is inside one — `InTx` reports
+true and a `WithTx` on it joins rather than nesting — and deliberately does not
+take over the boundary, so `AfterCommit` refuses there rather than queueing
+callbacks behind a commit sqlb will never perform.
 
-**A pgx-native `Executor` is planned, and it replaces this one.** The two
-objections this document used to raise are answered rather than waived. The
-freeze is being broken on purpose and before the tag, which is the only window
-in which it is a redefinition rather than a major version. And the work is no
-longer a rewrite: the scanners read an internal `rowSource` interface rather than
-`*sql.Rows`, so `exec.go` and `mutate.go` no longer name the concrete type and
-the migration is an adapter behind that seam. What is *not* waived is the cost —
-every consumer inherits pgx, "importing sqlb costs nothing" stops being true, and
-anyone wanting this engine on another driver is out. ADR-0040 states that bill in
-full.
+**What it bought**, since the bill below is not free:
 
-**What going through `database/sql` costs**, stated plainly because it is not
-nothing:
+- **A shared transaction.** This was impossible before and is the largest
+  mechanical cost of adoption that disappears. A library holding a `pgx.Tx` and
+  sqlb holding a `*sql.Tx` were in two transactions even against one pool —
+  `stdlib.OpenDBFromPool` shares connections, not transaction handles.
+- **Arrays at no cost.** `array.go` was 449 lines of array-literal codec written
+  because `database/sql` has no array case in either direction
+  ([ADR-0033](adr/0033-array-columns.md)). It is deleted. A `[]string` binds as
+  `text[]` and scans back from one, and `sqlb.EncodeArray` — a public function
+  whose only job was rendering `{a,b}` — is gone with nothing in its place.
+- **Per-connection type codecs.** Registering a binary codec on `AfterConnect`
+  is a pgx API with no `database/sql` spelling, and
+  [ADR-0026](adr/0026-vectors-declare-their-index.md) had to specify a vector
+  column over pgvector's *text* form for exactly that reason. Measured, a 50-row
+  page of 1536-dimension embeddings cost 2.7× the time and 21× the memory
+  through the bridge, because the text literal is parsed element by element in
+  Go.
+- **`CopyFrom` and `pgx.Batch` are reachable**, through `DB.Tx()`. Reach rather
+  than speed: sqlb's multi-row `VALUES` already ran within ~10% of the same
+  statement hand-written over pgx, and the whole gap was `CopyFrom`'s absence.
+  sqlb still has no builder for either.
 
-- **`CopyFrom`** — pgx's binary bulk load has no `database/sql` spelling. Bulk
-  ingest keeps a pgx handle of its own, or becomes a multi-row `INSERT`. sqlb's
-  multi-row `VALUES` runs within ~10% of the same statement hand-written over
-  pgx, so this is reach rather than speed: the gap is `CopyFrom`'s absence, not
-  bridge overhead.
-- **Per-connection type codecs** — registering a binary codec on `AfterConnect`,
-  as pgvector's Go support does, is a pgx API. Through `database/sql` those
-  values move as text.
-- **`pgx.Batch`** — the round-trip savings are unavailable.
+**What it cost**, stated plainly:
 
-The second of these *is* on sqlb's own path, which is what changed. This document
-used to say none of them were, and that was true of the engine as it stood; it
-stopped being true when [ADR-0026](adr/0026-vectors-declare-their-index.md)
-designed a vector column and had to specify it over pgvector's text form for this
-exact reason. Measured, a 50-row page of 1536-dimension embeddings costs 2.7× the
-time and 21× the memory of the binary path, because the text literal is parsed
-element by element in Go. The other two remain things the code *beside* sqlb may
-want.
-
-**Sharing a transaction is the one real constraint.** A library holding a
-`pgx.Tx` and sqlb holding a `*sql.Tx` are in two transactions even against one
-pool: `stdlib.OpenDBFromPool` shares connections, not transaction handles. For
-sqlc this decides the whole adoption shape, and
-[with-sqlc.md](with-sqlc.md#if-your-sqlc-is-generated-for-pgx) says what to do
-about it. There is a raw-connection escape — `sql.Conn.Raw` reaches the
-underlying pgx connection — and it is neither tested here nor recommended: it
-puts both libraries on one session under two handles, neither of which knows
-about the other's `BEGIN`.
-
-Both adoption ports hit this, and they place the boundary precisely: the *bridge*
-is cheap — one of them calls the pgxpool bridge "a non-event", and pgx's `pgtype`
-values scan through it with no model edits — while the *flip*, moving a platform
-onto `database/sql` so a unit of work can span a sqlb module and a pgx-native
-one, is the expensive half. Leaf and disjoint modules are cheap either way. The
-constraint only bites where a transaction crosses the two.
+- **Every consumer inherits pgx.** "Importing sqlb costs nothing" is no longer
+  true and has been removed from the pitch rather than softened. What holds
+  instead is that the list is short and checked: `mise run deps-check` fails on
+  any dependency of the engine that is not pgx or something pgx itself pulls in,
+  and on `rest` anything that is not huma.
+- **sqlb does not run on another driver.** A population
+  [ADR-0001](adr/0001-postgres-only.md) had already made small, but not zero.
+- **`Executor` broke, and there was no deprecation path** that preserved both,
+  because the point was to have one.
 
 **What would change this.** The optional-interface path this document used to
-name as the growth path is now the *rejected* alternative, not the plan:
+name as the growth path was the rejected alternative rather than the plan:
 type-asserting a narrow capability delivers the capability without the
 positioning, and pgvector's binary codec only helps if it is on by default. What
 would send it back to `database/sql` is in ADR-0040's *What would change our
-mind* — the shortest version is that if the modules needing a shared transaction
-stay a short list that can hold its own pgx handle, and pgvector stays outside
-the registry, then the coexistence path was sufficient and this is an expensive
-answer to a narrow problem. Those are things to check before the work, not after:
-reversing afterwards costs a second `Executor` break on top of the first.
+mind* — and it is now an expensive question rather than a cheap one, since
+reversing costs a second `Executor` break on top of the first and `array.go`
+would have to be written again.

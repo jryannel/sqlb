@@ -58,7 +58,7 @@ func explain(ctx context.Context, db Executor, q Compilable, analyze bool) (*Pla
 	if analyze {
 		opts += ", ANALYZE, BUFFERS"
 	}
-	rows, err := db.QueryContext(ctx, "EXPLAIN ("+opts+") "+query, args...)
+	rows, err := db.Query(ctx, "EXPLAIN ("+opts+") "+query, args...)
 	if err != nil {
 		// A failure here is the useful signal: the statement is not valid
 		// against this database. Keep the SQL attached so the caller can see

@@ -2,13 +2,13 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb/codegen"
 	"github.com/jryannel/sqlb/schema"
 )
@@ -25,26 +25,27 @@ import (
 // shadowDSN creates a scratch database for the test and returns a connection
 // string for it.
 //
-// A DSN rather than an open *sql.DB, because the Project's ShadowDB has to hand
-// back a fresh connection on every call — the command closes what it is given,
-// and a real project is called more than once per session.
+// A DSN rather than an open pool, because the Project's ShadowDB has to hand
+// back a fresh one on every call — the command closes what it is given, and a
+// real project is called more than once per session.
 func shadowDSN(t *testing.T) string {
 	t.Helper()
 	name := databaseName(t) + "_shadow"
 	mustExec(t, admin, `DROP DATABASE IF EXISTS `+quoteIdent(name))
 	mustExec(t, admin, `CREATE DATABASE `+quoteIdent(name))
 	t.Cleanup(func() {
-		_, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`)
+		_, _ = admin.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`)
 	})
 
 	// The shim the generated DDL for a UUIDv7 primary key needs, installed the
 	// same way freshDB does it and for the same reason — see bootstrap.
-	db, err := sql.Open("pgx", dsn(name))
+	pool, err := pgxpool.New(context.Background(), dsn(name))
 	if err != nil {
 		t.Fatalf("opening the shadow database: %v", err)
 	}
-	defer func() { _ = db.Close() }()
-	bootstrap(t, db)
+	defer pool.Close()
+	bootstrap(t, pool)
 
 	return dsn(name)
 }
@@ -53,25 +54,25 @@ func shadowDSN(t *testing.T) string {
 // connection, empty the schema, hand it over. The destructive statement is here
 // rather than in sqlb because this is the only place that knows the database is
 // scratch.
-func shadowFunc(t *testing.T, connStr string) func(context.Context) (*sql.DB, error) {
+func shadowFunc(t *testing.T, connStr string) func(context.Context) (*pgxpool.Pool, error) {
 	t.Helper()
-	return func(ctx context.Context) (*sql.DB, error) {
-		db, err := sql.Open("pgx", connStr)
+	return func(ctx context.Context) (*pgxpool.Pool, error) {
+		pool, err := pgxpool.New(ctx, connStr)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := db.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-			_ = db.Close()
+		if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+			pool.Close()
 			return nil, fmt.Errorf("emptying the shadow database: %w", err)
 		}
-		if _, err := db.ExecContext(ctx, `
+		if _, err := pool.Exec(ctx, `
 			CREATE FUNCTION uuid_generate_v7() RETURNS uuid
 			LANGUAGE sql VOLATILE AS 'SELECT uuidv7()'
 		`); err != nil {
-			_ = db.Close()
+			pool.Close()
 			return nil, fmt.Errorf("reinstalling the uuid shim: %w", err)
 		}
-		return db, nil
+		return pool, nil
 	}
 }
 
