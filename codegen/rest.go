@@ -48,8 +48,17 @@ func renderREST(opts Options) ([]byte, error) {
 			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
 				continue
 			}
-			if strings.Contains(f.Desc().GoType(), "time.Time") {
+			goType := f.Desc().GoType()
+			if strings.Contains(goType, "time.Time") {
 				imports["time"] = true
+			}
+			// A create body carrying a jsonb column names json.RawMessage, so
+			// the file needs the import whether or not a patch body is emitted.
+			// The patch body brings encoding/json in for its own presence
+			// tracking, which is why a create-only resource was the only shape
+			// that named the type without importing it.
+			if t.Rest().Ops.Has(schema.OpCreate) && strings.Contains(goType, "json.RawMessage") {
+				imports["encoding/json"] = true
 			}
 		}
 		if t.Rest().Ops.Has(schema.OpUpdate) && len(bodyFields(t, forUpdate)) > 0 {
@@ -152,11 +161,12 @@ func renderCreateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {
 		d := f.Desc()
 		field := GoName(d.Name)
 		// Whether the *model* field is a pointer, not whether the column is
-		// nullable: a nullable json.RawMessage / []byte column is nullable yet
-		// its model field is non-pointer (null is the zero value). Keying on
-		// d.Nullable here would assign a *json.RawMessage body field to a
-		// json.RawMessage model field. bodyType makes the body a pointer for any
-		// optional non-pointer model type, so those go through the deref branch.
+		// nullable. The two part company on the slice-typed columns: a nullable
+		// bytea stays []byte and an array stays []T whether or not it is
+		// nullable, because a nil slice already says NULL (schema.FieldDesc.GoType).
+		// Keying on d.Nullable there would assign a *[]byte body field to a
+		// []byte model field. bodyType makes the body a pointer for any optional
+		// non-pointer model type, so those go through the deref branch.
 		modelIsPointer := strings.HasPrefix(goType(typeName, t.Name(), d, ov), "*")
 		switch {
 		case modelIsPointer:
