@@ -22,6 +22,36 @@ type Executor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// rowSource is the result set every scanner in this package reads, and it is an
+// interface rather than *sql.Rows on purpose.
+//
+// Nothing here needs the concrete type. Scanning is Columns once, then
+// Next/Scan per row, then Err — five methods, and *sql.Rows satisfies them as
+// it stands, so no adapter sits on the path anyone runs today.
+//
+// Naming the subset is what keeps a driver other than database/sql from costing
+// a second scanner. [compatibility.md] rules out a pgx-native Executor partly
+// because "*sql.Rows is a concrete struct rather than an interface, so pgx.Rows
+// cannot be made to satisfy the signature" — which is a fact about the
+// signature rather than about scanning. pgx.Rows is one thin wrapper from this
+// shape: Columns over FieldDescriptions, and a Close that returns nil. So if
+// the pgx path that doc leaves open is ever wanted, it is an adapter and an
+// optional interface, not a fork of scan, mutate and their type-mapping tests.
+//
+// It stays unexported until something outside the package implements it.
+// Exporting an interface for an adapter nobody has written yet is how you
+// acquire a permanent API for a problem you did not have; the rename is one
+// line on the day the adapter exists. The public contract remains Executor.
+//
+// [compatibility.md]: https://github.com/jryannel/sqlb/blob/main/docs/compatibility.md#the-driver
+type rowSource interface {
+	Columns() ([]string, error)
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close() error
+}
+
 // All runs the query and returns every matching row.
 //
 // The builder is cloned first, so query hooks amend a copy and running the same
@@ -95,18 +125,27 @@ func (b *Builder[T]) Count(ctx context.Context, db Executor) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	var n int64
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, wrapQueryErr(err, query)
 	}
 	defer rows.Close()
+	return scanCount(rows)
+}
+
+// scanCount reads the single value a COUNT projection returns.
+//
+// An empty result set counts zero rather than failing: a grouped count over no
+// groups returns no rows at all, and nought is the honest answer to how many
+// there were.
+func scanCount(rows rowSource) (int64, error) {
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
 			return 0, err
 		}
 		return 0, nil
 	}
+	var n int64
 	if err := rows.Scan(&n); err != nil {
 		return 0, err
 	}
@@ -135,6 +174,13 @@ func (b *Builder[T]) Exists(ctx context.Context, db Executor) (bool, error) {
 		return false, wrapQueryErr(err, query)
 	}
 	defer rows.Close()
+	return scanExists(rows)
+}
+
+// scanExists reports whether a result set has a first row. The error is read
+// after Next, because a Next that returns false may be a failure rather than an
+// end.
+func scanExists(rows rowSource) (bool, error) {
 	found := rows.Next()
 	return found, rows.Err()
 }
@@ -191,14 +237,14 @@ const (
 )
 
 // scanAll maps a result set onto a slice of T, tolerating unfilled fields.
-func scanAll[T any](rows *sql.Rows, m *Model) ([]T, error) {
+func scanAll[T any](rows rowSource, m *Model) ([]T, error) {
 	return scan[T](rows, m, scanPartial)
 }
 
 // scan maps a result set onto a slice of T. Result columns with no matching
 // model field are read and discarded, so a query selecting extra expressions
 // still scans.
-func scan[T any](rows *sql.Rows, m *Model, mode scanMode) ([]T, error) {
+func scan[T any](rows rowSource, m *Model, mode scanMode) ([]T, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		return nil, err

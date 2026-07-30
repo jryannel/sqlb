@@ -2,7 +2,6 @@ package sqlb
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -562,8 +561,13 @@ func writeReturning(c *compiler, m *Model) {
 }
 
 // scanAllClose scans a RETURNING result set and closes it.
-func scanAllClose[T any](rows *sql.Rows, m *Model) ([]T, error) {
-	defer rows.Close()
+//
+// The close error is dropped for the reason .golangci.yml gives for excluding
+// (*sql.Rows).Close from errcheck — it is redundant with the Err that scanAll
+// already reads. It is spelled out here rather than excluded there because the
+// destination is now an interface, which that exclusion cannot name.
+func scanAllClose[T any](rows rowSource, m *Model) ([]T, error) {
+	defer func() { _ = rows.Close() }()
 	return scanAll[T](rows, m)
 }
 
