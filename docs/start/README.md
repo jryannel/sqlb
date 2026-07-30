@@ -74,10 +74,12 @@ reads it back into a schema file.
 
 ## Requirements
 
-Go 1.25 or newer, and Postgres. Nothing else: the engine depends on the standard
-library alone, and a check in CI enforces it. Only the `rest` package pulls in
-[Huma](https://huma.rocks), and only if you use it; the generated TypeScript
-client and the generated CLI are separate toolchains and separate opt-ins.
+Go 1.24 or newer, and Postgres. Nothing else: the engine's `go.mod` has no
+requirements at all — no `go.sum` either — and a check in CI enforces it. Only
+`rest` pulls in [Huma](https://huma.rocks), and it is a module of its own, so you
+inherit it only by asking for it: `go get github.com/jryannel/sqlb/rest`. That
+module needs Go 1.25, because huma does. The generated TypeScript client and the
+generated CLI are separate toolchains and separate opt-ins.
 
 Postgres only, deliberately. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING`
 are all load-bearing, and multi-dialect support would cost the best features

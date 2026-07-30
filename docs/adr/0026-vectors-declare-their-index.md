@@ -47,7 +47,7 @@ That line cannot be drawn here, because a vector is not a query shape. It is a
 **column**, and the same document says the schema is sqlb's:
 
 ```
-example/blog/blogschema/schema.go     the one declaration you edit
+example/blogschema/schema.go     the one declaration you edit
   → go run ./example/withsqlc/gen     renders it to DDL
   → example/withsqlc/schema.sql       what sqlc reads
 ```

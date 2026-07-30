@@ -83,10 +83,14 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
 ## Install
 
 ```bash
-go get github.com/jryannel/sqlb
+go get github.com/jryannel/sqlb              # the engine: no dependencies
+go get github.com/jryannel/sqlb/rest         # only if you serve HTTP: adds huma
 ```
 
-Go 1.25 or newer, and Postgres.
+**Go 1.24 or newer**, and Postgres. The REST adapter is a module of its own so
+that importing the engine puts nothing in your module graph and no floor under
+your toolchain — `rest` needs Go 1.25, because huma does, and you only pay that
+if you mount it ([ADR-0007](docs/adr/0007-generated-rest-handlers.md)).
 [Quickstart](https://jryannel.github.io/sqlb/start/quickstart/) goes
 from here to a running server.
 

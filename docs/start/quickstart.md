@@ -3,10 +3,17 @@
 By the end of this page you have a schema, generated models, a query running
 against Postgres, and a REST API in front of it.
 
-sqlb needs Go 1.25 or newer and Postgres.
+sqlb needs Go 1.24 or newer and Postgres.
 
 ```bash
 go get github.com/jryannel/sqlb
+```
+
+The REST section below also needs the adapter, which is a module of its own so
+that the engine stays dependency-free. It requires Go 1.25, because huma does:
+
+```bash
+go get github.com/jryannel/sqlb/rest
 ```
 
 ## See one running first

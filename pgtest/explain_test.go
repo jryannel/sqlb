@@ -12,7 +12,7 @@ import (
 	"github.com/jryannel/sqlb/schema"
 
 	// Imported for its side effects: declaring a table registers it.
-	_ "github.com/jryannel/sqlb/example/blog/blogschema"
+	_ "github.com/jryannel/sqlb/example/blogschema"
 )
 
 // This is the practice the README describes, run against the worked example:

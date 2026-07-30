@@ -9,7 +9,7 @@ import (
 
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/blog"
-	_ "github.com/jryannel/sqlb/example/blog/blogschema"
+	_ "github.com/jryannel/sqlb/example/blogschema"
 	"github.com/jryannel/sqlb/filter"
 	"github.com/jryannel/sqlb/schema"
 )
