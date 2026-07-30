@@ -153,6 +153,7 @@ server over the manifest.
 | [Reference](https://jryannel.github.io/sqlb/reference/) | Filter operators, column types, capabilities, codegen options, CLI, rejections |
 | [Architecture](https://jryannel.github.io/sqlb/project/architecture/) | How the pieces fit, the request path, where safety lives |
 | [Decision records](https://jryannel.github.io/sqlb/adr/) | What was decided, why, and what would change our mind |
+| [`example/recipes`](example/recipes/) | Eighty-odd small examples, one file per aspect — the place to look when you know what you are building and need to know how one piece is spelled |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
 | [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
 | [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx: hooks arriving through a value group, and a resource that refuses to mount without them |
