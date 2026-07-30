@@ -38,7 +38,7 @@ func renderModels(opts Options) ([]byte, error) {
 			switch f.Desc().GoType() {
 			case "time.Time", "*time.Time", "[]time.Time":
 				imports["time"] = true
-			case "json.RawMessage":
+			case "json.RawMessage", "*json.RawMessage":
 				imports["encoding/json"] = true
 			case "sqlb.Vector":
 				// The second thing in this file that is not a plain Go type,
