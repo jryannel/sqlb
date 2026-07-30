@@ -10,9 +10,14 @@
   `Executor`. High on the performance shape, which is now measured rather than
   reasoned (see below) and turned out narrower than this record first claimed:
   ordinary CRUD is ~30%, and the bulk-insert gap is an API gap rather than a
-  driver one. Medium that a framework is the right product for sqlb at all,
-  which is a positioning bet rather than a technical finding and is the part a
-  reader should push on. Lower on deleting the `database/sql` path outright
+  driver one. High, as of 2026-07-30, that a framework is the right product for
+  sqlb at all — this was Medium and flagged as the part a reader should push on,
+  and it got pushed on: [ADR-0007](0007-generated-rest-handlers.md) split `rest`
+  into its own module to keep huma out of a consumer's graph, and the split was
+  reverted on the grounds that it defended the "importing sqlb costs nothing"
+  property *this* record retires. huma stays the default HTTP path in the same
+  module, aiming at a declarative model with a ready-made REST server. The
+  positioning is now a decision rather than a bet. Lower on deleting the `database/sql` path outright
   rather than keeping both, which is the cheapest thing here to get wrong
 - **Decided:** 2026-07-30
 - **Last reviewed:** 2026-07-30

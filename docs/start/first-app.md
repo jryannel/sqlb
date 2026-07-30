@@ -24,13 +24,13 @@ server_test.go         the assembled server, and every claim above asserted
 ```
 
 The generated four are committed, and
-`sqlb check ./example/blogschema` fails if they are stale. That is the whole staleness story: generated code is checked
+`sqlb check ./example/blog/blogschema` fails if they are stale. That is the whole staleness story: generated code is checked
 in so it is reviewable in a diff, and a gate makes forgetting to regenerate
 loud.
 
 ## The schema
 
-Three tables, in [`blogschema/schema.go`](../../example/blogschema/schema.go).
+Three tables, in [`blogschema/schema.go`](../../example/blog/blogschema/schema.go).
 `Org` is a tenant, `Author` a person, `Post` the table the dynamic data views
 are built over. The interesting one:
 

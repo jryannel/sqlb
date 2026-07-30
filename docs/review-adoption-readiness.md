@@ -146,7 +146,7 @@ outbox is a hook or a peer of hooks. Decide it while only one of them exists.
 This is the one finding a user would hit as a bug rather than a limitation.
 
 - `schema.Ref(…).Expandable()` is declared in the shipped example
-  ([example/blogschema/schema.go:30](../example/blogschema/schema.go)).
+  ([example/blog/blogschema/schema.go:30](../example/blog/blogschema/schema.go)).
 - `schema.Validate` checks it is on a `Ref` and module-local
   ([schema/registry.go:199](../schema/registry.go)); `schema.Lint` checks the
   foreign key is indexed ([schema/lint.go:125](../schema/lint.go)). Neither says

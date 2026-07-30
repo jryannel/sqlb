@@ -16,7 +16,7 @@ import (
 
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/blog"
-	_ "github.com/jryannel/sqlb/example/blogschema"
+	_ "github.com/jryannel/sqlb/example/blog/blogschema"
 	"github.com/jryannel/sqlb/rest"
 )
 
