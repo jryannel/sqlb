@@ -75,6 +75,49 @@ func TestGeneratedModels(t *testing.T) {
 	}
 }
 
+// A nullable jsonb column is a pointer for the same reason every other
+// nullable column is, and unlike the bytea sitting next to it here.
+//
+// Both map onto a slice of bytes, which is why the two were once treated alike
+// and a nullable jsonb was emitted bare. Only bytea earns it: nil is what a
+// []byte *is* when it is absent, whereas json.RawMessage is a document type,
+// and emitting it bare left a nullable jsonb as the one column whose generated
+// type did not state that it could be NULL.
+//
+// Under database/sql — sqlb's executor until it took pgx as a dependency — the
+// bare form could not even be read: convertAssign resolves a destination by
+// concrete type, and a named type over []byte matches no case, so a NULL failed
+// with "unsupported Scan, storing driver.Value type <nil>". pgx has no such gap,
+// so this is no longer load-bearing for sqlb's own reads. It stays load-bearing
+// for the generated struct, which is a plain Go type other code scans too.
+func TestNullableJSONIsAPointer(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("documents",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.JSON("meta"),
+		schema.JSON("attachment_ids").Nullable(),
+		schema.Bytes("thumbnail").Nullable(),
+	)
+	models := generate(t, r)["models_gen.go"]
+
+	for _, want := range []string{
+		`Meta json.RawMessage`,
+		// AttachmentIds, not AttachmentIDs: the initialism table carries "id"
+		// and not its plural. Unrelated to what this test is about, and
+		// asserted as it actually renders rather than as it reads best.
+		`AttachmentIds *json.RawMessage`,
+		`Thumbnail []byte`, // a nil slice is already how a bytea says NULL
+		// The pointer must not cost the import: the import set is keyed off
+		// the rendered Go type, so a type it does not recognise silently
+		// produces a model that does not compile.
+		`"encoding/json"`,
+	} {
+		if !contains(models, want) {
+			t.Errorf("models missing %q:\n%s", want, models)
+		}
+	}
+}
+
 func TestGeneratedColumns(t *testing.T) {
 	cols := generate(t, fixture())["columns_gen.go"]
 

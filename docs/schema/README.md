@@ -56,7 +56,15 @@ defaulting to a generated, time-ordered v7 value — the usual primary key.
 `Enum` emits a Go string type with one constant per value, so
 `blog.PostStatusPublished` exists and a typo does not compile.
 
-`Nullable()` allows SQL NULL and makes codegen emit the Go field as a pointer.
+`Nullable()` allows SQL NULL and makes codegen emit the Go field as a pointer —
+so a nullable `JSON` column is a `*json.RawMessage`, and a nullable `Timestamp`
+a `*time.Time`.
+
+The exceptions are the two types that can already express absence on their own.
+A `Bytes` column stays `[]byte` and an `Array()` column stays a slice, because
+nil is what a slice *is* when the value is absent; a pointer would add a second
+spelling for the same thing. `json.RawMessage` is a slice too, but a document
+type rather than a bag of bytes, so it takes the pointer like everything else.
 
 The full table, including which filter operators each type admits, is in the
 [column type reference](https://jryannel.github.io/sqlb/reference/column-types/).

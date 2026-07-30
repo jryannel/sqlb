@@ -78,6 +78,8 @@ func TestGoTypeMapping(t *testing.T) {
 		schema.Int("maybe_count").Nullable(),
 		schema.Timestamp("at"),
 		schema.Bytes("blob").Nullable(),
+		schema.JSON("doc"),
+		schema.JSON("maybe_doc").Nullable(),
 	)
 	for _, tt := range []struct{ column, want string }{
 		{"id", "string"},
@@ -85,6 +87,13 @@ func TestGoTypeMapping(t *testing.T) {
 		{"maybe_count", "*int32"},
 		{"at", "time.Time"},
 		{"blob", "[]byte"}, // already nilable, so it is not wrapped in a pointer
+		{"doc", "json.RawMessage"},
+		// The pair above and below is the whole point of this case. Both types
+		// are slices of bytes, and only bytea may skip the pointer: nil is what
+		// a []byte is when it is absent. A document type is not that, and a
+		// bare json.RawMessage was the one generated type that did not say its
+		// column could be NULL.
+		{"maybe_doc", "*json.RawMessage"},
 	} {
 		if got := tbl.Field(tt.column).Desc().GoType(); got != tt.want {
 			t.Errorf("%s: Go type = %q, want %q", tt.column, got, tt.want)

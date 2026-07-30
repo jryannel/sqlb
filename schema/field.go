@@ -565,12 +565,32 @@ func (f *Field) OnUpdate(a Action) *Field {
 // An array is the plain slice of its element type, nullable or not: a nil slice
 // already says NULL and an empty one says {}, so a pointer would add a third
 // spelling for a distinction that only has two.
+//
+// A nullable bytea is the same argument and stays []byte: nil is already how a
+// slice says NULL, and a pointer would add a second spelling for it.
+//
+// jsonb used to be excluded alongside it, on the strength of the resemblance —
+// json.RawMessage is a slice of bytes too. The resemblance is where it ends.
+// []byte says NULL by being nil because that is what it *is*; json.RawMessage
+// is a document type whose nullability the model otherwise never states, which
+// left a nullable jsonb as the one column whose generated type did not say it
+// could be NULL.
+//
+// It was also, until sqlb took pgx as a dependency (ADR-0040), unreadable.
+// database/sql's convertAssign resolves a scan destination by concrete type: it
+// carries a `case *[]byte` that stores NULL as a nil slice, and json.RawMessage
+// is a named type over []byte that matches neither that case nor any other, so
+// a NULL fell out the bottom as "unsupported Scan, storing driver.Value type
+// <nil>". pgx has no such gap and scans NULL into a bare json.RawMessage as
+// nil, so on sqlb's own path this is now consistency rather than a repair — but
+// it is consistency the generated struct keeps when it is read by anything
+// else, database/sql included.
 func (d *FieldDesc) GoType() string {
 	base := d.Type.GoType()
 	if d.Array {
 		return "[]" + base
 	}
-	if d.Nullable && base != "[]byte" && base != "json.RawMessage" {
+	if d.Nullable && base != "[]byte" {
 		return "*" + base
 	}
 	return base
