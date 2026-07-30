@@ -13,6 +13,11 @@ What is gone is the identity, for the same reason as in
 [the first evaluation](review-adoption-existing-app.md) — the shape of the
 codebase is what the findings are about, and that shape is a common one.
 
+This same `subject-mono` was later ported hands-on — three `core/` leaf modules
+moved off sqlc onto sqlb against real Postgres, the driver split of finding B1
+below met in practice. See [the port report](review-adoption-port-multi-app.md),
+which shares this subject and this anonymisation.
+
 It is a different codebase from that one rather than a second draft of it: a
 different evaluator, a different tree, and one conclusion they reach
 independently and by different routes (`database/sql`).
