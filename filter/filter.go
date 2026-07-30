@@ -18,10 +18,18 @@
 //	?tag=in.a,b,c                value lists
 //	?deleted_at=isnull           null tests
 //	?or=(status.eq.draft,age.lt.18)   explicit disjunction
+//	?filter={"op":"and",...}     JSON expression tree, for arbitrary nesting
 //	?sort=-created_at,name       sorting, "-" for descending
 //	?select=id,name              projection
 //	?search=ada                  fan-out over searchable columns
 //	?page=2&per_page=50          pagination
+//
+// The same predicates can arrive as a JSON expression tree, in the ?filter=
+// parameter above or — via [ParseFilterTree] — on their own. It is a second
+// frontend over the same compiler, so a JSON filter is subject to the identical
+// column gate, coercion, bind discipline and MaxFilters budget; the URL grammar
+// is what a query string can spell, not the limit of what the package accepts.
+// A request may carry both, and Parse charges their conditions to one budget.
 package filter
 
 import (
@@ -219,18 +227,26 @@ func unprojectedOrderColumns[T any](b *sqlb.Builder[T], projected []string) []st
 	return out
 }
 
+// TreeParam is the query parameter a JSON filter tree travels in when a request
+// carries the URL grammar and a tree at once (see [ParseFilterTree]). Parse does
+// not read it — a tree is the REST layer's to compile — but the parameter is
+// reserved so the URL grammar never mistakes it for a column, letting the two
+// filter formats share one request.
+const TreeParam = "filter"
+
 // reserved parameter names, which never name a column.
 //
 // "count" is reserved but unused here: it asks a list endpoint for a total row
 // count, which costs a second query and so is the REST layer's decision rather
 // than the parser's. It is listed anyway, because a column named `count` would
 // otherwise shadow it and the collision would only surface once someone asked
-// for a total.
+// for a total. TreeParam is here for the same reason: Parse skips it, but a
+// column named `filter` must not shadow the tree a request may also carry.
 var reserved = map[string]bool{
 	"select": true, "sort": true, "order": true, "search": true,
 	"expand": true, "limit": true, "offset": true, "page": true,
 	"per_page": true, "or": true, "and": true, "count": true,
-	"cursor": true,
+	"cursor": true, TreeParam: true,
 }
 
 // Parse compiles URL query parameters into a Query.
@@ -267,6 +283,16 @@ func Parse(values url.Values, opts Options) (*Query, error) {
 	}
 	for _, raw := range values["and"] {
 		if pred, ok := p.parseGroup("and", raw, 0); ok {
+			q.Where = append(q.Where, pred)
+		}
+	}
+
+	// A JSON filter tree in ?filter= is compiled by this same parser, so its
+	// conditions draw on the one MaxFilters budget the parameters above drew on,
+	// and its problems join the same error list. Splitting a request's
+	// conditions across the two formats therefore buys no extra budget.
+	if raw := firstValue(values, TreeParam); raw != "" {
+		if pred, ok := p.compileTree([]byte(raw)); ok {
 			q.Where = append(q.Where, pred)
 		}
 	}
@@ -463,22 +489,140 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 	if kind != opList && kind != opRange && kind != opSet && !p.withinLength(value, param, raw) {
 		return sqlb.Pred{}, false
 	}
+	elem, isArray, ok := p.gateArrayScalar(col, op, kind, param, raw)
+	if !ok {
+		return sqlb.Pred{}, false
+	}
+	operands, ok := p.urlOperands(col, elem, isArray, op, kind, value, param, raw)
+	if !ok {
+		return sqlb.Pred{}, false
+	}
+	return p.applyOp(col, f, op, kind, isArray, operands, param, raw)
+}
 
-	// An array column and a scalar one accept disjoint operator sets, and the
-	// refusal names the alternative rather than letting Postgres report a type
-	// error from a statement the caller cannot see.
+// gateArrayScalar rejects an operator that does not fit the column's
+// array-ness, naming the allowed alternatives, and reports whether the column
+// is an array (with its element type) so the caller coerces operands to the
+// right type. The refusal is written here rather than left to Postgres, which
+// would report a type error from a statement the caller cannot see.
+//
+// The whole-array ordering operators are refused here too: they share opKind
+// opBinary with the eq/ne that arrays do accept, so the operator table alone
+// cannot separate them, and refusing before extraction keeps the error the
+// caller sees the same whether or not the operand also fails to coerce.
+func (p *parser) gateArrayScalar(col *sqlb.ColumnInfo, op string, kind opKind, param, raw string) (reflect.Type, bool, bool) {
 	elem, isArray := arrayElem(col)
 	switch {
-	case isArray && !arrayOperators[kind]:
+	case isArray && !arrayOperators[kind],
+		isArray && kind == opBinary && op != "eq" && op != "ne" && op != "neq":
 		p.errAllowed(param, raw, fmt.Sprintf("operator %q does not apply to the array column %s", op, col.Name), arrayOperatorNames())
-		return sqlb.Pred{}, false
+		return nil, false, false
 	case !isArray && (kind == opElem || kind == opSet):
 		p.errf(param, raw, "operator %q needs an array column, but %s is %s", op, col.Name, col.Type)
-		return sqlb.Pred{}, false
+		return nil, false, false
 	}
-	if isArray {
-		return p.buildArray(col, elem, f, op, kind, value, param, raw)
+	return elem, isArray, true
+}
+
+// urlOperands turns one URL operand string into the coerced operands applyOp
+// expects, honouring the per-member length budget and, for arrays, the same
+// element-list rules `hasany` and a whole-array eq are held to. It is the URL
+// frontend's half of the split with applyOp: extraction here, mapping there.
+func (p *parser) urlOperands(col *sqlb.ColumnInfo, elem reflect.Type, isArray bool,
+	op string, kind opKind, value, param, raw string) ([]any, bool) {
+
+	switch kind {
+	case opNullary:
+		return nil, true
+
+	case opPattern:
+		return []any{value}, true
+
+	case opElem:
+		v, err := Coerce(unquote(value), elem)
+		if err != nil {
+			p.errf(param, value, "%v", err)
+			return nil, false
+		}
+		return []any{v}, true
+
+	case opSet:
+		return p.arrayOperand(elem, value, param, raw, op)
+
+	case opList:
+		parts := splitTopLevel(value, ',')
+		if len(parts) == 0 {
+			p.errf(param, raw, "operator %q needs at least one value", op)
+			return nil, false
+		}
+		// One list is one condition however long it is, so the filter budget
+		// does not bound it and this has to.
+		if len(parts) > p.opts.maxListValues() {
+			p.errf(param, raw, "operator %q was given %d values, the limit is %d",
+				op, len(parts), p.opts.maxListValues())
+			return nil, false
+		}
+		vals := make([]any, 0, len(parts))
+		for _, part := range parts {
+			if !p.withinLength(part, param, raw) {
+				return nil, false
+			}
+			v, err := Coerce(unquote(part), col.Type)
+			if err != nil {
+				p.errf(param, part, "%v", err)
+				return nil, false
+			}
+			vals = append(vals, v)
+		}
+		return vals, true
+
+	case opRange:
+		parts := splitTopLevel(value, ',')
+		if len(parts) != 2 {
+			p.errf(param, raw, "operator \"between\" needs exactly two values, got %d", len(parts))
+			return nil, false
+		}
+		for _, part := range parts {
+			if !p.withinLength(part, param, raw) {
+				return nil, false
+			}
+		}
+		lo, err := Coerce(unquote(parts[0]), col.Type)
+		if err != nil {
+			p.errf(param, parts[0], "%v", err)
+			return nil, false
+		}
+		hi, err := Coerce(unquote(parts[1]), col.Type)
+		if err != nil {
+			p.errf(param, parts[1], "%v", err)
+			return nil, false
+		}
+		return []any{lo, hi}, true
+
+	default: // opBinary
+		// A whole-array eq/ne binds an array literal built from an element list;
+		// a scalar eq/ne binds one coerced value.
+		if isArray {
+			return p.arrayOperand(elem, value, param, raw, op)
+		}
+		v, err := Coerce(unquote(value), col.Type)
+		if err != nil {
+			p.errf(param, value, "%v", err)
+			return nil, false
+		}
+		return []any{v}, true
 	}
+}
+
+// applyOp maps a column, operator and already-coerced operands to a predicate.
+// It is the single compiler both frontends terminate in: the URL parser
+// (urlOperands) and the JSON tree (jsonOperands) each turn their own wire
+// format into typed operands and then call this, so the two spell exactly the
+// same predicate and cannot drift (ADR-0003). Operand shape is the extractor's
+// contract: nullary takes none, binary/pattern one, range two, a list one or
+// more; an array operator's operands are already coerced to the element type.
+func (p *parser) applyOp(col *sqlb.ColumnInfo, f sqlb.Field, op string, kind opKind,
+	isArray bool, operands []any, param, raw string) (sqlb.Pred, bool) {
 
 	switch kind {
 	case opNullary:
@@ -487,83 +631,54 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 		}
 		return f.NotNull(), true
 
+	case opElem:
+		// `has` binds the element — `$1 = ANY(col)` — not an array constant.
+		return f.Has(operands[0]), true
+
+	case opSet:
+		if op == "hasany" {
+			return f.HasAny(operands...), true
+		}
+		return f.HasAll(operands...), true
+
 	case opPattern:
 		if !isTextColumn(col) {
 			p.errf(param, raw, "operator %q needs a text column, but %s is %s", op, col.Name, col.Type)
 			return sqlb.Pred{}, false
 		}
+		s, _ := operands[0].(string)
 		switch op {
 		case "contains":
-			return f.Contains(value), true
+			return f.Contains(s), true
 		case "startswith":
-			return f.StartsWith(value), true
+			return f.StartsWith(s), true
 		case "endswith":
-			return f.EndsWith(value), true
+			return f.EndsWith(s), true
 		case "like":
-			return f.Like(value), true
+			return f.Like(s), true
 		default:
-			return f.ILike(value), true
+			return f.ILike(s), true
 		}
 
 	case opList:
-		parts := splitTopLevel(value, ',')
-		if len(parts) == 0 {
-			p.errf(param, raw, "operator %q needs at least one value", op)
-			return sqlb.Pred{}, false
-		}
-		// One list is one condition however long it is, so the filter budget
-		// does not bound it and this has to.
-		if len(parts) > p.opts.maxListValues() {
-			p.errf(param, raw, "operator %q was given %d values, the limit is %d",
-				op, len(parts), p.opts.maxListValues())
-			return sqlb.Pred{}, false
-		}
-		vals := make([]any, 0, len(parts))
-		for _, part := range parts {
-			if !p.withinLength(part, param, raw) {
-				return sqlb.Pred{}, false
-			}
-			v, err := Coerce(unquote(part), col.Type)
-			if err != nil {
-				p.errf(param, part, "%v", err)
-				return sqlb.Pred{}, false
-			}
-			vals = append(vals, v)
-		}
 		if op == "in" {
-			return f.OneOf(vals...), true
+			return f.OneOf(operands...), true
 		}
-		return f.NotOneOf(vals...), true
+		return f.NotOneOf(operands...), true
 
 	case opRange:
-		parts := splitTopLevel(value, ',')
-		if len(parts) != 2 {
-			p.errf(param, raw, "operator \"between\" needs exactly two values, got %d", len(parts))
-			return sqlb.Pred{}, false
-		}
-		for _, part := range parts {
-			if !p.withinLength(part, param, raw) {
-				return sqlb.Pred{}, false
-			}
-		}
-		lo, err := Coerce(unquote(parts[0]), col.Type)
-		if err != nil {
-			p.errf(param, parts[0], "%v", err)
-			return sqlb.Pred{}, false
-		}
-		hi, err := Coerce(unquote(parts[1]), col.Type)
-		if err != nil {
-			p.errf(param, parts[1], "%v", err)
-			return sqlb.Pred{}, false
-		}
-		return f.Between(lo, hi), true
+		return f.Between(operands[0], operands[1]), true
 
-	default:
-		v, err := Coerce(unquote(value), col.Type)
-		if err != nil {
-			p.errf(param, value, "%v", err)
-			return sqlb.Pred{}, false
+	default: // opBinary
+		if isArray {
+			// gateArrayScalar has already refused everything but eq/ne, so the
+			// operands are an element list that binds as a whole-array literal.
+			if op == "eq" {
+				return f.Eq(sqlb.Array(operands...)), true
+			}
+			return f.Neq(sqlb.Array(operands...)), true
 		}
+		v := operands[0]
 		switch op {
 		case "eq":
 			return f.Eq(v), true
@@ -593,59 +708,6 @@ var arrayOperators = map[opKind]bool{
 	opSet:     true,
 	opNullary: true,
 	opBinary:  true, // narrowed to eq/ne below; the ordering four are refused there
-}
-
-// buildArray builds a condition against an array column.
-//
-// `has` binds the *element* — `$1 = ANY(tags)` — which is why the descriptor
-// keeps naming the element type rather than fusing it into an array constant.
-func (p *parser) buildArray(col *sqlb.ColumnInfo, elem reflect.Type, f sqlb.Field,
-	op string, kind opKind, value, param, raw string) (sqlb.Pred, bool) {
-
-	switch kind {
-	case opNullary:
-		// A NULL column and an empty array are different values, so this stays
-		// meaningful on an array and means what it does everywhere else.
-		if op == "isnull" {
-			return f.IsNull(), true
-		}
-		return f.NotNull(), true
-
-	case opElem:
-		v, err := Coerce(unquote(value), elem)
-		if err != nil {
-			p.errf(param, value, "%v", err)
-			return sqlb.Pred{}, false
-		}
-		return f.Has(v), true
-
-	case opSet:
-		vals, ok := p.arrayOperand(elem, value, param, raw, op)
-		if !ok {
-			return sqlb.Pred{}, false
-		}
-		if op == "hasany" {
-			return f.HasAny(vals...), true
-		}
-		return f.HasAll(vals...), true
-
-	default:
-		// Whole-array comparison. The ordering operators are refused here
-		// rather than in the table above, because they share opBinary with the
-		// two that are allowed.
-		if op != "eq" && op != "ne" && op != "neq" {
-			p.errAllowed(param, raw, fmt.Sprintf("operator %q does not apply to the array column %s", op, col.Name), arrayOperatorNames())
-			return sqlb.Pred{}, false
-		}
-		vals, ok := p.arrayOperand(elem, value, param, raw, op)
-		if !ok {
-			return sqlb.Pred{}, false
-		}
-		if op == "eq" {
-			return f.Eq(sqlb.Array(vals...)), true
-		}
-		return f.Neq(sqlb.Array(vals...)), true
-	}
 }
 
 // arrayOperand parses the comma-separated element list an array-valued operator

@@ -114,6 +114,19 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 		},
 	)
 
+	params = append(params, &huma.Param{
+		Name: filter.TreeParam, In: "query",
+		Description: fmt.Sprintf(
+			"A filter as a URL-encoded JSON tree, for the arbitrary and/or nesting the "+
+				"`or`/`and` grammar above cannot spell. A node is a group "+
+				"`{\"op\":\"and\",\"children\":[…]}` or a condition "+
+				"`{\"op\":\"eq\",\"field\":\"status\",\"value\":\"active\"}`, over the same columns "+
+				"and operators as the per-column parameters. It conjoins with any of those, "+
+				"and groups may nest up to %d levels.",
+			filter.MaxTreeDepth),
+		Schema: &huma.Schema{Type: "string"},
+	})
+
 	maxPage := orDefault(b.opts.MaxPageSize, filter.MaxPageSize)
 	defaultPage := orDefault(b.opts.DefaultPageSize, filter.DefaultPageSize)
 	params = append(params,

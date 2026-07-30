@@ -67,6 +67,10 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		Parameters:  listParams(b),
 		Responses:   errorResponses(reg, http.StatusBadRequest, http.StatusInternalServerError),
 	}, func(ctx context.Context, in *listInput) (*listOutput[T], error) {
+		// Parse also compiles a JSON filter tree carried in ?filter= — the
+		// arbitrary and/or nesting the query grammar cannot spell — under the
+		// same model and the same MaxFilters budget as the query parameters, so
+		// nothing here has to special-case it.
 		q, err := filter.Parse(in.query, filter.Options{
 			Model:           b.model,
 			DefaultPageSize: opts.DefaultPageSize,
