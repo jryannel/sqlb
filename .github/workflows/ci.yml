@@ -60,6 +60,11 @@ jobs:
           experimental: true
       - run: mise run test-pg
       - run: mise run test-demo
+      # The fx example boots the whole application against Postgres, including
+      # the composition that must refuse to start. Its one database-free test
+      # runs here too rather than in `gate`, because splitting a module's suite
+      # across two jobs costs more attention than it saves.
+      - run: mise run test-fx
 
   bisect:
     # Linear in the number of commits, so it runs on pull requests only. It is

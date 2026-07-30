@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "resources": [
+    {
+      "path": "/notes",
+      "ops": [
+        "create",
+        "read",
+        "update",
+        "delete",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "space_id",
+          "rel": "space",
+          "type": "uuid",
+          "read_only": true,
+          "filterable": true,
+          "expandable": true
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "enum": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "pinned",
+          "type": "bool",
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/spaces",
+      "ops": [
+        "read",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    }
+  ]
+}
