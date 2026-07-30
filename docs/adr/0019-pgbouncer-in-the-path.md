@@ -7,7 +7,7 @@
   reasoned: the pooler tests prove queries pass through, that `LISTEN` needs a
   direct connection, and that `NOTIFY` does not
 - **Decided:** 2026-07-27
-- **Last reviewed:** 2026-07-27
+- **Last reviewed:** 2026-07-30 (read against ADR-0040)
 
 ## Context
 
@@ -86,16 +86,20 @@ advisory lock, a temp table, or a cursor held across transactions.
    pooler; it is listed only to record that it was considered and does not need
    the exception.
 
-**sqlb does not manage this.** It takes `*sql.DB` from the caller and will not
-grow a pooled-versus-direct abstraction. Owning connections would mean importing
-a driver, which is precisely what `deps-check` exists to prevent
-([ADR-0015](0015-module-isolation.md) is about a different kind of module, but
-the same instinct). What sqlb owes its users is documentation of which component
-needs which connection — not a seam that pretends to arrange it.
+**sqlb does not manage this.** It takes a handle from the caller and will not
+grow a pooled-versus-direct abstraction. What sqlb owes its users is
+documentation of which component needs which connection — not a seam that
+pretends to arrange it. This half stands regardless of what the handle's type
+is: a pooler-aware sqlb would be sqlb deciding a deployment topology it cannot
+see.
 
-**pgx is the assumed driver.** Not a dependency of the engine, but the driver
-the `pgtest` module uses and the one whose defaults the documentation should
-speak to.
+**pgx is the assumed driver** — and, under
+[ADR-0040](0040-the-driver-is-a-dependency.md), the depended-upon one. The
+original wording here said "not a dependency of the engine," and gave the
+`deps-check` invariant as the reason sqlb could not own connections. That reason
+is being retired: the constraint was never what made connection management a bad
+idea, it just happened to also forbid it. Owning connections stays refused on its
+own merits.
 
 ## Consequences
 
@@ -126,6 +130,13 @@ single-Postgres gate would have been.
   statements**, whether by age or by configuration. Then the query path needs
   pgx in exec mode, which is a connection-string change for every consumer and
   belongs in the README rather than only here.
+
+  [ADR-0040](0040-the-driver-is-a-dependency.md) changes the shape of this
+  trigger without removing it. If the engine depends on pgx directly, exec mode
+  stops being something a DSN has to carry and becomes a `QueryExecMode` sqlb
+  sets in code and can default safely — which turns "every consumer edits a
+  connection string" into a library default. The trigger stays worth watching,
+  because a wrong default is then sqlb's to own rather than a deployment's.
 - **A second component turns out to need session state.** Two named exceptions
   is a list; four is a missing abstraction, and the answer would then be a real
   seam rather than more prose.
@@ -198,3 +209,10 @@ curve. Worth noting it is not gone — it is the fallback, running slowly.
   because the pooler tracks prepared statements (a setting, not a property), and
   a pooled `LISTEN` is accepted rather than refused, so the misconfiguration is
   silent.
+- 2026-07-30 — Read against [ADR-0040](0040-the-driver-is-a-dependency.md), which
+  cites this record's exec-mode trigger as one of the things a direct pgx
+  dependency answers. The trigger is rewritten rather than removed: under a pgx
+  engine, exec mode is a library default instead of a DSN every consumer has to
+  get right, which moves the failure from a deployment's silence to sqlb's
+  choice. Nothing measured here changes — the carve-outs are a property of
+  transaction pooling, not of the driver's spelling.

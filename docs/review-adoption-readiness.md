@@ -213,7 +213,11 @@ and example change, and `example/blog` is the place to show it.
 **Cost of change.** None, and it materially improves the answer to "how is this
 safe if the columns are strings."
 
-### 5. Nothing is tagged — **do this first, it is free**
+### 5. Nothing is tagged — **FIXED 2026-07-27**
+
+> Resolved: `v0.1.0` was tagged alongside
+> [compatibility.md](compatibility.md), and `v0.2.0` has followed. The
+> present-tense text below is preserved as written.
 
 `git tag` is empty. For a private repo that is fine; the moment anyone else is
 meant to evaluate it, an unreleased `main` reads as "unknown risk," whereas

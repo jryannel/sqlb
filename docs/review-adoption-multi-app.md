@@ -1,5 +1,15 @@
 # Review — adopting sqlb into a multi-app monorepo  (2026-07-29)
 
+> **Status: reconciled 2026-07-30.** This report already annotates its upstream
+> asks inline as they close; §6 is where to look. Since then the **first** of
+> those asks has been granted rather than merely answered — sqlb is taking the
+> pgx dependency ([ADR-0040](adr/0040-the-driver-is-a-dependency.md)), so the
+> "flip sqlc" answer this report was given is withdrawn. Ask 2 has shipped, and
+> B2's composite-primary-key half stopped being a blocker when the port hit one.
+> The same subject was subsequently *ported*:
+> [review-adoption-port-multi-app.md](review-adoption-port-multi-app.md).
+> Nothing below is edited; the inline annotations carry the changes.
+
 The second outside evaluation of sqlb, and the first against a repository
 holding *many* applications rather than one: ten products in one tree sharing a
 `core/` platform layer, 213 tables, 923 sqlc queries, 748 route registrations
@@ -556,6 +566,15 @@ flowchart LR
   these tables needs a surrogate `UUIDv7` PK + a unique index. That is a real
   migration with real data, on tables the team chose composite keys for
   deliberately.
+
+  **Downgraded by the port: not a blocker.** The stance is recorded
+  ([ADR-0034](adr/0034-one-column-addresses-a-row.md)), and this paragraph's
+  premise turns out to be narrower than written — the migration is owed only by
+  tables that are *addressed*. `core/llmcatalog` has a `(provider, model_id)`
+  key, was ported with no surrogate and no migration, and its upsert names the
+  composite conflict target directly. What such a table gives up is the ability
+  to declare its real key, and with it every PK-derived affordance. Real, but
+  not the 15-file migration this row budgets for.
 - **Arrays (8 files)** — ~~no `text[]`~~. **Closed since this review**:
   `schema.Text("tags").Array()` declares one, and it round-trips through
   `introspect` ([ADR-0033](adr/0033-array-columns.md)). The pilot-target table
@@ -575,6 +594,14 @@ flowchart LR
 README and its adoption review say so plainly and say elapsed time is what is
 missing. Meanwhile:
 
+> **Partly overtaken.** "Zero observed consumers" stopped being true the next
+> day: two ports ran, this subject's
+> ([review-adoption-port-multi-app.md](review-adoption-port-multi-app.md)) among
+> them, and three `core` modules now run on sqlb with 21/21 tests green. That is
+> days of someone else's use against testcontainers, not the six months against
+> production traffic the exit criterion asks for — so this blocker is smaller
+> than it was and is not gone.
+
 - Subject ADR-0002 requires ≥2 apps to need a `core/` change, with a Proposed ADR
   first. A dependency this load-bearing in `core/` would be the largest single
   platform bet this team has made.
@@ -593,7 +620,7 @@ core does not carry.
 
 | # | Friction | Impact |
 |---|---|---|
-| F1 | `rest.Options` has **no `Security` field** — generated operations carry no OpenAPI security scheme. Auth still works (chi middleware), and the **generated TS client is unaffected** (it is built from the schema, not the document, and takes the auth header from the injected transport). The cost falls on the OpenAPI document and anything driven by it — `/docs`, and agents reading the spec. | Low–medium |
+| F1 | ~~`rest.Options` has **no `Security` field**~~ — **closed**, see ask 2 in §6. Every generated operation now carries its resource's requirement into the document; middleware still enforces. | ~~Low–medium~~ |
 | F2 | Response envelope is sqlb's (`{items, page, per_page, has_more, next_cursor}`) and paging is `?page/per_page/cursor`, not `?limit/offset`. No backward compat needed, but **every consuming frontend changes**. | Medium |
 | F3 | Capabilities must be **restated** in `Describe` when adopting over existing sqlc structs (they aren't in the struct). Two sources of truth until a module goes schema-first. | Low |
 | F4 | `?expand` resolves **one level only**; no `?expand=list.workspace`. Several nested reads (`app-a`, `app-e`) are two levels. | Low–medium |
@@ -629,10 +656,18 @@ core does not carry.
 
 1. **A pgx path** — or an explicit statement that `database/sql` is the contract,
    so we stop looking for one. (Today: the honest answer is "flip sqlc".)
-   [Answered — [compatibility.md](compatibility.md#the-driver).]
+   [~~Answered — compatibility.md.~~ **Granted, and the earlier answer is
+   withdrawn.** [ADR-0040](adr/0040-the-driver-is-a-dependency.md) takes the pgx
+   dependency: `Executor` is redefined over pgx's types and the `database/sql`
+   path is removed, before 1.0 or not at all. So this ask is the one that moved
+   sqlb rather than the one sqlb declined — "flip sqlc" is no longer the honest
+   answer, and this team's own port is part of why. Not built; it is Phase 4 of
+   [the road to 1.0](release-1.0.md).]
 2. **`Security` on `rest.Options`**, so generated operations carry their auth
    scheme into the OpenAPI document (the TS client does not need it — it never
-   reads the document).
+   reads the document). [Built — every generated operation now carries the
+   resource's requirement. It documents; middleware still enforces. This also
+   closes F1 in §5.4.]
 3. **Array columns** — the cheapest of the schema gaps and the one with 8 real
    call sites here. [Built — [ADR-0033](adr/0033-array-columns.md). The ask is
    what prompted the record, and the record is now implemented: `text[]`

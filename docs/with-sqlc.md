@@ -182,6 +182,26 @@ disjoint tables costs days and can make the regeneration unnecessary; doing the
 regeneration first is the largest mechanical change available and proves
 nothing on its own.
 
+**This whole subsection inverts before 1.0, and it is worth knowing before you
+act on it.** [ADR-0040](adr/0040-the-driver-is-a-dependency.md) decides that
+sqlb's engine depends on pgx directly, at which point a pgx-generated `DBTX` is
+the *compatible* case and the second bullet above reverses: the regeneration that
+buys a shared transaction would be from `database/sql` to `pgx/v5`, and it is
+`database/sql`-generated sqlc that ends up on the disjoint-tables path. Nothing
+here is wrong today and the disjoint-tables advice is unaffected either way —
+but if you are pgx-generated and weighing the second bullet, the honest answer is
+to take the first bullet now and wait, because the expensive move you are
+considering is one the driver decision would undo.
+
+One thing this document has been assuming rather than testing is now tested:
+pgx's `pgtype` values — `pgtype.Date`, `pgtype.Timestamptz`, `pgtype.UUID` —
+scan through sqlb unchanged, because they implement `sql.Scanner` and
+`driver.Valuer`. That is what makes "point sqlb at your existing sqlc structs"
+work for a pgx-generated codebase, it is load-bearing for the section above, and
+it was previously covered only by a `sql.NullTime`. `pgtest/pgtype_test.go`
+covers it in both directions including NULLs, with compile-time assertions that
+fail the build if a pgx release ever drops those interfaces.
+
 ## Instead of compile-time column checking
 
 The honest gap: `sqlb.F("titel")` compiles and fails at runtime, where sqlc

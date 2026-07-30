@@ -20,8 +20,10 @@
 ## Context
 
 This question has been asked and answered before, twice, and neither answer
-stuck. [compatibility.md](../compatibility.md#the-driver) says `database/sql` is
-the contract and "a pgx-native `Executor` is not planned". Then
+stuck. [compatibility.md](../compatibility.md#the-driver) said `database/sql` was
+the contract and that "a pgx-native `Executor` is not planned" — wording it no
+longer carries, since it was rewritten against this record on 2026-07-30; it is
+quoted here as the position being argued against. Then
 [release-1.0.md](../release-1.0.md) opened it again as stream B and deliberately
 *refused* to pre-decide, on the grounds that both target codebases are pgx-native
 and the ports would answer it better than reasoning would. That was the right
@@ -326,3 +328,20 @@ same mistake one layer down.
   a path the benchmark did not cover. The revisit trigger was rewritten as a
   result: "a port measures the flip as cheap" turned out to be two questions,
   and the ports answered the cheap one already.
+- 2026-07-30 — Propagated. This record was decided and then cited by nothing,
+  which left five other records and two planning documents asserting the premise
+  it overturns — the worst state for a living-document set to be in, because each
+  of them read as current. Now: `compatibility.md` says the contract is changing
+  and why, and its *Frozen* entry for `Executor` names the break rather than
+  implying permanence; `release-1.0.md` closes stream B against this record and
+  gains a phase for the break, so the freeze does not tag over it;
+  [ADR-0026](0026-vectors-declare-their-index.md)'s text-form `sqlb.Vector` and
+  [ADR-0033](0033-array-columns.md)'s hand-written codec are marked superseded in
+  their rationale and untouched in their decisions;
+  [ADR-0020](0020-transaction-scoped-handle.md)'s `Beginner` trigger is recorded
+  as fired; and [ADR-0019](0019-pgbouncer-in-the-path.md)'s exec-mode trigger is
+  restated as a library default rather than a DSN every consumer must get right.
+
+  Nothing in this record changed as a result. What changed is that disagreeing
+  with it now requires disagreeing with it, rather than reading a different
+  document and never learning it exists.
