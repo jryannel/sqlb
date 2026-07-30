@@ -14,6 +14,11 @@ inside the application and every finding is as written. What is gone is the
 identity, because none of it is load-bearing — the shape of the codebase is what
 the findings are about, and that shape is a common one.
 
+This same `subject-go` was later ported hands-on — the evaluation's conclusions
+carried out against real Postgres rather than assessed. See
+[the port report](review-adoption-port.md), which shares this subject and this
+anonymisation.
+
 Read it as a snapshot of one evaluator's judgement at `cc312aa` (branch
 `feat/reverse-expansion`) plus the then-unmerged `bb63e12`, not as a verdict.
 Where a finding names a file or a behaviour it was checked against the code;
