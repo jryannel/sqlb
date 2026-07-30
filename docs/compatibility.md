@@ -34,6 +34,20 @@ or deployed clients, not just call sites.
   was *not* extended to mean array containment, and will not be — one name
   meaning two things depending on the column it is applied to is the ambiguity
   the generated clients exist to remove.
+- **The wire spelling of a column** — the column's own name, verbatim, in the
+  JSON body, the OpenAPI document, the filter grammar's parameter names and both
+  generated clients. There is one spelling and no way to configure a second, so
+  `?created_at=gte.…` names the same thing the response does. A `Hidden` column
+  has no spelling at all. Renaming a column is therefore an API change as well
+  as a schema change; `RenamedFrom` makes the database half mechanical and the
+  client half is a regeneration plus a compile error per call site
+  ([ADR-0036](adr/0036-the-wire-is-the-column-name.md), which also says what a
+  camelCase front end is expected to do about it).
+- **The list envelope** — `{items, page, per_page, has_more, next_cursor?,
+  total?}`, one shape for every resource. `next_cursor` is absent when there is
+  no next page and `total` only when `?count=exact` asked for it. The key names
+  and which of them may be absent are frozen; *adding* an optional key is
+  additive and breaks no client that ignores unknown ones.
 - **The generated DDL's shape** — `migrate.Diff` output for a given pair of
   schemas may improve, but a migration already written and applied is never
   reinterpreted.

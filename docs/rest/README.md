@@ -66,6 +66,39 @@ also true of the generated [TypeScript client](../typescript/README.md) and
 it out and serves the removal as an update instead; the pair is written out in
 [Your first app](../start/first-app.md).
 
+**A collection has one path, and a parent relationship is a filter.** The tasks
+of a list are `GET /tasks?list_id=eq.<id>`, not `GET /lists/{id}/tasks` — so
+sorting, projection, paging and `?expand` all work on it unchanged, and it is the
+same request a capped `?expand` tells a caller to follow for the rest of the
+children. The one real cost is that a parent which does not exist yields an empty
+page rather than a 404
+([ADR-0038](https://github.com/jryannel/sqlb/blob/main/docs/adr/0038-collections-are-flat.md)).
+
+### Documenting the auth scheme
+
+`Options.Security` puts an OpenAPI security requirement on every operation of a
+resource:
+
+```go
+rest.Options{Path: "/posts", Ops: rest.CRUD | rest.OpList,
+    Security: []map[string][]string{{"bearerAuth": {}}}}
+```
+
+It **documents**; it does not enforce — authentication is middleware on your
+router and runs whether or not this is set. Leaving it empty produces operations
+that are protected and do not say so, which is what every reader of the document
+then has to guess about. Declare the scheme itself once on the API:
+
+```go
+api.OpenAPI().Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+    "bearerAuth": {Type: "http", Scheme: "bearer", BearerFormat: "JWT"},
+}
+```
+
+The generated clients do not read this, and that is not an oversight: they are
+built from the schema rather than from the document, and they take the credential
+from the transport your project supplies.
+
 ## Request bodies
 
 Codegen emits `PostCreate` and `PostPatch` because two problems need types

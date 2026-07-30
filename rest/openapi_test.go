@@ -275,3 +275,49 @@ func TestKeylessResourceDocumentsNoCursor(t *testing.T) {
 		t.Error("offset paging should still be offered")
 	}
 }
+
+// Security documents; it does not enforce. What this pins is that it reaches
+// *every* operation — the one that would be easy to miss is delete, whose
+// operation literal is aligned differently from the other four.
+func TestSecurityReachesEveryOperation(t *testing.T) {
+	db := newFakeDB(t)
+	opts := postOptions()
+	opts.Security = []map[string][]string{{"bearerAuth": {}}}
+	api := mount(t, db.db, opts)
+
+	doc := api.OpenAPI()
+	type opRef struct {
+		name string
+		op   *huma.Operation
+	}
+	item := doc.Paths["/posts/{id}"]
+	coll := doc.Paths["/posts"]
+	if item == nil || coll == nil {
+		t.Fatal("the resource did not mount both paths")
+	}
+	for _, ref := range []opRef{
+		{"list", coll.Get},
+		{"create", coll.Post},
+		{"read", item.Get},
+		{"update", item.Patch},
+		{"delete", item.Delete},
+	} {
+		if ref.op == nil {
+			t.Errorf("%s is not documented", ref.name)
+			continue
+		}
+		if len(ref.op.Security) != 1 || len(ref.op.Security[0]["bearerAuth"]) != 0 {
+			t.Errorf("%s carries Security %v, want the resource's requirement", ref.name, ref.op.Security)
+		}
+	}
+}
+
+// The default is nothing, because a requirement sqlb invented would document an
+// auth scheme the deployment may not have.
+func TestSecurityIsAbsentUnlessAsked(t *testing.T) {
+	db := newFakeDB(t)
+	api := mount(t, db.db, postOptions())
+	if op := api.OpenAPI().Paths["/posts"].Get; op.Security != nil {
+		t.Errorf("an unconfigured resource documented Security %v", op.Security)
+	}
+}

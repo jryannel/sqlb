@@ -171,6 +171,31 @@ type Options struct {
 	// hooks register. Read that as the reason it is phrased as a disable rather
 	// than as an enable: the safe value is the zero value.
 	DisableTransactions bool
+
+	// Security is the OpenAPI security requirement every operation of this
+	// resource carries — the same shape huma.Operation.Security takes, so it is
+	// a list of alternatives and each alternative names schemes and their
+	// scopes:
+	//
+	//	Security: []map[string][]string{{"bearerAuth": {}}}
+	//
+	// It documents; it does not enforce. Authentication is middleware on the
+	// router, and it runs whether or not this is set — leaving it empty produces
+	// operations that are protected and do not say so, which is what every
+	// consumer of the document has to guess about.
+	//
+	// The generated clients do not read this, and that is not an oversight: they
+	// are generated from the schema rather than from the document, and they take
+	// the credential from the transport the consuming project supplies. What
+	// this is for is /docs, an agent reading the spec, and anything else driven
+	// by the document.
+	//
+	// The scheme itself is declared once on the API, not here:
+	//
+	//	api.OpenAPI().Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+	//	    "bearerAuth": {Type: "http", Scheme: "bearer", BearerFormat: "JWT"},
+	//	}
+	Security []map[string][]string
 }
 
 func (o Options) name() string {

@@ -148,29 +148,28 @@ REST bodies and the manifest; it reaches filter coercion too, and must; and it
 does not reach the SQL type or the wire, which falls out of every client
 emitter mapping from `schema.Type` rather than from the Go type.
 
-### D. The wire format, stated as policy
+### D. The wire format, stated as policy — **closed**
 
-Three things ship as wire format and are frozen at 1.0:
+Three things ship as wire format. The filter grammar was already frozen in
+`compatibility.md`; the other two were decided in practice and undecided in
+writing, which is the state that produces a "we never promised that" argument
+later.
 
-| | Today | Status |
-|---|---|---|
-| Field naming | snake_case, the column name verbatim | Decided, [ADR-0028](adr/0028-typescript-client.md); **not written down as policy** |
-| List envelope | `{items, page, per_page, has_more, next_cursor}` | Decided, undocumented as a freeze |
-| Filter grammar | PostgREST-style | Frozen in `compatibility.md` ✓ |
+Both are now stated, with their cost and their escape
+([ADR-0036](adr/0036-the-wire-is-the-column-name.md)):
 
-The filter grammar is the only one of the three that `compatibility.md` names.
-The other two are decided in practice and undecided in writing, which is the
-state that produces a "we never promised that" argument later.
+| | Rule |
+|---|---|
+| Field naming | The column's own name, verbatim, on all five surfaces. One spelling, no configuration |
+| List envelope | `{items, page, per_page, has_more, next_cursor?, total?}`, one shape per resource |
 
-Both evaluations find real cost here — one counts 334 camelCase JSON tags that
-would have to be renamed on both sides of the wire. The answer may well stay
-"snake_case, and no mapping layer, because the point of a generated client is
-that there is nothing there." That is a defensible policy. It is not currently
-*a* policy; it is a behaviour.
-
-**Deliverable:** `compatibility.md` gains the envelope and the naming rule under
-*Frozen*, with the reasoning, and says what a consumer whose front end is
-camelCase is expected to do about it.
+The record is explicit that the rename cost for a camelCase front end is real
+and undiscounted — one evaluation counts 334 tags — and names the two positions
+an adopter can take instead, both of which keep exactly one spelling per
+deployment. It also names the escape it *would* build if a port stalls on this:
+a deployment-wide naming policy, not a per-field mapping layer, because every
+guarantee [ADR-0028](adr/0028-typescript-client.md) makes is about the generated
+client having no contents to be wrong.
 
 ### E. Schema gaps, and which of them 1.0 needs
 
@@ -180,40 +179,42 @@ Not all of these block. The test is whether a port can complete without them.
 |---|---|---|
 | **Array columns** | Was yes | **Done** — [ADR-0033](adr/0033-array-columns.md) |
 | **pgvector** | Yes, for one module | Scope that module out of the port, or build it. [ADR-0026](adr/0026-vectors-declare-their-index.md) is Exploring/Low and the shape is recorded |
-| **`tsvector` / full text** | Probably | Undecided, and **no ADR exists**. Needs one either way — building it or refusing it |
+| **`tsvector` / full text** | Probably | **Decided: not in 1.0** ([ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md)). The blocker is not the column type, it is that a `tsvector` is database-maintained and `migrate` renders neither generated columns nor triggers |
 | **Composite primary keys** | Yes, ~15 tables | [ADR-0034](adr/0034-one-column-addresses-a-row.md) states the refusal and concedes it is wider than its own argument. Narrow it: a table never addressed, expanded or cursor-paged needs no key |
 | **Generated columns, triggers, backfills** | No | `migrate.Diff` renders DDL only; hand-written migrations interleave. Document the asterisk rather than close it |
-| **`Security` on `rest.Options`** | No | Cheap, and the OpenAPI document is wrong without it. Do it |
-| **Parent-scoped routes** (`/projects/{id}/tasks`) | No, but every consumer notices | Undecided, no ADR. A flat collection plus a filter is the current answer and it is not obviously wrong |
+| ~~**`Security` on `rest.Options`**~~ | No | **Done** — every generated operation carries the resource's requirement. It documents; middleware still enforces |
+| **Parent-scoped routes** (`/projects/{id}/tasks`) | No, but every consumer notices | **Decided: flat, deliberately** ([ADR-0038](adr/0038-collections-are-flat.md)). The one real cost is that a missing parent is an empty page rather than a 404 |
 
-The two rows worth arguing about are **composite primary keys** and
-**`tsvector`**. Both are refusals sqlb currently makes for good reasons, and
-both are refusals a real codebase runs into within a week. ADR-0034's own text
-already concedes the first is over-broad — narrowing it is cheaper than
-defending it, and it is additive, so it can land after 1.0 if a port shows the
-narrow form is enough.
+The row still worth arguing about is **composite primary keys**. ADR-0034's own
+text concedes the refusal is wider than its own argument — a table never
+addressed, expanded or cursor-paged needs no key at all — and narrowing it is
+cheaper than defending it. It is additive, so it can land after 1.0 if a port
+shows the narrow form is enough.
 
-### F. ADR hygiene — the records must be true at 1.0
+### F. ADR hygiene — the records must be true at 1.0 — **closed**
 
-Six records are at **Exploring**, and they are not the same kind of thing:
+Six records sat at **Exploring**, and they were not the same kind of thing. Four
+described shipped behaviour and now say so; two are genuinely unbuilt and now say
+*that*, with "not in 1.0" in the status rather than left for a reader to infer
+from a confidence line.
 
-| ADR | Status | The problem |
+| ADR | Was | Now |
 |---|---|---|
-| [0004](adr/0004-schema-as-go-dsl.md) schema as Go DSL | Exploring | **Describes shipped, load-bearing behaviour.** Must be Working or say what is still open |
-| [0014](adr/0014-migrations-and-import.md) migrations by diff | Exploring | Same. The adoption loop is built and CI-enforced |
-| [0023](adr/0023-mixins-carry-behaviour.md) mixins | Exploring | Partly shipped. Needs a status pass |
-| [0019](adr/0019-pgbouncer-in-the-path.md) PgBouncer | Exploring/Low | `pgtest` has pooler tests; the confidence line predates them |
-| [0012](adr/0012-change-feed-outbox.md) change feed | Exploring/Low | **Unbuilt, and fine.** Should say "not in 1.0" explicitly |
-| [0026](adr/0026-vectors-declare-their-index.md) vectors | Exploring/Low | Unbuilt. Same treatment, unless a port needs it |
+| [0004](adr/0004-schema-as-go-dsl.md) schema as Go DSL | Exploring | **Working** — every artefact is generated from it |
+| [0014](adr/0014-migrations-and-import.md) migrations by diff | Exploring | **Working** — the loop closes and CI enforces the fixpoint |
+| [0019](adr/0019-pgbouncer-in-the-path.md) PgBouncer | Exploring/Low | **Working** — the carve-outs are tested against a real pooler, not reasoned |
+| [0023](adr/0023-mixins-carry-behaviour.md) mixins | Exploring | **Working as a decision** — the column half ships, the behaviour half is out of scope |
+| [0012](adr/0012-change-feed-outbox.md) change feed | Exploring/Low | **Not in 1.0**, said in the status |
+| [0026](adr/0026-vectors-declare-their-index.md) vectors | Exploring/Low | **Not in 1.0** unless a port needs it |
 
-The rule for 1.0: **every ADR is either Working, or explicitly out of scope with
-the reason.** An ADR at Exploring that describes shipped behaviour is a record
-that is no longer true, and the index is the first thing a reader of an unfamiliar
-codebase uses.
+Four decisions had **no record at all**. All four now have one: type overrides
+([0035](adr/0035-type-overrides.md)), the wire-format policy
+([0036](adr/0036-the-wire-is-the-column-name.md)), full-text search
+([0037](adr/0037-search-is-ilike-until-it-cannot-be.md)) and parent-scoped routes
+([0038](adr/0038-collections-are-flat.md)).
 
-Four decisions have **no record at all** and need one before they are frozen by
-being shipped: type overrides (C), the wire-format policy (D), full-text search,
-and parent-scoped routes.
+**The index now has no Exploring row whose subject is shipped**, which was Phase
+1's gate.
 
 ## Deliberately not in 1.0
 
@@ -243,19 +244,19 @@ Named so that "it is missing" is not mistaken for "it was forgotten".
 Four phases, each with a gate. The point of the gates is that work stops if one
 fails, rather than continuing on momentum.
 
-### Phase 1 — Make the records true
+### Phase 1 — Make the records true — **done**
 
-Stream F, plus the two cheap items. Nothing here needs a port and nothing here
-is risky, which is why it goes first: it is the work that makes the next phase
+Stream F plus the two cheap items. Nothing here needed a port and nothing here
+was risky, which is why it went first: it is the work that makes the next phase
 legible to someone who is not the author.
 
-- Every ADR reaches Working or documents its scope.
-- ADRs written for ~~type overrides~~ (done, ADR-0035), wire-format policy,
-  full text, parent-scoped routes — the *decision*, not necessarily the code.
-- `Security` on `rest.Options`.
-- `compatibility.md` gains the envelope and naming rule under *Frozen*.
+- ~~Every ADR reaches Working or documents its scope.~~
+- ~~ADRs written for type overrides, wire-format policy, full text,
+  parent-scoped routes.~~
+- ~~`Security` on `rest.Options`.~~
+- ~~`compatibility.md` gains the envelope and naming rule under *Frozen*.~~
 
-**Gate:** the ADR index has no Exploring row whose subject is shipped.
+**Gate: passed.** The ADR index has no Exploring row whose subject is shipped.
 
 ### Phase 2 — Close the hole and unblock the ports
 

@@ -1,6 +1,8 @@
 # ADR-0026: A vector column declares its index, and similarity search is its own operation
 
-- **Status:** Exploring — nothing is built. This records the shape before the
+- **Status:** Exploring — nothing is built, and **it is not in 1.0** unless one
+  of the ports needs it to complete; [the road to 1.0](../release-1.0.md) says
+  to scope the module out instead. This records the shape before the
   first line of it, which is the order [the README](README.md) asks for and the
   opposite of [ADR-0025](0025-expansion-is-one-statement.md)
 - **Confidence:** Low — nothing here is built. The unindexed half is grounded in

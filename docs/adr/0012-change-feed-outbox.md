@@ -1,6 +1,9 @@
 # ADR-0012: Change notification via a transactional outbox
 
-- **Status:** Exploring
+- **Status:** Exploring — nothing is built, and **it is not in 1.0**. It is the
+  largest unbuilt item in [the vision](../vision.md) and the one most likely to
+  change shape on contact with real traffic, so freezing an outbox format on a
+  guess is the mistake 1.0 exists to avoid ([the road to 1.0](../release-1.0.md))
 - **Confidence:** Low
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27

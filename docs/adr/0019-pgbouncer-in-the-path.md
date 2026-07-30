@@ -1,7 +1,11 @@
 # ADR-0019: Connections go through PgBouncer, except the ones that cannot
 
-- **Status:** Exploring
-- **Confidence:** Medium
+- **Status:** Working — the query path assumes nothing session-scoped, and
+  `pgtest` runs it through a real PgBouncer in transaction pooling mode alongside
+  the two carve-outs
+- **Confidence:** High on the carve-out list, which is now tested rather than
+  reasoned: the pooler tests prove queries pass through, that `LISTEN` needs a
+  direct connection, and that `NOTIFY` does not
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 
