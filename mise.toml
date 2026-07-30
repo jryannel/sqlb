@@ -270,8 +270,20 @@ fi
 # So the root module's direct requirements are pinned by name. This is what
 # keeps the pgtest module honest: moving those tests back in here fails loudly
 # instead of silently.
-want='github.com/danielgtaylor/huma/v2 github.com/go-chi/chi/v5'
-got=$(grep -E '^\s+[a-z0-9.-]+\.[a-z]+/' go.mod | grep -v '// indirect' | awk '{print $1}' | sort)
+#
+# Read from both go.mod require forms: the block `require (\n\tpath ver\n)` and
+# the single-line `require path ver` that `go mod tidy` collapses to when only
+# one requirement remains. An earlier version grepped for indented lines only and
+# read nothing the moment the block became a one-liner — a check that had stopped
+# covering anything, which is the ADR-0016 failure mode the positive control below
+# exists to catch.
+want='github.com/danielgtaylor/huma/v2'
+got=$(awk '
+  $1 == "require" && $2 != "(" && $0 !~ /\/\/ indirect/ { print $2; next }
+  $1 == "require" && $2 == "(" { inblock = 1; next }
+  inblock && $1 == ")" { inblock = 0; next }
+  inblock && $0 !~ /\/\/ indirect/ && NF >= 2 { print $1 }
+' go.mod | grep -E '\.[a-z]+/' | sort)
 
 if [ "$got" != "$(printf '%s\n' $want | sort)" ]; then
   echo "deps-check: the root module's direct dependencies changed."
