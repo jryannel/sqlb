@@ -139,15 +139,44 @@ func columnDefault(expr, formatted string, t schema.Type) *schema.Default {
 
 // stripCast removes a trailing ::type when it names the column's own type, and
 // reports whether it did.
+//
+// The cast is compared against the type name with its modifier removed as well
+// as with it, because Postgres does not agree with itself about which one to
+// use. format_type reports a length-bounded column as "character varying(20)",
+// and the default it stores on that same column is 'junior'::character varying
+// — no length. Comparing only the formatted name therefore never matched for a
+// varchar, so the cast survived, the default came back as a raw expression
+// where the declaration had a literal, and migrate.Diff proposed the same
+// SET DEFAULT on every run. A gate that is red for a reason that is not real is
+// worse than no gate, because it teaches people to skip reading it.
 func stripCast(expr, formatted string) (string, bool) {
 	cut := strings.LastIndex(expr, "::")
 	if cut < 0 {
 		return expr, false
 	}
-	if strings.TrimSpace(expr[cut+2:]) != formatted {
+	cast := strings.TrimSpace(expr[cut+2:])
+	if cast != formatted && cast != unmodified(formatted) {
 		return expr, false
 	}
 	return strings.TrimSpace(expr[:cut]), true
+}
+
+// unmodified removes a type modifier from a formatted type name, keeping any
+// array suffix: "character varying(20)" becomes "character varying", and
+// "numeric(10,2)[]" becomes "numeric[]".
+//
+// Only the modifier goes. A cast naming a different type is left for
+// columnDefault to keep as an expression, because it is doing something.
+func unmodified(formatted string) string {
+	open := strings.IndexByte(formatted, '(')
+	if open < 0 {
+		return formatted
+	}
+	shut := strings.LastIndexByte(formatted, ')')
+	if shut < open {
+		return formatted
+	}
+	return strings.TrimSpace(formatted[:open]) + strings.TrimSpace(formatted[shut+1:])
 }
 
 // unquoteLiteral turns a SQL string literal into its value.
