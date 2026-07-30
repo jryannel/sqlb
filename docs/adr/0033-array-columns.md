@@ -4,377 +4,177 @@
   `text[]`, and a real Postgres round-trips the codec, runs the three operators
   and reads an array column back through `introspect` unchanged
 - **Confidence:** High on the shape, which survived implementation with one
-  correction (recorded under Revisions). Low, still, on the operator names,
-  which are wire format from the first request and have nobody's use behind them
-  yet
+  correction. Low on the operator names, which are wire format from the first
+  request with nobody's use behind them yet
 - **Decided:** 2026-07-29
-- **Last reviewed:** 2026-07-30 (implemented; the codec's rationale is now
-  superseded by ADR-0040, the decision is not)
+- **Last reviewed:** 2026-07-30 (the codec's rationale is superseded by ADR-0040;
+  the decision is not)
 
 ## Context
 
-Two independent outside evaluations have now named array columns as the
-cheapest schema gap with the most real call sites, and the second one
-([review-adoption-multi-app.md](../review-adoption-multi-app.md)) puts a number
-on it: nine array columns across eight files, nineteen queries using an array
-operator, and — the part that decides more than the count does — the columns are
-*concentrated*. Five of the six affected table structs belong to one
-application, and they carry both of its headline lists. So the gap does not
-merely cost a feature; it removes an application from the set that could pilot
-sqlb at all.
+Two outside evaluations named array columns as the cheapest schema gap with the
+most real call sites. The second puts a number on it: nine array columns across
+eight files, nineteen queries using an array operator — and the columns are
+*concentrated*. Five of the six affected table structs belong to one application
+and carry both of its headline lists, so the gap does not merely cost a feature;
+it removes an application from the set that could pilot sqlb at all.
 
-The same evaluation ranks the fix third of six upstream asks and describes
-closing it as taking "the schema-gap objection from twenty tables to the vector
-column."
+It fails in three places: `schema.Type` has no array constant, `migrate.sqlType`
+ends in `unknown type`, and **`introspect` does not map `text[]`** — the
+expensive one, because the adoption loop needs `Diff` to come back empty and a
+dropped column makes it non-empty forever. One `text[]` anywhere in a module
+means that module cannot be adopted at all.
 
-### Where it fails today
+**The half that is not obvious:** `database/sql` cannot scan a Postgres array
+literal into a `[]string` and cannot bind one either. `pq.Array` was unavailable
+under the stdlib-only invariant, so supporting arrays meant writing the
+array-literal codec in both directions — bounded work, landing in two places that
+are already single choke points, `compiler.bind` and the scan assignment.
 
-Three places, and the third is the one that matters most:
+**That invariant is being inverted.**
+[ADR-0040](0040-the-driver-is-a-dependency.md) takes a direct pgx dependency, and
+pgx decodes arrays natively, so the codec becomes deletable. That does not make
+the work wasted or this record wrong: the codec is what let arrays ship under the
+constraint that held when it was written, and every decision below is independent
+of who does the decoding.
 
-- **`schema.Type`** has fourteen constants
-  ([`schema/type.go`](../../schema/type.go)) and none of them is an array, so
-  there is no field constructor to write.
-- **`migrate.sqlType`** ends in `column %q has unknown type %q`
-  ([`migrate/ddl.go`](../../migrate/ddl.go)), so nothing renders even if a
-  declaration existed.
-- **`introspect`** does not map `text[]`, so a table carrying one cannot round
-  trip. This is the expensive one. The adoption loop for an existing database is
-  `introspect.Registry` → `codegen.RenderSchema` → `migrate.Diff` comes back
-  empty ([ADR-0014](0014-migrations-and-import.md)), and a dropped column makes
-  `Diff` non-empty forever. One `text[]` anywhere in a module means that module
-  cannot be adopted at all — not that it adopts with a gap.
-
-### The half that is not obvious
-
-The declaration is the visible problem and the smaller one. `database/sql`
-cannot scan a Postgres array literal into a `[]string`: the driver hands back
-`{a,b,"c d"}` as bytes and the conversion fails. It cannot bind one either —
-`driver.Value` has no slice case beyond `[]byte`.
-
-The usual answer is `pq.Array`, and it is unavailable here. `mise run
-deps-check` fails any package outside `rest` and the blog example that acquires
-a third-party transitive dependency, and that invariant is the reason importing
-sqlb costs a consumer nothing. So supporting arrays means writing the Postgres
-array-literal codec, in both directions, against the standard library alone.
-
-That cost is real and it is bounded. It also lands in two places that already
-exist and are already single choke points: `compiler.bind`
-([`compile.go`](../../compile.go)) is the one function every bind parameter
-passes through, and the scan target assignment in
-[`exec.go`](../../exec.go) is the one place a result column is pointed at a
-struct field.
-
-**The invariant that forced all of this is being inverted.**
-[ADR-0040](0040-the-driver-is-a-dependency.md) decides that the engine depends on
-pgx, which decodes arrays natively — so the codec becomes deletable, along with
-its test matrix, and this subsection becomes a historical explanation of 449
-lines that no longer exist. That does not make the work wasted or this record
-wrong: the codec is what let arrays ship at all under the constraint that held
-when it was written, and every decision below — the element type plus a flag,
-the plain slice, the three operators — is independent of who does the decoding
-and survives unchanged.
-
-### Why the jsonb answer does not work here
-
-The DSL's current advice for a list-shaped column is `schema.JSON`, and for a
-greenfield schema it is a defensible answer. It fails on the case that motivates
-this record.
-
-An adoption target already has `text[]` in Postgres. Declaring it as `jsonb`
-does not describe that database, so `Diff` renders an `ALTER` that rewrites the
-column, and the adoption loop's premise — that the first diff against the live
-database is empty — is gone. The evaluation's Gate 0 is explicitly a
-*zero-migration* probe; "adopt this module by rewriting two production columns
-first" is not the same offer.
-
-It also loses on the wire, where the reason is `tsBaseType` in
-[`codegen/tsclient.go`](../../codegen/tsclient.go): `TypeJSON` emits `unknown`,
-because a jsonb column can hold anything. An array of text is exactly the case
-where the generated client *could* say `string[]` and the whole argument of
-[ADR-0028](0028-typescript-client.md) is that it should.
+**Why jsonb does not answer this.** For a greenfield schema it is defensible. An
+adoption target already has `text[]`, and declaring it `jsonb` makes `Diff`
+render an `ALTER` that rewrites the column — so the zero-migration probe is gone.
+It also loses on the wire: `TypeJSON` emits `unknown` in the TypeScript client,
+where an array of text is exactly the case that could say `string[]`.
 
 ## Decision
 
-### An array is its element type with a flag
-
-`FieldDesc.Type` keeps naming the *element*, and gains `Array bool` beside it.
-The spelling is a modifier:
+**An array is its element type with a flag.** `FieldDesc.Type` keeps naming the
+element and gains `Array bool` beside it:
 
 ```go
 schema.Text("tags").Array().Filterable()
 schema.Enum("labels", "red", "green").Array()
 ```
 
-Not `TypeTextArray` as a parallel constant per element type. The reason is not
-the combinatorics in the switch statements, which would be tolerable — it is
-that the filter parser needs the element type *back*. `?tags=has.urgent` binds a
-`text`, not a `text[]`, so a fused constant would be split apart again at the
-one place that most needs to get it right. Keeping `TypeEnum`'s value list, the
-varchar length and the enum union in `client.gen.ts` attached to the element is
-the same property, obtained for free.
+Not `TypeTextArray` per element type — the filter parser needs the element type
+*back*, since `?tags=has.urgent` binds a `text`, and a fused constant would be
+split apart again at the one place that most needs to get it right. Keeping the
+enum's value list and the varchar length attached to the element comes free.
 
-`Nullable()` continues to mean the column may be NULL. A NULL *element* is
-refused by `schema.Validate`: `{a,NULL,b}` versus `NULL` is a distinction
-neither generated client can express, and a column that admits both produces two
-different absences that a UI has to tell apart.
+`Nullable()` still means the column may be NULL. A NULL *element* is refused by
+`schema.Validate`: `{a,NULL,b}` versus `NULL` is a distinction neither generated
+client can express. The element set is the scalar types, one dimension only, and
+`introspect` **refuses** anything outside it rather than dropping it.
 
-The element set is the scalar types — text, varchar, enum, the numerics, bool,
-uuid and the three time types. Not `jsonb`, not `bytea`, and one dimension only.
-`introspect` **refuses** anything outside that set rather than dropping it, for
-the reason the round-trip exists: a silently dropped column produces a `Diff`
-that proposes deleting production data.
+**The Go type is the plain slice** — `[]string`, not a named `sqlb.TextArray`.
+Decided by the adoption path: both evaluations put `sqlb.Describe` over existing
+sqlc structs at the first gate, and sqlc in pgx mode emits `[]string` for a
+`text[]`. A named type would make arrays absent from exactly the path meant to
+prove the library cheaply.
 
-### The Go type is the plain slice
-
-`[]string`, not a named `sqlb.TextArray`. sqlb owns the encoding and decoding
-at the two choke points named above, and the struct the application holds stays
-something it could have written itself.
-
-This is decided by the adoption path rather than by taste. Both evaluations put
-`sqlb.Describe` over *existing sqlc structs* at the first gate, and sqlc in pgx
-mode already emits `[]string` for a `text[]` column. A required named type would
-make the array feature absent from precisely the path that is supposed to prove
-the library cheaply — and, in the concrete case, absent from the two headline
-lists of the one application whose arrays created the gap.
-
-Nothing in the model layer changes to allow this: `isScannable` in
-[`model.go`](../../model.go) already accepts any type implementing
-`sql.Scanner` or `driver.Valuer`, and a bare slice field is already read as one
-column rather than decomposed into several.
-
-### Three operators, and `contains` is not one of them
+**Three operators, and `contains` is not one of them:**
 
 | Request | SQL | Bound value |
 |---|---|---|
 | `?tags=has.urgent` | `$1 = ANY(tags)` | the **element**, a scalar |
 | `?tags=hasany.a,b` | `tags && $1` | an array |
 | `?tags=hasall.a,b` | `tags @> $1` | an array |
-| `?tags=isnull` / `notnull` | unchanged | none |
 
 `has` is the shape the census counts nineteen of, and it binds a scalar — so the
-operator that covers the observed usage needs none of the encoding half of the
-codec. That is the sequencing this record recommends below.
+operator covering observed usage needs none of the encoding half of the codec.
 
-**`contains` stays text-only.** It is already an `opPattern` operator gated by
-`isTextColumn` in [`filter/filter.go`](../../filter/filter.go), where it means
-`ILIKE '%x%'`. Array containment must not reuse the spelling. Two operators with
-one name, distinguished by the type of the column they are applied to, is
-exactly the ambiguity the generated clients exist to remove — and it would land
-on the column type where narrowing is most valuable. The existing refusal,
-`operator %q needs a text column, but %s is %s`, keeps doing its job unchanged
-for an array column.
+**`contains` stays text-only.** Two operators with one name, distinguished by
+column type, is exactly the ambiguity the generated clients exist to remove. `eq`
+compares whole arrays and is allowed; `in`, the ordering operators and `between`
+are refused.
 
-`eq` compares whole arrays and is allowed. `in`, the ordering operators and
-`between` are refused: a list of arrays has no spelling in the grammar, and
-Postgres's array ordering is not a thing an API should offer.
-
-### `Sortable` and `Searchable` are refused; `Filterable` requires a GIN index
-
-`schema.Validate` refuses `Sortable()` on an array — Postgres will order arrays
-happily, but keyset pagination would then have to encode one into the cursor,
-and the cursor payload is wire format ([ADR-0027](0027-keyset-pagination.md)).
-`Searchable()` is refused for the same reason `contains` is: search is a text
-operation.
-
-`Filterable()` on an array column requires a GIN index on it, checked by
-`schema.Validate`. An array filter without one is a sequential scan, which is
-the failure mode [ADR-0026](0026-vectors-declare-their-index.md) exists to name:
-the query *works*, so nothing reports it and the plan is only visible to someone
-who looks. `AddIndex{Method: "gin"}` already renders, and the opclass gap in the
-index DSL does not bite here — `array_ops` is the default.
-
-This is [ADR-0026](0026-vectors-declare-their-index.md)'s central argument, that
-a column whose access needs an index should declare it, arriving at a case that
-costs a fraction as much to get right. That is a reason to do arrays *first*.
+**`Sortable` and `Searchable` are refused; `Filterable` requires a GIN index.**
+Sorting would make keyset pagination encode an array into the cursor, which is
+wire format ([ADR-0027](0027-keyset-pagination.md)). An array filter without a
+GIN index is a sequential scan — the failure mode
+[ADR-0026](0026-vectors-declare-their-index.md) exists to name, arriving at a
+case that costs a fraction as much to get right.
 
 ## Consequences
 
-**What this buys.** The adoption loop stops failing closed on a whole module for
-one column. `Diff` renders `text[]`, `introspect` reads it back, and the
-fixpoint CI enforces holds for a schema that has one. The generated clients gain
-`string[]` where they would have had `unknown`, and `?tags=has.urgent` is a
-filter a hand-written handler had to spell for itself.
+**Buys.** The adoption loop stops failing closed on a whole module for one
+column. The generated clients gain `string[]` where they had `unknown`, and
+`?tags=has.urgent` is a filter a hand-written handler had to spell for itself.
 
-**What this costs.**
+**Costs.**
 
-*A codec this project has to own and fuzz.* Quoting, escaping, embedded commas,
-braces and quotes, the empty array, and the difference between an empty array
-and NULL. It is stdlib-only and about two hundred lines, and it is the kind of
-code that is wrong in exactly the cases nobody writes a test for. [`filter`
-already carries a fuzz target](../../filter/) and this needs one on the same
-footing.
+*A codec this project owns and fuzzes* — quoting, escaping, embedded commas and
+braces, the empty array versus NULL. About two hundred lines of the kind of code
+that is wrong in exactly the cases nobody writes a test for.
 
-*Ten switch statements that grow an arm, and no compiler to check they all did.*
-`Array` is a struct field, so a site that ignores it keeps compiling and renders
-`text` where it meant `text[]`. The emitters are worse than the engine here: a
-missed arm in `tsclient.go` produces a client type that is silently *wider* than
-the server, which is the one failure [ADR-0028](0028-typescript-client.md)
-claims cannot happen. The `@ts-expect-error` refusals file is what makes that
-claim testable and it has to grow with this
-([ADR-0016](0016-guards-proven-both-ways.md)).
+*Nine switch statements that grow an arm, with no compiler to check they all
+did.* A site that ignores the flag keeps compiling and renders `text`. The
+emitters are worse than the engine: a missed arm in `tsclient.go` produces a
+client type silently *wider* than the server, which is the one failure
+[ADR-0028](0028-typescript-client.md) claims cannot happen.
 
-*Wire format, from the first request.* `has`, `hasany` and `hasall` are in the
-filter grammar, which [compatibility.md](../compatibility.md) freezes. The
-confidence line on this record is Low for that reason and no other.
-
-*A Stable-tier struct change.* `Array` lands on `schema.FieldDesc`, and `schema`
-is Stable tier under [ADR-0013](0013-no-internal-split.md).
+*Wire format from the first request*, which is the only reason confidence is Low.
+And a Stable-tier struct change, since `Array` lands on `schema.FieldDesc`.
 
 ## What would change our mind
 
-- **If `has` turns out to be the only operator anyone reaches for**, then
-  `hasany` and `hasall` — and with them the array-valued bind parameter, and
-  with that the entire *encoding* half of the codec — were not worth building.
-  The decoding half is still required, because scanning a result is not
-  optional. Watch the first real schema's query log before building the second
-  and third operators.
-- **If a real sqlc struct does not present as a plain slice.** The
-  plain-slice decision rests on sqlc emitting `[]string` for `text[]`, which is
-  its default in pgx mode. A schema whose elements are nullable can produce
-  `[]pgtype.Text` instead, which sqlb cannot scan without the dependency it
-  refuses to take. If that shape is common in the codebases actually adopting,
-  the argument for the plain slice weakens and a named type wins on the merits.
-- **If the GIN requirement is experienced as a tax rather than a boundary** —
-  someone adding an index to satisfy a check and never querying through it —
-  then it should become a lint that reports the pairing rather than a refusal,
-  which is the retreat [ADR-0030](0030-declared-scope-is-required.md) names for
-  its own check.
-- **If a schema wants two dimensions, or an array of jsonb.** Both are refused
-  here on the grounds that nobody has asked. The first one to ask is evidence,
-  not a nuisance.
-- **If `Sortable` is asked for with a real use behind it.** Refusing now and
-  allowing later is additive; the reverse is not, which is why the refusal is
-  the starting position rather than the conclusion.
+- **`has` turns out to be the only operator anyone reaches for** — then `hasany`,
+  `hasall` and the entire *encoding* half of the codec were not worth building.
+  Watch the first real schema's query log.
+- **A real sqlc struct does not present as a plain slice.** A schema with
+  nullable elements can produce `[]pgtype.Text`. If that shape is common in the
+  codebases actually adopting, a named type wins on the merits.
+- **The GIN requirement is experienced as a tax** — someone adding an index to
+  satisfy a check and never querying through it. Then it becomes a lint rather
+  than a refusal.
+- **A schema wants two dimensions, or an array of jsonb.** The first to ask is
+  evidence, not a nuisance.
+- **`Sortable` is asked for with a real use behind it.**
 
 ## Cost of change
 
-**Declining today is free**, and stays free until the first line is written.
-Nothing declares an array, so reverting this record to "use jsonb, or stay on
-sqlc for that module" costs nothing but the paragraph explaining why.
+*Cheap:* the codec, the bind and scan wrapping, the DDL spelling, the
+`introspect` mapping — all internal. *Expensive:* the three operator names, from
+the first request a deployed client sends, and `Array` on Stable-tier
+`FieldDesc`.
 
-After that the bill splits.
-
-*Cheap.* The codec, the bind and scan wrapping, the DDL spelling, the
-`introspect` mapping. All of it is internal: no caller wrote any of it, and it
-can be rewritten under a green test suite.
-
-*Expensive.* The three operator names, from the first request a deployed client
-sends. And `Array` on `FieldDesc`, which is Stable tier — a schema that declares
-`.Array()` breaks if the spelling changes.
-
-*Asymmetric, twice, and in the useful direction both times.* Refusing
-`Sortable` and `Searchable` now and allowing them later is additive; allowing
-them first and withdrawing them breaks callers. Requiring the GIN index now and
-relaxing to a lint later is additive; relaxing first and requiring later breaks
-schemas that were previously valid. Both refusals are therefore the cheap
-direction to be wrong in — the same reasoning
-[ADR-0017](0017-enums-as-text-and-check.md) used to start an enum from text.
-
-The one decision with no useful asymmetry is the plain slice. Accepting
-`[]string` now and *also* accepting a named type later is additive; so is the
-reverse. That is why it is decided on the adoption argument rather than on
-reversibility — nothing about the ordering protects a wrong answer here.
-
-## Alternatives considered
-
-**Decline it; keep telling people to use jsonb.** The status quo, and the
-strongest alternative on a greenfield schema, where it is genuinely a fine
-answer. It loses on adoption and only on adoption: a database that already has
-`text[]` cannot be described by a schema that says `jsonb`, so the empty-first-
-diff property that makes [ADR-0014](0014-migrations-and-import.md)'s loop worth
-having is lost for the whole module. If sqlb did not claim to adopt existing
-databases, this would be the answer.
-
-**A parallel constant per element type** — `TypeTextArray`, `TypeIntArray`, and
-so on. Loses because the filter parser has to recover the element type to bind
-`has`'s operand, so the fusing is undone at the site where a mistake is most
-expensive. It would also grow `widens`, `tsBaseType`, `dartType` and the CLI
-flag renderer by an arm per element rather than a branch per site.
-
-**A named `sqlb.TextArray` type.** Genuinely close, and it wins on two real
-things: the codec becomes reachable to an application that wants it directly,
-and a generated model is self-describing about which columns are arrays. It
-loses to the sqlc structs. Both evaluations put `Describe` over stock sqlc
-output at the first gate precisely because it costs days rather than weeks, and
-a named type makes arrays the one feature that path cannot reach — in the exact
-application whose array columns are why this record exists. If the nullable-
-element shape in *What would change our mind* turns out to be common, this
-alternative wins and should be revisited on that evidence.
-
-**`schema.Opaque("tags", "text[]")`** — a passthrough type sqlb renders and does
-not understand. [ADR-0026](0026-vectors-declare-their-index.md) considered the
-same escape hatch for vectors and reached the same place: it buys the DDL and
-stops. No Go type, so the column cannot be scanned; no capability model, so it
-cannot be filtered; no client type, so it is `unknown` on the wire. It is
-[ADR-0024](0024-no-annotation-slot.md)'s argument again — the slot is the small
-half of the feature.
-
-**Reusing `contains` for array containment.** Rejected above and recorded here
-because it is the obvious spelling and someone will suggest it: the name is
-taken by a text pattern operator, and overloading it by column type puts an
-ambiguity into the one vocabulary whose entire purpose is that there is none.
+*Asymmetric in the useful direction twice:* refusing `Sortable`/`Searchable` now
+and allowing later is additive, and so is relaxing the GIN requirement to a lint
+— the same reasoning [ADR-0017](0017-enums-as-text-and-check.md) used to start an
+enum from text. The one decision with no useful asymmetry is the plain slice,
+which is why it rests on the adoption argument rather than on reversibility.
 
 ## Sequencing
 
-Three steps, each shippable on its own, in an order where the first is worth
-having even if the other two never happen. **All three are built** — they landed
-together, because step 1 on its own emits a model with a slice field that step 2
-is what makes scannable:
+Three steps, each shippable alone, all three built — they landed together because
+step 1 emits a model with a slice field that step 2 is what makes scannable:
 
-1. **Declare, render, introspect.** No runtime behaviour: `Array` on the
-   descriptor, the DDL arm, the `pg_catalog` mapping and its refusals. This
-   alone removes arrays from the adoption blocker list, because the complaint is
-   that a module *cannot be adopted*, not that its arrays cannot be filtered.
-2. **The codec**, at `compiler.bind` and the scan assignment, with its fuzz
-   target.
-3. **Operators and emitters** — `has` first, since it needs only step 2's
-   decoding half, then `hasany`/`hasall`, then `string[]` in the TypeScript and
-   Dart clients and the `--tags-has` flag in the CLI.
+1. **Declare, render, introspect.** No runtime behaviour. This alone removes
+   arrays from the adoption blocker list.
+2. **The codec**, at `compiler.bind` and the scan assignment, with a fuzz target.
+3. **Operators and emitters** — `has` first, then `hasany`/`hasall`, then
+   `string[]` in the clients and `--tags-has` in the CLI.
 
 ## Revisions
 
-- 2026-07-29 — Written, before any implementation, prompted by the second
-  outside evaluation ranking arrays as the cheapest gap with the most call
-  sites. The two decisions that carry the record — the element-type-plus-flag
-  spelling and the plain slice — are both forced by things this repository
-  already does: the filter parser binds an element, and `deps-check` refuses the
-  library that would otherwise supply the codec.
+- 2026-07-29 — Written before implementation. The two decisions that carry the
+  record are both forced by things this repository already does: the filter parser
+  binds an element, and `deps-check` refused the library that would have supplied
+  the codec.
+- 2026-07-29 — Implemented, all three steps in one change. Three things the record
+  did not anticipate, kept because what a record got wrong is the part worth
+  keeping:
+  - **The codec was wrong exactly as predicted, and the fuzz target found it in
+    four seconds.** `strings.TrimSpace` is Unicode-aware and Postgres is not, so
+    an element containing U+0085 read back a byte shorter.
+  - **A nil slice binds as NULL, not `{}`.** The first implementation encoded
+    both as the empty array, so every unset nullable array column would have been
+    written empty. A real Postgres caught it; the unit tests could not, because
+    encode and parse agreed about a question neither was asking.
+  - **`contains` on an array column is refused with a different message** — it
+    names the operators an array *does* take, because a caller who wrote
+    `contains.urgent` almost certainly meant `has`.
 
-- 2026-07-29 — Implemented, all three steps in one change. The shape above
-  survived; three things it did not anticipate are recorded here rather than
-  edited into the text above, because what a record got wrong is the part worth
-  keeping.
-
-  **The codec was wrong in exactly the way this record predicted, and the fuzz
-  target found it in four seconds.** `strings.TrimSpace` is Unicode-aware and
-  Postgres is not: an element containing U+0085 encoded unquoted and read back a
-  byte shorter. The encoder and the parser now agree on the ASCII set Postgres
-  actually trims. "The kind of code that is wrong in exactly the cases nobody
-  writes a test for" was not a figure of speech.
-
-  **A nil slice binds as NULL, not as `{}`.** The record says the two are
-  different values without saying which Go spelling produces which, and the
-  first implementation encoded both as the empty array — so every unset nullable
-  array column would have been written empty rather than null, silently. A real
-  Postgres caught it; the unit tests could not, because encode and parse agreed
-  with each other about a question neither was asking.
-
-  **`contains` on an array column is refused with a different message than
-  planned.** This record expected the existing `operator %q needs a text column`
-  to keep doing its job. What it does instead is name the operators an array
-  *does* take, because a caller who wrote `?tags=contains.urgent` almost
-  certainly meant `has` — and a 400 that names what would have been accepted is
-  the house rule. The decision it was protecting is unchanged: `contains` is
-  still the text operator and never means containment.
-
-  What arrived unchanged: the element-plus-flag spelling (the filter parser does
-  recover the element type, at exactly the site predicted), the plain slice, the
-  three operator names, the two refusals, and the GIN requirement. The ten switch
-  statements were nine.
-- 2026-07-30 — Noted that the constraint which produced the codec is being
-  inverted. [ADR-0040](0040-the-driver-is-a-dependency.md) takes a direct pgx
-  dependency, pgx decodes arrays natively, and `array.go` becomes deletable —
-  which this record's Context now says, since it spends a section explaining why
-  the codec had to be hand-written. The decision itself is untouched: element
-  type plus a flag, a plain slice, three operators, and neither the wire format
-  nor the schema DSL knows which library does the decoding.
+  Arrived unchanged: the element-plus-flag spelling, the plain slice, the three
+  operator names, the two refusals, and the GIN requirement.
+- 2026-07-30 — Noted that ADR-0040 inverts the constraint that produced the
+  codec. The decision is untouched: neither the wire format nor the schema DSL
+  knows which library does the decoding.

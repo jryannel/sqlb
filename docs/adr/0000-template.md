@@ -7,9 +7,8 @@
 
 ## Context
 
-What problem are we solving, and what constraints are real? Include the things
-that made this hard — if the decision looks obvious from the context, the
-context is incomplete.
+The problem and the constraints that are actually real, in a few sentences. Not
+the argument that got us here — the facts a reader needs to judge the decision.
 
 ## Decision
 
@@ -17,35 +16,26 @@ What we are doing, stated plainly. Present tense, active voice.
 
 ## Consequences
 
-**What this buys.** The benefits, concretely.
+**Buys.** The benefits, concretely. Two or three bullets.
 
-**What this costs.** The real price, stated without hedging. Every decision has
-one; a record that lists no costs has not been thought through.
+**Costs.** The real price, without hedging. Every decision has one.
 
 ## What would change our mind
 
-The observation that should trigger a revisit. Be specific enough to recognise
-it when it happens: "if X takes longer than Y" or "if we hit a case where Z"
-rather than "if it turns out to be a problem".
-
-This is the most important section. It is what makes the record a living
-document rather than a defence of the status quo.
+Two or three bullets. The observation that should trigger a revisit, specific
+enough to recognise: "if X takes longer than Y", not "if it turns out badly".
 
 ## Cost of change
 
-What it would take to reverse or revise this, concretely. Note asymmetry where
-it exists — many decisions are cheap in one direction and expensive in the
-other, and that is usually the most important thing to know about them.
-
-Changing a decision is always available. This section is what lets someone
-weigh the reason against the bill rather than guess at it.
-
-## Alternatives considered
-
-What else was on the table, and the actual reason it lost. Not a strawman — if
-an alternative was genuinely close, say so, because that is exactly the one
-worth revisiting later.
+What reversing this would take, in a line or two. Note asymmetry where it exists
+— cheap in one direction and expensive in the other is the usual case, and the
+most important thing to know.
 
 ## Revisions
 
 - YYYY-MM-DD — Written.
+
+---
+
+Keep the whole thing under a page. A record that argues its case at length has
+already failed: the reader wants the decision and the price, not the debate.

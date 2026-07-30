@@ -93,8 +93,15 @@ quietly.
 
 Copy [`0000-template.md`](0000-template.md), take the next free number, and use
 a short kebab-case slug: `0013-cursor-pagination.md`. Numbers are allocated in
-order and never reused. Keep it short — a page is usually enough, and a record
-nobody finishes reading has failed at its only job.
+order and never reused.
+
+**Keep it short.** A page is usually enough, and a record nobody finishes reading
+has failed at its only job. The sections are Context, Decision, Consequences,
+What would change our mind, Cost of change, Revisions — and that is the whole
+set. There is deliberately no *Alternatives considered*: a record is here to say
+what we are doing and what it costs, not to re-argue the case against every path
+not taken. Where a rejected option is genuinely close, name it in a line inside
+the section it bears on, and move on.
 
 ## Index
 

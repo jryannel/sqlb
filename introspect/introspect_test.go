@@ -487,7 +487,21 @@ func TestColumnDefault(t *testing.T) {
 		// The cast on a stored literal is stripped when it names the column's
 		// own type, so the default renders as it was written.
 		{"'draft'::text", "text", schema.TypeText, "", "draft"},
-		{"'x'::character varying", "character varying(10)", schema.TypeVarchar, "'x'::character varying", nil},
+		// A length-bounded column is the case this got wrong. The old
+		// expectation was `raw: "'x'::character varying"` — Postgres formats
+		// the column as "character varying(10)" and stores the cast without the
+		// length, so the two never matched, the literal survived as a raw
+		// expression, and migrate.Diff proposed the same SET DEFAULT forever.
+		// It has to reduce to the same Value the text case above does.
+		{"'x'::character varying", "character varying(10)", schema.TypeVarchar, "", "x"},
+		{"'x'::character", "character(4)", schema.TypeVarchar, "", "x"},
+		{"'1.5'::numeric", "numeric(10,2)", schema.TypeNumeric, "", "1.5"},
+		// An array of a length-bounded type: the modifier sits inside the
+		// brackets on one side and is absent on the other.
+		{"'{}'::character varying[]", "character varying(20)[]", schema.TypeVarchar, "", "{}"},
+		// The other direction, so the loosened comparison is not loose: a cast
+		// naming a DIFFERENT type is doing something, and survives.
+		{"'x'::text", "character varying(10)", schema.TypeVarchar, "'x'::text", nil},
 		// Bare literals need no stripping and pass through unchanged.
 		{"0", "integer", schema.TypeInt, "0", nil},
 		{"false", "boolean", schema.TypeBool, "false", nil},

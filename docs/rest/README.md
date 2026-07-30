@@ -175,3 +175,4 @@ quietest wrong answer in the system. See
 - [Pagination](pagination.md) — offset, cursors, and `total`
 - [Expanding relations](expand.md) — `?expand`, both directions
 - [Rejections](errors.md) — what a refusal says and why
+- [API compatibility](compatibility.md) — what a schema edit does to the contract
