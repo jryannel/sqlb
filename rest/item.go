@@ -95,6 +95,7 @@ func registerRead[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		Summary:     "Fetch one " + opts.name(),
 		Description: opts.Description,
 		Tags:        []string{opts.tag()},
+		Security:    opts.Security,
 		// Anything the operation does not declare is a mistake. Dropping it
 		// silently would answer a question the client did not ask — the same
 		// reason the list endpoint refuses an unknown parameter rather than
@@ -177,6 +178,7 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T
 		Summary:       "Create a " + opts.name(),
 		Description:   createDescription(b),
 		Tags:          []string{opts.tag()},
+		Security:      opts.Security,
 		DefaultStatus: statusCreated,
 		Responses: errorResponses(reg,
 			http.StatusUnprocessableEntity, http.StatusInternalServerError),
@@ -226,6 +228,7 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		Summary:     "Update a " + opts.name(),
 		Description: "Only the fields the request carries are written. " + opts.Description,
 		Tags:        []string{opts.tag()},
+		Security:    opts.Security,
 		Responses: errorResponses(reg,
 			http.StatusBadRequest, http.StatusNotFound,
 			http.StatusUnprocessableEntity, http.StatusInternalServerError),
@@ -287,6 +290,7 @@ func registerDelete[T any](api huma.API, w writer, b *binding[T]) {
 		Path:                         opts.itemPath(),
 		Summary:                      "Delete a " + opts.name(),
 		Tags:                         []string{opts.tag()},
+		Security:                     opts.Security,
 		DefaultStatus:                statusNoBody,
 		RejectUnknownQueryParameters: true,
 		Responses: errorResponses(reg,

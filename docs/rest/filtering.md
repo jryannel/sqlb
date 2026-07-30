@@ -100,6 +100,15 @@ address column that is filterable but not searchable answers "find my own
 record" and refuses to answer "who here uses example.com". See
 [Capabilities](../schema/capabilities.md#choosing-between-them).
 
+**This is a substring match, not full-text search**, and the distinction is
+worth knowing before relying on it. A user who types `ada` matches `Nowlada`; a
+user who types `running` does *not* match `run`, because nothing stems, drops
+stop words or ranks. That is the right default for a filter box over identifiers
+and the wrong one for a search box over prose, and sqlb has the first
+([ADR-0037](https://github.com/jryannel/sqlb/blob/main/docs/adr/0037-search-is-ilike-until-it-cannot-be.md),
+which also says why `tsvector` is not in 1.0 and what a schema carrying one does
+today).
+
 ## Projections cannot leak
 
 `filter.Apply` owns the projection. Given `?select` it uses those columns;

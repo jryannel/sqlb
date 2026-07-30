@@ -1,7 +1,12 @@
 # ADR-0004: Schema is a Go DSL, and codegen flows from it
 
-- **Status:** Exploring
-- **Confidence:** Medium
+- **Status:** Working — the DSL is what every other artefact is generated from:
+  models, the typed facade, REST bodies, three clients, the manifest and the
+  migration history
+- **Confidence:** High on the decision, which two outside evaluations exercised
+  against real schemas without reaching for the alternative. Medium on the parts
+  the DSL still cannot express, which are enumerated in
+  [the road to 1.0](../release-1.0.md) rather than here
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 

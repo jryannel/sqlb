@@ -63,6 +63,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 		Summary:     "List " + opts.name(),
 		Description: listDescription(b),
 		Tags:        []string{opts.tag()},
+		Security:    opts.Security,
 		Parameters:  listParams(b),
 		Responses:   errorResponses(reg, http.StatusBadRequest, http.StatusInternalServerError),
 	}, func(ctx context.Context, in *listInput) (*listOutput[T], error) {

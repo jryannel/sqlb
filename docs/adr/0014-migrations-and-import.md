@@ -1,7 +1,12 @@
 # ADR-0014: Migrations by diff, adoption by import
 
-- **Status:** Exploring
-- **Confidence:** Medium
+- **Status:** Working — `sqlb migrate` writes the diff, `introspect` reads a
+  database back, `shadow` replays the history, and CI enforces the fixpoint in
+  both directions
+- **Confidence:** High that the loop closes, which `pgtest` demonstrates against
+  a real Postgres and `example/tasks` demonstrates against a real history.
+  Medium on the constructs the loop still cannot carry — generated columns,
+  triggers and data backfills stay hand-written
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 

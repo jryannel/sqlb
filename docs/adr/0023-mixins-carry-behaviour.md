@@ -1,8 +1,12 @@
 # ADR-0023: A mixin contributes columns; carrying behaviour needs codegen
 
-- **Status:** Exploring
-- **Confidence:** Medium — the gap is demonstrated and has already produced one
-  shipped bug; the fix is sketched rather than tried
+- **Status:** Working as a decision — `schema.Group` ships and user-defined
+  column mixins work today. The behaviour-carrying half is deliberately unbuilt
+  and is not in 1.0; a `Group` is columns, and a bundle that also registered
+  hooks would need codegen
+- **Confidence:** High that splitting it this way is right — the column half has
+  been used and the behaviour half still has no consumer asking for it. Medium
+  on the sketched fix, which remains untried
 - **Decided:** 2026-07-27
 - **Last reviewed:** 2026-07-27
 
