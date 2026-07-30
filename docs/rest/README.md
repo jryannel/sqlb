@@ -8,19 +8,44 @@ discipline, and one set of hooks cover both.
 
 ## Mounting
 
-`rest` takes a `huma.API` rather than building a router, so chi, gin, echo or
-`net/http` — and all of that router's middleware — stays your choice:
+The batteries-included path is one call. `rest.NewServer` builds a huma API on
+`net/http` — no third-party router — and has huma serve the OpenAPI document and
+its docs page for you:
+
+```go
+srv := rest.NewServer(rest.Config{Title: "Blog", Version: "1.0.0"})
+if err := blog.Register(srv.API, db); err != nil {   // generated from the schema
+    return err
+}
+http.ListenAndServe(":8080", srv.Handler)   // wrap srv.Handler with your middleware
+```
+
+That is the default because importing sqlb should cost nothing: the engine and
+the REST adapter reach a consumer's module graph as the standard library plus
+huma, and no router beyond `net/http`.
+
+### Bringing your own router
+
+`rest` mounts on a `huma.API`, not a router it builds, so chi, gin, echo — and
+all of that router's middleware — stay a first-class choice. Build the API with
+the matching huma adapter and hand it to the same generated `Register`:
 
 ```go
 router := chi.NewRouter()
 router.Use(middleware.RequestID, middleware.Recoverer, yourAuth)
 
 api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
-if err := blog.Register(api, db); err != nil {   // generated from the schema
+if err := blog.Register(api, db); err != nil {
     return err
 }
 http.ListenAndServe(":8080", router)
 ```
+
+`rest.NewServer` is a convenience over this seam, not a replacement: whatever you
+pass `blog.Register` — the server's `srv.API` or one you built yourself — is a
+plain `huma.API`. The two examples show both paths:
+[`example/blog`](../../example/blog) mounts on the `NewServer` default, and
+[`example/tasks`](../../example/tasks) brings a chi router for its middleware.
 
 `blog.Register` is one `rest.Resource` call per exposed table. Written out, one
 of them looks like this:

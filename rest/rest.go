@@ -11,22 +11,27 @@
 // is not a fixed parameter set, but the *columns* are fixed, and enumerating one
 // parameter per filterable column is both precise and finite.
 //
-//	router := chi.NewRouter()
-//	router.Use(middleware.RequestID, middleware.Recoverer)
-//	api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
+//	srv := rest.NewServer(rest.Config{Title: "Blog", Version: "1.0.0"})
+//	blog.Register(srv.API, db)                 // generated: one Resource call per table
+//	http.ListenAndServe(":8080", srv.Handler)
 //
-//	rest.Must(rest.Resource[blog.Post, blog.PostCreate, blog.PostPatch](api, db, rest.Options{
+// NewServer is the batteries-included path: a huma.API on net/http, with the
+// OpenAPI document and docs page served for you, and no third-party router.
+// Under it, each exposed table is one rest.Resource call, generated into
+// rest_gen.go:
+//
+//	rest.Must(rest.Resource[blog.Post, blog.PostCreate, blog.PostPatch](srv.API, db, rest.Options{
 //	    Path: "/posts",
 //	    Ops:  rest.CRUD | rest.OpList,
 //	}))
 //
-// In practice that call is generated into rest_gen.go, one per exposed table,
-// and mounting the whole schema is blog.Register(api, db).
-//
-// The package takes a huma.API rather than building a router, so the choice of
-// router — chi, gin, echo, net/http — stays the application's. Nothing here
-// imports the schema package: exposure reaches the runtime as an Options value,
-// the way capabilities reach it as struct tags.
+// NewServer is a convenience over a seam, not a replacement for it: Resource and
+// the generated Register take a huma.API, so an application that wants chi, gin
+// or echo — for that router's middleware — builds the API itself with the
+// matching adapter (humachi.New(router, ...)) and passes it instead. The choice
+// of router stays the application's. Nothing here imports the schema package:
+// exposure reaches the runtime as an Options value, the way capabilities reach it
+// as struct tags.
 //
 // # Reads are hooked
 //

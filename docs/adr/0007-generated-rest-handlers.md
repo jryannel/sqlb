@@ -3,7 +3,7 @@
 - **Status:** Working
 - **Confidence:** Medium
 - **Decided:** 2026-07-27
-- **Last reviewed:** 2026-07-27
+- **Last reviewed:** 2026-07-30
 
 ## Context
 
@@ -56,6 +56,28 @@ chooses chi, gin, echo or `net/http`, and keeps its own middleware. This also
 keeps the engine's dependency claim intact: `rest` depends on huma, and nothing
 else in the module depends on either.
 
+**`rest` also offers a default that *does* build the router.** `rest.NewServer`
+assembles a huma.API on `net/http` — via humago, so no third-party router is
+pulled in — has huma serve the OpenAPI document and its docs page, and hands back
+the huma.API and the mux for a generated Register and any hand-written routes. It
+is a front door over the seam above, not a replacement for it: an application
+that wants a different router, a different huma adapter, or its own huma.Config
+still builds the huma.API itself. The seam is what lets the default exist without
+foreclosing the alternatives — huma stays the substrate, and the common path
+stops being a router-plus-adapter assembly each application repeats.
+
+**Considered and declined (2026-07-30): removing the huma dependency.** Under
+recurring adoption feedback — huma appears in a consumer's module graph even when
+they never mount a REST surface — going huma-free was scoped in full: `net/http`
+plus an in-house OpenAPI generator. It was declined. Reimplementing what huma
+does well — a battle-tested reflect-to-JSON-Schema generator, request-body
+validation, content negotiation — is a large, permanent surface to own, and
+dropping huma would inherit a validation gap the database only partly covers (a
+document could state a `minimum` or `enum` that nothing enforces before the
+write). The module-graph cost is accepted as the smaller price. The paths weighed
+are under *Alternatives considered*, and what would reopen the question is under
+*What would change our mind*.
+
 ## Consequences
 
 **What this buys.** End-to-end typing into the frontend: a filter that does not
@@ -81,7 +103,14 @@ TypeScript client yet; the document is the input to one.
   behind a single documented `filter` parameter and accept looser typing there.
 - If Huma's parameter or error hooks change shape in a way that needs
   workarounds rather than adaptation, the same design runs on `net/http` with a
-  hand-written document generator; the handlers do not change.
+  hand-written document generator; the handlers do not change. Weighed in full on
+  2026-07-30 and declined — the reimplementation is battle-tested code to re-own —
+  but the escape hatch is real if a future Huma version forces it.
+- If huma in the module graph becomes a hard adoption blocker rather than a
+  grumble — a consumer who imports the engine and never mounts REST refusing the
+  transitive dependency — the nested `rest` module (see *Alternatives*) reappears
+  before an in-house generator does: it keeps huma's machinery and costs only a
+  second release tag.
 - If in practice nobody consumes the generated document, most of the benefit of
   documenting per column evaporates, and a single opaque `filter` parameter is
   simpler.
@@ -89,8 +118,13 @@ TypeScript client yet; the document is the input to one.
 ## Cost of change
 
 Moving off Huma costs the `rest` package and nothing else: the engine, the
-filter grammar and the generated bodies are all independent of it. That is the
-main reason the adapter is its own package.
+filter grammar, the generated bodies and the generated clients — which read
+`sqlb.Model`, not the document ([ADR-0028](0028-typescript-client.md),
+[ADR-0031](0031-dart-client.md)) — are all independent of it. That is the main
+reason the adapter is its own package, and it is why the huma-free path scoped on
+2026-07-30 would have touched one package rather than the surface. The reason it
+was declined is not cost of change but cost of *ownership*: the replacement is
+machinery huma already maintains.
 
 The expensive surface is the **response and error shape**, not the handlers.
 `{items, page, per_page, has_more, total}` and the RFC 9457 problem document
@@ -117,13 +151,43 @@ move into middleware and be re-applied per resource. That trades a compile-time
 guarantee for a convention, on the one axis where a mistake is a data leak.
 
 **A nested Go module for `rest`.** Would keep the root module literally
-dependency-free. Rejected for the reason [ADR-0013](0013-no-internal-split.md)
-gives: two modules to version and release in lockstep is a standing tax, and the
-`deps-check` gate already proves per package what the module boundary would have
-proved by construction.
+dependency-free while keeping huma. Rejected first for the reason
+[ADR-0013](0013-no-internal-split.md) gives — two modules to version and release
+in lockstep is a standing tax, and the `deps-check` gate already proves per
+package what the module boundary would have proved by construction — and, when
+reconsidered on 2026-07-30 under adoption feedback, left rejected. Unlike
+`pgtest`, an internal test module nobody imports, a *published* `rest` module
+pays that tax for real: two release tags in lockstep and a version skew a
+consumer can pin themselves into. It stays the fallback, though — of the two ways
+to answer the module-graph complaint, it is the cheaper, because it keeps huma's
+machinery instead of rebuilding it.
+
+**Dropping huma entirely, on `net/http` with an in-house document generator.**
+Scoped in full on 2026-07-30 and declined. It means re-owning a battle-tested
+reflect-to-JSON-Schema generator, request-body validation and content
+negotiation, and it inherits a validation gap: the document could state a
+constraint — `minimum`, `enum` — that nothing enforces before the database, where
+huma enforces it before the handler. Query-parameter validation would survive
+untouched (it already lives in `filter.Parse`, not huma), but body validation
+would fall back to the database's CHECK constraints ([ADR-0017](0017-enums-as-text-and-check.md)),
+a coarser 422 arriving later. The module-graph cost huma imposes is real but
+smaller than that surface to own. Folded here rather than kept as its own record,
+since it is a road not taken.
 
 ## Revisions
 
+- 2026-07-30 — Added `rest.NewServer`, a batteries-included default that builds
+  the huma.API on `net/http` (humago, so no chi) and serves the document and docs
+  page, so the common REST path is one call rather than the router-plus-adapter
+  assembly each app repeated. The huma.API seam is unchanged and remains the
+  advanced path — this widens the surface, it does not narrow it.
+- 2026-07-30 — Reviewed under adoption feedback that huma appears in a consumer's
+  module graph even without a REST surface. Two ways out were scoped in full — a
+  nested `rest` module, and dropping huma for an in-house `net/http` generator —
+  and both declined in favour of keeping huma; the reasoning is under
+  *Alternatives considered*. Status stays Working; the module-graph cost is
+  accepted, and the nested module is recorded as the fallback if it stops being
+  acceptable.
 - 2026-07-27 — Rewritten after building it. The decision reversed from
   "generated handler per resource" to "one generic handler plus a generated
   document", which was the alternative this record already named as best-if-it-

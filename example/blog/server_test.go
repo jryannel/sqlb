@@ -14,24 +14,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/blog"
 	_ "github.com/jryannel/sqlb/example/blog/blogschema"
+	"github.com/jryannel/sqlb/rest"
 )
 
-// This is the assembled server, and the point of the whole exercise: a chi
-// router with the application's own middleware, a Huma API on top of it, and one
-// generated call that mounts every resource the schema exposes — filtering,
-// sorting, search, pagination, OpenAPI and all.
+// This is the assembled server, and the point of the whole exercise:
+// rest.NewServer builds a huma API on net/http — no third-party router — and one
+// generated call mounts every resource the schema exposes, with filtering,
+// sorting, search, pagination and OpenAPI all included. A real program adds its
+// own middleware by wrapping srv.Handler.
 func newServer(t *testing.T, db sqlb.Executor) http.Handler {
 	t.Helper()
-	router := chi.NewRouter()
-	router.Use(middleware.RequestID, middleware.Recoverer)
 
 	// posts declares SoftDelete, so the resource does not mount until something
 	// filters the column (ADR-0030). A test that registered its own hook keeps
@@ -42,15 +37,15 @@ func newServer(t *testing.T, db sqlb.Executor) http.Handler {
 		t.Cleanup(func() { sqlb.On[blog.Post]().Reset() })
 	}
 
-	api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
-	if err := blog.Register(api, db); err != nil {
+	srv := rest.NewServer(rest.Config{Title: "Blog", Version: "1.0.0"})
+	if err := blog.Register(srv.API, db); err != nil {
 		t.Fatalf("mounting the blog resources: %v", err)
 	}
 	// The generated call mounts what the schema exposes; this one mounts the
 	// soft delete that posts expose in place of the generated DELETE. Two calls
 	// rather than a wrapper, which is how example/tasks composes the same pair.
-	blog.RegisterPostSoftDelete(api, db)
-	return router
+	blog.RegisterPostSoftDelete(srv.API, db)
+	return srv.Handler
 }
 
 func TestGeneratedServerListsPosts(t *testing.T) {
@@ -251,10 +246,9 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 		defer sqlb.On[blog.Post]().Reset()
 
 		db := newStubDB(t, postColumns(), nil)
-		router := chi.NewRouter()
-		api := humachi.New(router, huma.DefaultConfig("Blog", "1.0.0"))
+		srv := rest.NewServer(rest.Config{Title: "Blog", Version: "1.0.0"})
 
-		err := blog.Register(api, db.db)
+		err := blog.Register(srv.API, db.db)
 		if err == nil {
 			t.Fatal("expected mounting to fail: nothing filters a column the schema says is filtered")
 		}
