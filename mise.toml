@@ -319,6 +319,11 @@ description = "Fail if committed generated code does not match what the schema w
 run = '''
 set -e
 go run ./cmd/sqlb check ./example/blog/blogschema
+# The one schema package under internal/. It exists because the driver is
+# compiled inside the module now; a regression putting it back outside would
+# make this command unable to read such a package at all, since Go refuses the
+# import. cmd/sqlb's test covers that mechanism — this keeps the output current.
+go run ./cmd/sqlb check ./internal/internalschema
 # The sqlc example reads a schema.sql rendered from the same declaration. If it
 # drifts, sqlc is typing its queries against a schema the database no longer
 # has, which is the exact failure docs/with-sqlc.md claims this arrangement
