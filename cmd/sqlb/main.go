@@ -74,6 +74,8 @@ Usage:
     sqlb check <package>             report stale artefacts, write nothing
     sqlb migrate [flags] <package>   write the migration that closes the gap
                                      between the history and the schema
+    sqlb impact [flags] <package>    report how the schema edit changes the REST
+                                     contract, against a checked-in baseline
     sqlb version                     print the version this binary was built from
 
 Flags for migrate:
@@ -84,6 +86,11 @@ Flags for migrate:
     -unblock              use the concurrent forms of the long-lock statements
     -allow-destructive    emit destructive statements live, not commented out
 
+Flags for impact:
+
+    -write                record the current REST contract as the new baseline
+    -error                exit non-zero if the contract has breaking changes
+
 <package> is the Go package that declares the schema, in the form go build
 takes — usually ./schema or ./taskschema. It must export:
 
@@ -92,7 +99,7 @@ takes — usually ./schema or ./taskschema. It must export:
 Paths in that Project resolve against the module root, so the commands above
 mean the same thing from a shell, from a //go:generate directive and from CI.
 
-generate and check need no database. migrate reads the current schema by
+generate, check and impact need no database. migrate reads the current schema by
 replaying the committed history into a scratch Postgres, so it needs the
 Project's ShadowDB — except for the first migration, which diffs against
 nothing and needs no database at all.
@@ -118,7 +125,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version())
 		return nil
-	case "generate", "check", "migrate":
+	case "generate", "check", "migrate", "impact":
 	default:
 		_, _ = fmt.Fprintf(stderr, "sqlb: unknown command %q\n\n", verb)
 		_, _ = fmt.Fprint(stderr, usage)

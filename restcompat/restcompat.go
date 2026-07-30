@@ -1,0 +1,685 @@
+// Package restcompat diffs the REST contract two schemas generate, and
+// classifies each delta as breaking, additive, or neutral for a deployed
+// client. It is the engine behind `sqlb impact`
+// (ADR-0039: a schema edit is an API edit, and the break is diffed).
+//
+// It is a sibling of migrate.Diff, not a consumer of it. migrate.Diff reads the
+// columns and types that produce DDL and ignores capabilities, because
+// capabilities emit no SQL. This reads the capabilities — Filterable, the Op
+// set, exposure — precisely because the sharpest API breaks produce no DDL at
+// all: un-exposing a column, dropping an operation, or a rename that is a clean
+// migration and a wire break at the same time. So the two functions run over the
+// same pair of registries and read different projections of them.
+//
+// Like migrate.Diff it is a pure function over two *schema.Registry values, with
+// no database and no running server, which is what makes it golden-testable.
+//
+// # What is deliberately honest here
+//
+// A change that is compatible for a reader and breaking for a writer — a column
+// going NOT NULL widens the create body's required set while leaving responses
+// untouched — is reported as two separate breaks, one per side, never folded
+// into one. A classifier that reported the reader side and forgot the writer
+// side would be a guard that fires sometimes, which reads as coverage it does
+// not have (ADR-0016). Where a type change cannot be classified confidently in
+// both directions, it is reported LevelUnknown rather than guessed as neutral.
+package restcompat
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/jryannel/sqlb/schema"
+)
+
+// Level is how a contract delta lands on a client that already exists.
+type Level int
+
+const (
+	// LevelNeutral: no client is affected. A response field going from nullable
+	// to always-present is neutral for a reader that already handled the type.
+	LevelNeutral Level = iota
+	// LevelAdditive: a new capability. Nothing that a client sends or reads
+	// today changes meaning; a client that ignores the addition is unaffected.
+	LevelAdditive
+	// LevelBreaking: an existing client can break — a request that worked now
+	// fails, or a response field it relied on is gone or changed shape.
+	LevelBreaking
+	// LevelUnknown: the delta is real but its effect depends on how a specific
+	// client generated its types (a widened integer overflows a narrow one), so
+	// it is surfaced for review rather than claimed safe. Treat it as breaking
+	// under a strict gate.
+	LevelUnknown
+)
+
+func (l Level) String() string {
+	switch l {
+	case LevelNeutral:
+		return "neutral"
+	case LevelAdditive:
+		return "additive"
+	case LevelBreaking:
+		return "breaking"
+	case LevelUnknown:
+		return "unknown"
+	default:
+		return "?"
+	}
+}
+
+// Facet names the part of the contract a break sits in. Facets are ordered so
+// that a resource-level break sorts above the field-level breaks under it.
+type Facet string
+
+const (
+	FacetResource Facet = "resource"    // the endpoint set as a whole
+	FacetOps      Facet = "ops"         // which operations exist
+	FacetResponse Facet = "response"    // the fields a read returns
+	FacetFilter   Facet = "filter"      // ?column=op.value parameters
+	FacetSort     Facet = "sort"        // ?sort columns
+	FacetExpand   Facet = "expand"      // ?expand relations
+	FacetCreate   Facet = "create-body" // the POST body
+	FacetPatch    Facet = "patch-body"  // the PATCH body
+)
+
+var facetOrder = map[Facet]int{
+	FacetResource: 0, FacetOps: 1, FacetResponse: 2, FacetFilter: 3,
+	FacetSort: 4, FacetExpand: 5, FacetCreate: 6, FacetPatch: 7,
+}
+
+// Break is one classified delta between two generated contracts.
+type Break struct {
+	Level    Level
+	Resource string // the collection path, e.g. "/posts"
+	Facet    Facet
+	Field    string // column or relation name; empty for resource- and ops-level
+	Summary  string // one line, in the allow-list voice: what changed, for whom
+}
+
+func (b Break) String() string {
+	loc := b.Resource
+	if b.Field != "" {
+		loc += " " + string(b.Facet) + "." + b.Field
+	} else {
+		loc += " " + string(b.Facet)
+	}
+	return fmt.Sprintf("%-8s %-28s %s", b.Level, loc, b.Summary)
+}
+
+// Diff reports how the REST contract changes moving from old to new. The result
+// is deterministic: sorted by resource, then by facet, then by field. An empty
+// result means the contract is byte-for-byte compatible.
+//
+// This is the convenience form for two registries in hand. `sqlb impact` diffs
+// a registry against a checked-in Snapshot instead — see DiffSnapshots — because
+// "backward compatible relative to what?" needs a committed answer, not the
+// other side of a comparison that only exists at generation time.
+func Diff(old, new *schema.Registry) []Break {
+	return DiffSnapshots(Capture(old), Capture(new))
+}
+
+// DiffSnapshots is Diff over two captured contracts. It is what the CLI runs:
+// the old side is read from a file in the repository, the new side is captured
+// from the current schema.
+func DiffSnapshots(old, new Snapshot) []Break {
+	oldR := index(old)
+	newR := index(new)
+
+	var breaks []Break
+	add := func(b Break) { breaks = append(breaks, b) }
+
+	for _, path := range union(oldR, newR) {
+		o, inOld := oldR[path]
+		n, inNew := newR[path]
+		switch {
+		case inOld && !inNew:
+			add(Break{LevelBreaking, path, FacetResource, "",
+				"resource is no longer exposed; every endpoint under it is gone"})
+		case !inOld && inNew:
+			add(Break{LevelAdditive, path, FacetResource, "",
+				"resource is newly exposed"})
+		default:
+			diffResource(o, n, add)
+		}
+	}
+
+	sort.SliceStable(breaks, func(i, j int) bool {
+		a, b := breaks[i], breaks[j]
+		if a.Resource != b.Resource {
+			return a.Resource < b.Resource
+		}
+		if a.Facet != b.Facet {
+			return facetOrder[a.Facet] < facetOrder[b.Facet]
+		}
+		return a.Field < b.Field
+	})
+	return breaks
+}
+
+// Breaking returns only the breaks a strict gate would fail on — the breaking
+// ones and the unknowns, which cannot be shown safe. This is what
+// `--api-compat=error` would count.
+func Breaking(breaks []Break) []Break {
+	var out []Break
+	for _, b := range breaks {
+		if b.Level == LevelBreaking || b.Level == LevelUnknown {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// diffResource compares two contracts for the same path.
+func diffResource(o, n resource, add func(Break)) {
+	// Operations.
+	for _, op := range []schema.Op{schema.OpCreate, schema.OpRead, schema.OpUpdate, schema.OpDelete, schema.OpList} {
+		switch {
+		case o.ops.Has(op) && !n.ops.Has(op):
+			add(Break{LevelBreaking, n.path, FacetOps, "",
+				fmt.Sprintf("operation %s removed", op)})
+		case !o.ops.Has(op) && n.ops.Has(op):
+			add(Break{LevelAdditive, n.path, FacetOps, "",
+				fmt.Sprintf("operation %s added", op)})
+		}
+	}
+
+	// Match fields, resolving renames first so a rename is one break rather than
+	// a spurious drop-and-add.
+	matched := map[string]bool{} // old column names consumed by a rename
+	for _, nf := range n.order {
+		nv := n.fields[nf]
+		if nv.renamedFrom == "" {
+			continue
+		}
+		ov, ok := o.fields[nv.renamedFrom]
+		if !ok || n.fields[nv.renamedFrom] != nil {
+			continue // hint's old name is gone or still present; not a rename here
+		}
+		matched[nv.renamedFrom] = true
+		diffRename(o.path, ov, nv, add)
+		diffField(n.path, ov, nv, add) // the renamed column may also have changed
+	}
+
+	for _, name := range o.order {
+		if matched[name] {
+			continue
+		}
+		ov := o.fields[name]
+		if _, ok := n.fields[name]; !ok {
+			diffRemoved(n.path, ov, add)
+		}
+	}
+	for _, name := range n.order {
+		nv := n.fields[name]
+		if nv.renamedFrom != "" && matched[nv.renamedFrom] {
+			continue
+		}
+		if _, ok := o.fields[name]; !ok {
+			diffAdded(n.path, nv, add)
+			continue
+		}
+		diffField(n.path, o.fields[name], nv, add)
+	}
+}
+
+// diffRemoved reports the breaks caused by a column leaving the schema.
+func diffRemoved(path string, ov *fieldView, add func(Break)) {
+	if ov.inResponse() {
+		add(Break{LevelBreaking, path, FacetResponse, ov.name,
+			"field removed from responses"})
+	}
+	if ov.filterable {
+		add(Break{LevelBreaking, path, FacetFilter, ov.name,
+			"filter removed; a request using it now 400s"})
+	}
+	if ov.sortable {
+		add(Break{LevelBreaking, path, FacetSort, ov.name, "sort key removed"})
+	}
+	if ov.expandable {
+		add(Break{LevelBreaking, path, FacetExpand, ov.relName, "expand relation removed"})
+	}
+}
+
+// diffAdded reports the breaks and additions caused by a new column.
+func diffAdded(path string, nv *fieldView, add func(Break)) {
+	if nv.inResponse() {
+		add(Break{LevelAdditive, path, FacetResponse, nv.name, "field added to responses"})
+	}
+	if nv.filterable {
+		add(Break{LevelAdditive, path, FacetFilter, nv.name, "filter added"})
+	}
+	if nv.sortable {
+		add(Break{LevelAdditive, path, FacetSort, nv.name, "sort key added"})
+	}
+	if nv.expandable {
+		add(Break{LevelAdditive, path, FacetExpand, nv.relName, "expand relation added"})
+	}
+	// The one addition that breaks a writer: a required field in the create body.
+	if nv.requiredAtCreate() {
+		add(Break{LevelBreaking, path, FacetCreate, nv.name,
+			"new required field; a create that omits it now fails validation"})
+	} else if nv.settableAtCreate() {
+		add(Break{LevelAdditive, path, FacetCreate, nv.name, "new optional field accepted"})
+	}
+}
+
+// diffRename reports the wire break a rename is, even though the migration under
+// it is a clean RENAME (ADR-0036: the wire spelling is the column name).
+func diffRename(path string, ov, nv *fieldView, add func(Break)) {
+	note := fmt.Sprintf("renamed from %q; the migration is a clean RENAME but the wire name changed", ov.name)
+	if ov.inResponse() {
+		add(Break{LevelBreaking, path, FacetResponse, nv.name, note})
+	}
+	if ov.filterable {
+		add(Break{LevelBreaking, path, FacetFilter, nv.name,
+			fmt.Sprintf("renamed from %q; ?%s=… now 400s", ov.name, ov.name)})
+	}
+	if ov.sortable {
+		add(Break{LevelBreaking, path, FacetSort, nv.name,
+			fmt.Sprintf("renamed from %q", ov.name)})
+	}
+}
+
+// diffField compares a column present on both sides (possibly under a new name
+// after a rename) and reports capability, visibility, nullability and type
+// deltas. Reader-side and writer-side effects are reported separately.
+func diffField(path string, o, n *fieldView, add func(Break)) {
+	// Visibility.
+	switch {
+	case o.inResponse() && !n.inResponse():
+		add(Break{LevelBreaking, path, FacetResponse, n.name,
+			"now hidden; readers that selected it lose it"})
+	case !o.inResponse() && n.inResponse():
+		add(Break{LevelAdditive, path, FacetResponse, n.name, "now returned in responses"})
+	}
+
+	// Capabilities.
+	capDelta(path, FacetFilter, n.name, o.filterable, n.filterable,
+		"filter removed; a request using it now 400s", "filter added", add)
+	capDelta(path, FacetSort, n.name, o.sortable, n.sortable,
+		"sort key removed", "sort key added", add)
+	capDelta(path, FacetExpand, n.relName, o.expandable, n.expandable,
+		"expand relation removed", "expand relation added", add)
+
+	// Nullability — the reader/writer asymmetry, reported on both sides.
+	if o.nullable != n.nullable {
+		diffNullable(path, o, n, add)
+	}
+
+	// Type.
+	if o.typ != n.typ || o.array != n.array || o.size != n.size || !sameEnum(o, n) {
+		diffType(path, o, n, add)
+	}
+}
+
+func capDelta(path string, facet Facet, field string, was, now bool, offMsg, onMsg string, add func(Break)) {
+	switch {
+	case was && !now:
+		add(Break{LevelBreaking, path, facet, field, offMsg})
+	case !was && now:
+		add(Break{LevelAdditive, path, facet, field, onMsg})
+	}
+}
+
+// diffNullable splits a nullability change into its reader and writer effects.
+func diffNullable(path string, o, n *fieldView, add func(Break)) {
+	if o.nullable && !n.nullable {
+		// null -> not null.
+		if n.inResponse() {
+			add(Break{LevelNeutral, path, FacetResponse, n.name,
+				"no longer null in responses; readers that handled the type are unaffected"})
+		}
+		// Writer: only breaking if it actually becomes required (no default).
+		if n.requiredAtCreate() && !o.requiredAtCreate() {
+			add(Break{LevelBreaking, path, FacetCreate, n.name,
+				"now required in the create body; a create that omits it now fails validation"})
+		}
+		return
+	}
+	// not null -> null.
+	if n.inResponse() {
+		add(Break{LevelBreaking, path, FacetResponse, n.name,
+			"may now be null; a non-nullable client type breaks on null"})
+	}
+	if o.requiredAtCreate() && !n.requiredAtCreate() {
+		add(Break{LevelAdditive, path, FacetCreate, n.name,
+			"now optional in the create body"})
+	}
+}
+
+// diffType classifies a type change. Enum value sets, scalar/array shape, and
+// integer/text width are handled explicitly; anything else is reported unknown
+// rather than guessed, because a wrong "neutral" is the failure ADR-0016 names.
+func diffType(path string, o, n *fieldView, add func(Break)) {
+	// Scalar <-> array is breaking both ways: the JSON shape changes.
+	if o.array != n.array {
+		add(Break{LevelBreaking, path, FacetResponse, n.name,
+			"changed between a scalar and an array; the JSON shape is different"})
+		return
+	}
+
+	// Enum value set.
+	if o.typ == schema.TypeEnum && n.typ == schema.TypeEnum {
+		gained := minus(n.enumValues, o.enumValues)
+		lost := minus(o.enumValues, n.enumValues)
+		if len(gained) > 0 && n.inResponse() {
+			add(Break{LevelBreaking, path, FacetResponse, n.name,
+				fmt.Sprintf("enum gained %s; a client's closed union rejects the new value", quote(gained))})
+		}
+		if len(lost) > 0 {
+			facet := FacetCreate
+			if n.filterable {
+				facet = FacetFilter
+			}
+			add(Break{LevelBreaking, path, facet, n.name,
+				fmt.Sprintf("enum dropped %s; input that used it now 422s", quote(lost))})
+		}
+		return
+	}
+
+	// Integer and text width.
+	if lvl, msg, ok := widthChange(o, n); ok {
+		add(Break{lvl, path, FacetResponse, n.name, msg})
+		return
+	}
+
+	// Everything else: a family change we do not model. Do not guess.
+	add(Break{LevelUnknown, path, FacetResponse, n.name,
+		fmt.Sprintf("type changed from %s to %s; classify by hand", o.typ, n.typ)})
+}
+
+// widthChange classifies a same-family widening or narrowing. Widening is
+// reported unknown, not neutral: a reader with a narrower generated integer
+// overflows on a value the wider server type now permits (ADR-0039's int4->int8
+// case). Narrowing is breaking on the write side.
+func widthChange(o, n *fieldView) (Level, string, bool) {
+	if or, ok := intRank(o.typ); ok {
+		if nr, ok := intRank(n.typ); ok {
+			switch {
+			case nr > or:
+				return LevelUnknown, fmt.Sprintf(
+					"widened %s->%s; a client with a narrower integer type may overflow", o.typ, n.typ), true
+			case nr < or:
+				return LevelBreaking, fmt.Sprintf(
+					"narrowed %s->%s; a value that fit before is now rejected", o.typ, n.typ), true
+			}
+		}
+	}
+	if ow, ok := textWidth(o); ok {
+		if nw, ok := textWidth(n); ok {
+			switch {
+			case nw > ow:
+				return LevelAdditive, "text length widened; accepts longer values", true
+			case nw < ow:
+				return LevelBreaking, "text length narrowed; a value that fit before is now rejected", true
+			}
+		}
+	}
+	return 0, "", false
+}
+
+// --- snapshot -----------------------------------------------------------------
+
+// SnapshotVersion is the format version of a captured contract. It is stamped
+// into every Snapshot so a future format change can be recognised rather than
+// misread — the snapshot is a checked-in artefact, and ADR-0039 flags its format
+// as the expensive thing to change once teams have committed one. This format is
+// still experimental and may change before it is frozen.
+const SnapshotVersion = 1
+
+// Snapshot is the serialisable REST contract of a schema: one entry per exposed
+// resource, holding exactly the capabilities a client couples to and nothing
+// about storage. It is what `sqlb impact -write` records and what a later run
+// diffs against.
+type Snapshot struct {
+	Version   int            `json:"version"`
+	Resources []ResourceSnap `json:"resources"`
+}
+
+// ResourceSnap is one exposed table's contract.
+type ResourceSnap struct {
+	Path   string      `json:"path"`
+	Ops    []string    `json:"ops"` // create, read, update, delete, list
+	Fields []FieldSnap `json:"fields"`
+}
+
+// FieldSnap is one column's contract-relevant shape. Storage-only properties —
+// the primary-key flag, the index list, the constraint names — are deliberately
+// absent: they do not change how a client couples to the field.
+type FieldSnap struct {
+	Name        string   `json:"name"`
+	Rel         string   `json:"rel,omitempty"`
+	Type        string   `json:"type"`
+	Array       bool     `json:"array,omitempty"`
+	Size        int      `json:"size,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+	Nullable    bool     `json:"nullable,omitempty"`
+	HasDefault  bool     `json:"has_default,omitempty"`
+	Hidden      bool     `json:"hidden,omitempty"`
+	ReadOnly    bool     `json:"read_only,omitempty"`
+	Immutable   bool     `json:"immutable,omitempty"`
+	Filterable  bool     `json:"filterable,omitempty"`
+	Sortable    bool     `json:"sortable,omitempty"`
+	Expandable  bool     `json:"expandable,omitempty"`
+	RenamedFrom string   `json:"renamed_from,omitempty"`
+}
+
+// canonicalOps is the fixed order operations are captured and compared in, so a
+// snapshot's op list is stable and a diff reads them in a predictable order.
+var canonicalOps = []struct {
+	op   schema.Op
+	name string
+}{
+	{schema.OpCreate, "create"}, {schema.OpRead, "read"}, {schema.OpUpdate, "update"},
+	{schema.OpDelete, "delete"}, {schema.OpList, "list"},
+}
+
+// Capture projects a registry into its serialisable REST contract. It is the
+// same projection Diff uses, exposed so the CLI can record and re-read it.
+// Resources are sorted by path so a re-record produces a minimal file diff.
+func Capture(r *schema.Registry) Snapshot {
+	s := Snapshot{Version: SnapshotVersion}
+	if r == nil {
+		return s
+	}
+	for _, t := range r.Tables() {
+		rest := t.Rest()
+		if rest == nil {
+			continue
+		}
+		path := rest.Path
+		if path == "" {
+			path = "/" + t.LocalName()
+		}
+		res := ResourceSnap{Path: path}
+		for _, c := range canonicalOps {
+			if rest.Ops.Has(c.op) {
+				res.Ops = append(res.Ops, c.name)
+			}
+		}
+		for _, f := range t.Fields() {
+			d := f.Desc()
+			fs := FieldSnap{
+				Name:        d.Name,
+				Type:        string(d.Type),
+				Array:       d.Array,
+				Size:        d.Size,
+				Enum:        d.EnumValues,
+				Nullable:    d.Nullable,
+				HasDefault:  d.Default != nil,
+				Hidden:      d.Hidden,
+				ReadOnly:    d.ReadOnly,
+				Immutable:   d.Immutable,
+				Filterable:  d.Filterable,
+				Sortable:    d.Sortable,
+				Expandable:  d.Expandable,
+				RenamedFrom: d.RenamedFrom,
+			}
+			if d.Ref != nil {
+				fs.Rel = d.Ref.Name
+			}
+			res.Fields = append(res.Fields, fs)
+		}
+		s.Resources = append(s.Resources, res)
+	}
+	sort.Slice(s.Resources, func(i, j int) bool {
+		return s.Resources[i].Path < s.Resources[j].Path
+	})
+	return s
+}
+
+// --- projection ---------------------------------------------------------------
+
+// resource is the internal, comparison-ready form of one resource's contract:
+// its fields indexed by name, with the op set decoded back to a mask.
+type resource struct {
+	path   string
+	ops    schema.Op
+	order  []string // column names, in declaration order, for stable output
+	fields map[string]*fieldView
+}
+
+// fieldView is the contract-relevant view of one column. It carries only what
+// decides how a client couples to the field, not how it is stored.
+type fieldView struct {
+	name       string
+	relName    string // relation name for a reference (?expand target); else ""
+	typ        schema.Type
+	array      bool
+	size       int
+	enumValues []string
+
+	nullable   bool
+	hasDefault bool
+
+	hidden     bool
+	readOnly   bool
+	immutable  bool
+	filterable bool
+	sortable   bool
+	expandable bool
+
+	// renamedFrom is not a property of the contract but the hint that matches
+	// this field to its old name across the diff. Kept on the view so the
+	// matcher has it without a second lookup.
+	renamedFrom string
+}
+
+func (f *fieldView) inResponse() bool       { return !f.hidden }
+func (f *fieldView) settableAtCreate() bool { return !f.readOnly }
+func (f *fieldView) requiredAtCreate() bool {
+	return f.settableAtCreate() && !f.nullable && !f.hasDefault
+}
+
+// index turns a Snapshot into the by-path, by-name form the comparison walks.
+func index(s Snapshot) map[string]resource {
+	out := map[string]resource{}
+	for _, rs := range s.Resources {
+		res := resource{path: rs.Path, fields: map[string]*fieldView{}}
+		for _, name := range rs.Ops {
+			for _, c := range canonicalOps {
+				if c.name == name {
+					res.ops |= c.op
+				}
+			}
+		}
+		for _, fs := range rs.Fields {
+			fv := &fieldView{
+				name:        fs.Name,
+				relName:     fs.Rel,
+				typ:         schema.Type(fs.Type),
+				array:       fs.Array,
+				size:        fs.Size,
+				enumValues:  fs.Enum,
+				nullable:    fs.Nullable,
+				hasDefault:  fs.HasDefault,
+				hidden:      fs.Hidden,
+				readOnly:    fs.ReadOnly,
+				immutable:   fs.Immutable,
+				filterable:  fs.Filterable,
+				sortable:    fs.Sortable,
+				expandable:  fs.Expandable,
+				renamedFrom: fs.RenamedFrom,
+			}
+			res.order = append(res.order, fs.Name)
+			res.fields[fs.Name] = fv
+		}
+		out[rs.Path] = res
+	}
+	return out
+}
+
+// --- helpers ------------------------------------------------------------------
+
+func union(a, b map[string]resource) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for k := range a {
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	for k := range b {
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func intRank(t schema.Type) (int, bool) {
+	switch t {
+	case schema.TypeInt:
+		return 1, true
+	case schema.TypeBigInt:
+		return 2, true
+	}
+	return 0, false
+}
+
+func textWidth(f *fieldView) (int, bool) {
+	switch f.typ {
+	case schema.TypeText:
+		return 1 << 30, true
+	case schema.TypeVarchar:
+		if f.size == 0 {
+			return 1 << 30, true
+		}
+		return f.size, true
+	}
+	return 0, false
+}
+
+func sameEnum(o, n *fieldView) bool {
+	if o.typ != schema.TypeEnum || n.typ != schema.TypeEnum {
+		return true // not both enums; type equality is checked elsewhere
+	}
+	return len(minus(o.enumValues, n.enumValues)) == 0 && len(minus(n.enumValues, o.enumValues)) == 0
+}
+
+// minus returns the elements of a not present in b.
+func minus(a, b []string) []string {
+	set := map[string]bool{}
+	for _, v := range b {
+		set[v] = true
+	}
+	var out []string
+	for _, v := range a {
+		if !set[v] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func quote(vs []string) string {
+	q := make([]string, len(vs))
+	for i, v := range vs {
+		q[i] = fmt.Sprintf("%q", v)
+	}
+	return strings.Join(q, ", ")
+}

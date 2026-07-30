@@ -138,3 +138,4 @@ nobody finishes reading has failed at its only job.
 | [0036](0036-the-wire-is-the-column-name.md) | The wire spells a column the way the schema does | Working | High |
 | [0037](0037-search-is-ilike-until-it-cannot-be.md) | `?search` is ILIKE, and a `tsvector` column is not in 1.0 | Not in 1.0 | High |
 | [0038](0038-collections-are-flat.md) | A collection has one path, and the parent is a filter | Working | High |
+| [0039](0039-a-schema-edit-is-an-api-edit.md) | A schema edit is an API edit, and the break is diffed | Exploring | Medium |

@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "resources": [
+    {
+      "path": "/authors",
+      "ops": [
+        "create",
+        "read",
+        "update",
+        "delete",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "org_id",
+          "rel": "org",
+          "type": "uuid",
+          "filterable": true,
+          "expandable": true
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "password_hash",
+          "type": "text",
+          "hidden": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/orgs",
+      "ops": [
+        "read",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/posts",
+      "ops": [
+        "create",
+        "read",
+        "update",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "org_id",
+          "rel": "org",
+          "type": "uuid"
+        },
+        {
+          "name": "author_id",
+          "rel": "author",
+          "type": "uuid",
+          "filterable": true,
+          "expandable": true
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "enum": [
+            "draft",
+            "review",
+            "published"
+          ],
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "view_count",
+          "type": "bigint",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "published_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "read_only": true
+        }
+      ]
+    }
+  ]
+}

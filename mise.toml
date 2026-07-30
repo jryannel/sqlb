@@ -333,6 +333,16 @@ go run ./example/withsqlc/gen -check
 cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sqlb check ./taskschema
 '''
 
+[tasks.impact-check]
+description = "Fail if a schema edit has changed the generated REST contract in a way that breaks a deployed client — a renamed or un-exposed column, a dropped operation, a narrowed type (ADR-0039). Diffs each example's schema against its committed restcontract.json baseline. Distinct from generate-check: that catches drift in the code sqlb writes, this catches drift in the API that code serves, and the two can disagree — a clean RENAME migration is a wire break. Re-record a baseline with `sqlb impact -write` when the change is intended. -error, not a bare run, because in a gate the point is to fail."
+run = '''
+set -e
+go run ./cmd/sqlb impact -error ./example/blog/blogschema
+# example/tasks is its own module, so like generate-check it needs a line of its
+# own; the root module's package list cannot reach its schema.
+cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sqlb impact -error ./taskschema
+'''
+
 [tasks.bisect-check]
 description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
@@ -373,7 +383,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run vet
@@ -381,6 +391,7 @@ mise run lint
 mise run tidy-check
 mise run deps-check
 mise run generate-check
+mise run impact-check
 mise run test-race
 mise run test-ts
 mise run test-dart
