@@ -8,24 +8,23 @@ import (
 	"testing"
 )
 
-// The refactor that introduced rowSource claims two things at once, and
-// ADR-0016 asks that a guard be proven in both directions rather than in the
-// one that happens to be convenient:
+// rowSource claims two things at once, and ADR-0016 asks that a guard be proven
+// in both directions rather than in the one that happens to be convenient:
 //
-//   - a result set that is not *sql.Rows scans, which is the new capability and
-//     the whole reason the interface exists;
-//   - *sql.Rows still satisfies it, which is the thing that must not have
-//     regressed, since it is the only row source anything in production uses.
+//   - the adapter over the real driver satisfies it, which is the thing that
+//     must not regress, since it is the only row source anything in production
+//     uses;
+//   - a result set that came from no driver at all scans, which is what lets
+//     the tests below run without a database.
 //
-// The second is a compile-time assertion because that is what it is. Widening
-// rowSource with a method *sql.Rows lacks would break every real caller, and
-// this line says so at the point of the mistake rather than fifty files away.
-var _ rowSource = (*sql.Rows)(nil)
+// The first is a compile-time assertion because that is what it is. Widening
+// rowSource with a method pgxRows lacks would break every real caller, and this
+// line says so at the point of the mistake rather than fifty files away.
+var _ rowSource = pgxRows{}
 
-// fakeRows is a row source with no driver, no connection and no database/sql
-// anywhere underneath it. If the scanners can read it, they are not written
-// against the standard library's concrete type — which is exactly what a pgx
-// adapter would need to be true.
+// fakeRows is a row source with no driver and no connection underneath it. If
+// the scanners can read it, they are not written against a concrete result set
+// — which is what made the driver flip an adapter rather than a rewrite.
 type fakeRows struct {
 	cols   []string
 	data   [][]any
@@ -46,14 +45,11 @@ func (r *fakeRows) Next() bool {
 
 func (r *fakeRows) Err() error { return r.err }
 
-func (r *fakeRows) Close() error {
-	r.closed = true
-	return nil
-}
+func (r *fakeRows) Close() { r.closed = true }
 
-// Scan follows database/sql's convention closely enough for the scanners to be
-// exercised honestly: sql.Scanner destinations are offered the raw value, which
-// is the path array columns take, and everything else is assigned by reflection.
+// Scan follows pgx's convention closely enough for the scanners to be exercised
+// honestly: sql.Scanner destinations are offered the raw value, which is pgx's
+// last-resort plan, and everything else is assigned by reflection.
 func (r *fakeRows) Scan(dest ...any) error {
 	if r.pos == 0 || r.pos > len(r.data) {
 		return errors.New("fakeRows: Scan called outside a row")
@@ -102,8 +98,8 @@ func TestScanReadsARowSourceThatIsNotSQLRows(t *testing.T) {
 	rows := &fakeRows{
 		cols: []string{"id", "name", "tags"},
 		data: [][]any{
-			{int64(1), "first", []byte("{a,b}")},
-			{int64(2), "second", []byte("{}")},
+			{int64(1), "first", []string{"a", "b"}},
+			{int64(2), "second", []string{}},
 		},
 	}
 
@@ -122,13 +118,13 @@ func TestScanReadsARowSourceThatIsNotSQLRows(t *testing.T) {
 }
 
 // The array column above is the part worth stating separately: it reaches the
-// destination as an arrayScanner rather than as the field's own address, so a
-// row source that never produces a *sql.Rows still has to satisfy sql.Scanner
-// destinations. Anything claiming to be a pgx adapter has to do the same.
+// destination as the slice field's own address, which is the whole of what
+// ADR-0040 bought there. Under database/sql it arrived as `{a,b}` in a []byte
+// and a 449-line codec turned it back into a []string.
 func TestScanDiscardsUnmappedColumnsFromARowSource(t *testing.T) {
 	rows := &fakeRows{
 		cols: []string{"id", "name", "tags", "computed_rank"},
-		data: [][]any{{int64(7), "kept", []byte("{}"), int64(99)}},
+		data: [][]any{{int64(7), "kept", []string{}, int64(99)}},
 	}
 
 	got, err := scanAll[rowSourceRow](rows, ModelOf[rowSourceRow]())

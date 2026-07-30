@@ -2,7 +2,6 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,18 +12,21 @@ import (
 	"github.com/jryannel/sqlb"
 )
 
-// What the bridge costs, measured rather than reasoned about.
+// What sqlb costs over the driver it is now written on, measured rather than
+// reasoned about.
 //
-// [ADR-0040] proposes making the engine pgx-native, and half its argument is
-// performance. That half was written from what the protocols do rather than
-// from a number, which is the position [ADR-0019] was in before it went and
-// tested a real PgBouncer — and two of that record's three claims came back
-// more interesting than the documentation predicted.
+// [ADR-0040] made the engine pgx-native, and half its argument was performance.
+// That half was written from what the protocols do rather than from a number,
+// which is the position [ADR-0019] was in before it went and tested a real
+// PgBouncer — and two of that record's three claims came back more interesting
+// than the documentation predicted. These benchmarks are what settled it: the
+// bridge cost ordinary CRUD ~30%, and a wide float array 2.7× time and 21×
+// memory, which is the pgvector case with a number attached.
 //
-// So: the same Postgres, the same table, the same rows, and the only variable
-// is the path a value takes to reach a Go struct. sqlb runs over
-// stdlib.OpenDBFromPool, which is the arrangement every pgx-native application
-// adopting sqlb uses today.
+// What they measure now is different, and worth keeping for it: sqlb and
+// hand-written pgx run on the same driver, so what is left is the builder, the
+// hooks and the reflective scan. Any gap here is sqlb's own, with nowhere to
+// put the blame.
 //
 // # Reading these fairly
 //
@@ -58,36 +60,24 @@ import (
 // plausible response.
 const benchRows = 200
 
-// benchDB returns two handles onto one fresh database: sqlb over the
-// database/sql bridge, and a pgxpool for the hand-written comparison. The raw
-// *sql.DB comes back too, for seeding and truncating outside the timed region.
-func benchDB(b *testing.B) (*sqlb.DB, *sql.DB, *pgxpool.Pool) {
+// benchDB returns two handles onto one fresh database: a sqlb handle, and the
+// pool underneath it for the hand-written comparison and for seeding outside
+// the timed region.
+//
+// They are the same pool on purpose. Before ADR-0040 they could not be — sqlb
+// held a *sql.DB and the comparison held a pgxpool, and the two connection
+// paths were half of what was being measured.
+func benchDB(b *testing.B) (*sqlb.DB, *pgxpool.Pool) {
 	b.Helper()
-	raw := freshDB(b)
-
-	// Asking the connection which database it is on avoids threading the
-	// generated name out of the harness.
-	var name string
-	if err := raw.QueryRow(`SELECT current_database()`).Scan(&name); err != nil {
-		b.Fatalf("reading the database name: %v", err)
-	}
-
-	pool, err := pgxpool.New(context.Background(), dsn(name))
-	if err != nil {
-		b.Fatalf("opening a pool onto %s: %v", name, err)
-	}
-	// Registered after freshDB's drop, so it runs before it: a database with
-	// open connections cannot be dropped.
-	b.Cleanup(pool.Close)
-
-	return sqlb.New(raw), raw, pool
+	pool := freshDB(b)
+	return sqlb.New(pool), pool
 }
 
 // --- Shape 1: a list of scalars -------------------------------------------
 //
 // The ordinary case, and the one almost every request is. Nothing here needs a
-// codec either driver lacks, so this measures the bridge's baseline overhead:
-// database/sql's conversion through driver.Value, and its pool bookkeeping.
+// codec pgx lacks, so what this measures is sqlb's baseline overhead: building
+// the statement, and the reflective scan into a struct.
 
 type BenchScalar struct {
 	ID        int64     `db:"id" sqlb:"pk"`
@@ -104,9 +94,9 @@ const benchScalarColumns = `id, name, status, amount, active, created_at`
 
 func BenchmarkListScalars(b *testing.B) {
 	ctx := context.Background()
-	db, raw, pool := benchDB(b)
+	db, pool := benchDB(b)
 
-	mustExec(b, raw, `
+	mustExec(b, pool, `
 		CREATE TABLE bench_scalars (
 			id         bigint PRIMARY KEY,
 			name       text NOT NULL,
@@ -115,7 +105,7 @@ func BenchmarkListScalars(b *testing.B) {
 			active     boolean NOT NULL,
 			created_at timestamptz NOT NULL
 		)`)
-	seedScalars(b, raw, benchRows)
+	seedScalars(b, pool, benchRows)
 
 	b.Run("sqlb", func(b *testing.B) {
 		b.ReportAllocs()
@@ -162,7 +152,7 @@ func listScalarsPgx(ctx context.Context, pool *pgxpool.Pool) ([]BenchScalar, err
 	return out, rows.Err()
 }
 
-func seedScalars(b *testing.B, raw *sql.DB, n int) {
+func seedScalars(b *testing.B, pool *pgxpool.Pool, n int) {
 	b.Helper()
 	var q strings.Builder
 	q.WriteString(`INSERT INTO bench_scalars (` + benchScalarColumns + `) VALUES `)
@@ -172,14 +162,15 @@ func seedScalars(b *testing.B, raw *sql.DB, n int) {
 		}
 		fmt.Fprintf(&q, "(%d, 'name-%d', 'active', %d.5, true, now())", i, i, i)
 	}
-	mustExec(b, raw, q.String())
+	mustExec(b, pool, q.String())
 }
 
 // --- Shape 2: array columns -----------------------------------------------
 //
-// Where the bridge stops being free. database/sql has no array case, so sqlb
-// writes and parses the `{a,b}` literal in Go ([ADR-0033], array.go, 449
-// lines). pgx decodes int8[] and text[] natively. Same rows, two codecs.
+// The shape that used to cost the most, and now costs nothing extra. Under
+// database/sql sqlb wrote and parsed the `{a,b}` literal in Go ([ADR-0033],
+// array.go, 449 lines); pgx decodes int8[] and text[] natively, so both arms
+// here run the same codec and the remaining gap is the builder's.
 
 type BenchArray struct {
 	ID    int64    `db:"id" sqlb:"pk"`
@@ -195,15 +186,15 @@ const benchArrayLen = 8
 
 func BenchmarkListArrays(b *testing.B) {
 	ctx := context.Background()
-	db, raw, pool := benchDB(b)
+	db, pool := benchDB(b)
 
-	mustExec(b, raw, `
+	mustExec(b, pool, `
 		CREATE TABLE bench_arrays (
 			id    bigint PRIMARY KEY,
 			tags  text[] NOT NULL,
 			sizes bigint[] NOT NULL
 		)`)
-	seedArrays(b, raw, benchRows)
+	seedArrays(b, pool, benchRows)
 
 	b.Run("sqlb", func(b *testing.B) {
 		b.ReportAllocs()
@@ -250,7 +241,7 @@ func listArraysPgx(ctx context.Context, pool *pgxpool.Pool) ([]BenchArray, error
 	return out, rows.Err()
 }
 
-func seedArrays(b *testing.B, raw *sql.DB, n int) {
+func seedArrays(b *testing.B, pool *pgxpool.Pool, n int) {
 	b.Helper()
 	var q strings.Builder
 	q.WriteString(`INSERT INTO bench_arrays (id, tags, sizes) VALUES `)
@@ -266,7 +257,7 @@ func seedArrays(b *testing.B, raw *sql.DB, n int) {
 		}
 		fmt.Fprintf(&q, "(%d, '{%s}', '{%s}')", i, strings.Join(tags, ","), strings.Join(sizes, ","))
 	}
-	mustExec(b, raw, q.String())
+	mustExec(b, pool, q.String())
 }
 
 // --- Shape 3: a wide float array, standing in for a vector ----------------
@@ -295,14 +286,14 @@ const (
 
 func BenchmarkListVectors(b *testing.B) {
 	ctx := context.Background()
-	db, raw, pool := benchDB(b)
+	db, pool := benchDB(b)
 
-	mustExec(b, raw, `
+	mustExec(b, pool, `
 		CREATE TABLE bench_vectors (
 			id        bigint PRIMARY KEY,
 			embedding real[] NOT NULL
 		)`)
-	seedVectors(b, raw, benchVectorRows)
+	seedVectors(b, pool, benchVectorRows)
 
 	b.Run("sqlb", func(b *testing.B) {
 		b.ReportAllocs()
@@ -349,7 +340,7 @@ func listVectorsPgx(ctx context.Context, pool *pgxpool.Pool) ([]BenchVector, err
 	return out, rows.Err()
 }
 
-func seedVectors(b *testing.B, raw *sql.DB, n int) {
+func seedVectors(b *testing.B, pool *pgxpool.Pool, n int) {
 	b.Helper()
 	elems := make([]string, benchVectorDims)
 	for i := range n {
@@ -358,7 +349,7 @@ func seedVectors(b *testing.B, raw *sql.DB, n int) {
 			// is a realistic width rather than n copies of "0".
 			elems[k] = fmt.Sprintf("%.6f", float64((i*benchVectorDims+k)%2000)/1000-1)
 		}
-		mustExec(b, raw, fmt.Sprintf(
+		mustExec(b, pool, fmt.Sprintf(
 			`INSERT INTO bench_vectors (id, embedding) VALUES (%d, '{%s}')`,
 			i, strings.Join(elems, ",")))
 	}
@@ -373,8 +364,9 @@ func seedVectors(b *testing.B, raw *sql.DB, n int) {
 //   - sqlb        — InsertRows, which compiles to one multi-row VALUES
 //     (mutate.go) with RETURNING over every column.
 //   - pgx/values  — the same statement shape by hand, also with RETURNING.
-//     The difference against sqlb is the bridge and the builder, nothing else.
-//   - pgx/copy    — CopyFrom, which has no database/sql spelling at all.
+//     The difference against sqlb is the builder, and nothing else.
+//   - pgx/copy    — CopyFrom, which sqlb has no API for. ADR-0040 made it
+//     reachable through DB.Tx; giving it a builder is a separate question.
 //
 // CopyFrom returns no rows, and cannot: that is not an oversight in the
 // benchmark but part of what the speed buys. sqlb's insert always appends
@@ -386,9 +378,9 @@ const benchInsertRows = 500
 
 func BenchmarkBulkInsert(b *testing.B) {
 	ctx := context.Background()
-	db, raw, pool := benchDB(b)
+	db, pool := benchDB(b)
 
-	mustExec(b, raw, `
+	mustExec(b, pool, `
 		CREATE TABLE bench_scalars (
 			id         bigint PRIMARY KEY,
 			name       text NOT NULL,
@@ -411,7 +403,7 @@ func BenchmarkBulkInsert(b *testing.B) {
 	// same shape, and outside the timer so the truncate is not what is measured.
 	reset := func(b *testing.B) {
 		b.StopTimer()
-		mustExec(b, raw, `TRUNCATE bench_scalars`)
+		mustExec(b, pool, `TRUNCATE bench_scalars`)
 		b.StartTimer()
 	}
 

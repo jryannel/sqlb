@@ -1,7 +1,6 @@
 package rest_test
 
 import (
-	"database/sql/driver"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,7 +18,7 @@ import (
 // OpenAPI document and the docs page are all reachable over HTTP without the
 // caller wiring a router or an adapter.
 func TestNewServerMountsAndServes(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 
 	srv := rest.NewServer(rest.Config{
 		Title:       "Test",

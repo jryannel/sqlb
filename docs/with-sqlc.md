@@ -30,7 +30,7 @@ So the question is never *which one*. It is *which queries go where*.
 | A filter/sort/search list endpoint | **sqlb** | sqlc structurally cannot express a conditional `WHERE` |
 | Multi-tenant scoping across every read | **sqlb** | `BeforeQuery` constrains every query of a model at once ([ADR-0008](adr/0008-hooks-as-domain-seam.md)) |
 | A REST surface with an OpenAPI document | **sqlb** | Generated from the schema's declared capabilities ([ADR-0007](adr/0007-generated-rest-handlers.md)) |
-| A multi-statement unit of work | **either** | `WithTx` hands you a handle; `*sql.Tx` satisfies sqlc's `DBTX` too ([ADR-0020](adr/0020-transaction-scoped-handle.md)) |
+| A multi-statement unit of work | **either** | `WithTx` hands you a handle; one `pgx.Tx` satisfies sqlc's `DBTX` too ([ADR-0020](adr/0020-transaction-scoped-handle.md)) |
 
 A useful split for a typical application: sqlb owns the CRUD and list surface,
 sqlc owns the dashboard and the reports.
@@ -102,7 +102,7 @@ type Post struct {
     ID          string
     OrgID       string        // → org_id, not org_i_d
     ViewCount   int64         // → view_count
-    PublishedAt sql.NullTime  // a Scanner/Valuer, so nullables need nothing special
+    PublishedAt pgtype.Timestamptz // a Scanner/Valuer, so nullables need nothing special
 }
 ```
 
@@ -129,11 +129,10 @@ disabling a filter.
 
 ## Sharing a transaction
 
-Both sides take an interface over `*sql.DB`/`*sql.Tx`, but not the *same*
-interface: `sqlb.Executor` is two methods and sqlc's generated `DBTX` is four
-(it also wants `PrepareContext` and `QueryRowContext`). So a `*sqlb.DB` cannot
-be handed to `sqlcgen.New` directly. `*sql.Tx` satisfies both, and `DB.Tx`
-reaches it:
+Both sides take an interface, and since [ADR-0040](adr/0040-the-driver-is-a-dependency.md)
+they are interfaces over the same types: `sqlb.Executor` is `Query` and `Exec`
+over pgx, and a pgx-generated `DBTX` is those two plus `QueryRow`. `Executor` is
+a strict subset, so a `pgx.Tx` satisfies both and `DB.Tx` reaches it:
 
 ```go
 err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
@@ -141,28 +140,54 @@ err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
     if err != nil {
         return err
     }
-    sqlTx, ok := tx.Tx()
+    pgTx, ok := tx.Tx()
     if !ok {
         return errors.New("expected a transaction")
     }
     // The same transaction, through sqlc's generated interface.
-    return sqlcgen.New(sqlTx).RecordPublication(ctx, post.ID)
+    return sqlcgen.New(pgTx).RecordPublication(ctx, post.ID)
 })
 ```
 
 Both statements land on one connection and commit or roll back together, and
 `WithTx` keeps its rollback-on-panic and its `AfterCommit` callbacks. Do not
-commit or roll back the returned `*sql.Tx` yourself — `WithTx` owns that
+commit or roll back the returned `pgx.Tx` yourself — `WithTx` owns that
 boundary.
 
-### If your sqlc is generated for pgx
+The other direction works too, and is the one an existing sqlc codebase reaches
+for first: if your code already opened the transaction, hand it to sqlb rather
+than the other way round.
 
-Everything above holds only because sqlc emitted a `DBTX` that `*sql.Tx`
-satisfies. Under `sql_package: pgx/v5` it does not: `DBTX` is
-`Exec`/`Query`/`QueryRow`/`CopyFrom` over `pgconn` and `pgx` types, and
-`Queries.WithTx` takes a `pgx.Tx`. So the example does not compile, and no
-adapter fixes it — the two libraries can share a pool and cannot share a
-transaction ([the driver](compatibility.md#the-driver)).
+```go
+tx, err := pool.Begin(ctx)
+if err != nil {
+    return err
+}
+defer tx.Rollback(ctx)
+
+if err := sqlcgen.New(tx).DebitAccount(ctx, id); err != nil {
+    return err
+}
+if _, err := sqlb.InsertRows(&entry).Exec(ctx, sqlb.New(tx)); err != nil {
+    return err
+}
+return tx.Commit(ctx)
+```
+
+`sqlb.New(tx)` knows it is inside a transaction, so hooks see `InTx` and a
+`WithTx` within joins rather than opening a second one. It does not take over
+the boundary — you opened the transaction and you commit it — so `AfterCommit`
+refuses on that handle rather than queueing a callback behind a commit sqlb will
+never perform. Use `WithTx` when you want that guarantee.
+
+### If your sqlc is generated for database/sql
+
+Everything above holds because both sides speak pgx. Under
+`sql_package: database/sql` they do not: `DBTX` is
+`ExecContext`/`QueryContext`/`QueryRowContext`/`PrepareContext` over
+`*sql.Rows` and `sql.Result`, which no sqlb handle satisfies and no adapter
+fixes — the two libraries can share a pool through `stdlib.OpenDBFromPool` and
+cannot share a transaction ([the driver](compatibility.md#the-driver)).
 
 Two shapes are honest, and only one of them scales:
 
@@ -171,36 +196,32 @@ Two shapes are honest, and only one of them scales:
   regeneration, and answers whether the list surface is worth the rest. It stops
   being viable the moment one module's filterable list and its reports read the
   same table inside one transaction.
-- **Regenerate sqlc with `sql_package: database/sql`.** Then `DB.Tx` hands the
-  same `*sql.Tx` to both and the split above is a split rather than a fracture.
-  It is mechanical and it is not free: `CopyFrom` disappears, because sqlc emits
-  it for pgx only; per-connection type codecs go with it; and any `overrides`
-  need re-checking against the `database/sql` type set.
+- **Regenerate sqlc with `sql_package: pgx/v5`.** Then one `pgx.Tx` carries
+  both and the split above is a split rather than a fracture. It is mechanical
+  and it is not free: your models change type — `sql.NullTime` becomes
+  `pgtype.Timestamptz` and so on down the column list — and any `overrides` need
+  re-checking against the pgx type set. `CopyFrom` appears rather than
+  disappears, which is the direction that at least argues for itself.
 
 Read that as an end state and not as a first step. Proving the list surface on
 disjoint tables costs days and can make the regeneration unnecessary; doing the
-regeneration first is the largest mechanical change available and proves
-nothing on its own.
+regeneration first is the largest mechanical change available and proves nothing
+on its own.
 
-**This whole subsection inverts before 1.0, and it is worth knowing before you
-act on it.** [ADR-0040](adr/0040-the-driver-is-a-dependency.md) decides that
-sqlb's engine depends on pgx directly, at which point a pgx-generated `DBTX` is
-the *compatible* case and the second bullet above reverses: the regeneration that
-buys a shared transaction would be from `database/sql` to `pgx/v5`, and it is
-`database/sql`-generated sqlc that ends up on the disjoint-tables path. Nothing
-here is wrong today and the disjoint-tables advice is unaffected either way —
-but if you are pgx-generated and weighing the second bullet, the honest answer is
-to take the first bullet now and wait, because the expensive move you are
-considering is one the driver decision would undo.
+**This subsection used to say the opposite**, and the reversal is the whole of
+what ADR-0040 changed here: pgx-generated sqlc was the incompatible case, and
+regenerating for `database/sql` was the move that bought a shared transaction.
+Anyone who read that advice and waited was told to. `example/withsqlc` is
+generated for pgx and asserts the compatibility above at compile time, so this
+document cannot drift from it again.
 
-One thing this document has been assuming rather than testing is now tested:
-pgx's `pgtype` values — `pgtype.Date`, `pgtype.Timestamptz`, `pgtype.UUID` —
-scan through sqlb unchanged, because they implement `sql.Scanner` and
-`driver.Valuer`. That is what makes "point sqlb at your existing sqlc structs"
-work for a pgx-generated codebase, it is load-bearing for the section above, and
-it was previously covered only by a `sql.NullTime`. `pgtest/pgtype_test.go`
-covers it in both directions including NULLs, with compile-time assertions that
-fail the build if a pgx release ever drops those interfaces.
+What this document assumed for a long time and now barely needs: pgx's `pgtype`
+values scan through sqlb because they implement `sql.Scanner` and
+`driver.Valuer`, which pgx still honours as its last-resort plan.
+`pgtest/pgtype_test.go` covers it in both directions including NULLs, with
+compile-time assertions that fail the build if a pgx release ever drops those
+interfaces. It mattered most when the two sides were on different drivers; it is
+kept because "point sqlb at your existing sqlc structs" still rests on it.
 
 ## Instead of compile-time column checking
 

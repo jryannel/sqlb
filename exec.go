@@ -7,49 +7,79 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// sql.Scanner and driver.Valuer are still the interfaces a type implements to
+// say it encodes itself, because pgx honours both as its last-resort plan and
+// pgtype implements them throughout. They are the only two names database/sql
+// keeps here (ADR-0040).
 var (
 	scannerType = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
 	valuerType  = reflect.TypeOf((*driver.Valuer)(nil)).Elem()
 )
 
-// Executor is the subset of *sql.DB and *sql.Tx that sqlb uses. Anything
-// satisfying it works, including pgx through its stdlib adapter and any
-// instrumenting wrapper.
+// Executor is the subset of pgx that sqlb runs statements through. *pgxpool.Pool,
+// *pgx.Conn and pgx.Tx all satisfy it as they stand, as does any instrumenting
+// wrapper over them.
+//
+// Taking pgx rather than database/sql is [ADR-0040], and the thing it buys that
+// an abstraction could not is that a caller's own pgx.Tx *is* an Executor: sqlb
+// writes join a unit of work the application already opened, rather than
+// opening a second transaction against the same pool.
+//
+// [ADR-0040]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0040-the-driver-is-a-dependency.md
 type Executor interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// rowSource is the result set every scanner in this package reads, and it is an
-// interface rather than *sql.Rows on purpose.
+// rowSource is the result set every scanner in this package reads. Scanning is
+// Columns once, then Next/Scan per row, then Err — five methods, and naming
+// them as an interface is what made the driver flip an adapter rather than a
+// rewrite of scan, mutate and their type-mapping tests.
 //
-// Nothing here needs the concrete type. Scanning is Columns once, then
-// Next/Scan per row, then Err — five methods, and *sql.Rows satisfies them as
-// it stands, so no adapter sits on the path anyone runs today.
-//
-// Naming the subset is what keeps a driver other than database/sql from costing
-// a second scanner. [compatibility.md] rules out a pgx-native Executor partly
-// because "*sql.Rows is a concrete struct rather than an interface, so pgx.Rows
-// cannot be made to satisfy the signature" — which is a fact about the
-// signature rather than about scanning. pgx.Rows is one thin wrapper from this
-// shape: Columns over FieldDescriptions, and a Close that returns nil. So if
-// the pgx path that doc leaves open is ever wanted, it is an adapter and an
-// optional interface, not a fork of scan, mutate and their type-mapping tests.
-//
-// It stays unexported until something outside the package implements it.
-// Exporting an interface for an adapter nobody has written yet is how you
-// acquire a permanent API for a problem you did not have; the rename is one
-// line on the day the adapter exists. The public contract remains Executor.
-//
-// [compatibility.md]: https://github.com/jryannel/sqlb/blob/main/docs/compatibility.md#the-driver
+// It is now a test seam rather than a driver seam (ADR-0040): there is one
+// driver, and the only other implementation is the fake the engine's own suite
+// scans, which is how those tests run without a database. It stays unexported
+// for that reason — the public contract is Executor.
 type rowSource interface {
 	Columns() ([]string, error)
 	Next() bool
 	Scan(dest ...any) error
 	Err() error
-	Close() error
+	Close()
+}
+
+// pgxRows adapts a pgx result set onto rowSource. Exactly one method differs:
+// pgx reports its columns as field descriptions.
+//
+// Close is pgx's, and returns nothing. That shape is deliberate rather than
+// inherited — a Close that reported an error would be one every caller here
+// defers and therefore ignores, and the failure is not lost either way: pgx
+// records it on the result set and every scanner ends by reading Err.
+type pgxRows struct{ pgx.Rows }
+
+func (r pgxRows) Columns() ([]string, error) {
+	fields := r.FieldDescriptions()
+	cols := make([]string, len(fields))
+	for i, f := range fields {
+		cols[i] = f.Name
+	}
+	return cols, nil
+}
+
+// runQuery runs a statement and hands back its rows already adapted, which is
+// the one place the driver's shape meets the scanners'. Named for the verb
+// rather than the noun because every caller has a local `query` holding the SQL.
+func runQuery(ctx context.Context, db Executor, query string, args ...any) (rowSource, error) {
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, wrapQueryErr(err, query)
+	}
+	return pgxRows{rows}, nil
 }
 
 // All runs the query and returns every matching row.
@@ -68,9 +98,9 @@ func (b *Builder[T]) All(ctx context.Context, db Executor) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := runQuery(ctx, db, query, args...)
 	if err != nil {
-		return nil, wrapQueryErr(err, query)
+		return nil, err
 	}
 	defer rows.Close()
 	return scanAll[T](rows, b.model)
@@ -125,9 +155,9 @@ func (b *Builder[T]) Count(ctx context.Context, db Executor) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := runQuery(ctx, db, query, args...)
 	if err != nil {
-		return 0, wrapQueryErr(err, query)
+		return 0, err
 	}
 	defer rows.Close()
 	return scanCount(rows)
@@ -169,9 +199,9 @@ func (b *Builder[T]) Exists(ctx context.Context, db Executor) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := runQuery(ctx, db, query, args...)
 	if err != nil {
-		return false, wrapQueryErr(err, query)
+		return false, err
 	}
 	defer rows.Close()
 	return scanExists(rows)
@@ -211,9 +241,9 @@ func Collect[R, T any](ctx context.Context, db Executor, b *Builder[T]) ([]R, er
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := runQuery(ctx, db, query, args...)
 	if err != nil {
-		return nil, wrapQueryErr(err, query)
+		return nil, err
 	}
 	defer rows.Close()
 	// Exact, unlike All: R was declared specifically to receive this
@@ -248,6 +278,22 @@ func scan[T any](rows rowSource, m *Model, mode scanMode) ([]T, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		return nil, err
+	}
+	// No columns is how a failure the driver deferred arrives here. pgx sends
+	// the statement and returns before the server has answered, so a rejected
+	// write — a unique violation, a parameter count over the protocol limit —
+	// comes back as a result set describing nothing, and the error only
+	// appears once the iteration has been driven. Driving it here means the
+	// caller sees "extended protocol limited to 65535 parameters" rather than
+	// a complaint about their db tags.
+	//
+	// A statement always projects at least one column, so there is no honest
+	// empty case this could be mistaking for a failure.
+	if len(cols) == 0 {
+		rows.Next()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	targets := make([][]int, len(cols))
@@ -328,15 +374,10 @@ func scan[T any](rows rowSource, m *Model, mode scanMode) ([]T, error) {
 			if err != nil {
 				return nil, err
 			}
-			// A slice field is a Postgres array, which database/sql cannot
-			// scan: the driver hands back `{a,b,"c d"}` and the conversion
-			// fails. This is the one place a result column is pointed at a
-			// struct field, so it is the one place the decoder goes
-			// (ADR-0033).
-			if _, isArray := arrayElemKind(field.Type()); isArray {
-				dest[i] = arrayScanner{dest: field, col: cols[i]}
-				continue
-			}
+			// An array column needs nothing special here. It did under
+			// database/sql, which has no array case in either direction and
+			// cost this package a 449-line literal codec; pgx decodes one into
+			// the slice field's own address (ADR-0033, ADR-0040).
 			dest[i] = field.Addr().Interface()
 		}
 		if err := rows.Scan(dest...); err != nil {

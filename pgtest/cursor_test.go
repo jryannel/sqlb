@@ -2,11 +2,11 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/blog"
 	"github.com/jryannel/sqlb/schema"
@@ -33,15 +33,15 @@ import (
 
 // seedPosts writes n posts with deliberate ties and NULLs, and returns the
 // author they belong to.
-func seedPosts(t *testing.T, db *sql.DB, n int) (orgID, authorID string) {
+func seedPosts(t *testing.T, db *pgxpool.Pool, n int) (orgID, authorID string) {
 	t.Helper()
 
-	if err := db.QueryRow(
+	if err := db.QueryRow(context.Background(),
 		`INSERT INTO orgs (name, slug) VALUES ('Acme', 'acme') RETURNING id`,
 	).Scan(&orgID); err != nil {
 		t.Fatalf("inserting an org: %v", err)
 	}
-	if err := db.QueryRow(
+	if err := db.QueryRow(context.Background(),
 		`INSERT INTO authors (org_id, email, name, password_hash)
 		 VALUES ($1, 'ada@example.com', 'Ada', 'argon2id$v=19$correct-horse')
 		 RETURNING id`, orgID,
@@ -60,7 +60,7 @@ func seedPosts(t *testing.T, db *sql.DB, n int) (orgID, authorID string) {
 		if i%3 != 0 {
 			published = fmt.Sprintf("2026-01-%02dT00:00:00Z", (i%28)+1)
 		}
-		if _, err := db.Exec(
+		if _, err := db.Exec(context.Background(),
 			`INSERT INTO posts (org_id, author_id, title, body, view_count, published_at)
 			 VALUES ($1, $2, $3, 'the body', $4, $5)`,
 			orgID, authorID, fmt.Sprintf("Post %02d", i), views, published,
@@ -200,7 +200,7 @@ func TestConcurrentInsertsDoNotShiftAPagedWalk(t *testing.T) {
 	// everything. Under offset paging the first of these would push a row from
 	// page one onto page two, and the client would see it twice.
 	for _, title := range []string{"Post 00b", "Post 99"} {
-		if _, err := raw.Exec(
+		if _, err := raw.Exec(context.Background(),
 			`INSERT INTO posts (org_id, author_id, title, body) VALUES ($1, $2, $3, 'body')`,
 			orgID, authorID, title,
 		); err != nil {
@@ -245,12 +245,12 @@ func TestRowComparisonSeekBecomesAnIndexCondition(t *testing.T) {
 	db := sqlb.New(raw)
 
 	seedPosts(t, raw, 25)
-	if _, err := raw.Exec(
+	if _, err := raw.Exec(context.Background(),
 		`CREATE INDEX posts_views_id ON posts (view_count DESC, id DESC)`,
 	); err != nil {
 		t.Fatalf("creating the paging index: %v", err)
 	}
-	if _, err := raw.Exec(`SET enable_seqscan = off`); err != nil {
+	if _, err := raw.Exec(context.Background(), `SET enable_seqscan = off`); err != nil {
 		t.Fatalf("disabling sequential scans: %v", err)
 	}
 
@@ -288,10 +288,10 @@ func TestRowComparisonSeekBecomesAnIndexCondition(t *testing.T) {
 }
 
 // explainText returns the plan for a statement, as Postgres prints it.
-func explainText(t *testing.T, db *sql.DB, stmt string, args []any) string {
+func explainText(t *testing.T, db *pgxpool.Pool, stmt string, args []any) string {
 	t.Helper()
 
-	rows, err := db.Query("EXPLAIN "+stmt, args...)
+	rows, err := db.Query(context.Background(), "EXPLAIN "+stmt, args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestOffsetPagingRepeatsARowUnderConcurrentInserts(t *testing.T) {
 	}
 
 	// One row ahead of everything already read.
-	if _, err := raw.Exec(
+	if _, err := raw.Exec(context.Background(),
 		`INSERT INTO posts (org_id, author_id, title, body) VALUES ($1, $2, 'Post 00b', 'body')`,
 		orgID, authorID,
 	); err != nil {

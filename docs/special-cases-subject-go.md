@@ -201,7 +201,9 @@ project assigns keys to every task — becomes O(rows) statements.
 ([`builder.go:254-267`](../builder.go)). `Update.Set`/`SetExpr` write one value
 to every matched row; there is no values-list form. `sqlb.UpdateFrom[T]`
 rendering the `unnest` join is the write-side twin of the multi-row insert that
-already exists, over the same [`array.go:84`](../array.go) encoder.
+already exists, and it needs no encoder behind it: the two arrays are ordinary
+bind parameters since [ADR-0040](adr/0040-the-driver-is-a-dependency.md), which
+deleted the array codec this paragraph used to point at.
 
 ### 4. Bulk insert has an exact ceiling, and it is worth naming
 

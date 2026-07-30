@@ -2,7 +2,6 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"strings"
 	"testing"
 
@@ -89,7 +88,7 @@ func TestExpandOmitsHiddenColumnsOfTheTarget(t *testing.T) {
 func TestExpandScansIntoTheRelationField(t *testing.T) {
 	h := newHarness(t,
 		[]string{"id", "list_id", "title", "__expand_list"},
-		[][]driver.Value{
+		[][]any{
 			{"t1", "l1", "Ship it", []byte(`{"id":"l1","name":"Backlog"}`)},
 			{"t2", "l2", "Later", nil},
 		})
@@ -342,7 +341,7 @@ func TestExpandTwoCollectionsAreIndependentSubqueries(t *testing.T) {
 func TestExpandCollectionScansTheEnvelope(t *testing.T) {
 	h := newHarness(t,
 		[]string{"id", "name", "secret", "__expand_tasks"},
-		[][]driver.Value{
+		[][]any{
 			{"l1", "Backlog", "", []byte(`{"items":[{"id":"t1","list_id":"l1","title":"Ship it"}],"has_more":true}`)},
 			{"l2", "Done", "", []byte(`{"items":[],"has_more":false}`)},
 		})

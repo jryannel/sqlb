@@ -2,7 +2,6 @@ package rest_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -45,7 +44,7 @@ func decode(t *testing.T, body []byte) map[string]any {
 }
 
 func TestListCompilesFiltersIntoSQL(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	resp := api.Get("/posts?status=eq.draft&view_count=gte.3&sort=-created_at")
@@ -69,7 +68,7 @@ func TestListCompilesFiltersIntoSQL(t *testing.T) {
 func TestListPaginationReportsMoreWithoutCounting(t *testing.T) {
 	// Three rows come back for a page size of two, which is how the handler
 	// learns there is another page.
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{
 		postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
 	}})
 	api := mount(t, db.db, postOptions())
@@ -98,8 +97,8 @@ func TestListPaginationReportsMoreWithoutCounting(t *testing.T) {
 
 func TestListCountExactAddsTotal(t *testing.T) {
 	db := newFakeDB(t,
-		reply{match: "count(", cols: []string{"count"}, rows: [][]driver.Value{{int64(42)}}},
-		reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "One")}},
+		reply{match: "count(", cols: []string{"count"}, rows: [][]any{{int64(42)}}},
+		reply{cols: postCols(), rows: [][]any{postRow("p1", "One")}},
 	)
 	api := mount(t, db.db, postOptions())
 
@@ -175,7 +174,7 @@ func TestListRejectionReportsEveryProblemAtOnce(t *testing.T) {
 func TestSelectShapesTheResponseObject(t *testing.T) {
 	db := newFakeDB(t, reply{
 		cols: []string{"id", "title"},
-		rows: [][]driver.Value{{"p1", "Hello"}},
+		rows: [][]any{{"p1", "Hello"}},
 	})
 	api := mount(t, db.db, postOptions())
 
@@ -202,7 +201,7 @@ func TestSelectShapesTheResponseObject(t *testing.T) {
 }
 
 func TestHiddenColumnIsNeverSerialised(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	raw := api.Get("/posts").Body.String()
@@ -222,7 +221,7 @@ func TestReadNotFound(t *testing.T) {
 }
 
 func TestReadRejectsStrayQueryParameters(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	// Silently ignoring an unknown parameter would answer a question the client
@@ -234,7 +233,7 @@ func TestReadRejectsStrayQueryParameters(t *testing.T) {
 }
 
 func TestCreateOmitsReadOnlyColumns(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	resp := api.Post("/posts", map[string]any{
@@ -260,7 +259,7 @@ func TestCreateOmitsReadOnlyColumns(t *testing.T) {
 }
 
 func TestUpdateWritesOnlyTheNamedColumns(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Changed")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Changed")}})
 	api := mount(t, db.db, postOptions())
 
 	resp := api.Patch("/posts/p1", map[string]any{"title": "Changed"})
@@ -316,7 +315,7 @@ func TestUpdateWithNoFieldsIsRejected(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	resp := api.Delete("/posts/p1")
@@ -345,7 +344,7 @@ func TestBeforeQueryHookAppliesToTheRESTSurface(t *testing.T) {
 		return nil
 	})
 
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "Hello")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
 	api := mount(t, db.db, postOptions())
 
 	api.Get("/posts")
@@ -388,7 +387,7 @@ func TestSoftDeleteColumnIsInertUntilAHookUsesIt(t *testing.T) {
 		sqlb.On[Archived]().Reset()
 		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
 
-		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]driver.Value{
+		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]any{
 			archivedRow("a1", "Gone"),
 		}})
 		api := mountArchived(t, db.db)
@@ -421,7 +420,7 @@ func TestSoftDeleteColumnIsInertUntilAHookUsesIt(t *testing.T) {
 		sqlb.On[Archived]().Reset()
 		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
 
-		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]driver.Value{
+		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]any{
 			archivedRow("a1", "Gone"),
 		}})
 		api := mountArchived(t, db.db)
@@ -539,7 +538,7 @@ func TestCreateKeepsWhatAHookPutInAReadOnlyColumn(t *testing.T) {
 
 	fake := newFakeDB(t, reply{
 		cols: tenantedCols(),
-		rows: [][]driver.Value{tenantedRow("t1", "acme", "Hello")},
+		rows: [][]any{tenantedRow("t1", "acme", "Hello")},
 	})
 	db := sqlb.New(fake.db).WithHooks(hooks)
 
@@ -573,7 +572,7 @@ func TestCreateKeepsWhatAHookPutInAReadOnlyColumn(t *testing.T) {
 func TestCreateClearsAReadOnlyColumnTheBodySet(t *testing.T) {
 	fake := newFakeDB(t, reply{
 		cols: tenantedCols(),
-		rows: [][]driver.Value{tenantedRow("t1", "", "Hello")},
+		rows: [][]any{tenantedRow("t1", "", "Hello")},
 	})
 
 	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
@@ -612,7 +611,7 @@ func mountDocs(t *testing.T, db sqlb.Executor, expandable []string) humatest.Tes
 }
 
 func TestExpandJoinsAndNestsTheRelation(t *testing.T) {
-	db := newFakeDB(t, reply{cols: docCols(), rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: docCols(), rows: [][]any{
 		docRow("d1", "Hello", []byte(`{"id":"acme","name":"Acme"}`)),
 	}})
 	api := mountDocs(t, db.db, []string{"org"})
@@ -652,7 +651,7 @@ func TestExpandJoinsAndNestsTheRelation(t *testing.T) {
 
 // Not asking for the expansion must leave the response and the SQL alone.
 func TestWithoutExpandNothingIsJoinedOrNested(t *testing.T) {
-	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]any{
 		{"d1", "acme", "Hello"},
 	}})
 	api := mountDocs(t, db.db, []string{"org"})
@@ -707,7 +706,7 @@ func TestExpandRejectionNamesWhatWouldHaveWorked(t *testing.T) {
 // creating it had to fetch the relation separately or re-list.
 
 func TestExpandOnTheItemEndpoint(t *testing.T) {
-	db := newFakeDB(t, reply{cols: docCols(), rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: docCols(), rows: [][]any{
 		docRow("d1", "Hello", []byte(`{"id":"acme","name":"Acme"}`)),
 	}})
 	api := mountDocs(t, db.db, []string{"org"})
@@ -746,7 +745,7 @@ func TestExpandOnTheItemEndpoint(t *testing.T) {
 }
 
 func TestItemWithoutExpandJoinsNothing(t *testing.T) {
-	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]any{
 		{"d1", "acme", "Hello"},
 	}})
 	api := mountDocs(t, db.db, []string{"org"})
@@ -783,7 +782,7 @@ func TestItemExpandRejectionNamesWhatWouldHaveWorked(t *testing.T) {
 // is why the parameter is declared per-resource instead of living on the input
 // struct, where it would exist on every resource.
 func TestItemRefusesExpandWhenTheResourceDeclaresNone(t *testing.T) {
-	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: docCols()[:3], rows: [][]any{
 		{"d1", "acme", "Hello"},
 	}})
 	api := mountDocs(t, db.db, nil)
@@ -866,7 +865,7 @@ func cursorOf(t *testing.T, body map[string]any) string {
 // the first response carries the position to resume from, so there is no flag
 // to set and no first cursor to obtain some other way.
 func TestListHandsBackACursorWhenThereIsMore(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{
 		postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
 	}})
 	api := mount(t, db.db, postOptions())
@@ -900,7 +899,7 @@ func TestListHandsBackACursorWhenThereIsMore(t *testing.T) {
 // The cursor names the end of *this* page, so a last page has none — which is
 // how a client knows to stop without comparing counts.
 func TestListOmitsTheCursorOnTheLastPage(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "One")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "One")}})
 	api := mount(t, db.db, postOptions())
 
 	body := decode(t, api.Get("/posts").Body.Bytes())
@@ -915,7 +914,7 @@ func TestListOmitsTheCursorOnTheLastPage(t *testing.T) {
 // A sorted request produces a cursor over that sort, and feeding it back seeks
 // on both the sort column and the tiebreaker.
 func TestCursorCarriesTheRequestedSort(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{
 		postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
 	}})
 	api := mount(t, db.db, postOptions())
@@ -941,7 +940,7 @@ func TestCursorCarriesTheRequestedSort(t *testing.T) {
 // Changing ?sort= and keeping the cursor is the ordinary way to reach an
 // unusable one, so it is a 400 that says what happened rather than a 500.
 func TestCursorFromADifferentSortIsRejected(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{
 		postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
 	}})
 	api := mount(t, db.db, postOptions())
@@ -960,7 +959,7 @@ func TestCursorFromADifferentSortIsRejected(t *testing.T) {
 }
 
 func TestCursorAndPageTogetherAreRejected(t *testing.T) {
-	db := newFakeDB(t, reply{cols: postCols(), rows: [][]driver.Value{postRow("p1", "One")}})
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "One")}})
 	api := mount(t, db.db, postOptions())
 
 	resp := api.Get("/posts?cursor=abc&page=2")
@@ -976,8 +975,8 @@ func TestCursorAndPageTogetherAreRejected(t *testing.T) {
 // pages through it — otherwise a progress bar built on it would run backwards.
 func TestCountIgnoresTheCursor(t *testing.T) {
 	db := newFakeDB(t,
-		reply{match: "count(*)", cols: []string{"count"}, rows: [][]driver.Value{{int64(97)}}},
-		reply{cols: postCols(), rows: [][]driver.Value{
+		reply{match: "count(*)", cols: []string{"count"}, rows: [][]any{{int64(97)}}},
+		reply{cols: postCols(), rows: [][]any{
 			postRow("p1", "One"), postRow("p2", "Two"), postRow("p3", "Three"),
 		}},
 	)

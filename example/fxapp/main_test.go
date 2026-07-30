@@ -2,7 +2,6 @@ package fxapp_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -11,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -40,7 +39,7 @@ const image = "postgres:18-alpine"
 var (
 	once      sync.Once
 	container testcontainers.Container
-	admin     *sql.DB
+	admin     *pgxpool.Pool
 	dsnFor    func(database string) string
 	startErr  error
 )
@@ -53,7 +52,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	if admin != nil {
-		_ = admin.Close()
+		admin.Close()
 	}
 	os.Exit(code)
 }
@@ -88,7 +87,7 @@ func startPostgres() {
 			host, port.Port(), database)
 	}
 
-	if admin, err = sql.Open("pgx", dsnFor("fxapp")); err != nil {
+	if admin, err = pgxpool.New(ctx, dsnFor("fxapp")); err != nil {
 		startErr = fmt.Errorf("opening the admin connection: %w", err)
 	}
 }
@@ -116,7 +115,8 @@ func freshDatabase(t *testing.T) string {
 	mustExec(t, `DROP DATABASE IF EXISTS `+quoteIdent(name))
 	mustExec(t, `CREATE DATABASE `+quoteIdent(name))
 	t.Cleanup(func() {
-		_, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`)
+		_, _ = admin.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`)
 	})
 	return dsnFor(name)
 }
@@ -150,7 +150,7 @@ func quoteIdent(s string) string {
 
 func mustExec(t *testing.T, query string) {
 	t.Helper()
-	if _, err := admin.Exec(query); err != nil {
+	if _, err := admin.Exec(context.Background(), query); err != nil {
 		t.Fatalf("exec failed: %v\n%s", err, strings.TrimSpace(query))
 	}
 }

@@ -2,7 +2,6 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"strings"
 	"testing"
 
@@ -24,7 +23,7 @@ const regressedPlan = `[{"Plan":{
 
 func explainHarness(t *testing.T, plan string) *harness {
 	t.Helper()
-	return newHarness(t, []string{"QUERY PLAN"}, [][]driver.Value{{[]byte(plan)}})
+	return newHarness(t, []string{"QUERY PLAN"}, [][]any{{[]byte(plan)}})
 }
 
 func TestExplainParsesThePlanTree(t *testing.T) {

@@ -19,8 +19,8 @@ mise run test
 ```
 
 No Docker and no Postgres: the engine's tests run against an in-memory
-`database/sql` driver, which is what keeps this fast enough to run on every
-save.
+`Executor` — see `internal/pgfake` — which is what keeps this fast enough to run
+on every save.
 
 ```bash
 mise run ci

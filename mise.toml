@@ -18,8 +18,8 @@ go = "1.26.4"
 golangci-lint = "2.12.2"
 # Node is here for one thing: typechecking the TypeScript client codegen emits
 # into example/tasks/web. That is the cost ADR-0028 names — a second toolchain
-# in a repository whose pitch is a stdlib-only Go module — and it is paid here
-# rather than in the Go module, which still inherits nothing. Pinned for the
+# in a repository whose Go module takes one dependency — and it is paid here
+# rather than in the Go module, which still inherits nothing else. Pinned for the
 # same reason the others are: the emitted client's guarantees are enforced by
 # tsc, and a different tsc is a different guarantee.
 node = "26.4.0"
@@ -35,7 +35,7 @@ dart = "3.12.2"
 # ---- Tasks ----
 
 [tasks.test]
-description = "Run all tests. No Docker and no Postgres needed: the engine's tests run against an in-memory database/sql driver, so hooks, scanning and the mutation paths are covered without a live database."
+description = "Run all tests. No Docker and no Postgres needed: the engine's tests run against an in-memory Executor, so hooks, scanning and the mutation paths are covered without a live database."
 run = "go test ./..."
 
 [tasks.test-race]
@@ -48,7 +48,7 @@ dir = "pgtest"
 run = "go test ./..."
 
 [tasks.bench-pg]
-description = "Measure what the database/sql bridge costs, against a real Postgres. Deliberately NOT part of `ci`: benchmark numbers from a shared runner are noise, and a gate that fails on them trains people to ignore it. This exists because ADR-0040 argues partly on performance, and ADR-0019 is the precedent for what happens when a record in this repo reasons from documentation instead of measuring — two of its three claims came back different. Run it before moving ADR-0040 off Exploring."
+description = "Measure what sqlb costs over pgx, against a real Postgres. Deliberately NOT part of `ci`: benchmark numbers from a shared runner are noise, and a gate that fails on them trains people to ignore it. It exists because ADR-0040 argued partly on performance, and ADR-0019 is the precedent for what happens when a record in this repo reasons from documentation instead of measuring — two of its three claims came back different. Now that the flip has landed, both arms run on pgx and what is left is the builder and the reflective scan."
 dir = "pgtest"
 run = "go test -run '^$' -bench . -benchmem ./..."
 
@@ -224,16 +224,20 @@ exit $status
 '''
 
 [tasks.deps-check]
-description = "Fail if a third-party dependency has crept into the engine. Everything on the request path depends on the standard library only, on purpose: it is a library, and every dependency it takes is one its consumers inherit. Exactly two packages are exempt — `rest`, which is an adapter onto huma, and the generated example that mounts it — so importing `sqlb` still costs nothing."
+description = "Fail if a dependency the engine has not chosen has crept in. The engine depends on pgx and nothing else (ADR-0040); `rest` additionally on huma; anything more is a regression. Every dependency sqlb takes is one its consumers inherit, so the list is short and it is checked rather than remembered."
 run = '''
-# The check the module-wide version could not express: sqlb now has an HTTP
-# adapter, so "zero dependencies anywhere" is no longer the invariant. What must
-# hold is that a consumer importing the engine inherits nothing.
+# What must hold, since ADR-0040: the engine's dependency list is a decision,
+# and this is where the decision is checked rather than remembered. "Zero
+# dependencies" stopped being the invariant when sqlb took pgx — but "pgx, and
+# nothing that arrived without an argument" is a stronger claim than the old one
+# was, because the old one was never written down in a record at all.
 #
 # ADR-0016: a guard must be proven in both directions, so this one ends by
 # checking that it *does* fire for `rest`. Three earlier guards in this repo
 # reported success while verifying nothing.
-allowed='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
+
+# rest is an adapter onto huma, and the generated example mounts it.
+huma_ok='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
 
 # third_party lists the non-stdlib, non-sqlb packages one package imports,
 # transitively. A stdlib path has no dot in its first element, which is what
@@ -241,6 +245,28 @@ allowed='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
 # grepped for "golang.org/x" matched the standard library's own vendored copies.
 third_party() {
   go list -deps "$1" | grep -E '^[^/]+\.[^/]+/' | grep -v '^github.com/jryannel/sqlb' | sort -u
+}
+
+# The dependencies pgx brings with it, computed rather than listed. They are
+# pgx's choices, not sqlb's, and refusing them would only mean refusing pgx by
+# another name — but enumerating them by hand would go stale the first time pgx
+# reorganised, and a stale allow-list is how a real regression gets waved
+# through. So the set is whatever pgx itself pulls in, asked of the toolchain.
+# The file is written rather than the list held in a variable because this task
+# runs under sh, where process substitution is not available.
+allowed=$(mktemp)
+trap 'rm -f "$allowed" "$allowed.trim"' EXIT
+go list -deps \
+  github.com/jackc/pgx/v5 \
+  github.com/jackc/pgx/v5/pgxpool \
+  github.com/jackc/pgx/v5/stdlib \
+  | grep -E '^[^/]+\.[^/]+/' | sort -u > "$allowed"
+# Stripped of the whitespace wc pads with, which head will not accept.
+pgx_only=$(wc -l < "$allowed" | tr -d ' ')
+
+# unexpected filters a dependency list down to what nothing has argued for.
+unexpected() {
+  grep -Fxv -f "$allowed" || true
 }
 
 if ! pkgs=$(go list ./... 2>&1); then
@@ -252,13 +278,26 @@ fi
 checked=0
 fail=0
 for pkg in $pkgs; do
-  case " $allowed " in *" $pkg "*) continue ;; esac
   checked=$((checked + 1))
-  if deps=$(third_party "$pkg") && [ -n "$deps" ]; then
-    echo "$pkg has third-party dependencies:"
+  case " $huma_ok " in
+    *" $pkg "*)
+      # rest and the example that mounts it get huma, and only for the length
+      # of this iteration.
+      go list -deps github.com/danielgtaylor/huma/v2 \
+        | grep -E '^[^/]+\.[^/]+/' >> "$allowed"
+      # huma's own subpackages, which -deps on the root package does not
+      # enumerate. Listing the module prefix is enough: what is being allowed
+      # here is huma, and which of its files rest reaches is rest's business.
+      third_party "$pkg" | grep '^github.com/danielgtaylor/huma/' >> "$allowed"
+      ;;
+  esac
+  if deps=$(third_party "$pkg" | unexpected) && [ -n "$deps" ]; then
+    echo "$pkg depends on something no record argues for:"
     printf '%s\n' "$deps" | sed 's/^/  /'
     fail=1
   fi
+  # Back to pgx alone, so the next package does not inherit rest's allowance.
+  head -n "$pgx_only" "$allowed" > "$allowed.trim" && mv "$allowed.trim" "$allowed"
 done
 
 if [ "$checked" -eq 0 ]; then
@@ -267,17 +306,31 @@ if [ "$checked" -eq 0 ]; then
 fi
 [ "$fail" -eq 0 ] || exit 1
 
-# The positive control. If this stops reporting huma, the check above has
-# stopped being able to see a dependency at all and its silence means nothing.
+# The positive controls. Each proves the check can still see a dependency at
+# all; without them a silent pass means nothing.
+if ! third_party github.com/jryannel/sqlb | grep -q '^github.com/jackc/pgx/v5'; then
+  echo "deps-check: the check cannot see a dependency it should — the engine imports pgx but none was found"
+  exit 1
+fi
 if ! third_party github.com/jryannel/sqlb/rest | grep -q '^github.com/danielgtaylor/huma'; then
   echo "deps-check: the check cannot see a dependency it should — rest imports huma but none was found"
   exit 1
 fi
+# And the direction that matters more: that the filter still *refuses*
+# something. huma is allowed for two packages and the allow-list is back to pgx
+# alone by now, so asking it about rest's dependencies here must report huma. If
+# this stops firing, `unexpected` has stopped excluding anything and every pass
+# above was vacuous.
+if ! third_party github.com/jryannel/sqlb/rest | unexpected | grep -q '^github.com/danielgtaylor/huma'; then
+  echo "deps-check: the filter accepted huma outside the two packages allowed it, so it is not filtering"
+  exit 1
+fi
 
 # The hole the package-level check above cannot cover: `go list -deps` does not
-# report test-only imports. A test file in this module importing pgx would leave
-# every assertion above passing while go.mod grew a driver — success reported by
-# a check that had stopped covering anything, which is the ADR-0016 failure mode.
+# report test-only imports. A test file in this module importing testcontainers
+# would leave every assertion above passing while go.mod grew a docker client —
+# success reported by a check that had stopped covering anything, which is the
+# ADR-0016 failure mode.
 #
 # So the root module's direct requirements are pinned by name. This is what
 # keeps the pgtest module honest: moving those tests back in here fails loudly
@@ -289,7 +342,7 @@ fi
 # read nothing the moment the block became a one-liner — a check that had stopped
 # covering anything, which is the ADR-0016 failure mode the positive control below
 # exists to catch.
-want='github.com/danielgtaylor/huma/v2'
+want='github.com/danielgtaylor/huma/v2 github.com/jackc/pgx/v5'
 got=$(awk '
   $1 == "require" && $2 != "(" && $0 !~ /\/\/ indirect/ { print $2; next }
   $1 == "require" && $2 == "(" { inblock = 1; next }
@@ -301,20 +354,21 @@ if [ "$got" != "$(printf '%s\n' $want | sort)" ]; then
   echo "deps-check: the root module's direct dependencies changed."
   echo "  want: $(printf '%s ' $want)"
   echo "  got:  $(printf '%s ' $got)"
-  echo "Tests needing a driver belong in the pgtest module, which has a go.mod of"
-  echo "its own for exactly this reason. See pgtest/doc.go."
+  echo "A new one needs a record arguing for it, the way ADR-0040 argues for pgx."
+  echo "Tests needing a container belong in the pgtest module, which has a go.mod"
+  echo "of its own for exactly this reason. See pgtest/doc.go."
   exit 1
 fi
 
-# The positive control for the check just above, in the spirit of the one below
-# it: prove it can see a direct requirement at all, rather than matching two
-# empty strings and calling that agreement.
+# The positive control for the check just above, in the spirit of the others:
+# prove it can read a direct requirement at all, rather than matching two empty
+# strings and calling that agreement.
 if [ -z "$got" ]; then
   echo "deps-check: read no direct requirements from go.mod, so the comparison above compared nothing"
   exit 1
 fi
 
-echo "deps-check: $checked packages, standard library only"
+echo "deps-check: $checked packages, pgx and nothing unargued"
 '''
 
 [tasks.generate]

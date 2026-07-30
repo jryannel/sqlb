@@ -97,6 +97,7 @@ import (
 // Changes are ordered so that each one's dependencies already exist and
 // nothing is dropped out from under something that still refers to it:
 //
+//  0. CREATE EXTENSION, before anything that declares a column of its type
 //  1. CREATE TABLE for new tables
 //  2. DROP INDEX for removed and changed indexes — before the columns they
 //     cover can disappear
@@ -148,6 +149,60 @@ func Diff(current, target *schema.Registry, opts ...Option) ([]Change, error) {
 	return d.changes(), nil
 }
 
+// extensionsNeeded emits the CREATE EXTENSION statements the target schema
+// requires and the current one does not already have.
+//
+// Only pgvector so far. It is emitted when a vector column appears and not on
+// every migration afterwards, which is what makes it a change rather than a
+// preamble — the statement is idempotent, so repeating it would be harmless and
+// would also be noise in every file forever.
+//
+// The collision argument that keeps CREATE TYPE out of this generator does not
+// apply. An extension is one global name, owned by nobody, and installing it
+// twice is defined to do nothing; a type name is a thing two schemas can each
+// believe they own (ADR-0026).
+//
+// There is no Down. Dropping the extension would drop every vector column in
+// the database, including those belonging to schemas this migration has never
+// heard of, and an extension nobody is using costs nothing to leave installed.
+// An empty Down renders as a note saying it is not automatically reversible,
+// which is the honest answer.
+func (d *differ) extensionsNeeded() {
+	for _, ext := range []struct {
+		name string
+		used func(*schema.Registry) bool
+	}{
+		{"vector", usesVector},
+	} {
+		if !ext.used(d.target) || ext.used(d.current) {
+			continue
+		}
+		d.extensions = append(d.extensions, Change{
+			Comment: ext.name + " extension, required by a column type declared below",
+			Up:      "CREATE EXTENSION IF NOT EXISTS " + quoteIdent(ext.name),
+			Hazard: "CREATE EXTENSION usually needs privileges the migration role does not have. " +
+				"If this fails it fails on the first statement, which is the best place for it to: " +
+				"install the extension as a superuser once, and this statement becomes a no-op.",
+		})
+	}
+}
+
+// usesVector reports whether any table in the registry declares a vector
+// column.
+func usesVector(r *schema.Registry) bool {
+	if r == nil {
+		return false
+	}
+	for _, t := range r.Tables() {
+		for _, f := range t.Fields() {
+			if f.Desc().Type == schema.TypeVector {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // differ accumulates changes into ordered phases. Phases exist because the
 // correct order is not the order the comparison discovers things in: a column
 // added to one table and an index dropped from another are found together and
@@ -170,6 +225,9 @@ type differ struct {
 	// run either. See markDependents.
 	pendingColumns map[string]bool
 
+	// extensions run before everything, because a table declaring a column of
+	// an extension type cannot be created until the extension is.
+	extensions     []Change
 	createTables   []Change
 	dropIndexes    []Change
 	dropForeignKey []Change
@@ -186,6 +244,7 @@ type differ struct {
 func (d *differ) changes() []Change {
 	var out []Change
 	for _, phase := range [][]Change{
+		d.extensions,
 		d.createTables,
 		d.dropIndexes,
 		d.dropForeignKey,
@@ -306,6 +365,7 @@ func columnKey(table, column string) string {
 func (d *differ) run() error {
 	d.tableRenames = map[string]string{}
 	d.pendingColumns = map[string]bool{}
+	d.extensionsNeeded()
 	claimed := map[string]bool{}
 	for _, t := range d.target.Tables() {
 		cur := d.currentFor(t)
@@ -581,6 +641,15 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 			c.Destructive = true
 			c.Reason = "converting " + t.Name() + "." + td.Name + " from " + curType +
 				" to " + tgtType + " is not a widening: values that do not fit are truncated or rejected"
+			if cd.Type == schema.TypeVector && td.Type == schema.TypeVector {
+				// Not truncation. Postgres refuses the cast outright, and the
+				// deeper problem is that every stored vector was produced by an
+				// embedder of the old width and means nothing at the new one.
+				c.Reason = "changing " + t.Name() + "." + td.Name + " from " + curType + " to " + tgtType +
+					" invalidates every stored embedding: they were produced by a different model and " +
+					"cannot be converted, only recomputed. Re-embed the rows, and expect to do it in " +
+					"batches rather than in this migration"
+			}
 			// No USING clause is generated. Postgres refuses a conversion it
 			// cannot make implicitly, and refusing is what should happen: a
 			// generated USING would pick a cast nobody reviewed, and casting

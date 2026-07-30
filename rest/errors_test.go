@@ -2,7 +2,6 @@ package rest_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"errors"
 	"net/http"
 	"strings"
@@ -164,7 +163,7 @@ func TestAnErrorCarryingItsOwnStatusIsNotSanitised(t *testing.T) {
 func TestConstraintReportedAtScanTimeIsStillClassified(t *testing.T) {
 	db := newFakeDB(t, reply{
 		cols:    postCols(),
-		rows:    [][]driver.Value{postRow("p1", "Hello")},
+		rows:    [][]any{postRow("p1", "Hello")},
 		rowsErr: &pgErr{code: "23505", message: "duplicate key"},
 	})
 	api := mount(t, db.db, postOptions())

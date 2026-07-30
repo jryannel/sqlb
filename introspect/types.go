@@ -32,7 +32,11 @@ func splitArrayType(formatted string) (elem string, array bool) {
 	return rest, true
 }
 
-func columnType(formatted string) (t schema.Type, size int, ok bool) {
+// columnType maps a formatted type onto a logical one, and returns the type's
+// parenthesised argument where it has one — a varchar's length, or a vector's
+// dimension. Both are the same thing to Postgres and to this function; what
+// each means is decided by the constructor that receives it.
+func columnType(formatted string) (t schema.Type, typeArg int, ok bool) {
 	base, arg := splitTypeArg(formatted)
 	switch base {
 	case "text":
@@ -76,6 +80,19 @@ func columnType(formatted string) (t schema.Type, size int, ok bool) {
 		return schema.TypeJSON, 0, true
 	case "bytea":
 		return schema.TypeBytes, 0, true
+	case "vector":
+		// A vector with no dimension is a legal Postgres column and not one the
+		// DSL can declare: the dimension is part of the type there, so
+		// importing it as any particular width would propose a migration that
+		// narrows the real column to a size nobody chose.
+		if arg == "" {
+			return "", 0, false
+		}
+		n, err := strconv.Atoi(arg)
+		if err != nil || n <= 0 {
+			return "", 0, false
+		}
+		return schema.TypeVector, n, true
 	}
 	return "", 0, false
 }

@@ -2,7 +2,6 @@ package app_test
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb/example/tasks/app"
 	"github.com/jryannel/sqlb/example/tasks/auth"
 )
@@ -27,7 +27,7 @@ import (
 // real one.
 var secret = []byte("test-secret-that-is-at-least-32-bytes-long")
 
-func newServer(t *testing.T, db *sql.DB) http.Handler {
+func newServer(t *testing.T, db *pgxpool.Pool) http.Handler {
 	t.Helper()
 	srv, err := app.New(app.Config{
 		DB:     db,

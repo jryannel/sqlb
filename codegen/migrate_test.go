@@ -2,12 +2,12 @@ package codegen_test
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb/codegen"
 )
 
@@ -215,7 +215,7 @@ func TestMigrateRefusesAShadowDBThatReturnsNothing(t *testing.T) {
 	if code, out := run(t, p, "migrate", "-name", "initial_schema"); code != 0 {
 		t.Fatalf("baseline migrate exited %d:\n%s", code, out)
 	}
-	p.ShadowDB = func(context.Context) (*sql.DB, error) { return nil, nil }
+	p.ShadowDB = func(context.Context) (*pgxpool.Pool, error) { return nil, nil }
 
 	code, out := run(t, p, "migrate", "-name", "second")
 	if code == 0 {

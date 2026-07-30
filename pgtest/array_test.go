@@ -11,13 +11,19 @@ import (
 	"github.com/jryannel/sqlb/schema"
 )
 
-// The array codec, against the database it was written for.
+// Array columns, against the database they are for.
 //
-// The unit tests in the engine check that encode and parse are inverses of each
-// other. That is necessary and not sufficient: two functions can agree with
-// each other and both disagree with Postgres. These tests are the ones that
-// cannot — every literal here is written by sqlb and read back by Postgres, or
-// written by Postgres and read back by sqlb (ADR-0033).
+// sqlb has no array codec any more. It had 449 lines of one, because
+// database/sql has no array case in either direction, and ADR-0040 deleted it
+// along with the driver that needed it — pgx encodes a slice and decodes an
+// array natively. So these tests changed meaning without changing shape: they
+// used to check sqlb's literal against Postgres, and now they check that
+// nothing sits between a Go slice and a Postgres array at all (ADR-0033).
+//
+// That makes them more important rather than less. They are now the only
+// coverage arrays have anywhere: the engine's own suite cannot test a codec it
+// does not contain, and a driver upgrade that changed how a slice is encoded
+// would show up here or nowhere.
 
 // The NOT NULL columns carry `default`, exactly as a generated model does for a
 // column the schema gave one: an insert omits them when the Go value is the nil
@@ -35,6 +41,43 @@ type ArrayRow struct {
 }
 
 func (ArrayRow) TableName() string { return "array_rows" }
+
+// Label is a named string type, which is what an enum column maps to in a
+// generated model. It is here because it is the case a reflective codec is
+// most likely to get wrong: the deleted codec walked the element type by hand,
+// and pgx has to find the underlying type of a named one instead.
+type Label string
+
+type LabelRow struct {
+	ID     int64   `db:"id" sqlb:"pk"`
+	Labels []Label `db:"labels" sqlb:"default"`
+}
+
+func (LabelRow) TableName() string { return "label_rows" }
+
+func TestNamedSliceElementsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	raw := freshDB(t)
+	mustExec(t, raw, `
+		CREATE TABLE label_rows (
+			id     bigint PRIMARY KEY,
+			labels text[] NOT NULL DEFAULT '{}'
+		)`)
+	db := sqlb.New(raw)
+
+	want := []Label{"urgent", "a,b", ""}
+	if _, err := sqlb.InsertRows(&LabelRow{ID: 1, Labels: want}).Exec(ctx, db); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	got, err := sqlb.Query[LabelRow]().One(ctx, db)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !reflect.DeepEqual(got.Labels, want) {
+		t.Errorf("labels = %#v, want %#v", got.Labels, want)
+	}
+}
 
 func arrayTable(t *testing.T) *sqlb.DB {
 	t.Helper()

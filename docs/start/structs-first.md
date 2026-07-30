@@ -86,9 +86,9 @@ codegen program, not a rewrite.
 
 This is the common case, and it has its own page.
 [Using sqlb with sqlc](../with-sqlc.md) covers who owns the schema, which
-queries go where, and how both land on one unit of work — `DB.Tx()` reaches the
-underlying `*sql.Tx`, so a sqlc `Queries` and a sqlb builder can share a
-transaction.
+queries go where, and how both land on one unit of work — one `pgx.Tx` satisfies
+`sqlb.Executor` and a pgx-generated `DBTX` at once, so a sqlc `Queries` and a
+sqlb builder can share a transaction in either direction.
 
 The short version: sqlc is the right tool for a query you can name, and this is
 the right tool for a view whose shape depends on what the user did. A project

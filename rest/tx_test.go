@@ -2,8 +2,6 @@ package rest_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"net/http"
 	"strings"
@@ -11,6 +9,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/rest"
 )
@@ -21,7 +21,7 @@ import (
 // generated handler (ADR-0021).
 
 // rowsOf is the one-row result a create, update or delete RETURNING produces.
-func rowsOf(row []driver.Value) [][]driver.Value { return [][]driver.Value{row} }
+func rowsOf(row []any) [][]any { return [][]any{row} }
 
 func TestGeneratedCreateIsWrapped(t *testing.T) {
 	db := newFakeDB(t, reply{cols: postCols(), rows: rowsOf(postRow("p1", "Hello"))})
@@ -216,12 +216,12 @@ func TestExecutorThatCannotBeginMountsWithTransactionsDisabled(t *testing.T) {
 // documents, and the case the startup check has to name helpfully.
 type execOnly struct{ inner sqlb.Executor }
 
-func (e execOnly) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
-	return e.inner.QueryContext(ctx, q, args...)
+func (e execOnly) Query(ctx context.Context, q string, args ...any) (pgx.Rows, error) {
+	return e.inner.Query(ctx, q, args...)
 }
 
-func (e execOnly) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
-	return e.inner.ExecContext(ctx, q, args...)
+func (e execOnly) Exec(ctx context.Context, q string, args ...any) (pgconn.CommandTag, error) {
+	return e.inner.Exec(ctx, q, args...)
 }
 
 // assertWrapped checks the statement log is BEGIN, the write, then COMMIT.

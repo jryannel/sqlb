@@ -1,10 +1,18 @@
 # ADR-0026: A vector column declares its index, and similarity search is its own operation
 
-- **Status:** Exploring — nothing is built, and **it is not in 1.0**. Buildable as
-  designed only after the driver flip ([ADR-0040](0040-the-driver-is-a-dependency.md))
-- **Confidence:** Low — the unindexed half is grounded in a working module
-  (`core/rag` in `subject-mono`); the indexed half is argument, and its sharpest
-  claims are about how Postgres behaves under a filter
+- **Status:** Working for the column, Exploring for the index. The unindexed
+  half is **built** — `schema.Vector(name, dim)`, `vector(n)` in `Diff` with the
+  extension ahead of it, the introspect mapping, `sqlb.Vector` with pgvector's
+  binary codec, and `Near` — and that half is a complete configuration rather
+  than a half-built feature. The index kind, the metric declaration and
+  `POST /resource/search` are unbuilt and **not in 1.0**
+- **Confidence:** Medium, raised from Low. The three physical claims this record
+  reasons from have been measured against pgvector 0.8.6
+  ([`pgtest/pgvector_test.go`](../../pgtest/pgvector_test.go)) and all three
+  hold, so the indexed half is no longer argument. What keeps it off High is the
+  regime rule: the collision this record listed as its most likely invalidator
+  turns out to be deployed rather than hypothetical, and the third branch below
+  is written but unbuilt and untested
 - **Decided:** 2026-07-28
 - **Last reviewed:** 2026-07-30 (read against the two port reports and ADR-0040)
 
@@ -48,11 +56,70 @@ Postgres does not complain, it sequentially scans. A metric typo is a correct
 answer a thousand times slower, which no test asserting on rows can see.
 
 **Filters and approximate search fight, silently.** An HNSW scan finds *k*
-candidates and the `WHERE` runs over them, so a filtered search returns 2 of 10
-with no error. pgvector 0.8's iterative scans convert under-recall into latency
-but do not make the filter free. Convex can *enforce* its restrictions because it
-owns its storage engine; sqlb sits on Postgres, which will cheerfully run the
-incoherent query. Anything this project wants enforced, it must refuse itself.
+candidates and the `WHERE` runs over them, so a filtered search comes back short
+with no error. Convex can *enforce* its restrictions because it owns its storage
+engine; sqlb sits on Postgres, which will cheerfully run the incoherent query.
+Anything this project wants enforced, it must refuse itself.
+
+### The three claims, measured
+
+This record's own *What would change our mind* put the physical claims first and
+said testing them was the work before the DSL. That is done, against pgvector
+0.8.6, in [`pgtest/pgvector_test.go`](../../pgtest/pgvector_test.go). All three
+hold. Four things about them were not known when this was written.
+
+**No number in that file is a recall figure, and this record must not quote one
+as if it were.** The first version of those tests measured uniform-random
+vectors and found a filtered search returning 6 of 10, and 0 of 10 once the
+filter was selective. Rewritten with a deterministic corpus so the gate would
+not flake, the same query returned 10 of 10 — and an empty-table IVFFlat index,
+which had returned nothing, answered in full. Neither run was wrong. Recall
+depends on the corpus, on the planner's costing, and on HNSW's own build
+randomness, since an index built twice over identical rows is not the same
+graph. The tests therefore force the mechanism rather than sample it: the rows
+the filter admits are placed opposite the probe, so the failure is a
+demonstration and not a statistic. The draft above said "2 of 10"; it should
+have said "fewer, and you will not be told".
+
+**The planner may decline the ANN index, and did.** Under a selective filter it
+costs the index above a sequential scan and chooses the scan, which returns the
+exact answer. That makes the silent under-return conditional on a planning
+decision — the same query complete on one database and quietly partial on
+another, according to statistics nobody is watching. This is worse than an
+unconditional failure, not better, and it is a fourth claim this record did not
+have.
+
+**pgvector's iterative scan is a real mitigation whose benefit is
+data-dependent.** The draft above said it "converts under-recall into latency",
+which was taken from the documentation. Measured, it recovers the full answer on
+one corpus and moves six rows to seven on another, with `EXPLAIN` still
+reporting a single index search. It may be offered. It may not be described as
+the thing that makes a filtered search correct, because whether it is cannot be
+seen from the schema.
+
+**The IVFFlat case announces itself.** `CREATE INDEX ... USING ivfflat` on an
+empty table emits a NOTICE — *"ivfflat index created with little data … Drop the
+index until the table has more data"*. A migration runner that surfaced notices
+would catch this at the moment it happens, which is cheaper than anything in the
+DSL. Every runner this project knows of discards them. That does not change the
+decision to default to HNSW; it adds a second, independent answer that costs
+almost nothing.
+
+### Two traps the harness found, which the feature will hit
+
+Neither is about vectors. Both are about executing a search that needs session
+state, which is what the operation below is.
+
+- **Session settings must be `SET LOCAL` inside a transaction.** A plain `SET`
+  rides the pooled connection back into whatever runs next. The first version of
+  the tests measured an exact search, handed the connection back still carrying
+  `enable_indexscan = off`, and reported a perfect result for the query the file
+  exists to show failing.
+- **pgx caches a prepared statement per connection, keyed on SQL text alone.** A
+  plan built under one set of GUCs is reused under another. The measurement pool
+  disables statement caching for that reason — and a `search` operation that sets
+  `hnsw.*` per statement has exactly this problem, since the setting changes and
+  the cached plan does not.
 
 ## Decision
 
@@ -79,6 +146,25 @@ schema.Vector("embedding", ragcfg.Dim).
   answer to the `%%EMBEDDING_DIM%%` sentinel — no rewrite step, no mirror file,
   and `Diff` *notices* a dimension change and proposes the rewrite. Over 2,000 is
   accepted for a column and refused for an index.
+
+  **This takes a capability away, and the record should say so rather than let a
+  port discover it.** `core/rag` reads its dimension from `RAG_EMBEDDING_DIM`, so
+  one binary can deploy against a 768- or a 1,536-dimension embedder. Fixing the
+  dimension at `generate` time ends that. It is stricter and it is the point —
+  the mirror `schema.sql` disappears and the drift becomes a diff instead of a
+  comment asking a human — but "config becomes a constant" is a real loss for one
+  known consumer.
+- **A dimension is not a vector space, and `Diff` noticing a change in one gives
+  false comfort.** The space is provider *and* model *and* dimension. Swap
+  `text-embedding-3-small` for a different model of the same width and the column
+  diffs clean while every stored vector is meaningless — an outcome with no
+  symptom except worse answers. `core/rag` carries an `embedding_fingerprint` per
+  chunk precisely because re-embedding has to be resumable, which is that
+  problem solved by hand downstream of a schema that could not express it. So a
+  vector column should be able to declare a **space identity** and not only a
+  width. The first version need not act on it beyond storing it and refusing to
+  search across a mismatch; what it must not do is let the dimension stand in for
+  the space.
 - **An unindexed column is a supported configuration, not a missing index.**
   `Lint` may observe it; it does not warn, because at rag's size the index would
   be the mistake.
@@ -90,13 +176,42 @@ schema.Vector("embedding", ragcfg.Dim).
 - **HNSW is the default, because the migration model chooses it.** An IVFFlat
   index built on an empty table clusters nothing, and a `Diff`-generated
   `CREATE INDEX` runs at exactly that moment.
-- **Which filters may accompany a search depends on the index and nothing else.**
-  With none, any filter the model allows. With an ANN index, a constant predicate
-  becomes the index's `WHERE`, a variable one must be declared, and an undeclared
-  one is refused. sqlb carries both regimes because, unlike Convex, it can offer
-  the first.
+- **Which filters may accompany a search depends on the index and nothing else**,
+  and there are **three** regimes rather than two. The first draft had two, and
+  the case it could not express is deployed — see *the collision, which is not
+  hypothetical* below.
+  - *No index.* Any filter the model allows. Exact scan; correct and slow, which
+    is the right answer at `core/rag`'s size.
+  - *ANN index, filters known at declaration time.* A constant predicate becomes
+    the index's `WHERE`; a variable one must be declared. An undeclared filter is
+    refused at build time, as before.
+  - *ANN index, filters variable per request.* The caller opts in explicitly, and
+    the search operation sets `hnsw.iterative_scan` and `hnsw.max_scan_tuples`
+    for the statement. This is the branch the measurement constrains: iterative
+    scan helps by an amount that depends on the data, so what the caller is
+    opting into is **"try harder, and it may still come back short"** — not a
+    fix. Naming it as one would reintroduce the silent failure with a
+    configuration flag in front of it.
+
+  All three are explicit and none is silent. Refusing the undeclared fourth case
+  at build time stays as written. The regimes are a property of the *search
+  operation*, which is what makes this expressible at all: the operation owns
+  execution, so it can own the session GUCs — subject to the two traps above,
+  which is why they are recorded here rather than in a test file nobody reads.
 - **The score is similarity, not distance** — larger is closer, whichever metric
-  produced it.
+  produced it — and it is a **projection as well as an ordering**. `1 - (embedding
+  <=> $1)` appears in the select list, in the threshold comparison and in the
+  `ORDER BY` of the same statement, so `Near(vec)` returns a handle yielding all
+  three rather than three call sites that must agree. This is the argument
+  `GroupBySelection` already makes for `date_trunc`.
+- **A shortfall cannot be detected by counting rows**, which is the trap in the
+  branch above. A `min_score` threshold makes "fewer than *k*" the normal case,
+  so `len(rows) < k` — the obvious alarm — is unusable exactly where it is most
+  needed, and a corpus applying both a threshold and a filter has no signal at
+  all. Any shortfall signal sqlb offers must distinguish rows lost to the
+  threshold from rows the index never found, which means counting before the
+  threshold cut. Whether to offer one is open; that it cannot be the naive count
+  is settled.
 - **Search is its own operation.** `POST /documents/search`, not `?near=`: 1,536
   float32s is ~20KB and does not fit in a URL; `?sort=…&near=…` is incoherent;
   and `OFFSET 100` into an approximate neighbour set is not page six of anything.
@@ -109,10 +224,25 @@ one global name, owned by nobody, idempotent), and `sqlb.Vector`.
 
 **Superseded:** the original `sqlb.Vector` was a text-form `[]float32` because
 `Executor` was `database/sql`. [ADR-0040](0040-the-driver-is-a-dependency.md)
-removes that constraint and cites this record as its strongest evidence. When
-built, `sqlb.Vector` is pgvector's binary codec on the pool — measured at 2.7×
-the time and 21× the memory for a 50-row page of 1536-dimension embeddings. The
-rest of this record is unaffected either way.
+removed that constraint — it cites this record as its strongest evidence — and
+it is built. `sqlb.Vector` is therefore specified as pgvector's binary codec
+registered on the pool, which is now an ordinary thing to write rather than a
+thing the driver had no spelling for. The measurement that made the case: 2.7×
+the time and 21× the memory for a 50-row page of 1536-dimension embeddings,
+through the text form. The rest of this record is unaffected either way.
+
+**What this record is still waiting on** is therefore nothing external, and the
+three places that did not know the type now do. What remains is the index half,
+which this record deliberately leaves as a second decision — and which the
+measurement above says should stay unbuilt until a corpus has outgrown an exact
+scan, because every failure mode it introduces is silent.
+
+**One cross-reference in this record was wrong** and is worth correcting rather
+than quietly deleting: the score-as-projection bullet cites `GroupBySelection`
+as an existing precedent for `date_trunc`. No such thing exists in the tree. The
+argument it was making is sound and is what `Near` implements — write the
+expression once, get the projection, the predicate and the ordering from it —
+but it was not standing on a precedent.
 
 ## Consequences
 
@@ -129,9 +259,12 @@ nothing ever outgrows an exact scan.
   table stakes* — a type, an index kind, a Go value type, a REST operation, an
   extension in the diff engine, an introspect mapping, a lint rule. The honest
   reason it is worth it is the schema argument, not that vector search is popular.
-- *Approximate results are hard to test the way this project tests.* The guard is
-  "the index is used", and failing it on purpose means reading a query plan, not
-  a result set.
+- *Approximate results are hard to test the way this project tests*, and harder
+  than this record first thought. The guard cannot be a recall number, because
+  recall varies with the corpus, the planner and the index build's own
+  randomness; it has to be "the plan is the dangerous shape" or "the index is
+  used", which means reading a query plan rather than a result set.
+  `pgtest/pgvector_test.go` is the worked example and the warning.
 - *The index build is the slowest migration this project will generate.* A vector
   index wants its own migration file, and nothing enforces that yet.
 - *`CREATE EXTENSION` usually needs privileges the migration role lacks* — failing
@@ -148,22 +281,52 @@ nothing ever outgrows an exact scan.
 
 ## What would change our mind
 
-- **Any of the three physical claims failing against a real database** — silent
-  under-return under a filter, sequential-scan fallback on a mismatched opclass,
-  an empty-table IVFFlat being useless. Testing them is the first work, before
-  the DSL.
+- ~~**Any of the three physical claims failing against a real database.**~~ Done,
+  and none of them failed —
+  [`pgtest/pgvector_test.go`](../../pgtest/pgvector_test.go) against pgvector
+  0.8.6. What the measurement changed is recorded in the Context: a fourth claim
+  (the planner may decline the index), a weaker statement about iterative scan,
+  and the rule that no recall figure here is transferable. The trigger that
+  replaces it: **a claim measured on one corpus being quoted as a property of
+  pgvector.** This record has already made that mistake once.
 - A second metric on one column makes `Near(vec)` ambiguous. The fix is additive,
   but it means the schema-only story was too simple.
 - Someone needs the raw vector over the wire — client-side re-ranking is the
   plausible case, and one instance turns `Hidden` into an overridable default.
 - **An ANN index whose declared filters cannot express what a caller narrows by.**
-  If a corpus outgrows exact search *and* needs open-ended metadata narrowing,
-  the two regimes collide and this record has no answer. That is the measurement
-  most likely to be needed first.
+  ~~That is the measurement most likely to be needed first.~~ **This has fired**,
+  and the arrangement is deployed rather than hypothetical — see below. The
+  record now has a third regime for it, which is written and unbuilt; what would
+  change our mind again is that branch failing to hold in practice, which cannot
+  be known until something runs it.
 - A second extension wants the same machinery — PostGIS is the obvious one.
 - The surface cost arrives as bugs elsewhere — the fallback is not to fix it but
   to cut back to an opaque passthrough type, a tenth of the code, which unblocks
   the thing that actually forced the decision.
+
+### The collision, which is not hypothetical
+
+The trigger above was written as a thing to watch for. A census of `subject-go`
+reports it already in production: an `hnsw (embedding vector_cosine_ops)` index,
+and a search narrowing by `org_id`, `conversation_id IS NULL`, `backoffice_only`,
+`project_id`, `work_package_id` and an `EXISTS` over archived projects — every
+one variable per request, none expressible as the index's `WHERE`. No
+`hnsw.ef_search` or `hnsw.iterative_scan` is set anywhere in that repository.
+
+On the measurement above, that arrangement returns fewer rows than it asks for
+and says nothing about it. Whether it is doing so today depends on the planner,
+the corpus and the index build — which is to say nobody there knows, and the
+failure has no symptom that would tell them. It is reported rather than
+observed: this project has not run that query. But it is the shape, and it is the
+reason the third regime exists rather than a fourth refusal.
+
+Two details from the same census sharpen the record elsewhere. That codebase
+applies a `min_score` threshold *and* a filter, which is the case where counting
+rows cannot detect a shortfall — the trap now stated in the Decision. And its
+migration names `vector_cosine_ops` in a comment for a future index while its
+query uses `<=>`: those agree because an author was careful once, in prose, with
+nothing checking it. That is this record's metric argument, standing in someone
+else's repository.
 
 ## Cost of change
 
@@ -197,3 +360,58 @@ text.
   DSL — a text-form `sqlb.Vector` cannot host a binary codec however well the
   schema declares its index. Still not in 1.0, now with the dependency stated.
 - 2026-07-30 — Condensed.
+- 2026-07-30 — **The three physical claims measured**, which this record said was
+  the first work and had not been done. All three hold, against pgvector 0.8.6,
+  in [`pgtest/pgvector_test.go`](../../pgtest/pgvector_test.go). Four changes
+  followed, and only one of them was expected. The claims are now stated as
+  mechanisms rather than as recall figures, because the first version of those
+  tests produced 6-of-10 on one corpus and 10-of-10 on another and *both were
+  correct measurements* — recall varies with the corpus, the planner's costing
+  and HNSW's own build randomness. The draft's "returns 2 of 10" was a number
+  this record was never entitled to. A fourth claim was added: the planner may
+  decline the ANN index and return the exact answer, which makes the silent
+  failure conditional on statistics nobody watches. The iterative-scan sentence
+  was weakened from the documentation's framing to what was observed — a real
+  mitigation whose benefit is data-dependent and invisible from the schema. And
+  the IVFFlat case turns out to announce itself as a build-time NOTICE, which is
+  a second answer costing almost nothing. Confidence: Low → Medium.
+- 2026-07-30 — **The regime rule gains a third branch, because its most likely
+  invalidator is deployed.** A census of `subject-go` reports an HNSW index with
+  six per-request filters and no scan tuning — the exact collision this record
+  listed as hypothetical and had no answer for. The two-regime rule became
+  three: no index, declared filters, or an explicit opt-in to iterative scan
+  whose honest promise is "try harder, and it may still come back short". Also
+  from that census, two things the record was missing: a `min_score` threshold
+  makes `len(rows) < k` unusable as a shortfall alarm exactly where it is most
+  needed, and a vector space is provider *and* model *and* dimension — so `Diff`
+  noticing a width change gives false comfort, and a column should be able to
+  declare a space identity. Reported rather than observed; this project has not
+  run that codebase's queries.
+- 2026-07-30 — **The column is built**, which is the whole of what this record
+  calls a complete configuration on its own: `schema.Vector(name, dim)` with the
+  dimension as a Go expression, `vector(n)` rendered by `Diff` with
+  `CREATE EXTENSION` ordered ahead of it, the introspect mapping that closes the
+  round trip, `sqlb.Vector` with pgvector's binary codec written against pgx
+  rather than taken from pgvector-go, and `Near` yielding the projection, the
+  threshold and the ordering from one handle. Verified against pgvector 0.8.6:
+  the DDL applies, an imported schema diffs to nothing, values round-trip in
+  binary, and a search returns rows in the order its scores claim.
+
+  Three things decided while building it that the record did not say. `Near`
+  binds the vector **once** however many times it is mentioned, which needed a
+  shared-parameter node in the compiler — an embedding is twenty kilobytes and a
+  search names it three times. The metric is cosine and is **not an argument**,
+  on this record's own asymmetry: adding one later is additive, removing one is
+  not. And a vector column is refused as a primary key, as Unique, as an array
+  element, and as Filterable, Sortable or Searchable — each because the REST
+  surface has no spelling for a vector, which is the same reason search is its
+  own operation.
+
+  The index half stays unbuilt, and the measurement above is now an argument for
+  keeping it that way until a corpus has outgrown an exact scan.
+- 2026-07-30 — Two smaller corrections while folding the above in. The score is a
+  projection as well as an ordering, so `Near(vec)` yields select, predicate and
+  order together rather than three call sites that must agree. And making the
+  dimension a Go expression removes a capability one known consumer uses — a
+  single binary deploying against a 768- or 1,536-dimension embedder — which is
+  the intended trade but was not written down.
