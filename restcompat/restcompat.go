@@ -566,7 +566,7 @@ type fieldView struct {
 	renamedFrom string
 }
 
-func (f *fieldView) inResponse() bool      { return !f.hidden }
+func (f *fieldView) inResponse() bool       { return !f.hidden }
 func (f *fieldView) settableAtCreate() bool { return !f.readOnly }
 func (f *fieldView) requiredAtCreate() bool {
 	return f.settableAtCreate() && !f.nullable && !f.hasDefault
