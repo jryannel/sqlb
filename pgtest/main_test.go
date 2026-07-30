@@ -97,7 +97,7 @@ func run(m *testing.M) (int, error) {
 // and returns a connection to it, dropped when the test ends. A database per
 // test rather than a container per test: container startup dominates, and
 // CREATE DATABASE is milliseconds.
-func freshDB(t *testing.T) *sql.DB {
+func freshDB(t testing.TB) *sql.DB {
 	t.Helper()
 	db := freshStockDB(t)
 	bootstrap(t, db)
@@ -109,7 +109,7 @@ func freshDB(t *testing.T) *sql.DB {
 // extension, which is a claim the shimmed database cannot test — with
 // uuid_generate_v7() defined, both spellings work and the difference is
 // invisible.
-func freshStockDB(t *testing.T) *sql.DB {
+func freshStockDB(t testing.TB) *sql.DB {
 	t.Helper()
 
 	name := databaseName(t)
@@ -143,7 +143,7 @@ func freshStockDB(t *testing.T) *sql.DB {
 // Worth stating plainly, because the test cannot: generated DDL for a UUIDv7
 // primary key does not apply to a stock Postgres. That is a real gap in what
 // sqlb emits, not an artefact of this harness.
-func bootstrap(t *testing.T, db *sql.DB) {
+func bootstrap(t testing.TB, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db, `
 		CREATE FUNCTION uuid_generate_v7() RETURNS uuid
@@ -152,7 +152,7 @@ func bootstrap(t *testing.T, db *sql.DB) {
 }
 
 // databaseName derives a legal, unique database name from the test name.
-func databaseName(t *testing.T) string {
+func databaseName(t testing.TB) string {
 	name := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_':
@@ -178,7 +178,7 @@ func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-func mustExec(t *testing.T, db *sql.DB, query string) {
+func mustExec(t testing.TB, db *sql.DB, query string) {
 	t.Helper()
 	if _, err := db.Exec(query); err != nil {
 		t.Fatalf("exec failed: %v\n%s", err, strings.TrimSpace(query))

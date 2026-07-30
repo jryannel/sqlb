@@ -139,3 +139,4 @@ nobody finishes reading has failed at its only job.
 | [0037](0037-search-is-ilike-until-it-cannot-be.md) | `?search` is ILIKE, and a `tsvector` column is not in 1.0 | Not in 1.0 | High |
 | [0038](0038-collections-are-flat.md) | A collection has one path, and the parent is a filter | Working | High |
 | [0039](0039-a-schema-edit-is-an-api-edit.md) | A schema edit is an API edit, and the break is diffed | Exploring | Medium |
+| [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Exploring | Medium |
