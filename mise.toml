@@ -47,6 +47,11 @@ description = "Run the round-trip and connection-path tests against a real Postg
 dir = "pgtest"
 run = "go test ./..."
 
+[tasks.bench-pg]
+description = "Measure what the database/sql bridge costs, against a real Postgres. Deliberately NOT part of `ci`: benchmark numbers from a shared runner are noise, and a gate that fails on them trains people to ignore it. This exists because ADR-0040 argues partly on performance, and ADR-0019 is the precedent for what happens when a record in this repo reasons from documentation instead of measuring — two of its three claims came back different. Run it before moving ADR-0040 off Exploring."
+dir = "pgtest"
+run = "go test -run '^$' -bench . -benchmem ./..."
+
 [tasks.test-demo]
 description = "Run the task-manager example's suite against a real Postgres in a container. Needs Docker. Separate from `test` for the same reason `test-pg` is: the engine's inner loop stays database-free. This is the example that proves the pieces compose — schema to migration to DDL Postgres accepts, a JWT workspace boundary that holds across tenants, and a transaction that leaves nothing behind when it aborts. It also carries the drift gate `generate-check` cannot be: migrations/drift_test.go replays the checked-in history and requires it to build what taskschema declares, so editing schema.go without adding a migration fails here rather than in production."
 dir = "example/tasks"
