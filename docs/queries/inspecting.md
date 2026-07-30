@@ -47,24 +47,28 @@ OpenTelemetry, slog or a test double without sqlb depending on any of them:
 ```go
 type tracer struct{ inner sqlb.Executor }
 
-func (t tracer) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+func (t tracer) Query(ctx context.Context, q string, args ...any) (pgx.Rows, error) {
     start := time.Now()
-    rows, err := t.inner.QueryContext(ctx, q, args...)
+    rows, err := t.inner.Query(ctx, q, args...)
     slog.InfoContext(ctx, "sqlb", "sql", q, "dur", time.Since(start), "err", err)
     return rows, err
 }
-// ExecContext likewise, then pass the wrapper wherever you passed the *sql.DB.
+// Exec likewise, then pass the wrapper wherever you passed the pool.
 ```
 
 If your wrapper should also support `WithTx`, implement `Beginner` on it —
-`BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)` — alongside
+`BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)` — alongside
 `Executor`. It is asserted for rather than required, which is what keeps
 `Executor` two methods.
 
-That two-method surface is the same reason pgx works through its stdlib adapter,
-and why a connection pooler in the path needs nothing from sqlb: the query path
-is tested through a real PgBouncer in transaction pooling, because that is the
-deployed topology ([ADR-0019](../adr/0019-pgbouncer-in-the-path.md)).
+pgx has a tracing seam of its own — `pgx.QueryTracer` on the pool config — and it
+sees things a wrapper here cannot, such as which connection ran the statement.
+Use that when you want the driver's view and this when you want sqlb's.
+
+That two-method surface is also why a connection pooler in the path needs nothing
+from sqlb: the query path is tested through a real PgBouncer in transaction
+pooling, because that is the deployed topology
+([ADR-0019](../adr/0019-pgbouncer-in-the-path.md)).
 
 ## Checking the schema, not the query
 

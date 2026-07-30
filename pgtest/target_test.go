@@ -1,6 +1,7 @@
 package pgtest
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestMinPostgres18AppliesToAStockPostgres(t *testing.T) {
 	// And the column really does generate UUIDv7s, rather than merely parsing.
 	// Version 7 is recorded in the 13th hex digit of the textual form.
 	var id string
-	if err := db.QueryRow(
+	if err := db.QueryRow(context.Background(),
 		`INSERT INTO orgs (name, slug) VALUES ('acme', 'acme') RETURNING id`,
 	).Scan(&id); err != nil {
 		t.Fatalf("inserting a row that relies on the generated default: %v", err)
@@ -59,7 +60,7 @@ func TestTheDefaultTargetStillNeedsTheExtension(t *testing.T) {
 		if strings.TrimSpace(c.Up) == "" {
 			continue
 		}
-		if _, err := db.Exec(c.Up); err != nil {
+		if _, err := db.Exec(context.Background(), c.Up); err != nil {
 			lastErr = err
 			break
 		}

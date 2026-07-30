@@ -2,34 +2,26 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/internal/pgfake"
 )
 
 // The examples below run real terminal methods, because a hook only fires when
 // a statement executes — asserting on a builder would prove nothing. This is the
-// smallest thing that can stand behind Executor: a driver that records every
+// smallest thing that can stand behind Executor: something that records every
 // statement and replays one canned row. No Postgres, and no pretending.
 var exampleLog []string
 
-const exampleDriverName = "sqlb-example"
-
-func init() { sql.Register(exampleDriverName, exampleDriver{}) }
-
-// exampleDB opens a handle over the recording driver and clears the log.
+// exampleDB returns a handle over the recording executor and clears the log.
 func exampleDB() *sqlb.DB {
 	exampleLog = nil
-	db, err := sql.Open(exampleDriverName, "")
-	if err != nil {
-		panic(err)
-	}
-	return sqlb.New(db)
+	return sqlb.New(exampleExec{})
 }
 
 // whereClause returns just the WHERE clause of the last statement, so an example
@@ -182,77 +174,34 @@ func ExampleAfterCommit_rollback() {
 	// last statement: ROLLBACK
 }
 
-// --- the recording driver ---------------------------------------------------
+// --- the recording executor -------------------------------------------------
 
-type exampleDriver struct{}
+type exampleExec struct{}
 
-func (exampleDriver) Open(string) (driver.Conn, error) { return exampleConn{}, nil }
-
-type exampleConn struct{}
-
-func (exampleConn) Close() error { return nil }
-
-func (exampleConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("example driver: prepared statements are not used")
-}
-
-func (exampleConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("example driver: use BeginTx")
-}
-
-func (c exampleConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	exampleLog = append(exampleLog, "BEGIN")
-	return exampleTx{}, nil
-}
-
-func (exampleConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+func (e exampleExec) Query(_ context.Context, query string, _ ...any) (pgx.Rows, error) {
 	exampleLog = append(exampleLog, query)
-	// The result has to match the projection, or database/sql rejects the Scan
-	// before sqlb ever sees it. A count is one column; everything else here
-	// selects the whole row.
+	// The result has to match the projection, or the scan fails before the
+	// example gets to print anything. A count is one column; everything else
+	// here selects the whole row.
 	if strings.HasPrefix(query, "SELECT count(") {
-		return &exampleRows{cols: []string{"count"}, vals: []driver.Value{int64(1)}}, nil
+		return &pgfake.Rows{Cols: []string{"count"}, Data: [][]any{{int64(1)}}}, nil
 	}
-	return &exampleRows{
-		cols: []string{"id", "title", "status", "view_count", "org_id"},
-		vals: []driver.Value{"a1", "Hello", "draft", int64(0), "acme"},
+	return &pgfake.Rows{
+		Cols: []string{"id", "title", "status", "view_count", "org_id"},
+		Data: [][]any{{"a1", "Hello", "draft", int64(0), "acme"}},
 	}, nil
 }
 
-func (exampleConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+func (e exampleExec) Exec(_ context.Context, query string, _ ...any) (pgconn.CommandTag, error) {
 	exampleLog = append(exampleLog, query)
-	return driver.RowsAffected(1), nil
+	return pgconn.NewCommandTag("DELETE 1"), nil
 }
 
-type exampleTx struct{}
-
-func (exampleTx) Commit() error {
-	exampleLog = append(exampleLog, "COMMIT")
-	return nil
-}
-
-func (exampleTx) Rollback() error {
-	exampleLog = append(exampleLog, "ROLLBACK")
-	return nil
-}
-
-// exampleRows replays a single canned row, which is enough for a RETURNING
-// clause to scan and for a count to read.
-type exampleRows struct {
-	cols []string
-	vals []driver.Value
-	done bool
-}
-
-func (r *exampleRows) Columns() []string { return r.cols }
-
-func (*exampleRows) Close() error { return nil }
-
-func (r *exampleRows) Next(dest []driver.Value) error {
-	if r.done {
-		return io.EOF
-	}
-	r.done = true
-	copy(dest, r.vals)
-	return nil
+func (e exampleExec) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+	exampleLog = append(exampleLog, "BEGIN")
+	return &pgfake.Tx{
+		Statements: e,
+		OnCommit:   func() error { exampleLog = append(exampleLog, "COMMIT"); return nil },
+		OnRollback: func() error { exampleLog = append(exampleLog, "ROLLBACK"); return nil },
+	}, nil
 }

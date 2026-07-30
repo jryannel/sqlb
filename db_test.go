@@ -2,48 +2,15 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
 )
-
-// --- transaction support for the fake driver --------------------------------
-//
-// The harness in sqlb_test.go replays canned rows. Transactions are recorded
-// into the same statement log as BEGIN/COMMIT/ROLLBACK markers, so a test can
-// assert on the order of the whole unit of work rather than on a flag.
-
-func (c *fakeConn) BeginTx(_ context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	c.h.mu.Lock()
-	if c.h.txErr != nil {
-		err := c.h.txErr
-		c.h.mu.Unlock()
-		return nil, err
-	}
-	c.h.lastTxOpts = opts
-	c.h.mu.Unlock()
-	c.h.record("BEGIN")
-	return &fakeTx{h: c.h}, nil
-}
-
-type fakeTx struct{ h *harness }
-
-func (t *fakeTx) Commit() error {
-	t.h.record("COMMIT")
-	t.h.mu.Lock()
-	defer t.h.mu.Unlock()
-	return t.h.commitErr
-}
-
-func (t *fakeTx) Rollback() error {
-	t.h.record("ROLLBACK")
-	return nil
-}
 
 // statements returns the recorded log, with the SQL reduced to its first word
 // so assertions read as the shape of the unit of work.
@@ -88,7 +55,7 @@ func sameStatements(t *testing.T, got, want []string) {
 func txHarness(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t, []string{"id", "email", "name", "age", "org_id", "password_hash", "created_at"},
-		[][]driver.Value{{"u1", "a@b.c", "Ada", nil, "org1", "", time.Unix(0, 0).UTC()}})
+		[][]any{{"u1", "a@b.c", "Ada", nil, "org1", "", time.Unix(0, 0).UTC()}})
 	t.Cleanup(h.close)
 	return h
 }
@@ -234,7 +201,7 @@ func TestNestedIsolationRequestIsRefused(t *testing.T) {
 	db := sqlb.New(h.db)
 
 	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
-		return tx.WithTxOptions(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable},
+		return tx.WithTxOptions(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable},
 			func(context.Context, *sqlb.DB) error { return nil })
 	})
 	if err == nil {
@@ -631,10 +598,10 @@ func TestAfterCommitRefusedOnceDrained(t *testing.T) {
 // wrapper the README documents.
 type execOnly struct{ inner sqlb.Executor }
 
-func (e execOnly) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
-	return e.inner.QueryContext(ctx, q, args...)
+func (e execOnly) Query(ctx context.Context, q string, args ...any) (pgx.Rows, error) {
+	return e.inner.Query(ctx, q, args...)
 }
 
-func (e execOnly) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
-	return e.inner.ExecContext(ctx, q, args...)
+func (e execOnly) Exec(ctx context.Context, q string, args ...any) (pgconn.CommandTag, error) {
+	return e.inner.Exec(ctx, q, args...)
 }

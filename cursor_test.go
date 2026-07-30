@@ -2,7 +2,6 @@ package sqlb_test
 
 import (
 	"context"
-	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -252,7 +251,7 @@ func TestSeekIsAppliedAfterTheCallersOwnPredicates(t *testing.T) {
 // ?count=exact answers "how big is this result set", which must not shrink as
 // a client pages through it.
 func TestCountIgnoresTheCursor(t *testing.T) {
-	h := newHarness(t, []string{"count"}, [][]driver.Value{{int64(42)}})
+	h := newHarness(t, []string{"count"}, [][]any{{int64(42)}})
 	defer h.close()
 
 	cur := cursorAt(t, []sqlb.Order{sqlb.F("created_at").Desc()}, User{ID: "u2"})

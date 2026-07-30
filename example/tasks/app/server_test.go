@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -292,7 +293,7 @@ func TestSoftDeleteHidesTheRow(t *testing.T) {
 	// The row is still there. A soft delete that actually removed the row would
 	// pass every assertion above.
 	var deleted int
-	if err := db.QueryRow(
+	if err := db.QueryRow(context.Background(),
 		`SELECT count(*) FROM tasks WHERE id = $1 AND deleted_at IS NOT NULL`, drop,
 	).Scan(&deleted); err != nil {
 		t.Fatalf("counting the deleted row: %v", err)
@@ -327,7 +328,7 @@ func TestATaskCannotJoinAnotherWorkspacesList(t *testing.T) {
 	}
 
 	var rows int
-	if err := db.QueryRow(`SELECT count(*) FROM tasks`).Scan(&rows); err != nil {
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM tasks`).Scan(&rows); err != nil {
 		t.Fatalf("counting tasks: %v", err)
 	}
 	if rows != 0 {

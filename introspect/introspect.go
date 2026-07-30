@@ -14,13 +14,11 @@
 // it produces files, and a runner applies them. This package does connect, so
 // it is separate, and migrate stays a pure function over two data structures.
 //
-// # No driver dependency
+// # The connection
 //
-// Everything here works through *sql.DB, so the driver comes from the caller,
-// the same way it does for the query engine. The invariant `mise run
-// deps-check` enforces is that a consumer importing the engine inherits no
-// third-party dependency, and reading a catalog through database/sql keeps
-// this package on the right side of it.
+// Everything here works through a sqlb.Executor, so a pool, a connection or a
+// transaction the caller already holds all work, and reading a catalog uses the
+// same handle as querying a table (ADR-0040).
 //
 // # What cannot be represented
 //
@@ -34,9 +32,10 @@ package introspect
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/schema"
 )
 
@@ -73,7 +72,7 @@ func (o Options) schemaName() string {
 // should be filterable or exposed over REST, and guessing would publish
 // columns nobody chose to publish — so everything imports with no capabilities
 // at all and widening them is a deliberate, reviewable edit (ADR-0014).
-func Registry(ctx context.Context, db *sql.DB, opts Options) (*schema.Registry, *Report, error) {
+func Registry(ctx context.Context, db sqlb.Executor, opts Options) (*schema.Registry, *Report, error) {
 	cat, err := read(ctx, db, opts.schemaName())
 	if err != nil {
 		return nil, nil, err
@@ -139,6 +138,12 @@ type indexRow struct {
 // enum's CHECK normalises to "= ANY (ARRAY[...])" rather than the IN () it was
 // written as, and a literal default comes back with its cast attached. Each of
 // those was observed before the mapping that handles it was written.
+//
+// Every catalog column of type "char" is cast to text. That is not decoration:
+// attgenerated is a zero byte on an ordinary column, and a driver is entitled
+// to decode that as a one-character string rather than an empty one — which is
+// how every column in a database briefly became a generated column here. The
+// cast makes the empty case empty on any driver.
 
 const tableQuery = `
 SELECT c.relname, COALESCE(obj_description(c.oid, 'pg_class'), '')
@@ -151,7 +156,7 @@ const columnQuery = `
 SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
        COALESCE(pg_get_expr(d.adbin, d.adrelid), ''),
        COALESCE(col_description(c.oid, a.attnum), ''),
-       a.attidentity, a.attgenerated
+       a.attidentity::text, a.attgenerated::text
 FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -214,13 +219,13 @@ WHERE n.nspname = $1
   )
 ORDER BY c.relname, i.relname`
 
-func read(ctx context.Context, db *sql.DB, nspname string) (*catalog, error) {
+func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, error) {
 	if db == nil {
 		return nil, fmt.Errorf("introspect: no database given")
 	}
 	cat := &catalog{}
 
-	if err := query(ctx, db, tableQuery, nspname, func(rows *sql.Rows) error {
+	if err := query(ctx, db, tableQuery, nspname, func(rows pgx.Rows) error {
 		var r tableRow
 		if err := rows.Scan(&r.Name, &r.Comment); err != nil {
 			return err
@@ -231,7 +236,7 @@ func read(ctx context.Context, db *sql.DB, nspname string) (*catalog, error) {
 		return nil, fmt.Errorf("introspect: reading tables: %w", err)
 	}
 
-	if err := query(ctx, db, columnQuery, nspname, func(rows *sql.Rows) error {
+	if err := query(ctx, db, columnQuery, nspname, func(rows pgx.Rows) error {
 		var r columnRow
 		if err := rows.Scan(&r.Table, &r.Name, &r.Type, &r.NotNull, &r.Default,
 			&r.Comment, &r.Identity, &r.Generated); err != nil {
@@ -243,7 +248,7 @@ func read(ctx context.Context, db *sql.DB, nspname string) (*catalog, error) {
 		return nil, fmt.Errorf("introspect: reading columns: %w", err)
 	}
 
-	if err := query(ctx, db, constraintQuery, nspname, func(rows *sql.Rows) error {
+	if err := query(ctx, db, constraintQuery, nspname, func(rows pgx.Rows) error {
 		var r constraintRow
 		var cols, refCols string
 		if err := rows.Scan(&r.Table, &r.Name, &r.Type, &cols, &r.RefTable, &refCols,
@@ -257,7 +262,7 @@ func read(ctx context.Context, db *sql.DB, nspname string) (*catalog, error) {
 		return nil, fmt.Errorf("introspect: reading constraints: %w", err)
 	}
 
-	if err := query(ctx, db, indexQuery, nspname, func(rows *sql.Rows) error {
+	if err := query(ctx, db, indexQuery, nspname, func(rows pgx.Rows) error {
 		var r indexRow
 		var cols string
 		if err := rows.Scan(&r.Table, &r.Name, &r.Unique, &r.Method, &r.Where,
@@ -274,12 +279,12 @@ func read(ctx context.Context, db *sql.DB, nspname string) (*catalog, error) {
 	return cat, nil
 }
 
-func query(ctx context.Context, db *sql.DB, sqlText, arg string, scan func(*sql.Rows) error) error {
-	rows, err := db.QueryContext(ctx, sqlText, arg)
+func query(ctx context.Context, db sqlb.Executor, sqlText, arg string, scan func(pgx.Rows) error) error {
+	rows, err := db.Query(ctx, sqlText, arg)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 	for rows.Next() {
 		if err := scan(rows); err != nil {
 			return err

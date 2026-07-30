@@ -40,34 +40,26 @@ if _, err := sqlb.InsertRows(&loan).One(ctx, tx); err != nil {
 handlers use exactly this to answer 409 for a conflict and 422 for the rest,
 instead of the 500 an unrecognised error would otherwise become.
 
-`Constraint` — the name of the index that refused — needs a driver to read it,
-because every driver exposes it as a struct field rather than as a method and
-this library depends on the standard library alone. Register a classifier once
-at startup and the field is filled in:
+`Constraint` — the name of the index that refused — is filled in too, along with
+`Table`, `Column` and `Detail`. So is:
 
 ```go
-sqlb.SetErrorClassifier(func(err error) (sqlb.ConstraintError, bool) {
-    var pg *pgconn.PgError
-    if !errors.As(err, &pg) {
-        return sqlb.ConstraintError{}, false
-    }
-    kind, ok := sqlb.ConstraintKindOf(pg.SQLState())
-    if !ok {
-        return sqlb.ConstraintError{}, false
-    }
-    return sqlb.ConstraintError{
-        Kind:       kind,
-        Constraint: pg.ConstraintName,
-        Table:      pg.TableName,
-        Column:     pg.ColumnName,
-        Detail:     pg.Detail,
-    }, true
-})
+var c *sqlb.ConstraintError
+if errors.As(err, &c) && c.Constraint == "loans_one_open_per_book_per_borrower" {
+    return "you already have a copy of that book out"
+}
 ```
 
-Then `c.Constraint == "loans_one_open_per_book_per_borrower"` is a comparison
-against a value rather than a `strings.Contains` on a message — which is what
-the same code looks like without it, and what no rename survives.
+a comparison against a value rather than a `strings.Contains` on a message —
+which is what the same code looks like without it, and what no rename survives.
+
+This used to require registering a `SetErrorClassifier` at startup, because the
+constraint name is a struct field on the driver's error and sqlb depended on the
+standard library alone. Since [ADR-0040](../adr/0040-the-driver-is-a-dependency.md)
+sqlb reads `*pgconn.PgError` itself. If you registered a classifier for that
+reason, you can delete it; `SetErrorClassifier` remains for errors that reach
+sqlb wrapped past `errors.As`, and for an application that wants its own
+mapping.
 
 This is the mechanism behind [where domain logic
 goes](../concepts/domain-logic.md): the check constraint is the guarantee, and
@@ -112,7 +104,7 @@ deciding in Go is wrong, and passes every test that runs one request at a time.
 
 `sqlb.New(pool)` returns a `*sqlb.DB`: a handle carrying an executor and the
 hook registry its queries resolve against. It satisfies `Executor` itself, so it
-goes wherever a `*sql.DB` went.
+goes wherever the pool went.
 
 ```go
 db := sqlb.New(pool)
@@ -175,9 +167,9 @@ scales with concurrency.
 ## Sharing the transaction with another library
 
 `Executor` is deliberately two methods, which is what keeps every wrapper and
-pool adapter valid — but it means a library wanting more than that cannot be
-handed a `*sqlb.DB`. sqlc's generated `DBTX` wants four. `DB.Tx()` reaches the
-underlying `*sql.Tx` so both sides land on one unit of work:
+pool adapter valid — but it means code wanting more than that cannot be handed a
+`*sqlb.DB`. `CopyFrom`, `SendBatch` and sqlc's generated `DBTX` all want more.
+`DB.Tx()` reaches the underlying `pgx.Tx` so both sides land on one unit of work:
 
 ```go
 err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
@@ -185,21 +177,50 @@ err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
     if err != nil {
         return err
     }
-    sqlTx, ok := tx.Tx()
+    pgTx, ok := tx.Tx()
     if !ok {
         return errors.New("expected a transaction")
     }
-    return sqlcgen.New(sqlTx).RecordPublication(ctx, post.ID)
+    return sqlcgen.New(pgTx).RecordPublication(ctx, post.ID)
 })
 ```
 
 It reports false when the executor is a pool, or a wrapper that does not expose
 the transaction it holds.
 
-**Do not commit or roll back the returned `*sql.Tx` yourself.** `WithTx` owns
+**Do not commit or roll back the returned `pgx.Tx` yourself.** `WithTx` owns
 that boundary, and taking it over leaves the after-commit callbacks unrun — the
-one failure mode that looks like success. [Using sqlb with sqlc](../with-sqlc.md)
-covers the pairing in full: who owns the schema, and which queries go where.
+one failure mode that looks like success.
+
+### When your code opened the transaction
+
+The other direction needs no `WithTx` at all: a `pgx.Tx` is an `Executor`, so
+hand it to `sqlb.New` and sqlb writes join the unit of work you already have.
+
+```go
+tx, err := pool.Begin(ctx)
+if err != nil {
+    return err
+}
+defer tx.Rollback(ctx)
+
+if err := legacy.DebitAccount(ctx, tx, id); err != nil {
+    return err
+}
+if _, err := sqlb.InsertRows(&entry).Exec(ctx, sqlb.New(tx)); err != nil {
+    return err
+}
+return tx.Commit(ctx)
+```
+
+That handle knows it is inside a transaction — `InTx()` reports true and a
+`WithTx` on it joins rather than opening a second one — and deliberately does not
+take the boundary over. You commit, so `AfterCommit` refuses there rather than
+queueing a callback behind a commit sqlb will never perform. Use `WithTx` when
+you want that guarantee.
+
+[Using sqlb with sqlc](../with-sqlc.md) covers the pairing in full: who owns the
+schema, and which queries go where.
 
 ## Next
 

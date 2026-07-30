@@ -1,8 +1,8 @@
 package filter_test
 
 import (
-	"database/sql/driver"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -42,20 +42,6 @@ func compilePost(t *testing.T, query string) (string, []any) {
 	return sql, args
 }
 
-// arg renders a bind parameter the way the driver will see it, so a test can
-// assert the array literal rather than the wrapper that produces it.
-func arg(t *testing.T, v any) any {
-	t.Helper()
-	if valuer, ok := v.(driver.Valuer); ok {
-		out, err := valuer.Value()
-		if err != nil {
-			t.Fatalf("Value(): %v", err)
-		}
-		return out
-	}
-	return v
-}
-
 func TestArrayFilters(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -75,27 +61,27 @@ func TestArrayFilters(t *testing.T) {
 			name:  "hasany is an overlap",
 			query: "tags=hasany.a,b",
 			want:  `WHERE "tags" && $1`,
-			arg:   "{a,b}",
+			arg:   []any{"a", "b"},
 		},
 		{
 			name:  "hasall is containment",
 			query: "tags=hasall.a,b",
 			want:  `WHERE "tags" @> $1`,
-			arg:   "{a,b}",
+			arg:   []any{"a", "b"},
 		},
 		{
 			name:  "eq compares whole arrays",
 			query: "tags=eq.a,b",
 			want:  `WHERE "tags" = $1`,
-			arg:   "{a,b}",
+			arg:   []any{"a", "b"},
 		},
 		{
 			// A member carrying a comma is quoted by the grammar and has to
-			// survive into the array literal as one element.
+			// survive into the array as one element.
 			name:  "a quoted member stays one element",
 			query: `tags=hasany.%22a%2Cb%22,c`,
 			want:  `WHERE "tags" && $1`,
-			arg:   `{"a,b",c}`,
+			arg:   []any{"a,b", "c"},
 		},
 		{
 			// The element type decides the binding, so an int array binds
@@ -103,7 +89,7 @@ func TestArrayFilters(t *testing.T) {
 			name:  "elements are coerced to the element type",
 			query: "sizes=hasany.1,2",
 			want:  `WHERE "sizes" && $1`,
-			arg:   "{1,2}",
+			arg:   []any{int64(1), int64(2)},
 		},
 	}
 	for _, tt := range tests {
@@ -115,8 +101,12 @@ func TestArrayFilters(t *testing.T) {
 			if len(args) != 1 {
 				t.Fatalf("args = %v, want one", args)
 			}
-			if got := arg(t, args[0]); got != tt.arg {
-				t.Errorf("bound %#v, want %#v", got, tt.arg)
+			// The bound value is the slice itself. It used to be an array
+			// literal, because database/sql had no other spelling for one;
+			// pgx encodes a slice against the column's element type, so what
+			// the grammar coerced is what reaches the wire (ADR-0040).
+			if !reflect.DeepEqual(args[0], tt.arg) {
+				t.Errorf("bound %#v, want %#v", args[0], tt.arg)
 			}
 		})
 	}

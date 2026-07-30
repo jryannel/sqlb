@@ -2,11 +2,11 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb/introspect"
 	"github.com/jryannel/sqlb/migrate"
 	"github.com/jryannel/sqlb/schema"
@@ -210,7 +210,7 @@ func TestTheRoundTripCanFail(t *testing.T) {
 // what a migration runner does per file, and CREATE INDEX CONCURRENTLY cannot
 // run inside a transaction block at all. Wrapping this would make the harness
 // unable to exercise the concurrent paths it exists to check.
-func applySchema(t *testing.T, db *sql.DB, target *schema.Registry, opts ...migrate.Option) {
+func applySchema(t *testing.T, db *pgxpool.Pool, target *schema.Registry, opts ...migrate.Option) {
 	t.Helper()
 
 	changes := diff(t, schema.NewRegistry(), target, opts...)
@@ -222,14 +222,14 @@ func applySchema(t *testing.T, db *sql.DB, target *schema.Registry, opts ...migr
 		if strings.TrimSpace(c.Up) == "" {
 			continue
 		}
-		if _, err := db.Exec(c.Up); err != nil {
+		if _, err := db.Exec(context.Background(), c.Up); err != nil {
 			t.Fatalf("statement %d of %d failed: %v\n%s\n\n(comment: %s)",
 				i+1, len(changes), err, strings.TrimSpace(c.Up), c.Comment)
 		}
 	}
 }
 
-func importRegistry(t *testing.T, db *sql.DB) *schema.Registry {
+func importRegistry(t *testing.T, db *pgxpool.Pool) *schema.Registry {
 	t.Helper()
 
 	r, report, err := introspect.Registry(context.Background(), db, introspect.Options{})

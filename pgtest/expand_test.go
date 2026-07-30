@@ -2,10 +2,10 @@ package pgtest
 
 import (
 	"context"
-	"database/sql"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/blog"
 	"github.com/jryannel/sqlb/schema"
@@ -30,22 +30,22 @@ import (
 
 // seedBlog inserts one org, one author with a password hash, and one post by
 // that author, returning the author's id.
-func seedBlog(t *testing.T, db *sql.DB) (orgID, authorID string) {
+func seedBlog(t *testing.T, db *pgxpool.Pool) (orgID, authorID string) {
 	t.Helper()
 
-	if err := db.QueryRow(
+	if err := db.QueryRow(context.Background(),
 		`INSERT INTO orgs (name, slug) VALUES ('Acme', 'acme') RETURNING id`,
 	).Scan(&orgID); err != nil {
 		t.Fatalf("inserting an org: %v", err)
 	}
-	if err := db.QueryRow(
+	if err := db.QueryRow(context.Background(),
 		`INSERT INTO authors (org_id, email, name, password_hash)
 		 VALUES ($1, 'ada@example.com', 'Ada', 'argon2id$v=19$correct-horse')
 		 RETURNING id`, orgID,
 	).Scan(&authorID); err != nil {
 		t.Fatalf("inserting an author: %v", err)
 	}
-	if _, err := db.Exec(
+	if _, err := db.Exec(context.Background(),
 		`INSERT INTO posts (org_id, author_id, title, body)
 		 VALUES ($1, $2, 'Hello', 'the body')`, orgID, authorID,
 	); err != nil {
@@ -136,7 +136,7 @@ func TestAMissingTargetExpandsToNullNotAnEmptyObject(t *testing.T) {
 	_, authorID := seedBlog(t, raw)
 
 	mustExec(t, raw, `ALTER TABLE posts DROP CONSTRAINT posts_author_id_fkey`)
-	if _, err := raw.Exec(`DELETE FROM authors WHERE id = $1`, authorID); err != nil {
+	if _, err := raw.Exec(context.Background(), `DELETE FROM authors WHERE id = $1`, authorID); err != nil {
 		t.Fatalf("orphaning the post: %v", err)
 	}
 
@@ -207,22 +207,21 @@ func TestExpandComposesWithTheOtherQueryParameters(t *testing.T) {
 // expansionJSON runs a compiled statement and returns the named expansion
 // column of its first row, as the text Postgres produced. An empty string means
 // the column was NULL.
-func expansionJSON(t *testing.T, ctx context.Context, db *sql.DB, text string, args []any, column string) string {
+func expansionJSON(t *testing.T, ctx context.Context, db *pgxpool.Pool, text string, args []any, column string) string {
 	t.Helper()
 
-	rows, err := db.QueryContext(ctx, text, args...)
+	rows, err := db.Query(ctx, text, args...)
 	if err != nil {
 		t.Fatalf("executing:\n%s\n%v", text, err)
 	}
 	defer rows.Close()
 
-	names, err := rows.Columns()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fields := rows.FieldDescriptions()
+	names := make([]string, len(fields))
 	at := -1
-	for i, n := range names {
-		if n == column {
+	for i, f := range fields {
+		names[i] = f.Name
+		if f.Name == column {
 			at = i
 		}
 	}
@@ -233,14 +232,11 @@ func expansionJSON(t *testing.T, ctx context.Context, db *sql.DB, text string, a
 	if !rows.Next() {
 		t.Fatalf("the statement returned no rows:\n%s", text)
 	}
-	cells := make([]any, len(names))
-	for i := range cells {
-		cells[i] = new(sql.RawBytes)
-	}
-	if err := rows.Scan(cells...); err != nil {
-		t.Fatalf("scanning: %v", err)
-	}
-	out := string(*cells[at].(*sql.RawBytes))
+	// The raw bytes, so this reads what Postgres produced rather than what a
+	// codec made of it: the expansion column is JSON and the assertions are
+	// about its text.
+	values := rows.RawValues()
+	out := string(values[at])
 	if err := rows.Err(); err != nil {
 		t.Fatalf("reading rows: %v", err)
 	}
@@ -258,7 +254,7 @@ func expansionJSON(t *testing.T, ctx context.Context, db *sql.DB, text string, a
 
 // seedAuthorPosts gives the seeded author three posts with distinct publication
 // dates, so a cap of two has something to truncate and an order to truncate by.
-func seedAuthorPosts(t *testing.T, db *sql.DB, orgID, authorID string) {
+func seedAuthorPosts(t *testing.T, db *pgxpool.Pool, orgID, authorID string) {
 	t.Helper()
 	for _, p := range []struct {
 		title     string
@@ -268,7 +264,7 @@ func seedAuthorPosts(t *testing.T, db *sql.DB, orgID, authorID string) {
 		{"Middle", "2021-01-01T00:00:00Z"},
 		{"Newest", "2022-01-01T00:00:00Z"},
 	} {
-		if _, err := db.Exec(
+		if _, err := db.Exec(context.Background(),
 			`INSERT INTO posts (org_id, author_id, title, body, status, published_at)
 			 VALUES ($1, $2, $3, 'body', 'published', $4)`,
 			orgID, authorID, p.title, p.published,
@@ -333,7 +329,7 @@ func TestAnEmptyCollectionIsAnEmptyArray(t *testing.T) {
 
 	orgID, _ := seedBlog(t, raw)
 	var emptyOrg string
-	if err := raw.QueryRow(
+	if err := raw.QueryRow(context.Background(),
 		`INSERT INTO orgs (name, slug) VALUES ('Empty', 'empty') RETURNING id`,
 	).Scan(&emptyOrg); err != nil {
 		t.Fatalf("inserting an org: %v", err)
@@ -479,7 +475,7 @@ func TestACollectionUsesTheForeignKeyIndex(t *testing.T) {
 		t.Fatalf("SQL: %v", err)
 	}
 
-	rows, err := raw.QueryContext(ctx, "EXPLAIN "+text, args...)
+	rows, err := raw.Query(ctx, "EXPLAIN "+text, args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN:\n%s\n%v", text, err)
 	}
@@ -531,12 +527,12 @@ func TestExpandDoesNotCrossATenantBoundary(t *testing.T) {
 	// that points at them. The foreign key permits it; nothing in the schema
 	// says a post's author must share its org.
 	var theirs, theirAuthor string
-	if err := raw.QueryRow(
+	if err := raw.QueryRow(context.Background(),
 		`INSERT INTO orgs (name, slug) VALUES ('Other', 'other') RETURNING id`,
 	).Scan(&theirs); err != nil {
 		t.Fatalf("inserting the second org: %v", err)
 	}
-	if err := raw.QueryRow(
+	if err := raw.QueryRow(context.Background(),
 		`INSERT INTO authors (org_id, email, name, password_hash)
 		 VALUES ($1, 'grace@example.com', 'Grace', 'argon2id$v=19$other')
 		 RETURNING id`, theirs,
@@ -544,7 +540,7 @@ func TestExpandDoesNotCrossATenantBoundary(t *testing.T) {
 		t.Fatalf("inserting the second author: %v", err)
 	}
 	var leaky string
-	if err := raw.QueryRow(
+	if err := raw.QueryRow(context.Background(),
 		`INSERT INTO posts (org_id, author_id, title, body)
 		 VALUES ($1, $2, 'Crosses', 'the boundary') RETURNING id`, mine, theirAuthor,
 	).Scan(&leaky); err != nil {

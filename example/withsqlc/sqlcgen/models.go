@@ -5,8 +5,7 @@
 package sqlcgen
 
 import (
-	"database/sql"
-	"time"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Author struct {
@@ -15,8 +14,8 @@ type Author struct {
 	Email        string
 	Name         string
 	PasswordHash string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 // A tenant. Every other table is scoped to one.
@@ -24,8 +23,8 @@ type Org struct {
 	ID        string
 	Name      string
 	Slug      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }
 
 // A blog post.
@@ -37,8 +36,8 @@ type Post struct {
 	Body        string
 	Status      string
 	ViewCount   int64
-	PublishedAt sql.NullTime
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	DeletedAt   sql.NullTime
+	PublishedAt pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
 }

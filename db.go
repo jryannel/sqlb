@@ -2,20 +2,23 @@ package sqlb
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Beginner is the subset of *sql.DB that opens a transaction. It is asserted
-// for rather than required, so Executor stays two methods and every wrapper
-// written against it keeps working.
+// Beginner is the subset of a pgx pool or connection that opens a transaction.
+// It is asserted for rather than required, so Executor stays two methods and
+// every wrapper written against it keeps working.
 //
-// A wrapper that wants WithTx to work through it — a tracer, a pool adapter —
-// implements this alongside Executor and returns the underlying *sql.Tx.
+// *pgxpool.Pool and *pgx.Conn satisfy it. A wrapper that wants WithTx to work
+// through it — a tracer, a pool adapter — implements this alongside Executor
+// and returns the underlying pgx.Tx.
 type Beginner interface {
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
 // DB is a handle carrying an Executor and the hook registry that its queries
@@ -92,6 +95,14 @@ func (d *DB) AfterCommit(fn func(context.Context) error) error {
 		return errors.New("sqlb: AfterCommit called with a nil function")
 	}
 	if d.tx == nil {
+		if d.inTx {
+			// A pgx.Tx passed to New. sqlb runs in it but does not commit it,
+			// and a callback registered here would wait for a commit this
+			// package never performs.
+			return errors.New("sqlb: AfterCommit cannot follow a transaction sqlb did not open; " +
+				"this handle runs on a pgx.Tx the caller commits, so run the callback after " +
+				"that Commit, or open the unit of work with db.WithTx instead")
+		}
 		return errors.New("sqlb: AfterCommit needs a transaction to be after, " +
 			"but this handle is not in one; wrap the write in db.WithTx")
 	}
@@ -156,9 +167,33 @@ func (s *txState) drain(ctx context.Context) error {
 // New returns a handle over exec, using the process-default hook registry — so
 // hooks registered with On[T]() apply to it, and an existing program can adopt
 // the handle without moving its registrations.
+//
+// A pgx.Tx is an Executor like any other, and passing one is how sqlb joins a
+// transaction the application opened itself:
+//
+//	tx, err := pool.Begin(ctx)
+//	defer tx.Rollback(ctx)
+//	if err := legacy.DebitAccount(ctx, tx, id); err != nil {
+//	    return err
+//	}
+//	_, err = sqlb.InsertRows(&entry).Exec(ctx, sqlb.New(tx))
+//	...
+//	return tx.Commit(ctx)
+//
+// The handle knows it is inside one, so InTx reports true and a WithTx on it
+// joins rather than opening a second transaction against the same pool. What it
+// deliberately does not do is take over the boundary: the caller opened the
+// transaction and the caller commits it. So AfterCommit refuses here rather
+// than accumulating callbacks nothing will ever drain — WithTx is what owns a
+// commit, and therefore the only thing that can promise anything after one.
 func New(exec Executor) *DB {
 	if exec == nil {
 		panic("sqlb: New called with a nil Executor")
+	}
+	// tx stays nil: it is the state of a transaction *this* package will
+	// commit, and a borrowed one is not that.
+	if _, borrowed := exec.(pgx.Tx); borrowed {
+		return &DB{exec: exec, hooks: defaultRegistry, inTx: true}
 	}
 	return &DB{exec: exec, hooks: defaultRegistry}
 }
@@ -202,10 +237,10 @@ func (d *DB) CanBeginTx() bool {
 	return ok
 }
 
-// Tx returns the underlying *sql.Tx, if this handle runs on one.
+// Tx returns the underlying pgx.Tx, if this handle runs on one.
 //
-// It exists so that a unit of work can be shared with a library that wants more
-// than Executor's two methods. sqlc's generated DBTX wants four, so this is how
+// It exists so that a unit of work can be shared with code that wants more than
+// Executor's two methods — CopyFrom, SendBatch, or a generated query set — so
 // both sides land on one transaction without giving up WithTx's rollback and
 // panic handling:
 //
@@ -214,30 +249,30 @@ func (d *DB) CanBeginTx() bool {
 //	    if err != nil {
 //	        return err
 //	    }
-//	    sqlTx, ok := tx.Tx()
+//	    pgTx, ok := tx.Tx()
 //	    if !ok {
 //	        return errors.New("expected a transaction")
 //	    }
-//	    return sqlcgen.New(sqlTx).RecordPublication(ctx, post.ID)
+//	    return queries.New(pgTx).RecordPublication(ctx, post.ID)
 //	})
 //
 // It reports false when the executor is a pool, or a wrapper that does not
 // expose the transaction it holds. Committing or rolling back the returned
-// *sql.Tx directly is a mistake: WithTx owns that boundary, and doing it here
+// pgx.Tx directly is a mistake: WithTx owns that boundary, and doing it here
 // leaves the after-commit callbacks unrun.
-func (d *DB) Tx() (*sql.Tx, bool) {
-	tx, ok := d.exec.(*sql.Tx)
+func (d *DB) Tx() (pgx.Tx, bool) {
+	tx, ok := d.exec.(pgx.Tx)
 	return tx, ok
 }
 
-// QueryContext satisfies Executor.
-func (d *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return d.exec.QueryContext(ctx, query, args...)
+// Query satisfies Executor.
+func (d *DB) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
+	return d.exec.Query(ctx, query, args...)
 }
 
-// ExecContext satisfies Executor.
-func (d *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return d.exec.ExecContext(ctx, query, args...)
+// Exec satisfies Executor.
+func (d *DB) Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	return d.exec.Exec(ctx, query, args...)
 }
 
 // WithTx runs fn inside a transaction, committing if it returns nil and rolling
@@ -269,7 +304,7 @@ func (d *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Re
 // and nothing needs it yet. Joining keeps a function that opens a transaction
 // callable from inside one.
 func (d *DB) WithTx(ctx context.Context, fn func(ctx context.Context, tx *DB) error) error {
-	return d.WithTxOptions(ctx, nil, fn)
+	return d.WithTxOptions(ctx, pgx.TxOptions{}, fn)
 }
 
 // WithTxOptions is WithTx with an explicit isolation level or read-only flag.
@@ -278,7 +313,7 @@ func (d *DB) WithTx(ctx context.Context, fn func(ctx context.Context, tx *DB) er
 // a property of the transaction and the outer one has already begun. Asking for
 // stricter isolation than the enclosing transaction provides is therefore an
 // error rather than a silent downgrade.
-func (d *DB) WithTxOptions(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, tx *DB) error) error {
+func (d *DB) WithTxOptions(ctx context.Context, opts pgx.TxOptions, fn func(ctx context.Context, tx *DB) error) error {
 	if fn == nil {
 		return errors.New("sqlb: WithTx called with a nil function")
 	}
@@ -292,17 +327,23 @@ func (d *DB) WithTxOptions(ctx context.Context, opts *sql.TxOptions, fn func(ctx
 	beginner, ok := d.exec.(Beginner)
 	if !ok {
 		return fmt.Errorf("sqlb: WithTx needs an executor that can begin a transaction, "+
-			"but %T only implements Executor; pass the *sql.DB itself, or implement "+
-			"BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error) on the wrapper", d.exec)
+			"but %T only implements Executor; pass the *pgxpool.Pool itself, or implement "+
+			"BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) on the wrapper", d.exec)
 	}
-	sqlTx, err := beginner.BeginTx(ctx, opts)
+	pgTx, err := beginner.BeginTx(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("sqlb: beginning transaction: %w", err)
 	}
 
 	state := &txState{}
-	tx := &DB{exec: sqlTx, hooks: d.hooks, inTx: true, tx: state}
+	tx := &DB{exec: pgTx, hooks: d.hooks, inTx: true, tx: state}
 	txCtx := context.WithValue(ctx, txKey{}, tx)
+
+	// Rolling back is a statement of its own, and pgx wants a context for it.
+	// The caller's is the wrong one: the usual reason a unit of work fails is
+	// that its context was cancelled, and rolling back on a cancelled context
+	// would abandon the transaction open on the connection rather than end it.
+	abortCtx := context.WithoutCancel(ctx)
 
 	// A panic must not leave the transaction open, and it must still reach the
 	// caller: rollback, then re-raise with the original stack.
@@ -312,13 +353,13 @@ func (d *DB) WithTxOptions(ctx context.Context, opts *sql.TxOptions, fn func(ctx
 			return
 		}
 		if p := recover(); p != nil {
-			_ = sqlTx.Rollback()
+			_ = pgTx.Rollback(abortCtx)
 			panic(p)
 		}
 	}()
 
 	if err := fn(txCtx, tx); err != nil {
-		if rbErr := sqlTx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+		if rbErr := pgTx.Rollback(abortCtx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
 			// Both matter: the caller's error says why the unit of work
 			// failed, the rollback error says the connection may be unusable.
 			return errors.Join(err, fmt.Errorf("sqlb: rolling back: %w", rbErr))
@@ -326,7 +367,7 @@ func (d *DB) WithTxOptions(ctx context.Context, opts *sql.TxOptions, fn func(ctx
 		return err
 	}
 
-	if err := sqlTx.Commit(); err != nil {
+	if err := pgTx.Commit(ctx); err != nil {
 		return fmt.Errorf("sqlb: committing transaction: %w", err)
 	}
 	committed = true
@@ -339,21 +380,24 @@ func (d *DB) WithTxOptions(ctx context.Context, opts *sql.TxOptions, fn func(ctx
 // compatibleWithOuter rejects options that the outer transaction cannot honour.
 // Silently ignoring them would give a caller that asked for Serializable a
 // weaker guarantee than it believes it has.
-func compatibleWithOuter(opts *sql.TxOptions) error {
-	if opts == nil {
-		return nil
-	}
-	if opts.Isolation != sql.LevelDefault {
+func compatibleWithOuter(opts pgx.TxOptions) error {
+	if opts.IsoLevel != "" {
 		return fmt.Errorf("sqlb: WithTxOptions asked for %s inside an existing transaction, "+
 			"whose isolation is already fixed; request it on the outermost WithTx instead",
-			opts.Isolation)
+			opts.IsoLevel)
 	}
 	// ReadOnly is a narrowing, but Postgres will not accept it mid-transaction
 	// either, and pretending it applied would be worse than saying so.
-	if opts.ReadOnly {
+	if opts.AccessMode == pgx.ReadOnly {
 		return errors.New("sqlb: WithTxOptions asked for a read-only transaction inside an " +
 			"existing one, which cannot be narrowed after it has begun; request it on the " +
 			"outermost WithTx instead")
+	}
+	// BeginQuery replaces the BEGIN statement outright, which cannot mean
+	// anything when no BEGIN is about to be sent.
+	if opts.BeginQuery != "" {
+		return errors.New("sqlb: WithTxOptions gave a BeginQuery inside an existing " +
+			"transaction, which has already begun; give it on the outermost WithTx instead")
 	}
 	return nil
 }

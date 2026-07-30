@@ -43,7 +43,7 @@ type AuthorLeaderboardRow struct {
 // A window function: rank authors within their org by published posts. Nothing
 // about this benefits from being expressible as a runtime filter.
 func (q *Queries) AuthorLeaderboard(ctx context.Context) ([]AuthorLeaderboardRow, error) {
-	rows, err := q.db.QueryContext(ctx, authorLeaderboard)
+	rows, err := q.db.Query(ctx, authorLeaderboard)
 	if err != nil {
 		return nil, err
 	}
@@ -62,9 +62,6 @@ func (q *Queries) AuthorLeaderboard(ctx context.Context) ([]AuthorLeaderboardRow
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -78,7 +75,7 @@ SELECT id, org_id, email, name, password_hash, created_at, updated_at FROM autho
 // A plain lookup, included only so the generated Author struct exists for the
 // adoption test to point sqlb.Describe at.
 func (q *Queries) GetAuthor(ctx context.Context, id string) (Author, error) {
-	row := q.db.QueryRowContext(ctx, getAuthor, id)
+	row := q.db.QueryRow(ctx, getAuthor, id)
 	var i Author
 	err := row.Scan(
 		&i.ID,
@@ -114,7 +111,7 @@ type PostViewsByStatusRow struct {
 // result shape is not the table shape, so the typed guarantee is worth more
 // here than the runtime filterability sqlb trades it for.
 func (q *Queries) PostViewsByStatus(ctx context.Context, orgID string) ([]PostViewsByStatusRow, error) {
-	rows, err := q.db.QueryContext(ctx, postViewsByStatus, orgID)
+	rows, err := q.db.Query(ctx, postViewsByStatus, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -126,9 +123,6 @@ func (q *Queries) PostViewsByStatus(ctx context.Context, orgID string) ([]PostVi
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -314,7 +314,7 @@ func buildColumn(table string, col columnRow, cons *constraints,
 	}
 
 	elemType, isArray := splitArrayType(col.Type)
-	t, size, ok := columnType(elemType)
+	t, typeArg, ok := columnType(elemType)
 	if !ok {
 		rep.add(table, col.Name, "column type "+col.Type+" has no equivalent in the DSL; "+
 			"importing it as anything else would propose changing the real column", col.Type)
@@ -329,7 +329,7 @@ func buildColumn(table string, col columnRow, cons *constraints,
 		return nil, false
 	}
 
-	f := newField(col, t, size, isArray, cons, built, rep, table)
+	f := newField(col, t, typeArg, isArray, cons, built, rep, table)
 	if f == nil {
 		return nil, false
 	}
@@ -364,7 +364,7 @@ func buildColumn(table string, col columnRow, cons *constraints,
 
 // newField creates the column in whichever of the DSL's forms it belongs to: a
 // reference, an enum, or a plain typed column.
-func newField(col columnRow, t schema.Type, size int, isArray bool, cons *constraints,
+func newField(col columnRow, t schema.Type, typeArg int, isArray bool, cons *constraints,
 	built map[string]*schema.TableDef, rep *Report, table string) *schema.Field {
 
 	// An array column is never a foreign key — Postgres has no such constraint
@@ -396,7 +396,7 @@ func newField(col columnRow, t schema.Type, size int, isArray bool, cons *constr
 	if values, isEnum := cons.enums[col.Name]; isEnum && t == schema.TypeText {
 		return schema.Enum(col.Name, values...)
 	}
-	return plainField(col.Name, t, size)
+	return plainField(col.Name, t, typeArg)
 }
 
 func refField(col columnRow, fk constraintRow, target *schema.TableDef,
@@ -433,12 +433,15 @@ func relationName(column string) string {
 	return strings.TrimSuffix(column, "_id")
 }
 
-func plainField(name string, t schema.Type, size int) *schema.Field {
+// plainField builds the column. typeArg is the type's parenthesised argument
+// where it has one, and which field it lands in depends on the type: a length
+// for a varchar, a dimension for a vector.
+func plainField(name string, t schema.Type, typeArg int) *schema.Field {
 	switch t {
 	case schema.TypeText:
 		return schema.Text(name)
 	case schema.TypeVarchar:
-		return schema.Varchar(name, size)
+		return schema.Varchar(name, typeArg)
 	case schema.TypeInt:
 		return schema.Int(name)
 	case schema.TypeBigInt:
@@ -461,6 +464,11 @@ func plainField(name string, t schema.Type, size int) *schema.Field {
 		return schema.JSON(name)
 	case schema.TypeBytes:
 		return schema.Bytes(name)
+	case schema.TypeVector:
+		// Hidden comes with the constructor and is not optional, so an adopted
+		// database's embedding column does not start being serialised into REST
+		// responses the moment it is imported (ADR-0026).
+		return schema.Vector(name, typeArg)
 	}
 	// columnType only returns types this switch covers, so reaching here means
 	// the two have drifted apart.

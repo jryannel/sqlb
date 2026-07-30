@@ -2,10 +2,8 @@ package blog_test
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/blog"
 	_ "github.com/jryannel/sqlb/example/blog/blogschema"
+	"github.com/jryannel/sqlb/internal/pgfake"
 	"github.com/jryannel/sqlb/rest"
 )
 
@@ -58,7 +59,7 @@ func TestGeneratedServerListsPosts(t *testing.T) {
 		return nil
 	})
 
-	db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+	db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
 	server := newServer(t, db.db)
 
 	resp := do(t, server, http.MethodGet, "/posts?status=eq.draft&sort=-published_at&per_page=5", nil)
@@ -146,7 +147,7 @@ func TestUnexposedOperationsHaveNoRoute(t *testing.T) {
 }
 
 func TestGeneratedServerPatchesOnlyTheNamedColumns(t *testing.T) {
-	db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Renamed")})
+	db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Renamed")})
 	server := newServer(t, db.db)
 
 	resp := do(t, server, http.MethodPatch, "/posts/p1", strings.NewReader(`{"title":"Renamed"}`))
@@ -160,7 +161,7 @@ func TestGeneratedServerPatchesOnlyTheNamedColumns(t *testing.T) {
 
 // The nullable case that a plain pointer cannot express: clearing a column.
 func TestGeneratedServerCanClearANullableColumn(t *testing.T) {
-	db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+	db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
 	server := newServer(t, db.db)
 
 	resp := do(t, server, http.MethodPatch, "/posts/p1", strings.NewReader(`{"published_at":null}`))
@@ -209,7 +210,7 @@ func TestGeneratedServerRefusesAValueOutsideAnEnum(t *testing.T) {
 	}
 
 	// A declared value still passes, so the guard is proven both ways.
-	db2 := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+	db2 := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
 	server2 := newServer(t, db2.db)
 	resp = do(t, server2, http.MethodPatch, "/posts/p1", strings.NewReader(`{"status":"published"}`))
 	if resp.Code != http.StatusOK {
@@ -226,7 +227,7 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 		defer sqlb.On[blog.Post]().Reset()
 		blog.RegisterHooks()
 
-		db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+		db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
 		server := newServer(t, db.db)
 
 		if code := do(t, server, http.MethodGet, "/posts", nil).Code; code != http.StatusOK {
@@ -263,7 +264,7 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 		defer sqlb.On[blog.Post]().Reset()
 		blog.RegisterHooks()
 
-		db := newStubDB(t, postColumns(), [][]driver.Value{postValues("p1", "Hello")})
+		db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
 		server := newServer(t, db.db)
 
 		if code := do(t, server, http.MethodDelete, "/posts/p1", nil).Code; code != http.StatusNoContent {
@@ -335,34 +336,21 @@ func do(t *testing.T, h http.Handler, method, target string, body io.Reader) *ht
 // stubDB is a database that returns one canned result for every statement. The
 // engine's own tests cover scanning; what matters here is the SQL the generated
 // handlers compile and the JSON they return.
+//
+// It is the Executor itself — db points back at it — since ADR-0040 made pgx
+// the contract and there is no driver to register.
 type stubDB struct {
-	db   *sql.DB
+	db   *stubDB
 	mu   sync.Mutex
 	log  []string
 	cols []string
-	rows [][]driver.Value
+	rows [][]any
 }
 
-var stubSeq struct {
-	sync.Mutex
-	n int
-}
-
-func newStubDB(t *testing.T, cols []string, rows [][]driver.Value) *stubDB {
+func newStubDB(t *testing.T, cols []string, rows [][]any) *stubDB {
 	t.Helper()
-	stubSeq.Lock()
-	stubSeq.n++
-	name := "blogstub" + string(rune('a'+stubSeq.n))
-	stubSeq.Unlock()
-
 	s := &stubDB{cols: cols, rows: rows}
-	sql.Register(name, stubDriver{s: s})
-	db, err := sql.Open(name, "")
-	if err != nil {
-		t.Fatalf("opening the stub driver: %v", err)
-	}
-	s.db = db
-	t.Cleanup(func() { _ = db.Close() })
+	s.db = s
 	return s
 }
 
@@ -393,66 +381,28 @@ func (s *stubDB) last() string {
 	return ""
 }
 
-type stubDriver struct{ s *stubDB }
-
-func (d stubDriver) Open(string) (driver.Conn, error) { return stubConn(d), nil }
-
-type stubConn struct{ s *stubDB }
-
-func (c stubConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("stub driver: prepared statements are not used")
+func (s *stubDB) Query(_ context.Context, query string, _ ...any) (pgx.Rows, error) {
+	s.record(query)
+	return &pgfake.Rows{Cols: s.cols, Data: s.rows}, nil
 }
-func (c stubConn) Close() error { return nil }
+
+func (s *stubDB) Exec(_ context.Context, query string, _ ...any) (pgconn.CommandTag, error) {
+	s.record(query)
+	return pgconn.NewCommandTag(fmt.Sprintf("DELETE %d", len(s.rows))), nil
+}
 
 // The generated handlers wrap each write in a transaction so that a hook can
 // register AfterCommit work, so the stub has to be able to open one. The
-// markers go into the same statement log as everything else; lastStatement
-// skips them, since no assertion here is about the transaction itself.
-func (c stubConn) Begin() (driver.Tx, error) {
-	c.s.record("BEGIN")
-	return stubTx(c), nil
+// markers go into the same statement log as everything else; last skips them,
+// since no assertion here is about the transaction itself.
+func (s *stubDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+	s.record("BEGIN")
+	return &pgfake.Tx{
+		Statements: s,
+		OnCommit:   func() error { s.record("COMMIT"); return nil },
+		OnRollback: func() error { s.record("ROLLBACK"); return nil },
+	}, nil
 }
-
-func (c stubConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return c.Begin()
-}
-
-type stubTx struct{ s *stubDB }
-
-func (t stubTx) Commit() error   { t.s.record("COMMIT"); return nil }
-func (t stubTx) Rollback() error { t.s.record("ROLLBACK"); return nil }
-
-func (c stubConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	c.s.record(query)
-	return &stubRows{cols: c.s.cols, data: c.s.rows}, nil
-}
-
-func (c stubConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	c.s.record(query)
-	return stubResult{n: int64(len(c.s.rows))}, nil
-}
-
-type stubRows struct {
-	cols []string
-	data [][]driver.Value
-	i    int
-}
-
-func (r *stubRows) Columns() []string { return r.cols }
-func (r *stubRows) Close() error      { return nil }
-func (r *stubRows) Next(dest []driver.Value) error {
-	if r.i >= len(r.data) {
-		return io.EOF
-	}
-	copy(dest, r.data[r.i])
-	r.i++
-	return nil
-}
-
-type stubResult struct{ n int64 }
-
-func (r stubResult) LastInsertId() (int64, error) { return 0, nil }
-func (r stubResult) RowsAffected() (int64, error) { return r.n, nil }
 
 func postColumns() []string {
 	return []string{
@@ -461,9 +411,9 @@ func postColumns() []string {
 	}
 }
 
-func postValues(id, title string) []driver.Value {
+func postValues(id, title string) []any {
 	now := time.Unix(0, 0).UTC()
-	return []driver.Value{
+	return []any{
 		id, "acme", "a1", title, "body text", "draft",
 		int64(3), now, now, now, nil,
 	}

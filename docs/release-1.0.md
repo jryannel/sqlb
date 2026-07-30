@@ -120,6 +120,7 @@ exist. That gate is met, and the answer is
 [ADR-0040](adr/0040-the-driver-is-a-dependency.md): **the engine depends on pgx
 v5, `database/sql` stops being the contract, and there is one driver rather than
 two.** It lands before the freeze or not at all, because it breaks `Executor`.
+It has landed; Phase 4 below is closed.
 
 Neither branch this plan wrote down is what happened, and the reason is worth
 recording. The two branches were "the flip is cheap, so the answer stands" and
@@ -362,23 +363,35 @@ buys nothing but calendar time. Each produces a written report.
 ([port](review-adoption-port.md), [multi-app](review-adoption-port-multi-app.md)),
 and stream B is decided by what they measured — see B above.
 
-### Phase 4 — The one sanctioned break
+### Phase 4 — The one sanctioned break — **done**
 
 Stream B's answer breaks a *Frozen* surface, so it gets its own phase rather than
 being folded into the freeze. Doing it the other way round would mean tagging and
 then breaking, which is the failure the freeze exists to prevent.
 
-- `Executor` redefined over pgx, the `database/sql` path removed, `deps-check`
-  rewritten to enforce pgx-and-nothing-else with its positive controls intact
-  ([ADR-0040](adr/0040-the-driver-is-a-dependency.md)).
-- `compatibility.md` and `with-sqlc.md` rewritten to match — `with-sqlc.md`
+- ~~`Executor` redefined over pgx, the `database/sql` path removed, `deps-check`
+  rewritten to enforce pgx-and-nothing-else with its positive controls intact~~
+  ([ADR-0040](adr/0040-the-driver-is-a-dependency.md)). Done, and it took two
+  things with it the phase did not list: `array.go`'s 449-line codec, and
+  `sqlb.EncodeArray` — a public function that existed only because
+  `database/sql` had no spelling for an array.
+- ~~`compatibility.md` and `with-sqlc.md` rewritten to match — `with-sqlc.md`
   inverts, since the advice it gives pgx-generated sqlb users now applies to
-  `database/sql`-generated ones.
-- ADR-0040's revisit triggers checked *before* the work, not after: reversal
-  costs a second `Executor` break on top of the first, so this is the cheap
-  moment to find out the answer was wrong.
+  `database/sql`-generated ones.~~ Both done, and `example/withsqlc` is now
+  generated for pgx so the inversion is asserted by a compiler rather than by a
+  paragraph.
+- ~~ADR-0040's revisit triggers checked *before* the work, not after~~ — they
+  were, and none fired.
 
-**Gate:** ADR-0040 reaches Working, and no *other* frozen surface has moved.
+**Gate:** ~~ADR-0040 reaches Working~~ — it reached Accepted, and no other frozen
+surface moved. The whole gate passes on it, `pgtest` included.
+
+What the phase did not anticipate, recorded because the next estimate should
+know: the engine was the small half. The work was in the three test harnesses
+that had each been a registered `database/sql` driver, and in the examples,
+where goose still wants a `*sql.DB` and now gets one over the application's own
+pool. ADR-0040's *What the port actually cost* has the detail, including the two
+bugs the flip introduced.
 
 ### Phase 5 — Freeze
 

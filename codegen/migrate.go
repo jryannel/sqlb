@@ -197,7 +197,7 @@ func runMigrate(p Project, target *schema.Registry, args []string, stdout, stder
 // tree and hands back its own spelling, so a declared check and an introspected
 // one never match as strings, and the only reliable way to compare them is to
 // put the declared one through the same normalisation (issue #24, and
-// shadow.NormalizeChecks at length). Handing the *sql.DB back out instead would
+// shadow.NormalizeChecks at length). Handing the pool back out instead would
 // widen this function's contract to "and also, close this" for one caller.
 //
 // An empty migration directory is the baseline case — the first migration of a
@@ -222,7 +222,7 @@ func currentSchema(ctx context.Context, p Project, format migrate.Format, target
 			"sqlb: %s has migrations, so the current schema has to be read by replaying "+
 				"them, and this project declares no ShadowDB. Set it on the Project returned "+
 				"by %s — it opens a connection to an empty scratch database, and it is a "+
-				"function in your code because sqlb has no Postgres driver of its own",
+				"function in your code because only your code knows which database is scratch",
 			p.MigrationsDir, ProjectFunc)
 	}
 
@@ -233,7 +233,7 @@ func currentSchema(ctx context.Context, p Project, format migrate.Format, target
 	if db == nil {
 		return nil, fmt.Errorf("sqlb: %s.ShadowDB returned no error and no database", ProjectFunc)
 	}
-	defer func() { _ = db.Close() }()
+	defer db.Close()
 
 	opts := shadow.Options{
 		Dir:    p.MigrationsDir,

@@ -233,9 +233,9 @@ func (i *Insert[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := runQuery(ctx, db, query, args...)
 	if err != nil {
-		return nil, wrapQueryErr(err, query)
+		return nil, err
 	}
 	stored, err := scanAllClose[T](rows, i.model)
 	if err != nil {
@@ -417,9 +417,9 @@ func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := runQuery(ctx, db, query, args...)
 	if err != nil {
-		return nil, wrapQueryErr(err, query)
+		return nil, err
 	}
 	updated, err := scanAllClose[T](rows, u.model)
 	if err != nil {
@@ -534,14 +534,11 @@ func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := db.ExecContext(ctx, query, args...)
+	tag, err := db.Exec(ctx, query, args...)
 	if err != nil {
 		return 0, wrapQueryErr(err, query)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
+	n := tag.RowsAffected()
 	if err := hooks.runAfterDelete(ctx, n); err != nil {
 		return 0, err
 	}
@@ -561,13 +558,8 @@ func writeReturning(c *compiler, m *Model) {
 }
 
 // scanAllClose scans a RETURNING result set and closes it.
-//
-// The close error is dropped for the reason .golangci.yml gives for excluding
-// (*sql.Rows).Close from errcheck — it is redundant with the Err that scanAll
-// already reads. It is spelled out here rather than excluded there because the
-// destination is now an interface, which that exclusion cannot name.
 func scanAllClose[T any](rows rowSource, m *Model) ([]T, error) {
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 	return scanAll[T](rows, m)
 }
 

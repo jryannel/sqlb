@@ -2,7 +2,6 @@ package sqlb
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 )
@@ -54,6 +53,14 @@ type compiler struct {
 	// statement names one table, which is the common case and the one whose
 	// SQL should stay readable. See qualifyTo.
 	base string
+
+	// shared maps a sharedParam's identity onto the placeholder it was given
+	// earlier in this statement, so that a value appearing in the projection,
+	// the WHERE and the ORDER BY is sent once rather than three times. Keyed by
+	// identity rather than by value: two equal vectors that arrived separately
+	// are two parameters, and deduplicating them would be a different and much
+	// larger promise.
+	shared map[*sharedValue]int
 }
 
 func newCompiler(d Dialect) *compiler {
@@ -73,26 +80,15 @@ func (c *compiler) write(s string) { c.sb.WriteString(s) }
 
 // bind appends a value as the next bind parameter.
 //
-// It is the one function every value passes through on its way out, which is
-// why the array encoding lands here rather than at each operator that can take
-// one: a slice the driver would refuse becomes a driver.Valuer rendering the
-// Postgres array literal, and everything else is passed on untouched
-// (ADR-0033). A []byte stays a []byte — that is bytea, and the driver has
-// always handled it.
+// It is the one function every value passes through on its way out, and it
+// passes them all on untouched. That is worth a sentence, because it used to be
+// where the array encoding lived: database/sql has no array case in either
+// direction, so a slice had to be wrapped in a driver.Valuer rendering the
+// Postgres literal (ADR-0033). pgx encodes slices natively, so the wrapping and
+// the codec behind it are gone (ADR-0040).
 func (c *compiler) bind(v any) {
-	c.args = append(c.args, bindValue(v))
+	c.args = append(c.args, v)
 	c.write(c.d.Placeholder(len(c.args)))
-}
-
-// bindValue wraps a value the driver cannot take as it stands.
-func bindValue(v any) any {
-	if v == nil {
-		return nil
-	}
-	if _, isArray := arrayElemKind(reflect.TypeOf(v)); isArray {
-		return arrayParam{v: v}
-	}
-	return v
 }
 
 func (c *compiler) ident(s string) {
@@ -172,6 +168,21 @@ func (c *compiler) expr(e Expr) {
 
 	case Param:
 		c.bind(n.Value)
+
+	case sharedParam:
+		// The second and later appearances of one value reuse its placeholder.
+		// An embedding is about twenty kilobytes and a similarity search names
+		// it three times; without this the wire carries all three.
+		if idx, ok := c.shared[n.slot]; ok {
+			c.write(c.d.Placeholder(idx))
+			break
+		}
+		c.args = append(c.args, n.slot.value)
+		if c.shared == nil {
+			c.shared = make(map[*sharedValue]int, 1)
+		}
+		c.shared[n.slot] = len(c.args)
+		c.write(c.d.Placeholder(len(c.args)))
 
 	case List:
 		c.write("(")

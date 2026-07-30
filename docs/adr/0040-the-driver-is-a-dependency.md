@@ -1,15 +1,14 @@
 # ADR-0040: The driver is a dependency, not a seam
 
-- **Status:** Exploring — the positioning is decided and the enabling refactor has
-  landed (the scanners read an interface rather than `*sql.Rows`), but no pgx code
-  exists yet. This fixes the shape before the 1.0 freeze makes it unavailable
-- **Confidence:** High that `database/sql` structurally blocks two things sqlb has
-  committed to — pgvector's binary codec and joining a caller's `pgx.Tx` — and
-  High that this is pre-1.0-or-never, since it breaks `Executor`. High on the
-  performance shape, now measured and narrower than first claimed. High, as of
-  2026-07-30, that a framework is the right product for sqlb at all. Lower on
-  deleting the `database/sql` path outright, which is the cheapest thing here to
-  get wrong
+- **Status:** Accepted, and built. `Executor` is pgx-shaped, `array.go` is
+  deleted, `deps-check` is rewritten, and the whole gate — including `pgtest`
+  against a real Postgres and a real PgBouncer — passes on it
+- **Confidence:** High. What was argued is now observed: joining a caller's
+  `pgx.Tx` works, the array codec turned out to be deletable rather than merely
+  replaceable, and nothing in the port needed the escape hatch this record was
+  least sure about. The positioning bet was listed here as the one thing the
+  build could not settle; it is now the weakest of the revisit triggers rather
+  than an open question, for the reasons under *What would change our mind*
 - **Decided:** 2026-07-30
 - **Last reviewed:** 2026-07-30
 
@@ -131,8 +130,15 @@ weakens, though testcontainers is reason enough to keep the split.
 - **pgvector support stops mattering** — if the RAG tables stay permanently
   outside the registry, the strongest technical argument evaporates and only
   transaction sharing is left.
-- **A second consumer arrives that is not pgx-native**, with a reason. The
-  positioning bet is that every real consumer already runs pgx.
+- **A consumer arrives that is not pgx-native, with a reason.** This is the
+  weakest of the four now. The five applications this library is built for all
+  run pgx; `lib/pq` has been in maintenance mode for years and its own README
+  points at pgx; and pgx is what a Go project starting on Postgres today is
+  told to use. So the bet is not "every consumer happens to run pgx" but "the
+  ones that do not have chosen the unusual thing", and a consumer in that
+  position has an argument to make rather than a fact to report. What would
+  actually move this is a *reason* — a platform constraint, a driver-level
+  requirement sqlb cannot meet — not a preference.
 - **`database/sql` grows the hooks.** Unlikely on any relevant timescale, but a
   standard-library path to per-connection codecs removes the pgvector argument.
 
@@ -155,6 +161,43 @@ the capability without the positioning — pgvector's binary codec only helps if
 is on by default, and two supported drivers doubles the type-mapping matrix
 permanently.
 
+## What the port actually cost
+
+Written after the work rather than before it, because the estimate above said
+"days" and an estimate nobody checks is a guess that gets quoted.
+
+**Smaller than expected.** `Executor` and the `DB` handle were an afternoon: the
+`rowSource` seam did what it was written to do, and `scan`, `mutate` and their
+type-mapping tests were not touched except to delete from them. `array.go` and
+its 303-line test went in one commit and nothing replaced them — pgx decodes a
+named slice type (`[]Label` over an enum column) through its own reflection
+path, which was the one case there was reason to doubt.
+
+**Where the work actually was**, and it was not the engine:
+
+- **The test harnesses.** Three packages each ran a registered `database/sql`
+  driver, and a canned result set now has to be a `pgx.Rows` — nine methods, and
+  `pgx.Tx` is eleven. That boilerplate is `internal/pgfake`, written once.
+- **The examples.** Every one of them opened a `*sql.DB`, and goose still wants
+  one, so each grew `stdlib.OpenDBFromPool` for the migration runner over the
+  pool the application already had. That is the shape a real adopter will land
+  on too, which makes it worth having in the examples rather than around them.
+
+**Two bugs the port introduced, both from pgx being less lossy than the bridge:**
+
+- `introspect` read `attgenerated` — a `"char"` that is a zero byte on an
+  ordinary column — as a one-character string rather than an empty one, so every
+  column in every database imported as a generated column. The catalog queries
+  now cast `"char"` to text, as the neighbouring ones already did.
+- pgx sends a statement and returns before the server has answered, so a
+  rejected write arrives as a result set describing nothing with the error on
+  `Err`. `scan` reported "none of the result columns map to T" for what was
+  really a unique violation. It now drives the iteration when there are no
+  columns, which is where the real error surfaces.
+
+Neither was reachable from the database-free suite. Both were caught by
+`pgtest`, which is the argument for that module restated.
+
 ## Revisions
 
 - 2026-07-30 — Written. The scan-path refactor onto an internal `rowSource`
@@ -172,3 +215,15 @@ permanently.
   and ADR-0019 now all point at it. Nothing here changed; what changed is that
   disagreeing with it now requires disagreeing with it.
 - 2026-07-30 — Condensed.
+- 2026-07-30 — The positioning bet, examined rather than assumed. Five
+  applications, all pgx; `lib/pq` in maintenance and deferring to pgx in its own
+  README; pgx the default recommendation for a new Go Postgres project. That is
+  one operator's five applications plus a fact about the ecosystem, not a
+  survey — but the trigger it bears on asked for a consumer with a *reason*, and
+  the reasons available have got thinner. Rewritten to say so.
+- 2026-07-30 — Built, and moved to Accepted. What changed against the plan: the
+  `database/sql` path was deleted outright rather than kept beside the new one,
+  which this record was least confident about and which turned out to have no
+  callers worth keeping. Added *What the port actually cost*, including the two
+  bugs the flip introduced — both of them cases where pgx hands back what
+  Postgres sent and `database/sql` had been quietly tidying it.
