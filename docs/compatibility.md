@@ -67,32 +67,6 @@ or deployed clients, not just call sites.
   reason to treat it as private. See
   [ADR-0027](adr/0027-keyset-pagination.md).
 
-## The module layout
-
-Three published modules, and which one you need is decided by whether you serve
-HTTP:
-
-| Module | What it is | Requires |
-|---|---|---|
-| `github.com/jryannel/sqlb` | the engine, the filter grammar, the schema DSL, codegen and the tools | **nothing** — the `go.mod` has no `require` line and no `go.sum` |
-| `github.com/jryannel/sqlb/rest` | the huma adapter | huma, and the engine |
-| `github.com/jryannel/sqlb/example/blog` | the worked example that mounts it | both of the above |
-
-**Import paths did not change.** `import "github.com/jryannel/sqlb/rest"` is what
-it always was. What changed is that a consumer mounting REST now writes a second
-`require`, because a nested module is not fetched with its parent.
-
-**Why it is arranged this way** is [ADR-0007](adr/0007-generated-rest-handlers.md),
-which rejected this split twice before taking it. The short version: while `rest`
-shared the engine's module, huma's `go 1.25.0` directive was the minimum toolchain
-for every consumer of an engine that needs 1.24 — a constraint on your build that
-no amount of per-package dependency checking could remove. The boundary removes
-it.
-
-**What this costs you.** Two versions to keep in step. `sqlb` and `sqlb/rest` are
-tagged separately, so it is possible to pin a pair that disagree. Treat them as
-one unit unless a release note says otherwise.
-
 ## Will move
 
 Named in advance, so the break is a documented plan rather than a surprise.

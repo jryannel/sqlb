@@ -12,7 +12,7 @@ import (
 	"github.com/jryannel/sqlb/schema"
 
 	// Imported for its side effects: declaring a table registers it.
-	_ "github.com/jryannel/sqlb/example/blogschema"
+	_ "github.com/jryannel/sqlb/example/blog/blogschema"
 )
 
 // Cursor pagination, judged by Postgres rather than by a golden string.

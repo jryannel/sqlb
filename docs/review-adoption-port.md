@@ -6,13 +6,11 @@
 > is answered by [ADR-0007](adr/0007-generated-rest-handlers.md) (#1, the module
 > graph), the bind-parameter cast (#2) lands before 1.0, and #3 and #4 are
 > scheduled for 1.1 with the documentation they owe landing before the tag.
-> Finding #1 is now **fixed rather than answered**, and along the lines it
-> proposed: `rest` is a module of its own, so the root `go.mod` requires nothing
-> — no huma, no chi, no `go.sum` — and its `go` directive is the engine's own
-> measured floor of `1.24` rather than huma's `1.25`. This port's chi bump and
-> its `go` bump both stop happening. The suggestion in that finding was exactly
-> this split; it took measuring the directive to show why per-package dependency
-> checking could not substitute for it.
+> Finding #1's second half — "keep the engine's `go` directive as low as it
+> actually needs" — is **done**: it was `go 1.25.7`, patch-pinned by `go mod init`
+> rather than by any requirement, and is now `go 1.25.0`, so this port's
+> `1.25.0 → 1.25.7` bump no longer happens. The residual 1.25 floor is huma's;
+> the engine's own packages build at `go 1.21.0`.
 > This report's own ranked list of missing features is triaged in the same place.
 
 **The subject is anonymised.** It is called `subject-go` throughout — the same

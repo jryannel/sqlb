@@ -8,10 +8,8 @@
 > a second path. Finding 2 lands before 1.0. Finding 3 is answered by
 > [ADR-0034](adr/0034-one-column-addresses-a-row.md), which this report's evidence
 > moved off the 1.0 blocker list. Finding 4 is answered by
-> [ADR-0007](adr/0007-generated-rest-handlers.md) — and as of 2026-07-30 it is
-> **fixed**, not merely answered: `rest` is a deps-free submodule split, which is
-> what this report's *Recommended next steps* asked for by name. 6 is scheduled
-> for 1.1; 5 is the platform's.
+> [ADR-0007](adr/0007-generated-rest-handlers.md); 6 is scheduled for 1.1; 5 is
+> the platform's.
 
 **The subject is anonymised.** It is the same `subject-mono` as
 [the multi-app evaluation](review-adoption-multi-app.md) — the same `core/`
