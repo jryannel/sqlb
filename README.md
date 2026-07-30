@@ -150,6 +150,7 @@ server over the manifest.
 | [Decision records](https://jryannel.github.io/sqlb/adr/) | What was decided, why, and what would change our mind |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
 | [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
+| [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx: hooks arriving through a value group, and a resource that refuses to mount without them |
 
 ## Development
 

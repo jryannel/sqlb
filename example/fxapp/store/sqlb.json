@@ -1,0 +1,372 @@
+{
+  "version": "1",
+  "tables": [
+    {
+      "name": "notes",
+      "comment": "A note, belonging to exactly one space.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "space_id",
+          "type": "uuid",
+          "goType": "string",
+          "readOnly": true,
+          "capabilities": [
+            "filter",
+            "expand"
+          ],
+          "references": {
+            "relation": "space",
+            "table": "spaces",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          },
+          "scoped": true
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "sort",
+            "search"
+          ]
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "search"
+          ]
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "goType": "string",
+          "enum": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "hasDefault": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "pinned",
+          "type": "bool",
+          "goType": "bool",
+          "hasDefault": true,
+          "capabilities": [
+            "filter",
+            "sort"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "notes_space_id_status_idx",
+          "columns": [
+            "space_id",
+            "status"
+          ]
+        }
+      ],
+      "rest": {
+        "path": "/notes",
+        "operations": [
+          "create",
+          "read",
+          "update",
+          "delete",
+          "list"
+        ],
+        "defaultPageSize": 25,
+        "maxPageSize": 100,
+        "filterable": [
+          "id",
+          "space_id",
+          "title",
+          "body",
+          "status",
+          "pinned"
+        ],
+        "sortable": [
+          "title",
+          "status",
+          "pinned",
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [
+          "title",
+          "body"
+        ],
+        "expandable": [
+          "space"
+        ],
+        "examples": [
+          "GET /notes?id=eq.VALUE",
+          "GET /notes?sort=-title\u0026page=2\u0026per_page=20",
+          "GET /notes?search=TERM",
+          "GET /notes?expand=space",
+          "GET /notes?or=(id.eq.A,space_id.eq.B)"
+        ]
+      }
+    },
+    {
+      "name": "spaces",
+      "comment": "A tenant. Every note belongs to exactly one.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ],
+          "scoped": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter",
+            "sort",
+            "search"
+          ]
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "goType": "string",
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        }
+      ],
+      "collectedBy": [
+        {
+          "name": "notes",
+          "table": "notes",
+          "column": "space_id",
+          "order": "-created_at",
+          "limit": 10,
+          "expandable": true
+        }
+      ],
+      "rest": {
+        "path": "/spaces",
+        "operations": [
+          "read",
+          "list"
+        ],
+        "defaultPageSize": 0,
+        "maxPageSize": 0,
+        "filterable": [
+          "id",
+          "name",
+          "slug"
+        ],
+        "sortable": [
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [
+          "name"
+        ],
+        "expandable": [
+          "notes"
+        ],
+        "examples": [
+          "GET /spaces?id=eq.VALUE",
+          "GET /spaces?sort=-name\u0026page=2\u0026per_page=20",
+          "GET /spaces?search=TERM",
+          "GET /spaces?expand=notes",
+          "GET /spaces?or=(id.eq.A,name.eq.B)"
+        ]
+      }
+    }
+  ],
+  "filterOperators": [
+    {
+      "name": "eq",
+      "form": "col=eq.VALUE (or col=VALUE)",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "ne",
+      "form": "col=ne.VALUE",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "gt",
+      "form": "col=gt.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "gte",
+      "form": "col=gte.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "lt",
+      "form": "col=lt.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "lte",
+      "form": "col=lte.VALUE",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "in",
+      "form": "col=in.A,B,C",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "nin",
+      "form": "col=nin.A,B",
+      "applies": "any filterable column"
+    },
+    {
+      "name": "between",
+      "form": "col=between.LO,HI",
+      "applies": "ordered columns"
+    },
+    {
+      "name": "isnull",
+      "form": "col=isnull",
+      "applies": "nullable columns"
+    },
+    {
+      "name": "notnull",
+      "form": "col=notnull",
+      "applies": "nullable columns"
+    },
+    {
+      "name": "contains",
+      "form": "col=contains.TEXT",
+      "applies": "text columns; wildcards escaped"
+    },
+    {
+      "name": "startswith",
+      "form": "col=startswith.TEXT",
+      "applies": "text columns; wildcards escaped"
+    },
+    {
+      "name": "endswith",
+      "form": "col=endswith.TEXT",
+      "applies": "text columns; wildcards escaped"
+    },
+    {
+      "name": "like",
+      "form": "col=like.PATTERN",
+      "applies": "text columns; wildcards NOT escaped"
+    },
+    {
+      "name": "ilike",
+      "form": "col=ilike.PATTERN",
+      "applies": "text columns; wildcards NOT escaped"
+    }
+  ],
+  "reservedParams": [
+    {
+      "name": "select",
+      "form": "select=id,name — projection; the primary key is always included"
+    },
+    {
+      "name": "sort",
+      "form": "sort=-created_at,name — leading '-' is descending"
+    },
+    {
+      "name": "search",
+      "form": "search=TERM — fans out over searchable columns"
+    },
+    {
+      "name": "page",
+      "form": "page=2 — 1-based"
+    },
+    {
+      "name": "per_page",
+      "form": "per_page=50 — capped by maxPageSize"
+    },
+    {
+      "name": "limit",
+      "form": "limit=50 — alternative to per_page"
+    },
+    {
+      "name": "offset",
+      "form": "offset=100 — alternative to page"
+    },
+    {
+      "name": "or",
+      "form": "or=(a.eq.1,b.gt.2) — explicit disjunction, nestable"
+    },
+    {
+      "name": "and",
+      "form": "and=(a.eq.1,b.gt.2) — explicit conjunction"
+    }
+  ]
+}

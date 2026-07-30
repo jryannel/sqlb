@@ -57,6 +57,11 @@ description = "Run the task-manager example's suite against a real Postgres in a
 dir = "example/tasks"
 run = "go test ./..."
 
+[tasks.test-fx]
+description = "Run the fx example's suite. Needs Docker for all but one of its tests: the graph validation constructs nothing, and everything else boots the whole application against a real Postgres because the claims are about a boot — that the migrations apply, that provisioning survives a restart, that the space boundary holds between two callers. It also carries the one assertion the other examples cannot make: with the notes module removed from the list, the server must refuse to start rather than serve unscoped rows (ADR-0030)."
+dir = "example/fxapp"
+run = "go test ./..."
+
 [tasks.test-ts]
 description = "Typecheck the generated TypeScript client and run its encoder tests. The typecheck is the test: the client's whole claim is that a misspelled column, an operator its column type does not accept, or a sort on a column that did not opt in fails at tsc. example/tasks/web/src/refusals.ts asserts each of those with @ts-expect-error, so a generator that widened a type would fail here."
 dir = "example/tasks/web"
@@ -100,21 +105,23 @@ go tool cover -func=coverage.out | tail -20
 '''
 
 [tasks.vet]
-description = "go vet across all three modules"
+description = "go vet across all four modules"
 run = '''
 set -e
 go vet ./...
 cd "$MISE_PROJECT_ROOT/pgtest" && go vet ./...
 cd "$MISE_PROJECT_ROOT/example/tasks" && go vet ./...
+cd "$MISE_PROJECT_ROOT/example/fxapp" && go vet ./...
 '''
 
 [tasks.lint]
-description = "golangci-lint across all three modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
+description = "golangci-lint across all four modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
 run = '''
 set -e
 golangci-lint run
 cd "$MISE_PROJECT_ROOT/pgtest" && golangci-lint run
 cd "$MISE_PROJECT_ROOT/example/tasks" && golangci-lint run
+cd "$MISE_PROJECT_ROOT/example/fxapp" && golangci-lint run
 '''
 
 [tasks.lint-fix]
@@ -201,10 +208,10 @@ run = "go mod tidy"
 [tasks.tidy-check]
 description = "Fail if go.mod or go.sum would change, in any module. Catches a dependency added but not tidied."
 run = '''
-# Every module, because pgtest and example/tasks have a go.mod each and an
+# Every module, because pgtest and the two examples have a go.mod each and an
 # untidied one there fails in CI exactly as confusingly as an untidied one here.
 status=0
-for mod in . pgtest example/tasks; do
+for mod in . pgtest example/tasks example/fxapp; do
   cd "$MISE_PROJECT_ROOT/$mod"
   cp go.mod go.mod.bak
   [ -f go.sum ] && cp go.sum go.sum.bak
@@ -336,6 +343,10 @@ go run ./example/withsqlc/gen -check
 # the larger example's committed output free to drift, which is the exact
 # failure this gate exists to catch.
 cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sqlb check ./taskschema
+# example/fxapp, likewise its own module. Its generated package also holds one
+# hand-written file (store/module.go), which the check ignores: it compares the
+# artefacts the emitters own and says nothing about their neighbours.
+cd "$MISE_PROJECT_ROOT/example/fxapp" && go run github.com/jryannel/sqlb/cmd/sqlb check ./noteschema
 '''
 
 [tasks.impact-check]
@@ -346,6 +357,7 @@ go run ./cmd/sqlb impact -error ./example/blog/blogschema
 # example/tasks is its own module, so like generate-check it needs a line of its
 # own; the root module's package list cannot reach its schema.
 cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sqlb impact -error ./taskschema
+cd "$MISE_PROJECT_ROOT/example/fxapp" && go run github.com/jryannel/sqlb/cmd/sqlb impact -error ./noteschema
 '''
 
 [tasks.bisect-check]
@@ -388,7 +400,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run vet
@@ -407,6 +419,7 @@ mise run test-cli
 # the scripts that measured it are gone.
 mise run test-pg
 mise run test-demo
+mise run test-fx
 echo
 echo "ci: all gates passed"
 '''
