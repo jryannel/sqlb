@@ -43,7 +43,7 @@ sqlc owns the dashboard and the reports.
 reads as its `schema.sql`. The example wires this up literally:
 
 ```
-example/blog/blogschema/schema.go     the one declaration you edit
+example/blogschema/schema.go     the one declaration you edit
   → go run ./example/withsqlc/gen     renders it to DDL
   → example/withsqlc/schema.sql       what sqlc reads
   → sqlc generate                     types its queries against it

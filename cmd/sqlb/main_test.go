@@ -14,7 +14,7 @@ import (
 // assertion worth something: it proves the generated driver compiles against a
 // module and reproduces output that is committed, which is the entire claim. A
 // fixture module would prove only that the fixture compiled.
-const blog = "./example/blog/blogschema"
+const blog = "./example/blogschema"
 
 // invoke runs the command from the repository root and reports the exit code
 // alongside everything it printed.

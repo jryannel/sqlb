@@ -35,12 +35,24 @@ dart = "3.12.2"
 # ---- Tasks ----
 
 [tasks.test]
-description = "Run all tests. No Docker and no Postgres needed: the engine's tests run against an in-memory database/sql driver, so hooks, scanning and the mutation paths are covered without a live database."
-run = "go test ./..."
+description = "Run all tests that need no Docker: the engine, the REST adapter and the blog example. The engine's tests run against an in-memory database/sql driver, so hooks, scanning and the mutation paths are covered without a live database. `rest` and `example/blog` are modules of their own (ADR-0007), so `go test ./...` in the root reaches neither and they need a line each."
+run = '''
+set -e
+go test ./...
+for mod in rest example/blog; do
+  cd "$MISE_PROJECT_ROOT/$mod" && go test ./...
+done
+'''
 
 [tasks.test-race]
 description = "Run all tests with the race detector. Worth running before touching anything that caches per-type state — the model cache, the hook registry, or Describe, which mutates a cached model on purpose and is only safe at init."
-run = "go test -race ./..."
+run = '''
+set -e
+go test -race ./...
+for mod in rest example/blog; do
+  cd "$MISE_PROJECT_ROOT/$mod" && go test -race ./...
+done
+'''
 
 [tasks.test-pg]
 description = "Run the round-trip and connection-path tests against a real Postgres and a real PgBouncer, in containers. Needs Docker. Deliberately NOT part of `test`: the engine's suite is database-free and that is worth keeping as the inner loop. This is what answers whether the generated SQL is *valid* rather than merely *expected* — see pgtest/doc.go for why it is a module of its own."
@@ -100,21 +112,23 @@ go tool cover -func=coverage.out | tail -20
 '''
 
 [tasks.vet]
-description = "go vet across all three modules"
+description = "go vet across all five modules"
 run = '''
 set -e
 go vet ./...
-cd "$MISE_PROJECT_ROOT/pgtest" && go vet ./...
-cd "$MISE_PROJECT_ROOT/example/tasks" && go vet ./...
+for mod in rest example/blog pgtest example/tasks; do
+  cd "$MISE_PROJECT_ROOT/$mod" && go vet ./...
+done
 '''
 
 [tasks.lint]
-description = "golangci-lint across all three modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
+description = "golangci-lint across all five modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
 run = '''
 set -e
 golangci-lint run
-cd "$MISE_PROJECT_ROOT/pgtest" && golangci-lint run
-cd "$MISE_PROJECT_ROOT/example/tasks" && golangci-lint run
+for mod in rest example/blog pgtest example/tasks; do
+  cd "$MISE_PROJECT_ROOT/$mod" && golangci-lint run
+done
 '''
 
 [tasks.lint-fix]
@@ -204,7 +218,7 @@ run = '''
 # Every module, because pgtest and example/tasks have a go.mod each and an
 # untidied one there fails in CI exactly as confusingly as an untidied one here.
 status=0
-for mod in . pgtest example/tasks; do
+for mod in . rest example/blog pgtest example/tasks; do
   cd "$MISE_PROJECT_ROOT/$mod"
   cp go.mod go.mod.bak
   [ -f go.sum ] && cp go.sum go.sum.bak
@@ -217,16 +231,17 @@ exit $status
 '''
 
 [tasks.deps-check]
-description = "Fail if a third-party dependency has crept into the engine. Everything on the request path depends on the standard library only, on purpose: it is a library, and every dependency it takes is one its consumers inherit. Exactly two packages are exempt — `rest`, which is an adapter onto huma, and the generated example that mounts it — so importing `sqlb` still costs nothing."
+description = "Fail if a third-party dependency has crept into the library. The root module depends on the standard library alone — no exemptions, because `rest` and the example that mounts it are modules of their own (ADR-0007). So this now checks two things a package-level scan could not: that no root package imports anything third-party, and that the root go.mod requires nothing at all."
 run = '''
-# The check the module-wide version could not express: sqlb now has an HTTP
-# adapter, so "zero dependencies anywhere" is no longer the invariant. What must
-# hold is that a consumer importing the engine inherits nothing.
+# What must hold is that a consumer importing the engine inherits nothing — not
+# at compile time, and not in their module graph. Since ADR-0007 split `rest`
+# into its own module, those are the same statement and the exemption list that
+# used to carry `rest` and `example/blog` is empty.
 #
-# ADR-0016: a guard must be proven in both directions, so this one ends by
-# checking that it *does* fire for `rest`. Three earlier guards in this repo
-# reported success while verifying nothing.
-allowed='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
+# ADR-0016: a guard must be proven in both directions. Both positive controls
+# below run against the `rest` module, because it is now the only place in the
+# repository that *has* a dependency to find — and a control that cannot fail is
+# one this repository has already shipped three times.
 
 # third_party lists the non-stdlib, non-sqlb packages one package imports,
 # transitively. A stdlib path has no dot in its first element, which is what
@@ -234,6 +249,20 @@ allowed='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
 # grepped for "golang.org/x" matched the standard library's own vendored copies.
 third_party() {
   go list -deps "$1" | grep -E '^[^/]+\.[^/]+/' | grep -v '^github.com/jryannel/sqlb' | sort -u
+}
+
+# direct_requires reads the non-indirect requirements out of a go.mod. Both
+# require forms: the block `require (\n\tpath ver\n)` and the single-line
+# `require path ver` that `go mod tidy` collapses to when only one remains. An
+# earlier version read indented lines only and saw nothing the moment the block
+# became a one-liner — a check that had stopped covering anything.
+direct_requires() {
+  awk '
+    $1 == "require" && $2 != "(" && $0 !~ /\/\/ indirect/ { print $2; next }
+    $1 == "require" && $2 == "(" { inblock = 1; next }
+    inblock && $1 == ")" { inblock = 0; next }
+    inblock && $0 !~ /\/\/ indirect/ && NF >= 2 { print $1 }
+  ' "$1" | grep -E '\.[a-z]+/' | sort
 }
 
 if ! pkgs=$(go list ./... 2>&1); then
@@ -245,7 +274,6 @@ fi
 checked=0
 fail=0
 for pkg in $pkgs; do
-  case " $allowed " in *" $pkg "*) continue ;; esac
   checked=$((checked + 1))
   if deps=$(third_party "$pkg") && [ -n "$deps" ]; then
     echo "$pkg has third-party dependencies:"
@@ -260,54 +288,40 @@ if [ "$checked" -eq 0 ]; then
 fi
 [ "$fail" -eq 0 ] || exit 1
 
-# The positive control. If this stops reporting huma, the check above has
-# stopped being able to see a dependency at all and its silence means nothing.
-if ! third_party github.com/jryannel/sqlb/rest | grep -q '^github.com/danielgtaylor/huma'; then
-  echo "deps-check: the check cannot see a dependency it should — rest imports huma but none was found"
+# The module-graph half, which the package scan cannot see: `go list -deps` does
+# not report test-only imports, so a test file importing pgx would leave every
+# assertion above passing while go.mod grew a driver. The root module must
+# require nothing. This is what keeps the pgtest module honest — moving those
+# tests back in here fails loudly instead of silently — and it is now a stronger
+# statement than the old "exactly huma", because there is no longer a name on the
+# list to hide behind.
+if [ -n "$(direct_requires go.mod)" ]; then
+  echo "deps-check: the root module has direct dependencies, and it must have none."
+  direct_requires go.mod | sed 's/^/  /'
+  echo "The HTTP adapter lives in rest/ and the example that mounts it in"
+  echo "example/blog/, each with a go.mod of its own — see ADR-0007. Tests needing"
+  echo "a driver belong in pgtest/. Nothing belongs here."
   exit 1
 fi
 
-# The hole the package-level check above cannot cover: `go list -deps` does not
-# report test-only imports. A test file in this module importing pgx would leave
-# every assertion above passing while go.mod grew a driver — success reported by
-# a check that had stopped covering anything, which is the ADR-0016 failure mode.
-#
-# So the root module's direct requirements are pinned by name. This is what
-# keeps the pgtest module honest: moving those tests back in here fails loudly
-# instead of silently.
-#
-# Read from both go.mod require forms: the block `require (\n\tpath ver\n)` and
-# the single-line `require path ver` that `go mod tidy` collapses to when only
-# one requirement remains. An earlier version grepped for indented lines only and
-# read nothing the moment the block became a one-liner — a check that had stopped
-# covering anything, which is the ADR-0016 failure mode the positive control below
-# exists to catch.
-want='github.com/danielgtaylor/huma/v2'
-got=$(awk '
-  $1 == "require" && $2 != "(" && $0 !~ /\/\/ indirect/ { print $2; next }
-  $1 == "require" && $2 == "(" { inblock = 1; next }
-  inblock && $1 == ")" { inblock = 0; next }
-  inblock && $0 !~ /\/\/ indirect/ && NF >= 2 { print $1 }
-' go.mod | grep -E '\.[a-z]+/' | sort)
-
-if [ "$got" != "$(printf '%s\n' $want | sort)" ]; then
-  echo "deps-check: the root module's direct dependencies changed."
-  echo "  want: $(printf '%s ' $want)"
-  echo "  got:  $(printf '%s ' $got)"
-  echo "Tests needing a driver belong in the pgtest module, which has a go.mod of"
-  echo "its own for exactly this reason. See pgtest/doc.go."
+# Positive control 1: the package scanner can see a dependency at all. Run in the
+# rest module, since the root no longer has one to find. If this stops reporting
+# huma, every "standard library only" above means nothing.
+if ! (cd rest && third_party github.com/jryannel/sqlb/rest) | grep -q '^github.com/danielgtaylor/huma'; then
+  echo "deps-check: the package scanner cannot see a dependency it should — rest imports huma but none was found"
   exit 1
 fi
 
-# The positive control for the check just above, in the spirit of the one below
-# it: prove it can see a direct requirement at all, rather than matching two
-# empty strings and calling that agreement.
-if [ -z "$got" ]; then
-  echo "deps-check: read no direct requirements from go.mod, so the comparison above compared nothing"
+# Positive control 2: the go.mod reader can see a requirement at all, rather than
+# comparing two empty strings and calling that agreement. This is the control the
+# old check got for free when the root required huma, and the one most likely to
+# rot now that the answer it wants is "nothing".
+if ! direct_requires rest/go.mod | grep -q '^github.com/danielgtaylor/huma'; then
+  echo "deps-check: the go.mod reader read no requirement from rest/go.mod, so the check above compared nothing"
   exit 1
 fi
 
-echo "deps-check: $checked packages, standard library only"
+echo "deps-check: $checked packages and the root go.mod, standard library only"
 '''
 
 [tasks.generate]
@@ -318,7 +332,7 @@ run = "go generate ./..."
 description = "Fail if committed generated code does not match what the schema would produce now. Generated code is committed, so it drifts: someone edits a schema, forgets to regenerate, and the models silently describe a table that no longer exists. Part of `ci`, in the same spirit as a sqlc-check gate."
 run = '''
 set -e
-go run ./cmd/sqlb check ./example/blog/blogschema
+go run ./cmd/sqlb check ./example/blogschema
 # The sqlc example reads a schema.sql rendered from the same declaration. If it
 # drifts, sqlc is typing its queries against a schema the database no longer
 # has, which is the exact failure docs/with-sqlc.md claims this arrangement
@@ -342,7 +356,7 @@ cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sql
 description = "Fail if a schema edit has changed the generated REST contract in a way that breaks a deployed client — a renamed or un-exposed column, a dropped operation, a narrowed type (ADR-0039). Diffs each example's schema against its committed restcontract.json baseline. Distinct from generate-check: that catches drift in the code sqlb writes, this catches drift in the API that code serves, and the two can disagree — a clean RENAME migration is a wire break. Re-record a baseline with `sqlb impact -write` when the change is intended. -error, not a bare run, because in a gate the point is to fail."
 run = '''
 set -e
-go run ./cmd/sqlb impact -error ./example/blog/blogschema
+go run ./cmd/sqlb impact -error ./example/blogschema
 # example/tasks is its own module, so like generate-check it needs a line of its
 # own; the root module's package list cannot reach its schema.
 cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sqlb impact -error ./taskschema
@@ -366,7 +380,14 @@ for sha in $(git rev-list --reverse "${BASE:-HEAD}"); do
   mkdir -p "$tmp/wt"
   git archive "$sha" | tar -x -C "$tmp/wt"
 
-  if out=$(cd "$tmp/wt" && go build ./... 2>&1 && go vet ./... 2>&1 && go test ./... 2>&1); then
+  # `rest` is shipped library code, and since ADR-0007 made it a module of its
+  # own it is no longer reached by the root module's `./...`. Bisecting a
+  # regression in the REST adapter is exactly what this gate is for, so it gets a
+  # line rather than being lost to a directory boundary. It is skipped on commits
+  # predating the split, where the directory has no go.mod — those are green
+  # under the root walk alone, which is what was true at the time.
+  if out=$(cd "$tmp/wt" && go build ./... 2>&1 && go vet ./... 2>&1 && go test ./... 2>&1 &&
+           { [ ! -f rest/go.mod ] || (cd rest && go build ./... 2>&1 && go vet ./... 2>&1 && go test ./... 2>&1); }); then
     printf "  %-9s PASS  %s\n" "$short" "$subject"
   elif printf "%s" "$out" | grep -qE "no packages to (test|vet)|matched no packages"; then
     # A commit before any Go package exists is legitimately empty, not broken.
