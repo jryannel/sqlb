@@ -1,7 +1,9 @@
 package migrate
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -696,7 +698,7 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 	if err != nil {
 		return err
 	}
-	if curDefault != tgtDefault {
+	if !sameDefault(td.Type, curDefault, tgtDefault) {
 		up, down := "DROP DEFAULT", "DROP DEFAULT"
 		if tgtDefault != "" {
 			up = "SET DEFAULT " + tgtDefault
@@ -1073,7 +1075,7 @@ func (d *differ) indexes(cur, tgt *schema.TableDef, cols map[string]string) {
 			}
 			usedCur[name], usedTgt[want] = true, true
 			d.renames = append(d.renames, Change{
-				Comment: "rename index " + name + " to " + want,
+				Comment: indexRenameComment(name, want, curIdx[name].Unique),
 				Up:      renameIndex(name, want),
 				Down:    renameIndex(want, name),
 			})
@@ -1207,4 +1209,95 @@ func concurrentStage(concurrent bool) Stage {
 		return StageConcurrent
 	}
 	return StageMain
+}
+
+// indexRenameComment says what a rename costs, which is nothing in the database
+// and occasionally something in the application.
+//
+// Postgres reports a violated constraint by name, and matching that name is the
+// standard way to tell one unique violation from another — so renaming a unique
+// index can turn a handled collision into an unhandled 500 without touching the
+// code that handled it. The declaration can say what the name is
+// (schema.TableDef.UniqueIndexNamed), and this is where a reader finds that out
+// before applying the migration rather than after (issue #57).
+func indexRenameComment(from, to string, unique bool) string {
+	c := "rename index " + from + " to " + to
+	if unique {
+		c += " (a unique index's name reaches the application: Postgres reports it in a " +
+			"23505 error, so code matching " + from + " by name stops matching. " +
+			"UniqueIndexNamed keeps the old name if something does)"
+	}
+	return c
+}
+
+// sameDefault reports whether two rendered defaults mean the same thing.
+//
+// Textual equality answers it for almost every type, and for those this is that
+// comparison. The exception is jsonb, where the same default has two spellings
+// and each side of a database diff picks a different one: introspect normalises
+// a literal default into schema.Value, which renders as `'[]'`, while a
+// declaration reaching for schema.Expr — the natural choice, since it is what
+// the raw DDL says — renders as `'[]'::jsonb`. Those two strings are not equal
+// and the defaults are, so a diff proposed SET DEFAULT on every run, forever
+// (issue #56).
+//
+// The comparison is semantic rather than textual: both sides are unwrapped to
+// their JSON text and compared as documents, so `'{"a":1,"b":2}'::jsonb` and
+// `'{"b": 2, "a": 1}'` are one default — which is what Postgres itself thinks,
+// since jsonb stores a parsed value and not the text it arrived as.
+//
+// Only for a jsonb column. Doing it for text would make `'{"a":1}'` and
+// `'{ "a" : 1 }'` compare equal on a column where they are genuinely different
+// strings.
+func sameDefault(t schema.Type, cur, tgt string) bool {
+	if cur == tgt {
+		return true
+	}
+	if t != schema.TypeJSON {
+		return false
+	}
+	curDoc, ok := jsonDefaultValue(cur)
+	if !ok {
+		return false
+	}
+	tgtDoc, ok := jsonDefaultValue(tgt)
+	if !ok {
+		return false
+	}
+	return jsonEqual(curDoc, tgtDoc)
+}
+
+// jsonDefaultValue extracts the JSON text from a rendered default, unwrapping
+// the cast and the quoting that the two spellings differ in.
+//
+// It reports false for anything that is not a literal — `now()`, a function
+// call, an expression over other columns — because those are not documents to
+// compare and their text is the only thing that can be.
+func jsonDefaultValue(rendered string) (string, bool) {
+	s := strings.TrimSpace(rendered)
+	// The cast is what a hand-written default carries and a normalised one does
+	// not: '[]'::jsonb and '[]' are the same default.
+	for _, cast := range []string{"::jsonb", "::json", "::JSONB", "::JSON"} {
+		s = strings.TrimSuffix(strings.TrimSpace(s), cast)
+	}
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != '\'' || s[len(s)-1] != '\'' {
+		return "", false
+	}
+	// Postgres doubles an embedded quote inside a string literal, which is the
+	// only escape in one.
+	return strings.ReplaceAll(s[1:len(s)-1], "''", "'"), true
+}
+
+// jsonEqual compares two JSON documents by value, so that key order and
+// whitespace do not decide whether a migration is generated.
+func jsonEqual(a, b string) bool {
+	var av, bv any
+	if err := json.Unmarshal([]byte(a), &av); err != nil {
+		return false
+	}
+	if err := json.Unmarshal([]byte(b), &bv); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
 }

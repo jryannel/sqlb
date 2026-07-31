@@ -224,7 +224,8 @@ func (t *TableDef) RenamedFrom(local string) *TableDef {
 	return t
 }
 
-// Index adds a secondary index over the given columns.
+// Index adds a secondary index over the given columns, named by convention:
+// posts_org_id_idx. Use [TableDef.IndexNamed] when the name matters.
 func (t *TableDef) Index(columns ...string) *TableDef {
 	t.indexes = append(t.indexes, Index{
 		Name:    indexName(t.name, columns, false),
@@ -233,13 +234,50 @@ func (t *TableDef) Index(columns ...string) *TableDef {
 	return t
 }
 
-// UniqueIndex adds a composite unique index.
+// UniqueIndex adds a composite unique index, named by convention:
+// posts_org_id_slug_uniq. Use [TableDef.UniqueIndexNamed] when the name
+// matters, which for a unique index it more often does — see below.
 func (t *TableDef) UniqueIndex(columns ...string) *TableDef {
 	t.indexes = append(t.indexes, Index{
 		Name:    indexName(t.name, columns, true),
 		Columns: columns,
 		Unique:  true,
 	})
+	return t
+}
+
+// IndexNamed adds a secondary index under a name you choose, rather than the
+// one the convention would derive.
+//
+//	t.IndexNamed("idx_projects_org_id", "org_id")
+//
+// It exists for adopting a database somebody else's tool built. A declared
+// index whose name does not match the live one is a rename, and a schema of any
+// size turns "declare the tables sqlb already agrees with" into "rename every
+// index in the database" — which is a migration nobody asked for, on a database
+// where it is the least welcome (issue #57).
+//
+// # An index name is not always inert
+//
+// Postgres reports a violated constraint by name, and matching that name is the
+// standard way to tell one unique violation from another:
+//
+//	pgErr.Code == "23505" && pgErr.ConstraintName == "idx_projects_org_code"
+//
+// So renaming an index can turn a handled collision — retry with the next
+// suffix — into an unhandled 500, without touching the code that handles it.
+// That is the reason this is a declaration rather than a lint: the schema has
+// to be able to say what the name *is*, not merely prefer it.
+func (t *TableDef) IndexNamed(name string, columns ...string) *TableDef {
+	t.indexes = append(t.indexes, Index{Name: name, Columns: columns})
+	return t
+}
+
+// UniqueIndexNamed adds a composite unique index under a name you choose. See
+// [TableDef.IndexNamed], and note that a unique index is the kind whose name an
+// application is most likely to be matching on.
+func (t *TableDef) UniqueIndexNamed(name string, columns ...string) *TableDef {
+	t.indexes = append(t.indexes, Index{Name: name, Columns: columns, Unique: true})
 	return t
 }
 
