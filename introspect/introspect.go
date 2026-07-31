@@ -33,6 +33,7 @@ package introspect
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jryannel/sqlb"
@@ -151,6 +152,14 @@ type indexRow struct {
 	Columns    []string
 	Expression bool // an index over an expression rather than plain columns
 	Def        string
+	// Opclasses is the operator class of each indexed column, in the same order
+	// as Columns, with "" where the column takes its type's default. For
+	// pgvector it is the distance function and there is no default, so an index
+	// read back without it cannot be reapplied (issue #53).
+	Opclasses []string
+	// Options is the index's storage parameters, as reloptions hands them back:
+	// "m=16", "ef_construction=64".
+	Options []string
 }
 
 // The catalog queries.
@@ -222,7 +231,9 @@ const indexQuery = `
 SELECT c.relname, i.relname, x.indisunique, am.amname,
        COALESCE(pg_get_expr(x.indpred, x.indrelid), ''),
        COALESCE(k.cols, ''), (0 = ANY (x.indkey::int2[])),
-       pg_get_indexdef(x.indexrelid)
+       pg_get_indexdef(x.indexrelid),
+       COALESCE(oc.classes, ''),
+       COALESCE(array_to_string(i.reloptions, ','), '')
 FROM pg_index x
 JOIN pg_class i ON i.oid = x.indexrelid
 JOIN pg_class c ON c.oid = x.indrelid
@@ -233,6 +244,14 @@ LEFT JOIN LATERAL (
   FROM unnest(x.indkey::int2[]) WITH ORDINALITY AS u(attnum, ord)
   JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = u.attnum
 ) k ON true
+-- The operator class per indexed column, in index order, and empty where the
+-- column takes its type's default: comparing against opcdefault is what keeps
+-- an ordinary btree from acquiring "text_ops" in every declaration.
+LEFT JOIN LATERAL (
+  SELECT string_agg(CASE WHEN op.opcdefault THEN '' ELSE op.opcname END, ',' ORDER BY u.ord) AS classes
+  FROM unnest(x.indclass::oid[]) WITH ORDINALITY AS u(class, ord)
+  JOIN pg_opclass op ON op.oid = u.class
+) oc ON true
 WHERE n.nspname = $1
   AND NOT EXISTS (
     SELECT 1 FROM pg_constraint con
@@ -286,12 +305,18 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 
 	if err := query(ctx, db, indexQuery, nspname, func(rows pgx.Rows) error {
 		var r indexRow
-		var cols string
+		var cols, classes, options string
 		if err := rows.Scan(&r.Table, &r.Name, &r.Unique, &r.Method, &r.Where,
-			&cols, &r.Expression, &r.Def); err != nil {
+			&cols, &r.Expression, &r.Def, &classes, &options); err != nil {
 			return err
 		}
 		r.Columns = splitList(cols)
+		// Not splitList: an empty entry means "this column takes the default
+		// class" and has to keep its position, which a filter would lose.
+		if classes != "" {
+			r.Opclasses = strings.Split(classes, ",")
+		}
+		r.Options = splitList(options)
 		cat.indexes = append(cat.indexes, r)
 		return nil
 	}); err != nil {

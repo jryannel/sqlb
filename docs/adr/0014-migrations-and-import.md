@@ -171,3 +171,19 @@ change later. Choosing to own a runner afterwards is comparatively cheap.
   which cannot see test-only imports, so a driver in this module's tests would
   have left the gate reporting success while covering nothing.
 - 2026-07-30 — Condensed.
+- 2026-07-31 — The round trip is asserted as a *fixpoint*, and three
+  disagreements fell out of asserting it (issue #53). Each lived between two
+  packages that were individually well tested: `introspect` read a `vector`
+  column that `RenderSchema` refused to write — which blocked the bootstrap this
+  record calls the point of importing at all — an index lost its operator class
+  and storage parameters, so the DDL for a pgvector index was rejected outright
+  rather than being merely poorer, and an enum's CHECK lost its name, so a
+  database whose constraint is called `chk_org_plan` was rebuilt with
+  `orgs_plan_check` and every later diff proposed dropping and re-adding it.
+
+  The gate that catches them is not another round-trip test of one package. It
+  applies a deliberately awkward schema, reads it, writes it back out as source
+  that must *compile*, rebuilds a second database from what was read, and
+  compares the two databases through `pg_catalog` — not the two registries.
+  That distinction is the finding: two registries agree about everything they
+  both dropped, which is exactly how a lost constraint name stayed invisible.

@@ -73,6 +73,17 @@ type FieldDesc struct {
 	// recreating it under a name of its own choosing.
 	ConstraintName string
 
+	// CheckName pins the name of the CHECK an enum column emits, which is a
+	// second constraint on the same column and so cannot share the field above:
+	// a column may be unique *and* an enum, and one name cannot serve both.
+	//
+	// An enum is text plus a CHECK (ADR-0017), and the check's name is the one
+	// thing about it that introspection cannot recover from the expression. Left
+	// unpinned, a database whose check is called chk_org_plan is rebuilt with
+	// one called orgs_plan_check — so a diff against it proposes dropping and
+	// re-adding that constraint on every run, forever (issue #53).
+	CheckName string
+
 	// RenamedFrom is the column's previous name, declared for one release so
 	// that a migration renames the column instead of dropping and re-adding
 	// it. Nothing else reads it.
@@ -546,6 +557,20 @@ func (f *Field) Named(column string) *Field {
 // ones this package would generate.
 func (f *Field) ConstraintNamed(name string) *Field {
 	f.d.ConstraintName = name
+	return f
+}
+
+// CheckNamed pins the name of the CHECK an enum column emits.
+//
+//	schema.Enum("plan", "free", "pro").CheckNamed("chk_org_plan")
+//
+// It is a second constraint on the same column, so it has a name of its own
+// rather than sharing ConstraintNamed with a unique constraint or a foreign
+// key. Introspection sets it when the database's name is not the one this
+// package would generate; declaring it by hand is for the same case, reached
+// from the other direction.
+func (f *Field) CheckNamed(name string) *Field {
+	f.d.CheckName = name
 	return f
 }
 

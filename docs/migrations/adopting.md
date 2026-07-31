@@ -55,6 +55,13 @@ os.WriteFile("blogschema/schema.go", src, 0o644)
 `introspect` reports every construct it could not express rather than dropping
 it, which is what makes the report worth reading rather than skipping.
 
+That pair is the multiplier for a database of any size: sixty-nine tables become
+sixty-nine declarations to *review*, not sixty-nine to write. So the two halves
+have to agree about what the DSL can express — a type `introspect` reads and
+`RenderSchema` refuses stops the bootstrap at the first column that has it. They
+are held to that by a test: every type in `schema.Types()` must render, the
+rendered source must compile, and the whole loop must be a fixpoint (below).
+
 Everything imports with **no capabilities and nothing exposed over REST**,
 because neither can be read from DDL — widening that is a deliberate edit, which
 is the correct default for a surface that decides what the outside world can
@@ -64,6 +71,31 @@ the compiler checks for you.
 
 Generating a migration and adopting a database are the same machinery pointed in
 opposite directions.
+
+## The round trip is a fixpoint
+
+Read a database, write it back out, build a second database from what was read,
+and the two are the same database:
+
+```
+apply(fixture)           → db
+introspect(db)           → registry
+RenderSchema(registry)   → source that compiles
+apply(Diff(∅, registry)) → db'
+db' == db
+```
+
+`pgtest/fixpoint_test.go` asserts exactly that against Postgres, over a schema
+chosen to be awkward: a `vector` column with an HNSW index whose operator class
+is its meaning, storage parameters, a partial index, a composite unique, an
+array, nullable `jsonb`, an enum-shaped check and a real one.
+
+The comparison is between the two **databases**, through `pg_catalog`, rather
+than between the two registries — and that is the load-bearing part. Two
+registries agree about everything they both dropped, which is how an enum's
+constraint name went missing for as long as it did: both sides lost it
+identically, so every registry-level check passed while the rebuilt database
+called the constraint something else and the next diff proposed dropping it.
 
 ## Adopting one table at a time
 

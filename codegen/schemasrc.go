@@ -239,7 +239,8 @@ func renderIndex(t *schema.TableDef, idx schema.Index) string {
 	}
 	args := strings.Join(quoted, ", ")
 
-	plain := idx.Where == "" && (idx.Method == "" || idx.Method == "btree")
+	plain := idx.Where == "" && (idx.Method == "" || idx.Method == "btree") &&
+		len(idx.Opclasses) == 0 && len(idx.With) == 0
 	if plain && idx.Name == derivedIndexName(t, idx) {
 		if idx.Unique {
 			return fmt.Sprintf("UniqueIndex(%s)", args)
@@ -260,8 +261,34 @@ func renderIndex(t *schema.TableDef, idx schema.Index) string {
 	if idx.Where != "" {
 		fmt.Fprintf(&b, "\t\tWhere:   %s,\n", strconv.Quote(idx.Where))
 	}
+	// An operator class and a storage parameter are what make a pgvector index
+	// the index it is, so a bootstrap that dropped them would render a schema
+	// whose first migration Postgres refuses (issue #53).
+	if len(idx.Opclasses) > 0 {
+		fmt.Fprintf(&b, "\t\tOpclasses: %s,\n", renderStringMap(idx.Opclasses))
+	}
+	if len(idx.With) > 0 {
+		fmt.Fprintf(&b, "\t\tWith:      %s,\n", renderStringMap(idx.With))
+	}
 	b.WriteString("\t})")
 	return b.String()
+}
+
+// renderStringMap writes a map literal with its keys in sorted order, because a
+// generated file whose contents depend on map iteration is a file that fails
+// its own drift check every other run.
+func renderStringMap(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %s", strconv.Quote(k), strconv.Quote(m[k])))
+	}
+	return "map[string]string{" + strings.Join(parts, ", ") + "}"
 }
 
 // derivedIndexName reproduces what TableDef.Index would have named this index.
@@ -348,6 +375,9 @@ func renderField(d *schema.FieldDesc, names map[string]string) (string, error) {
 	}
 	if d.ConstraintName != "" {
 		fmt.Fprintf(&b, ".ConstraintNamed(%s)", strconv.Quote(d.ConstraintName))
+	}
+	if d.CheckName != "" {
+		fmt.Fprintf(&b, ".CheckNamed(%s)", strconv.Quote(d.CheckName))
 	}
 	return b.String(), nil
 }
@@ -489,8 +519,20 @@ func fieldConstructor(d *schema.FieldDesc) (string, error) {
 			return "", fmt.Errorf("enum column has no values")
 		}
 		return fmt.Sprintf("schema.Enum(%s, %s)", name, strings.Join(values, ", ")), nil
+	case schema.TypeVector:
+		// The dimension is part of the type rather than a constraint on it
+		// (ADR-0026), so it is an argument here exactly as it is at a call site
+		// somebody wrote by hand. A real schema usually names a constant —
+		// schema.Vector("embedding", ragcfg.Dim) — and this cannot know that,
+		// so it writes the width the database has.
+		if d.Dim <= 0 {
+			return "", fmt.Errorf("vector column has no dimension")
+		}
+		return fmt.Sprintf("schema.Vector(%s, %d)", name, d.Dim), nil
 	}
-	return "", fmt.Errorf("unknown column type %q", d.Type)
+	return "", fmt.Errorf(
+		"unknown column type %q; introspect and RenderSchema disagree about what the DSL can express, "+
+			"which is a bug in sqlb rather than in your database (issue #53)", d.Type)
 }
 
 func defaultIsImpliedByConstructor(d *schema.FieldDesc) bool {

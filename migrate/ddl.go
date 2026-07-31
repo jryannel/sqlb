@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -349,6 +350,9 @@ func foreignKeyName(t *schema.TableDef, d *schema.FieldDesc) string {
 }
 
 func enumCheckName(t *schema.TableDef, d *schema.FieldDesc) string {
+	if d.CheckName != "" {
+		return d.CheckName
+	}
 	return t.Name() + "_" + d.Name + "_check"
 }
 
@@ -796,8 +800,18 @@ func notNullCheck(table, column string) constraint {
 // indexDef reduces an index to a comparable string, so that a changed index is
 // recognised as one thing rather than as an unrelated drop and create.
 func indexDef(idx schema.Index) string {
-	return fmt.Sprintf("unique=%t method=%q columns=%s where=%q",
-		idx.Unique, idx.Method, strings.Join(idx.Columns, ","), idx.Where)
+	// The operator classes and the storage parameters are part of the index's
+	// identity, not decoration: a vector index under a different class answers
+	// a different question, and one built with different parameters is a
+	// different index. Leaving them out here made a changed index compare equal
+	// and stay as it was (issue #53).
+	classes := make([]string, 0, len(idx.Columns))
+	for _, c := range idx.Columns {
+		classes = append(classes, c+":"+idx.Opclasses[c])
+	}
+	return fmt.Sprintf("unique=%t method=%q columns=%s classes=%s with=%q where=%q",
+		idx.Unique, idx.Method, strings.Join(idx.Columns, ","),
+		strings.Join(classes, ","), storageParameters(idx.With), idx.Where)
 }
 
 // renamedIndex returns the index as it will read once cols have been renamed.
@@ -837,13 +851,57 @@ func createIndex(t *schema.TableDef, idx schema.Index, concurrent bool) string {
 	cols := make([]string, len(idx.Columns))
 	for i, c := range idx.Columns {
 		cols[i] = quoteIdent(c)
+		// The operator class follows the column, unquoted: it is a type name
+		// in the catalog rather than a user identifier, and pgvector's classes
+		// are the reason this is not optional (issue #53).
+		if class := idx.Opclasses[c]; class != "" {
+			cols[i] += " " + class
+		}
 	}
 	b.WriteString(" (" + strings.Join(cols, ", ") + ")")
+	if with := storageParameters(idx.With); with != "" {
+		b.WriteString(" WITH (" + with + ")")
+	}
 	if idx.Where != "" {
 		b.WriteString(" WHERE " + idx.Where)
 	}
 	b.WriteString(";")
 	return b.String()
+}
+
+// storageParameters renders an index's WITH clause in sorted key order.
+//
+// A number is written bare and anything else is quoted, which is what Postgres
+// hands back through reloptions and therefore what makes the value survive a
+// round trip: `m=16` comes back as `m=16`, and `buffering=auto` as
+// `buffering=auto` whether it was written quoted or not.
+func storageParameters(with map[string]string) string {
+	if len(with) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(with))
+	for k := range with {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+" = "+storageValue(with[k]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func storageValue(v string) string {
+	if v == "" {
+		return "''"
+	}
+	for i := 0; i < len(v); i++ {
+		if (v[i] < '0' || v[i] > '9') && v[i] != '.' && v[i] != '-' {
+			return sqlString(v)
+		}
+	}
+	return v
 }
 
 func dropIndex(name string, concurrent bool) string {
