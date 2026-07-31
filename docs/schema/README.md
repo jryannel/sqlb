@@ -134,6 +134,7 @@ pair written out.
 ).
     Index("org_id", "status").                       // composite
     UniqueIndex("org_id", "slug").
+    IndexNamed("idx_posts_author", "author_id").     // the name the database has
     AddIndex(schema.Index{Columns: []string{"body"}, Method: "gin"}).
     Check("name", "status <> 'published' OR published_at IS NOT NULL")
 ```
@@ -144,9 +145,29 @@ the cleanest way to state a domain rule the type system cannot:
 `UNIQUE (book_id, borrower_id) WHERE returned_at IS NULL` makes borrowing a book
 you already have out impossible, and borrowing it again next year ordinary.
 
-An external reference gets an index whether or not you asked for one, and it is
-added to the table's own index list rather than applied invisibly, so it shows
-up in `Indexes()`, the manifest and the generated DDL like any other.
+`Index` and `UniqueIndex` name the index by convention — `posts_org_id_idx`,
+`posts_org_id_slug_uniq`. `IndexNamed` and `UniqueIndexNamed` take the name
+instead, which is what describing a database somebody else's tool built needs: a
+declared index whose name differs from the live one is a rename, and across a
+schema of any size that turns adoption into renaming every index in the
+database.
+
+An index name is not always inert, which is the sharper half. Postgres reports a
+violated constraint by name, and matching that name is the standard way to tell
+one unique violation from another —
+
+```go
+pgErr.Code == "23505" && pgErr.ConstraintName == "idx_projects_org_code"
+```
+
+— so renaming a unique index turns a handled collision into an unhandled 500
+without touching the code that handled it. The generated migration says so when
+it proposes one.
+
+An external reference gets an index whether or not you asked for one. It is
+resolved when the index set is read, so an index you declare on the same column
+replaces it rather than colliding with it, and it shows up in `Indexes()`, the
+manifest and the generated DDL like any other.
 
 `Check` is the floor under everything else. A hook is a convention; a check
 constraint cannot be bypassed by code that has not been written yet — see
