@@ -62,6 +62,11 @@ func renderModels(opts Options) ([]byte, error) {
 				// importable without sqlb the way the rest of them are.
 				imports["github.com/jryannel/sqlb"] = true
 			}
+			// A computed column's expression is carried by a method returning
+			// sqlb.Computed, for the reason renderComputed gives.
+			if f.Desc().Computed() {
+				imports["github.com/jryannel/sqlb"] = true
+			}
 		}
 		// An expanded collection lands in a sqlb.Collection. Models are
 		// otherwise importable without sqlb — a table with neither a reverse

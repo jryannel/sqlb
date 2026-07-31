@@ -91,6 +91,16 @@ type Project struct {
 	// (ADR-0039) — so it belongs in the repository like the migration history.
 	ContractFile string
 
+	// EjectDir is where `sqlb eject` writes, relative to the module root.
+	//
+	// Empty defaults to "ejected" beside the generated code, which is the
+	// answer for the case this verb exists for: a repository that wants the way
+	// out committed and checked, rather than discovered on the day it is
+	// needed. Set it to move the package; set EjectPackage if the directory's
+	// base name is not the package name you want.
+	EjectDir     string
+	EjectPackage string
+
 	// MigrationFormat names the runner's file layout: "goose" (the default),
 	// "golang-migrate", or "plain". Resolved by migrate.ByName, so an unknown
 	// name is refused with the list of the ones that exist.
@@ -192,7 +202,7 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 	}
 
 	verb, rest := args[0], args[1:]
-	if verb != "migrate" && verb != "impact" && verb != "check" && len(rest) > 0 {
+	if verb != "migrate" && verb != "impact" && verb != "check" && verb != "eject" && len(rest) > 0 {
 		say(stderr, "sqlb: %s takes no flags, got %q\n", verb, rest[0])
 		return 2
 	}
@@ -229,6 +239,14 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		// because the sharpest API breaks — un-exposing a column, dropping an
 		// operation, a rename — produce no DDL (ADR-0039).
 		return runImpact(p, opts, opts.Registry, rest, stdout, stderr)
+
+	case "eject":
+		// The way out: the schema as SQL and the resources as plain handlers,
+		// depending on pgx and the standard library and nothing else. It reads
+		// the same registry the emitters do, so the exit describes the schema as
+		// it stands rather than as it was when someone last remembered to run
+		// this.
+		return runEject(p, opts, rest, stdout, stderr)
 
 	default:
 		say(stderr, "sqlb: driver does not know the verb %q\n", verb)

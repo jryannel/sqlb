@@ -164,14 +164,18 @@ const SOURCES = [
     // accident — what belongs on the site is a decision each time.
     //
     // Read in this order: what it is for, how it is built, what it promises,
-    // what it has to do before that promise becomes permanent, how it sits
-    // beside sqlc, and what an outside reader made of it. The review is a dated
-    // snapshot and says so in its own first paragraph, which is what makes it
-    // publishable rather than misleading.
+    // how to leave, what it has to do before that promise becomes permanent,
+    // how it sits beside sqlc, and what an outside reader made of it. The
+    // review is a dated snapshot and says so in its own first paragraph, which
+    // is what makes it publishable rather than misleading.
+    //
+    // The exit sits directly after the compatibility promise on purpose: the
+    // two answer the same reader's question, one page apart.
     files: [
       "vision.md",
       "architecture.md",
       "compatibility.md",
+      "eject.md",
       "release-1.0.md",
       "comparisons.md",
       "with-sqlc.md",

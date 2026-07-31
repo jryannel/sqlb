@@ -78,6 +78,9 @@ Usage:
                                      between the history and the schema
     sqlb impact [flags] <package>    report how the schema edit changes the REST
                                      contract, against a checked-in baseline
+    sqlb eject [flags] <package>     write the exit: the schema as SQL and the
+                                     resources as plain handlers, importing pgx
+                                     and the standard library and nothing else
     sqlb version                     print the version this binary was built from
 
 Flags for check:
@@ -98,6 +101,10 @@ Flags for impact:
     -write                record the current REST contract as the new baseline
     -error                exit non-zero if the contract has breaking changes
 
+Flags for eject:
+
+    -check                report whether the committed exit is stale; write nothing
+
 <package> is the Go package that declares the schema, in the form go build
 takes — usually ./schema or ./taskschema. It must export:
 
@@ -106,8 +113,8 @@ takes — usually ./schema or ./taskschema. It must export:
 Paths in that Project resolve against the module root, so the commands above
 mean the same thing from a shell, from a //go:generate directive and from CI.
 
-generate and impact need no database, and neither does check until it is given
-one. migrate reads the current schema by
+generate, impact and eject need no database, and neither does check until it is
+given one. migrate reads the current schema by
 replaying the committed history into a scratch Postgres, so it needs the
 Project's ShadowDB — except for the first migration, which diffs against
 nothing and needs no database at all.
@@ -133,7 +140,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version())
 		return nil
-	case "generate", "check", "migrate", "impact":
+	case "generate", "check", "migrate", "impact", "eject":
 	default:
 		_, _ = fmt.Fprintf(stderr, "sqlb: unknown command %q\n\n", verb)
 		_, _ = fmt.Fprint(stderr, usage)

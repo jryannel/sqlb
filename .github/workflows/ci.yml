@@ -30,6 +30,7 @@ jobs:
       - run: mise run deps-check
       - run: mise run generate-check
       - run: mise run impact-check
+      - run: mise run eject-check
       - run: mise run test-race
       # Node comes from mise.toml, like Go and golangci-lint. This is the gate
       # ADR-0028 promised the TypeScript client would need: the emitted client's

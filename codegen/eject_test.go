@@ -1,0 +1,218 @@
+package codegen_test
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/jryannel/sqlb/codegen"
+	"github.com/jryannel/sqlb/schema"
+)
+
+func ejectFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	org := r.Table("orgs",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("name").Searchable().Sortable(),
+	).Expose(schema.REST{Ops: schema.OpRead | schema.OpList})
+
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("org", org).OnDelete(schema.Cascade).Filterable().ReadOnly().Scoped(),
+		schema.Text("title").Searchable().Sortable(),
+		schema.Text("secret").Hidden(),
+		schema.Enum("status", "draft", "published").Default(schema.Value("draft")).Filterable(),
+		schema.BigInt("view_count").Default(schema.Value(0)).Filterable().Sortable().ReadOnly(),
+		schema.Computed("is_published", schema.TypeBool,
+			schema.FromSQL("status = 'published'")).Filterable(),
+		schema.Timestamps(),
+		schema.SoftDelete(),
+		// OpDelete is absent for the reason the schema validator gives: a table
+		// that soft-deletes and exposes a generated DELETE is a contradiction.
+	).Index("org_id").Expose(schema.REST{
+		Ops:         schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList,
+		MaxPageSize: 50,
+	})
+	return r
+}
+
+func eject(t *testing.T, r *schema.Registry) map[string]string {
+	t.Helper()
+	dir := t.TempDir()
+	written, err := codegen.Eject(codegen.EjectOptions{Registry: r, Dir: dir, Package: "ejected"})
+	if err != nil {
+		t.Fatalf("Eject: %v", err)
+	}
+	out := map[string]string{}
+	for _, path := range written {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[filepath.Base(path)] = string(data)
+	}
+	return out
+}
+
+// The exit is a package, and this is what is in it.
+func TestEjectWritesASelfContainedPackage(t *testing.T) {
+	files := eject(t, ejectFixture())
+
+	var names []string
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	want := []string{"README.md", "handlers.go", "models.go", "schema.sql", "store.go", "support.go"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Errorf("wrote %v, want %v", names, want)
+	}
+
+	// The whole argument of the verb: nothing here imports sqlb. A package that
+	// did would be an exit you cannot take.
+	for name, src := range files {
+		if strings.HasSuffix(name, ".go") && strings.Contains(src, `"github.com/jryannel/sqlb`) {
+			t.Errorf("%s imports sqlb, so the exit is not one", name)
+		}
+	}
+}
+
+// The schema comes out as SQL, and a computed column comes out as an expression
+// in the projection rather than as a column that does not exist.
+func TestEjectRendersTheSchemaAsSQL(t *testing.T) {
+	files := eject(t, ejectFixture())
+
+	ddl := files["schema.sql"]
+	for _, want := range []string{"CREATE TABLE \"posts\"", "\"title\" text NOT NULL", "CREATE INDEX"} {
+		if !strings.Contains(ddl, want) {
+			t.Errorf("the DDL is missing %q:\n%s", want, ddl)
+		}
+	}
+	if strings.Contains(ddl, "is_published") {
+		t.Errorf("a computed column reached the DDL:\n%s", ddl)
+	}
+	if !strings.Contains(files["store.go"], `(status = 'published') AS \"is_published\"`) {
+		t.Errorf("the computed expression should be in the projection:\n%s", files["store.go"])
+	}
+}
+
+// Capabilities are opt-in in the exit exactly as they were in the schema, and a
+// hidden column has no spelling at all.
+func TestEjectCarriesTheCapabilities(t *testing.T) {
+	store := eject(t, ejectFixture())["store.go"]
+
+	for _, want := range []string{
+		// Searchable implies Filterable in the schema, and the exit inherits the
+		// implication rather than re-deriving it.
+		`{Name: "title", Filterable: true, Sortable: true, Searchable: true, Parse: ParseText}`,
+		`{Name: "status", Filterable: true, Sortable: false, Searchable: false, Parse: ParseText}`,
+		`{Name: "view_count", Filterable: true, Sortable: true, Searchable: false, Parse: ParseInt}`,
+	} {
+		if !contains(store, want) {
+			t.Errorf("the column table is missing %s:\n%s", want, store)
+		}
+	}
+	if strings.Contains(store, `{Name: "secret"`) {
+		t.Error("a hidden column is nameable in the exit")
+	}
+}
+
+// ADR-0030 survives the loss of everything it was implemented in: the resource
+// refuses to register without the hook that confines it.
+func TestEjectKeepsTheObligation(t *testing.T) {
+	handlers := eject(t, ejectFixture())["handlers.go"]
+
+	for _, want := range []string{
+		`"ejected: %s: Confine is required (%s)", "/posts", "org_id is Scoped; deleted_at declares a soft delete"`,
+		`Assign is required (%s is Scoped and read-only`,
+	} {
+		if !contains(handlers, want) {
+			t.Errorf("handlers are missing the refusal %q:\n%s", want, handlers)
+		}
+	}
+	// A table that declared nothing needs no hook, and does not pretend to.
+	if strings.Contains(handlers, `"/orgs": Confine`) {
+		t.Error("a table with no obligation should not require a hook")
+	}
+}
+
+// A column that no request body carries and the database does not default has
+// to be written by the insert, or the first POST fails on a not-null the caller
+// never heard of.
+func TestEjectSuppliesTheValuesNoBodyCarries(t *testing.T) {
+	handlers := eject(t, ejectFixture())["handlers.go"]
+	if !contains(handlers, `var postInsertDefaults = map[string]any{`) ||
+		!contains(handlers, `"secret": "",`) {
+		t.Errorf("the insert does not supply the hidden not-null column:\n%s", handlers)
+	}
+}
+
+// The README is the honest half of the feature, so it is generated with the
+// code rather than written once and left behind.
+func TestEjectDocumentsWhatItDoesNotCarry(t *testing.T) {
+	readme := eject(t, ejectFixture())["README.md"]
+	for _, want := range []string{
+		"?cursor", "?select", "?expand", "?filter=",
+		"is a computed column",
+		"Scoped", "Confine",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("the README does not mention %q:\n%s", want, readme)
+		}
+	}
+}
+
+// A registry with no REST surface still ejects: the schema and the statements
+// are the whole exit for a project that used sqlb as a query builder.
+func TestEjectWithoutARestSurface(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("events", schema.UUIDv7("id").PrimaryKey(), schema.Text("kind"))
+
+	files := eject(t, r)
+	if _, ok := files["handlers.go"]; ok {
+		t.Error("nothing is exposed, so there should be no handlers")
+	}
+	if !strings.Contains(files["store.go"], "func ListEvent(") {
+		t.Error("the statements should come out even with no REST surface")
+	}
+}
+
+// The exit rots the same way generated code does, so it has the same gate.
+func TestEjectCheckReportsDrift(t *testing.T) {
+	dir := t.TempDir()
+	opts := codegen.EjectOptions{Registry: ejectFixture(), Dir: dir, Package: "ejected"}
+
+	if _, err := codegen.Eject(opts); err != nil {
+		t.Fatalf("Eject: %v", err)
+	}
+	stale, err := codegen.EjectCheck(opts)
+	if err != nil {
+		t.Fatalf("EjectCheck: %v", err)
+	}
+	if len(stale) != 0 {
+		t.Errorf("a freshly written exit is stale: %v", stale)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "store.go"), []byte("package ejected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "schema.sql")); err != nil {
+		t.Fatal(err)
+	}
+	stale, err = codegen.EjectCheck(opts)
+	if err != nil {
+		t.Fatalf("EjectCheck: %v", err)
+	}
+	if len(stale) != 2 {
+		t.Errorf("stale = %v, want the edited file and the missing one", stale)
+	}
+}
+
+func TestEjectRefusesAnInvalidPackageName(t *testing.T) {
+	_, err := codegen.Eject(codegen.EjectOptions{Registry: ejectFixture(), Dir: t.TempDir() + "/api-client"})
+	if err == nil || !strings.Contains(err.Error(), "EjectOptions.Package") {
+		t.Errorf("want a refusal naming the option to set, got %v", err)
+	}
+}
