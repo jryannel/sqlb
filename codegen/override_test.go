@@ -97,6 +97,50 @@ func TestOverrideReachesTheGeneratedGo(t *testing.T) {
 	}
 }
 
+// An override's import belongs to the files that render the overridden column,
+// and rest_gen.go renders a strict subset of them: the body columns of the
+// exposed tables, which exclude every primary key, every read-only and hidden
+// column, and every table that is not exposed at all.
+//
+// The models and columns emitters render every column of every table, so the
+// registry-wide set ov.imports returns is exactly right for them. Taking it
+// here imported uuid into a rest_gen.go for a schema whose only uuid column is
+// a primary key — the same unused-import defect as the "time" one next door,
+// arriving through a different door.
+func TestRestImportsAnOverrideOnlyWhereABodyNamesIt(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("posts", schema.UUIDv7("id").PrimaryKey(), schema.Text("title")).
+		Expose(schema.REST{Ops: schema.OpList})
+	files := generateWith(t, codegen.Options{
+		Registry: r, Types: []codegen.TypeOverride{uuidOverride()},
+	})
+
+	if rest := files["rest_gen.go"]; contains(rest, "github.com/google/uuid") {
+		t.Errorf("the only uuid column is a primary key, which no body carries:\n%s", rest)
+	}
+	// The models file renders that same primary key, so there the import is
+	// not merely allowed but required — this is a narrowing, not a removal.
+	if models := files["models_gen.go"]; !contains(models, "github.com/google/uuid") {
+		t.Errorf("models names uuid.UUID without importing it:\n%s", models)
+	}
+
+	// And a body that does carry an overridden column still gets it. The
+	// reference is not a primary key, so it is a column a create body writes.
+	r = schema.NewRegistry()
+	orgs := r.Table("orgs", schema.UUIDv7("id").PrimaryKey(), schema.Text("name"))
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("org", orgs).OnDelete(schema.Cascade),
+	).Expose(schema.REST{Ops: schema.OpCreate})
+	rest := generateWith(t, codegen.Options{
+		Registry: r, Types: []codegen.TypeOverride{uuidOverride()},
+	})["rest_gen.go"]
+
+	if !contains(rest, "github.com/google/uuid") {
+		t.Errorf("a create body carrying a uuid.UUID does not import it:\n%s", rest)
+	}
+}
+
 // The four things an override must not reach. This is the record's actual
 // claim, and it is why the test names each of them separately rather than
 // asserting one golden file.

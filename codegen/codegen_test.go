@@ -210,6 +210,64 @@ func TestCreateBodyAssignsSliceColumnsThroughTheDeref(t *testing.T) {
 	}
 }
 
+// The mirror of TestColumnsImportsWhatItNames, in the direction the rest
+// emitter got wrong: an import for a type the file never names.
+//
+// The import set was derived from the create field list of every exposed
+// table, without asking whether a create body was emitted for it. A resource
+// exposed for reads only emits no body at all — the whole file is the Register
+// function, which names nothing but the model types — so a timestamp column on
+// such a table produced a rest_gen.go importing "time" with no time.Time in it.
+//
+// Invisible to codegen for the same reason the missing-import bugs were:
+// format.Source parses without type-checking, and an unused import is valid Go
+// source that only fails at the consumer's compiler. TestGeneratedGoCompiles is
+// the general guard; this is the case that prompted it.
+func TestRestImportsNothingItDoesNotName(t *testing.T) {
+	// The fixture is already this shape — exposed for OpList, with a nullable
+	// timestamp — and generating from it is what produced the file that did
+	// not compile.
+	src := generate(t, fixture())["rest_gen.go"]
+
+	if contains(src, `"time"`) {
+		t.Errorf("a resource that emits no body imports time:\n%s", src)
+	}
+
+	// The same defect through the other import the patch body earns. errors is
+	// named only where Changes() refuses an explicit null, which is only for a
+	// column that cannot hold one — but it was added for the patch body's mere
+	// existence, so a table whose every patchable column is nullable imported
+	// it and never used it.
+	nullable := schema.NewRegistry()
+	nullable.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("title").Nullable(),
+	).Expose(schema.REST{Ops: schema.OpUpdate})
+	src = generate(t, nullable)["rest_gen.go"]
+
+	if contains(src, `"errors"`) {
+		t.Errorf("an all-nullable patch body imports errors:\n%s", src)
+	}
+
+	// And the import is narrowed, not removed: one non-nullable column brings
+	// the rejection back, and with it the import.
+	required := schema.NewRegistry()
+	required.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("title"),
+	).Expose(schema.REST{Ops: schema.OpUpdate})
+	src = generate(t, required)["rest_gen.go"]
+
+	for _, want := range []string{
+		`"errors"`,
+		`errors.New("title is not nullable and cannot be set to null")`,
+	} {
+		if !contains(src, want) {
+			t.Errorf("a non-nullable patch column is missing %q:\n%s", want, src)
+		}
+	}
+}
+
 func TestGeneratedColumns(t *testing.T) {
 	cols := generate(t, fixture())["columns_gen.go"]
 

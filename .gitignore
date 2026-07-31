@@ -25,6 +25,12 @@ node_modules/
 # between those from ending in a commit, which has already happened once.
 .sqlb-driver-*/
 
+# The scratch directory codegen's compile check generates into. Same shape and
+# same reason as the one above: it has to live inside this module, because that
+# is what resolves the sqlb and huma imports in the code being compiled. The
+# test removes it, and this rule covers the run that is killed before it can.
+.sqlb-gencheck-*/
+
 # Local environment
 .env
 .env.local

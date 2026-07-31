@@ -196,25 +196,44 @@ func (o *overrides) describe(idx []int) string {
 	return strings.Join(parts, " and ")
 }
 
+// rule returns the override that applies to a column, or nil when none does.
+//
+// Ambiguity resolves to nil rather than to a winner, but newOverrides has
+// already refused a schema where two rules tie, so this is the belt to that
+// braces: nothing reaches here whose type would depend on rule order.
+func (o *overrides) rule(table string, d *schema.FieldDesc) *TypeOverride {
+	if o == nil || len(o.rules) == 0 {
+		return nil
+	}
+	top := o.candidates(table, d).top
+	if len(top) != 1 {
+		return nil
+	}
+	return &o.rules[top[0]]
+}
+
 // base returns the overridden base type for a column, and whether one applied.
 //
 // "Base" is the type before Nullable and Array wrap it: those compose on top,
 // in the same place they did before, so an override never has to know about
 // either.
 func (o *overrides) base(table string, d *schema.FieldDesc) (string, bool) {
-	if o == nil || len(o.rules) == 0 {
+	r := o.rule(table, d)
+	if r == nil {
 		return "", false
 	}
-	top := o.candidates(table, d).top
-	if len(top) != 1 {
-		return "", false
-	}
-	return o.rules[top[0]].GoType, true
+	return r.GoType, true
 }
 
 // imports returns the package paths the overrides that actually matched need,
 // so an override written for a table the schema does not have cannot add an
 // import to a file that never uses it.
+//
+// Every column of every table, which is what the models and columns emitters
+// render. A file that renders a subset — rest_gen.go, which sees only the body
+// columns of the exposed tables — collects its imports per field instead, or
+// the same argument that rejects an unmatched rule would let a matched one in
+// through a door the file never opens.
 func (o *overrides) imports(reg *schema.Registry) []string {
 	if o == nil || len(o.rules) == 0 {
 		return nil
@@ -222,12 +241,12 @@ func (o *overrides) imports(reg *schema.Registry) []string {
 	seen := map[string]bool{}
 	for _, t := range reg.Tables() {
 		for _, f := range t.Fields() {
-			top := o.candidates(t.Name(), f.Desc()).top
-			if len(top) != 1 {
+			r := o.rule(t.Name(), f.Desc())
+			if r == nil {
 				continue
 			}
-			if path := o.rules[top[0]].Import; path != "" {
-				seen[path] = true
+			if r.Import != "" {
+				seen[r.Import] = true
 			}
 		}
 	}
