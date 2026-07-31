@@ -202,7 +202,7 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 	}
 
 	verb, rest := args[0], args[1:]
-	if verb != "migrate" && verb != "impact" && verb != "eject" && len(rest) > 0 {
+	if verb != "migrate" && verb != "impact" && verb != "check" && verb != "eject" && len(rest) > 0 {
 		say(stderr, "sqlb: %s takes no flags, got %q\n", verb, rest[0])
 		return 2
 	}
@@ -227,24 +227,11 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		return 0
 
 	case "check":
-		stale, err := Check(opts)
-		if err != nil {
-			line(stderr, err)
-			return 1
-		}
-		if len(stale) > 0 {
-			// Naming the command that fixes it matters more here than
-			// anywhere else in sqlb: this message is read almost exclusively
-			// out of a CI log, by someone who is not in the directory and has
-			// no idea what the generator was called.
-			line(stderr, "sqlb: generated files are out of date; run: sqlb generate")
-			for _, f := range stale {
-				line(stderr, "  "+f)
-			}
-			return 1
-		}
-		line(stderr, "sqlb: generated files are current")
-		return 0
+		// Two questions, and only the second one needs a database: are the
+		// generated files current, and — with -database — does the declaration
+		// still describe the database it is meant to be the truth about
+		// (issue #54).
+		return runCheck(p, opts, rest, stdout, stderr)
 
 	case "impact":
 		// The REST contract the current schema generates, diffed against the

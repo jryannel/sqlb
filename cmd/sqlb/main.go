@@ -71,7 +71,9 @@ const usage = `sqlb keeps a project's generated code and migration history in st
 Usage:
 
     sqlb generate <package>          write every artefact the project declares
-    sqlb check <package>             report stale artefacts, write nothing
+    sqlb check [flags] <package>     report stale artefacts, write nothing; with
+                                     -database, also report a declaration that no
+                                     longer describes the live database
     sqlb migrate [flags] <package>   write the migration that closes the gap
                                      between the history and the schema
     sqlb impact [flags] <package>    report how the schema edit changes the REST
@@ -80,6 +82,11 @@ Usage:
                                      resources as plain handlers, importing pgx
                                      and the standard library and nothing else
     sqlb version                     print the version this binary was built from
+
+Flags for check:
+
+    -database <dsn>       compare the declared schema against this database too,
+                          and exit non-zero if they disagree
 
 Flags for migrate:
 
@@ -106,7 +113,8 @@ takes — usually ./schema or ./taskschema. It must export:
 Paths in that Project resolve against the module root, so the commands above
 mean the same thing from a shell, from a //go:generate directive and from CI.
 
-generate, check, impact and eject need no database. migrate reads the current schema by
+generate, impact and eject need no database, and neither does check until it is
+given one. migrate reads the current schema by
 replaying the committed history into a scratch Postgres, so it needs the
 Project's ShadowDB — except for the first migration, which diffs against
 nothing and needs no database at all.

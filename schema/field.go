@@ -120,6 +120,12 @@ type Reference struct {
 	// deliberately — resolving it would require the dependency this is
 	// designed to avoid.
 	Target string
+	// Enforced turns an external reference into a real FOREIGN KEY to the
+	// table Target names, without resolving that table's declaration. It is
+	// the case an incremental adoption lives in: the database has a live,
+	// enforced constraint and the table it points at has not been declared yet
+	// (issue #55). See Field.Enforced.
+	Enforced bool
 
 	// Inverse is the name the target knows this relation by, and declaring it
 	// is what makes the reverse relation exist at all.
@@ -361,11 +367,87 @@ func Ref(name string, target *TableDef) *Field {
 //
 // Such a reference cannot be Expandable: expanding it would join a table this
 // module does not own. Fetch the other side through that module's own API.
+//
+// # relation, not column
+//
+// The first argument is the *relation* — the column is named after it, with
+// "_id" appended. So ExternalRef("org", …) declares a column called org_id, and
+// ExternalRef("org_id", …) declares one called org_id_id. Use [Field.Named] if
+// the column is spelled some other way.
 func ExternalRef(relation, target string) *Field {
 	f := newField(relation+"_id", TypeUUID)
 	f.d.Ref = &Reference{Name: relation, Target: target, External: true}
 	f.d.indexWanted = true
 	return f
+}
+
+// Enforced makes an external reference emit a real FOREIGN KEY.
+//
+//	schema.ExternalRef("org", "organizations.id").Enforced().Filterable()
+//
+// It is for the case an incremental adoption always reaches: the database has a
+// live, enforced foreign key, and the table it points at has not been declared
+// yet. Neither existing spelling covers that — [Ref] needs the target's
+// *TableDef, and a plain [ExternalRef] emits no constraint, so a
+// schema-vs-database diff reports the live one as something to drop and, if
+// sqlb owned the DDL, would propose actually dropping it (issue #55).
+//
+// The target is still not resolved: it is a name, and the constraint is emitted
+// against that name. Two forms are accepted — "organizations.id" names the
+// table and the column, and a bare "organizations" means its "id". A
+// module-qualified target ("platform/users.users.id") cannot be enforced,
+// because a constraint has to name a table in this database, and neither can a
+// schema-qualified one, which this spelling has no room for.
+//
+// # What this gives up
+//
+// Everything [ADR-0015] bought by refusing the constraint. Two modules joined
+// by an enforced reference can no longer be migrated or deployed independently,
+// and neither can be moved to its own database without dropping it. That is the
+// right trade when both tables are in one database and the constraint is
+// already there — which is exactly the adoption case — and the wrong one across
+// a module boundary you intend to keep.
+//
+// Expansion is still refused. A real constraint says the row exists; it does
+// not give this schema the target's columns, so `?expand` has nothing to build
+// a join from.
+//
+// [ADR-0015]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0015-module-isolation.md
+func (f *Field) Enforced() *Field {
+	if f.d.Ref != nil {
+		f.d.Ref.Enforced = true
+	}
+	return f
+}
+
+// EnforcedTarget resolves an enforced external reference's target into the
+// table and column a FOREIGN KEY names.
+//
+// "organizations.id" is a table and a column; a bare "organizations" is that
+// table's "id", which is the convention every other part of this DSL already
+// assumes. Anything else — a module-qualified target, an empty one, more than
+// one dot — reports false, and Validate turns that into an error naming the two
+// forms rather than emitting a constraint against a guess.
+func (r *Reference) EnforcedTarget() (table, column string, ok bool) {
+	if r == nil || !r.Enforced {
+		return "", "", false
+	}
+	target := strings.TrimSpace(r.Target)
+	if target == "" || strings.Contains(target, "/") {
+		return "", "", false
+	}
+	switch parts := strings.Split(target, "."); len(parts) {
+	case 1:
+		table, column = parts[0], "id"
+	case 2:
+		table, column = parts[0], parts[1]
+	default:
+		return "", "", false
+	}
+	if !isIdent(table) || !isIdent(column) {
+		return "", "", false
+	}
+	return table, column, true
 }
 
 // OfType overrides the column type, for an external reference whose target is

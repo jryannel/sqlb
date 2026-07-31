@@ -288,7 +288,7 @@ func (t *TableDef) indexedColumns() map[string]bool {
 			out[d.Name] = true
 		}
 	}
-	for _, idx := range t.indexes {
+	for _, idx := range t.Indexes() {
 		if len(idx.Columns) > 0 {
 			// Only the leading column of a btree is seekable on its own.
 			out[idx.Columns[0]] = true
@@ -298,7 +298,7 @@ func (t *TableDef) indexedColumns() map[string]bool {
 }
 
 func hasIndexMethod(t *TableDef, column, method string) bool {
-	for _, idx := range t.indexes {
+	for _, idx := range t.Indexes() {
 		if !strings.EqualFold(idx.Method, method) {
 			continue
 		}

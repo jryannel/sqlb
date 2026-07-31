@@ -65,6 +65,77 @@ the compiler checks for you.
 Generating a migration and adopting a database are the same machinery pointed in
 opposite directions.
 
+## Adopting one table at a time
+
+The realistic adoption declares a few tables while the database holds dozens, and
+that shape used to fight the tooling at four points. All four are closed.
+
+**Read only what you declared.** Diffing five declared tables against sixty-nine
+imported ones reports sixty-four tables to drop, which is the adoption working
+rather than drift:
+
+```go
+introspect.Registry(ctx, db, introspect.Options{
+    Only:    []string{"projects", "project_members"},
+    Exclude: []string{"goose_db_version"},
+})
+```
+
+A name in either list that the database does not have is reported, because a
+typo there silently shrinks what a gate covers.
+
+**A corner the DSL cannot model no longer stops the rest.** A `tsvector` column
+is skipped and reported — and now so is the index over it, the check that
+constrains it, and any pinned name that depended on it. One unmodelable column
+used to fail the whole import, which made a drift gate impossible to build for
+every other table in the database.
+
+**A real foreign key can point at a table you have not declared.** `Ref` needs
+the target's declaration and `ExternalRef` emits no constraint, so a partial
+declaration had to choose between describing the database inaccurately and
+declaring all of it at once:
+
+```go
+schema.ExternalRef("org", "organizations.id").Enforced().Filterable()
+```
+
+The target is a name, not a resolution. See [`Enforced`](https://pkg.go.dev/github.com/jryannel/sqlb/schema#Field.Enforced)
+for what it gives up — everything [ADR-0015](../adr/0015-module-isolation.md)
+bought by refusing the constraint, which is the right trade only when both tables
+live in one database.
+
+**Describe the indexes the database already has.** A declared index whose name
+differs from the live one is a rename, and index names are not inert: Postgres
+reports a violated constraint by name, and matching that name is the standard way
+to tell one unique violation from another.
+
+```go
+).
+    IndexNamed("idx_projects_org_id", "org_id").
+    UniqueIndexNamed("idx_projects_org_code", "org_id", "code")
+```
+
+## The drift gate
+
+Once a table is declared accurately, the question worth asking in CI is whether
+it *stays* accurate — a hand-applied hotfix, a column added by another service, a
+migration edited after the fact:
+
+```bash
+sqlb check -database "$DATABASE_URL" ./schema
+```
+
+`check` on its own compares committed generated files with the declaration and
+opens no database. With `-database` it also reads the live one, narrowed to the
+tables the schema declares, normalises the declared `CHECK` expressions against
+that same Postgres — `ADD CONSTRAINT … NOT VALID` inside a transaction that is
+always rolled back, so no table is scanned — and prints the differences as SQL,
+exiting non-zero if there are any.
+
+What it does not compare is what it says it cannot: constructs the DSL has no
+way to describe are listed rather than silently skipped, so the gate never claims
+to have checked something it never looked at.
+
 
 ## Next
 

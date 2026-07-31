@@ -153,6 +153,73 @@ func TestColumnsImportsWhatItNames(t *testing.T) {
 	}
 }
 
+// The columns file has two halves that disagree about hidden columns, and only
+// one of them was accounted for.
+//
+// The facade omits a hidden column so that a predicate against one does not
+// compile. The typed update deliberately keeps it — writing an embedding from
+// Go is the whole point of the one hidden column this repository has — so a
+// hidden timestamp is set by a Set…(v time.Time) in a file whose import set was
+// built from the facade's columns alone.
+//
+// It survived because the hidden column it was written for is the vector one,
+// whose import is sqlb and is there unconditionally.
+func TestColumnsImportsWhatTheTypedUpdateNames(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("users",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("name"),
+		schema.Timestamp("last_seen_at").Hidden(),
+		schema.JSON("audit").Hidden(),
+	)
+	cols := generate(t, r)["columns_gen.go"]
+
+	for _, want := range []string{
+		// The setters exist, which is what makes the imports necessary.
+		"func (u *UserUpdate) SetLastSeenAt(v time.Time)",
+		"func (u *UserUpdate) SetAudit(v json.RawMessage)",
+		`"time"`,
+		`"encoding/json"`,
+	} {
+		if !contains(cols, want) {
+			t.Errorf("columns missing %q:\n%s", want, cols)
+		}
+	}
+	// And the facade still omits them, so this is an import fix and not a
+	// hidden column becoming queryable.
+	facade := cols[strings.Index(cols, "type userColumns struct {"):strings.Index(cols, "type UserUpdate struct {")]
+	for _, forbidden := range []string{"LastSeenAt", "Audit"} {
+		if contains(facade, forbidden) {
+			t.Errorf("a hidden column reached the typed facade (%s):\n%s", forbidden, facade)
+		}
+	}
+}
+
+// A nullable vector renders as *sqlb.Vector, and the models emitter's import
+// switch was a list of spellings that did not have that one on it — so the
+// model named the type with nothing importing it.
+//
+// The switch now asks whether the rendered type contains sqlb.Vector rather
+// than which of three ways it was spelled, which is the same question the
+// nullable and array wrapping already made it ask twice for time.Time.
+func TestNullableVectorImportsSqlb(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("chunks",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Vector("embedding", 1536).Nullable(),
+	)
+	models := generate(t, r)["models_gen.go"]
+
+	for _, want := range []string{
+		"Embedding *sqlb.Vector",
+		`import "github.com/jryannel/sqlb"`,
+	} {
+		if !contains(models, want) {
+			t.Errorf("models missing %q:\n%s", want, models)
+		}
+	}
+}
+
 // Row() has to key on whether the *model* field is a pointer, not on whether
 // the column is nullable. The two agree everywhere except the slice-typed
 // columns: a nullable bytea stays []byte and an array stays []T either way,
@@ -206,6 +273,64 @@ func TestCreateBodyAssignsSliceColumnsThroughTheDeref(t *testing.T) {
 	} {
 		if contains(rest, bad) {
 			t.Errorf("rest assigns across the pointer boundary %q:\n%s", bad, rest)
+		}
+	}
+}
+
+// The mirror of TestColumnsImportsWhatItNames, in the direction the rest
+// emitter got wrong: an import for a type the file never names.
+//
+// The import set was derived from the create field list of every exposed
+// table, without asking whether a create body was emitted for it. A resource
+// exposed for reads only emits no body at all — the whole file is the Register
+// function, which names nothing but the model types — so a timestamp column on
+// such a table produced a rest_gen.go importing "time" with no time.Time in it.
+//
+// Invisible to codegen for the same reason the missing-import bugs were:
+// format.Source parses without type-checking, and an unused import is valid Go
+// source that only fails at the consumer's compiler. TestGeneratedGoCompiles is
+// the general guard; this is the case that prompted it.
+func TestRestImportsNothingItDoesNotName(t *testing.T) {
+	// The fixture is already this shape — exposed for OpList, with a nullable
+	// timestamp — and generating from it is what produced the file that did
+	// not compile.
+	src := generate(t, fixture())["rest_gen.go"]
+
+	if contains(src, `"time"`) {
+		t.Errorf("a resource that emits no body imports time:\n%s", src)
+	}
+
+	// The same defect through the other import the patch body earns. errors is
+	// named only where Changes() refuses an explicit null, which is only for a
+	// column that cannot hold one — but it was added for the patch body's mere
+	// existence, so a table whose every patchable column is nullable imported
+	// it and never used it.
+	nullable := schema.NewRegistry()
+	nullable.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("title").Nullable(),
+	).Expose(schema.REST{Ops: schema.OpUpdate})
+	src = generate(t, nullable)["rest_gen.go"]
+
+	if contains(src, `"errors"`) {
+		t.Errorf("an all-nullable patch body imports errors:\n%s", src)
+	}
+
+	// And the import is narrowed, not removed: one non-nullable column brings
+	// the rejection back, and with it the import.
+	required := schema.NewRegistry()
+	required.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("title"),
+	).Expose(schema.REST{Ops: schema.OpUpdate})
+	src = generate(t, required)["rest_gen.go"]
+
+	for _, want := range []string{
+		`"errors"`,
+		`errors.New("title is not nullable and cannot be set to null")`,
+	} {
+		if !contains(src, want) {
+			t.Errorf("a non-nullable patch column is missing %q:\n%s", want, src)
 		}
 	}
 }
