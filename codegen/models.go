@@ -31,26 +31,35 @@ func renderModels(opts Options) ([]byte, error) {
 	}
 	for _, t := range tables {
 		for _, f := range t.Fields() {
+			// A computed column's expression is carried by a method returning
+			// sqlb.Computed, for the reason renderComputed gives. Ahead of the
+			// override guard, not behind it: an override replaces the column's
+			// Go type and not the fact that it is computed, so the method is
+			// emitted either way and needs the import either way.
+			if f.Desc().Computed() {
+				imports["github.com/jryannel/sqlb"] = true
+			}
 			// The default mapping decides which stdlib import a column needs;
 			// an overridden column brings its own, above.
 			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
 				continue
 			}
-			switch f.Desc().GoType() {
-			case "time.Time", "*time.Time", "[]time.Time":
+			// Contains rather than a case per spelling. The list of spellings
+			// was maintained by hand and was already one short: a nullable
+			// vector renders as *sqlb.Vector, which matched none of them, so
+			// the model named the type with nothing importing it. The wrapping
+			// a nullable or array column adds is not information this switch
+			// wants, so it does not ask for it.
+			switch goType := f.Desc().GoType(); {
+			case strings.Contains(goType, "time.Time"):
 				imports["time"] = true
-			case "json.RawMessage", "*json.RawMessage":
+			case strings.Contains(goType, "json.RawMessage"):
 				imports["encoding/json"] = true
-			case "sqlb.Vector":
+			case strings.Contains(goType, "sqlb.Vector"):
 				// The second thing in this file that is not a plain Go type,
 				// and the first that is a *column*. An embedding needs the
 				// codec that moves it in binary, so the model cannot be
 				// importable without sqlb the way the rest of them are.
-				imports["github.com/jryannel/sqlb"] = true
-			}
-			// A computed column's expression is carried by a method returning
-			// sqlb.Computed, for the reason renderComputed gives.
-			if f.Desc().Computed() {
 				imports["github.com/jryannel/sqlb"] = true
 			}
 		}

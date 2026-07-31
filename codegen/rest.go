@@ -38,37 +38,41 @@ func renderREST(opts Options) ([]byte, error) {
 		return nil, err
 	}
 
+	// Every import past these three comes from a body that is actually
+	// emitted — from the same createBody/patchBody the renderers are driven
+	// by, and per field rather than per table. Register names nothing but the
+	// model types, which live in this package, so a resource exposed for
+	// reads only needs no import at all beyond the three. The looser shape
+	// this replaced derived the set from the create field list of every
+	// exposed table regardless of whether a body was emitted, which left a
+	// list-only resource with a timestamp column importing "time" for a file
+	// that never says time.Time.
 	imports := map[string]bool{
 		"github.com/danielgtaylor/huma/v2": true,
 		"github.com/jryannel/sqlb":         true,
 		"github.com/jryannel/sqlb/rest":    true,
 	}
 	for _, t := range exposed {
-		for _, f := range bodyFields(t, forCreate) {
-			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
-				continue
-			}
-			goType := f.Desc().GoType()
-			if strings.Contains(goType, "time.Time") {
-				imports["time"] = true
-			}
-			// A create body carrying a jsonb column names json.RawMessage, so
-			// the file needs the import whether or not a patch body is emitted.
-			// The patch body brings encoding/json in for its own presence
-			// tracking, which is why a create-only resource was the only shape
-			// that named the type without importing it.
-			if t.Rest().Ops.Has(schema.OpCreate) && strings.Contains(goType, "json.RawMessage") {
-				imports["encoding/json"] = true
-			}
+		create, _ := createBody(t)
+		for _, f := range create {
+			bodyImports(imports, t.Name(), f.Desc(), ov)
 		}
-		if t.Rest().Ops.Has(schema.OpUpdate) && len(bodyFields(t, forUpdate)) > 0 {
+		patch, hasPatch := patchBody(t)
+		if hasPatch {
+			// UnmarshalJSON decodes the body twice, the second time into a
+			// map[string]json.RawMessage, which is how presence is recorded.
 			imports["encoding/json"] = true
-			imports["errors"] = true
 		}
-	}
-
-	for _, path := range ov.imports(opts.Registry) {
-		imports[path] = true
+		for _, f := range patch {
+			d := f.Desc()
+			bodyImports(imports, t.Name(), d, ov)
+			if !d.Nullable {
+				// Changes() refuses an explicit null on a column that cannot
+				// hold one. A patch body whose every column is nullable emits
+				// no such branch, and so names errors nowhere.
+				imports["errors"] = true
+			}
+		}
 	}
 
 	b := header(opts.Package, sortedSet(imports))
@@ -110,6 +114,77 @@ func bodyFields(t *schema.TableDef, kind bodyKind) []*schema.Field {
 	return out
 }
 
+// createBody and patchBody are the one answer to "does this table emit this
+// body, and over which columns" — asked by the renderer that writes the body,
+// by the registration that names its type, and by the import block that has to
+// account for the types it mentions.
+//
+// They exist because those three re-derived it separately and disagreed. The
+// import block computed a create field list for a table exposed for reads only
+// and imported "time" for a body that was never written; registration and
+// renderUpdateBody each had their own copy of the empty-patch rule. A body's
+// existence is one fact, so it is computed in one place.
+
+// createBody reports the columns a create body carries, and whether one is
+// emitted. Unlike a patch, an empty create body is still emitted: a table whose
+// every column is read-only is created by POSTing `{}`, and rest.Resource needs
+// a body type to bind.
+func createBody(t *schema.TableDef) ([]*schema.Field, bool) {
+	if !t.Rest().Ops.Has(schema.OpCreate) {
+		return nil, false
+	}
+	return bodyFields(t, forCreate), true
+}
+
+// patchBody reports the columns a patch body carries, and whether one is
+// emitted.
+//
+// An empty one is not: when every column is read-only, hidden or immutable
+// there is nothing a patch could write, and registration passes rest.None
+// rather than a body type with no fields.
+func patchBody(t *schema.TableDef) ([]*schema.Field, bool) {
+	if !t.Rest().Ops.Has(schema.OpUpdate) {
+		return nil, false
+	}
+	fields := bodyFields(t, forUpdate)
+	if len(fields) == 0 {
+		return nil, false
+	}
+	return fields, true
+}
+
+// bodyImports records the packages one body field's type names.
+//
+// An override replaces the type outright, so what the field needs is the
+// override's own import and never the default mapping's — a column overridden
+// to uuid.UUID says nothing about time or encoding/json. That is also why the
+// override imports are collected here rather than from ov.imports over the
+// whole registry, as the models and columns emitters do: those render every
+// column of every table, and this file renders the body columns of the exposed
+// ones, so a registry-wide set is an unused import waiting for a schema whose
+// only uuid column is a primary key.
+func bodyImports(imports map[string]bool, table string, d *schema.FieldDesc, ov *overrides) {
+	if r := ov.rule(table, d); r != nil {
+		if r.Import != "" {
+			imports[r.Import] = true
+		}
+		return
+	}
+	// schema.Type.GoType names three qualified types and no others: time.Time,
+	// json.RawMessage and sqlb.Vector. The third needs no case, because sqlb is
+	// imported unconditionally and a vector column is hidden by construction so
+	// no body carries one. A fourth would need a case here, in the models
+	// emitter and in the columns emitter — TestGeneratedGoCompiles is what says
+	// so, since a type named without its import is valid source that only fails
+	// at the consumer's compiler.
+	switch goType := d.GoType(); {
+	case strings.Contains(goType, "time.Time"):
+		imports["time"] = true
+	case strings.Contains(goType, "json.RawMessage"):
+		imports["encoding/json"] = true
+	}
+}
+
 // enumTag renders Huma's enum struct tag for an enum column.
 //
 // Without it the generated body types the column as a string alias, Huma
@@ -132,12 +207,12 @@ func optionalOnCreate(d *schema.FieldDesc) bool {
 }
 
 func renderCreateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {
-	if !t.Rest().Ops.Has(schema.OpCreate) {
+	fields, ok := createBody(t)
+	if !ok {
 		return
 	}
 	typeName := TypeName(t.LocalName())
 	name := typeName + "Create"
-	fields := bodyFields(t, forCreate)
 
 	fmt.Fprintf(b, "\n// %s is the request body for creating a %s.\n", name, typeName)
 	fmt.Fprintf(b, "//\n// Read-only columns are absent: the database or a BeforeCreate hook owns them.\n")
@@ -183,18 +258,12 @@ func renderCreateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {
 }
 
 func renderUpdateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {
-	if !t.Rest().Ops.Has(schema.OpUpdate) {
+	fields, ok := patchBody(t)
+	if !ok {
 		return
 	}
 	typeName := TypeName(t.LocalName())
 	name := typeName + "Patch"
-	fields := bodyFields(t, forUpdate)
-	if len(fields) == 0 {
-		// Every column is read-only, hidden or immutable, so there is nothing a
-		// patch could write. Registration reports this rather than emitting a
-		// body type with no fields.
-		return
-	}
 
 	fmt.Fprintf(b, "\n// %s is the request body for patching a %s.\n", name, typeName)
 	fmt.Fprintf(b, "//\n// Every field is a pointer and every field is optional, so a request writes\n")
@@ -279,10 +348,10 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 		typeName := TypeName(t.LocalName())
 		r := t.Rest()
 		create, update := "rest.None["+typeName+"]", "rest.None["+typeName+"]"
-		if r.Ops.Has(schema.OpCreate) {
+		if _, ok := createBody(t); ok {
 			create = typeName + "Create"
 		}
-		if r.Ops.Has(schema.OpUpdate) && len(bodyFields(t, forUpdate)) > 0 {
+		if _, ok := patchBody(t); ok {
 			update = typeName + "Patch"
 		}
 
