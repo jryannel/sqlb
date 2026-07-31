@@ -118,6 +118,98 @@ func TestNullableJSONIsAPointer(t *testing.T) {
 	}
 }
 
+// The columns file needs `encoding/json` for the same reason the models file
+// does, and used to go without it: the import set here was a bare check for
+// time.Time, so a jsonb column produced a columns file naming json.RawMessage
+// with nothing importing it.
+//
+// gofmt does not catch this. codegen runs format.Source over every file, which
+// parses but does not type-check, so a missing import is valid Go source that
+// only fails at the consumer's compiler — which is why the models emitter was
+// fixed for this and the columns emitter was not noticed.
+func TestColumnsImportsWhatItNames(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("documents",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.JSON("meta"),
+		schema.JSON("attachment_ids").Nullable(),
+	)
+	cols := generate(t, r)["columns_gen.go"]
+
+	if !contains(cols, `"encoding/json"`) {
+		t.Errorf("columns names json.RawMessage without importing it:\n%s", cols)
+	}
+	for _, want := range []string{
+		// Both spellings collapse to the base type here, the same way a
+		// nullable timestamp compares as time.Time: a column is what you
+		// compare against, and NULL is not a value you write in a predicate.
+		"Meta sqlb.Col[json.RawMessage]",
+		"AttachmentIds sqlb.Col[json.RawMessage]",
+		"SetMeta(v json.RawMessage)",
+	} {
+		if !contains(cols, want) {
+			t.Errorf("columns missing %q:\n%s", want, cols)
+		}
+	}
+}
+
+// Row() has to key on whether the *model* field is a pointer, not on whether
+// the column is nullable. The two agree everywhere except the slice-typed
+// columns: a nullable bytea stays []byte and an array stays []T either way,
+// because a nil slice is already how a slice says NULL.
+//
+// Keying on nullability assigned the body field straight across for those,
+// which is a *[]byte going into a []byte — generated code that does not
+// compile. jsonb was in this bucket until a nullable jsonb became a pointer,
+// which is why the bug outlived the column that first showed it.
+func TestCreateBodyAssignsSliceColumnsThroughTheDeref(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("documents",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.JSON("attachment_ids").Nullable(),
+		schema.Bytes("thumbnail").Nullable(),
+		schema.Text("tags").Array().Nullable(),
+	).Expose(schema.REST{Ops: schema.OpCreate})
+	rest := generate(t, r)["rest_gen.go"]
+
+	// Create-only is the shape that exposed this: the patch body imports
+	// encoding/json for its presence tracking, so every resource exposed for
+	// update got the import by accident and only a create-only one named
+	// json.RawMessage without it.
+	if !contains(rest, `"encoding/json"`) {
+		t.Errorf("rest names json.RawMessage without importing it:\n%s", rest)
+	}
+
+	for _, want := range []string{
+		// The body is a pointer wherever the model is not, so the assignment
+		// has to dereference it.
+		`Thumbnail *[]byte`,
+		"if c.Thumbnail != nil {\nrow.Thumbnail = *c.Thumbnail\n}",
+		`Tags *[]string`,
+		"if c.Tags != nil {\nrow.Tags = *c.Tags\n}",
+		// A nullable jsonb is a pointer in the model, so body and model agree
+		// and absent and null both mean NULL. No deref.
+		`AttachmentIds *json.RawMessage`,
+		"row.AttachmentIds = c.AttachmentIds",
+	} {
+		if !contains(rest, want) {
+			t.Errorf("rest missing %q:\n%s", want, rest)
+		}
+	}
+	// The failure this guards is an assignment across the pointer boundary.
+	// Spelled out because the deref assertions above would still pass if a
+	// second, wrong assignment were emitted alongside them.
+	for _, bad := range []string{
+		"row.Thumbnail = c.Thumbnail",
+		"row.Tags = c.Tags",
+		"row.AttachmentIds = *c.AttachmentIds",
+	} {
+		if contains(rest, bad) {
+			t.Errorf("rest assigns across the pointer boundary %q:\n%s", bad, rest)
+		}
+	}
+}
+
 func TestGeneratedColumns(t *testing.T) {
 	cols := generate(t, fixture())["columns_gen.go"]
 
