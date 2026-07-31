@@ -67,6 +67,33 @@ type Index struct {
 	Unique  bool
 	Method  string // "btree", "gin", ...; empty means the dialect default
 	Where   string // optional partial-index predicate
+
+	// Opclasses names the operator class each column is indexed under, keyed by
+	// column name. An absent entry takes the type's default.
+	//
+	// For most indexes an operator class is a tuning decision. For some it is
+	// the whole meaning: pgvector's `hnsw` has *no* default class, because the
+	// class is what selects the distance function, so an index emitted without
+	// one is rejected outright —
+	//
+	//	ERROR: data type vector has no default operator class for access method "hnsw"
+	//
+	// — and a schema that could not express it could not describe its own
+	// database (issue #53).
+	//
+	//	AddIndex(schema.Index{
+	//	    Name:      "idx_chunks_embedding",
+	//	    Columns:   []string{"embedding"},
+	//	    Method:    "hnsw",
+	//	    Opclasses: map[string]string{"embedding": "vector_cosine_ops"},
+	//	    With:      map[string]string{"m": "16", "ef_construction": "64"},
+	//	})
+	Opclasses map[string]string
+
+	// With is the index's storage parameters — `WITH (m = 16)`. Rendered in
+	// sorted key order, because a map has none and a migration that reorders
+	// its own DDL between runs is a diff nobody can read.
+	With map[string]string
 }
 
 // Check is a table-level check constraint.

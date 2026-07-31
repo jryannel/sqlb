@@ -200,6 +200,8 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 		t.AddIndex(schema.Index{
 			Name: idx.Name, Columns: idx.Columns, Unique: idx.Unique,
 			Method: indexMethod(idx.Method), Where: idx.Where,
+			Opclasses: opclassesByColumn(idx),
+			With:      storageParameters(idx.Options),
 		})
 	}
 	return t, nil
@@ -221,6 +223,7 @@ type constraints struct {
 	unique      map[string]constraintRow // by column, single-column only
 	foreign     map[string]constraintRow // by column, single-column only
 	enums       map[string][]string      // by column, recovered from a CHECK
+	enumName    map[string]string        // by column, the CHECK's own name
 	tableChecks []schema.Check
 }
 
@@ -228,9 +231,10 @@ type constraints struct {
 // to declare.
 func classify(table string, rows []constraintRow, rep *Report) *constraints {
 	c := &constraints{
-		unique:  map[string]constraintRow{},
-		foreign: map[string]constraintRow{},
-		enums:   map[string][]string{},
+		unique:   map[string]constraintRow{},
+		foreign:  map[string]constraintRow{},
+		enums:    map[string][]string{},
+		enumName: map[string]string{},
 	}
 	for _, row := range rows {
 		switch row.Type {
@@ -281,6 +285,10 @@ func (c *constraints) check(table string, row constraintRow, rep *Report) {
 	for _, col := range candidateEnumColumns(row) {
 		if values, ok := enumValues(col, row.Expr); ok {
 			c.enums[col] = values
+			// The name is the one thing about an enum's check that the
+			// expression does not carry, and losing it makes every later diff
+			// propose dropping and re-adding the constraint (issue #53).
+			c.enumName[col] = row.Name
 			return
 		}
 	}
@@ -394,7 +402,14 @@ func newField(col columnRow, t schema.Type, typeArg int, isArray bool, cons *con
 		}
 	}
 	if values, isEnum := cons.enums[col.Name]; isEnum && t == schema.TypeText {
-		return schema.Enum(col.Name, values...)
+		f := schema.Enum(col.Name, values...)
+		// Pinned only when it differs from what the DDL layer would generate,
+		// for the reason the unique constraint's name is: a pin that agrees
+		// with the convention is noise in every declaration that has one.
+		if name := cons.enumName[col.Name]; name != "" && name != table+"_"+col.Name+"_check" {
+			f.CheckNamed(name)
+		}
+		return f
 	}
 	return plainField(col.Name, t, typeArg)
 }
@@ -473,4 +488,41 @@ func plainField(name string, t schema.Type, typeArg int) *schema.Field {
 	// columnType only returns types this switch covers, so reaching here means
 	// the two have drifted apart.
 	panic("introspect: no constructor for type " + string(t))
+}
+
+// opclassesByColumn pairs an index's operator classes with the columns they
+// apply to, dropping the ones that are the type's default.
+//
+// The catalog reports one class per indexed column and the query blanks the
+// defaults, so what arrives here is positional and mostly empty. Keying it by
+// column is what lets the DDL layer render `(embedding vector_cosine_ops)`
+// without knowing anything about index order.
+func opclassesByColumn(idx indexRow) map[string]string {
+	var out map[string]string
+	for i, class := range idx.Opclasses {
+		if class == "" || i >= len(idx.Columns) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, 1)
+		}
+		out[idx.Columns[i]] = class
+	}
+	return out
+}
+
+// storageParameters turns reloptions — "m=16", "ef_construction=64" — into the
+// map the schema declares. An option with no "=" is recorded with an empty
+// value rather than dropped, so that nothing the database has disappears
+// silently.
+func storageParameters(options []string) map[string]string {
+	if len(options) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(options))
+	for _, opt := range options {
+		key, value, _ := strings.Cut(opt, "=")
+		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return out
 }
