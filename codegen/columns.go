@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jryannel/sqlb/schema"
 )
@@ -24,21 +25,34 @@ func renderColumns(opts Options) ([]byte, error) {
 	}
 
 	imports := map[string]bool{"github.com/jryannel/sqlb": true}
+	// Registry-wide, which is right here for a reason worth naming, since the
+	// REST emitter needs the opposite: this file renders an overridden column
+	// whether or not it is hidden — the facade omits hidden columns but the
+	// typed update sets them — so there is no column an override can match that
+	// this file might not name.
 	for _, path := range ov.imports(opts.Registry) {
 		imports[path] = true
 	}
+	// Both field sets, because neither half of this file renders all of the
+	// columns and neither set contains the other: the facade omits hidden
+	// columns and carries computed ones, the typed update does the reverse.
+	// Iterating only the facade's was a missing import — a hidden timestamp
+	// emitted Set…(v time.Time) with nothing importing time. It went unnoticed
+	// because the hidden column this was written for is the vector one, whose
+	// import is sqlb and is unconditional.
 	for _, t := range tables {
-		for _, f := range t.Fields() {
-			if f.Desc().Hidden {
+		for _, f := range append(facadeFields(t), writableFields(t)...) {
+			d := f.Desc()
+			if _, replaced := ov.base(t.Name(), d); replaced {
 				continue
 			}
-			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
-				continue
-			}
-			switch base(f.Desc()) {
-			case "time.Time":
+			// Contains rather than equality, so the pointer a nullable column
+			// carries and the slice an array carries need no cases of their
+			// own. The setter types are the rendered ones and do carry both.
+			switch goType := d.GoType(); {
+			case strings.Contains(goType, "time.Time"):
 				imports["time"] = true
-			case "json.RawMessage":
+			case strings.Contains(goType, "json.RawMessage"):
 				imports["encoding/json"] = true
 			}
 		}
@@ -50,12 +64,7 @@ func renderColumns(opts Options) ([]byte, error) {
 		typeName := TypeName(t.LocalName())
 		setName := unexportedGoName(typeName) + "Columns"
 
-		visible := make([]*schema.Field, 0, len(t.Fields()))
-		for _, f := range t.Fields() {
-			if !f.Desc().Hidden {
-				visible = append(visible, f)
-			}
-		}
+		visible := facadeFields(t)
 
 		fmt.Fprintf(b, "\ntype %s struct {\n", setName)
 		for _, f := range visible {
@@ -103,12 +112,12 @@ func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.Tab
 	// The primary key stays out. It addresses the row rather than being part of
 	// what an update writes, and Stmt() is there for the rare case that is
 	// genuinely meant.
-	var writable []*schema.Field
-	for _, f := range t.Fields() {
-		if !f.Desc().PrimaryKey {
-			writable = append(writable, f)
-		}
-	}
+	//
+	// A computed column stays out too, and for a different reason: ReadOnly is
+	// a rule about who may write, and a computed column has nothing to write
+	// to. A setter for one would compile and then fail every statement it was
+	// used in.
+	writable := writableFields(t)
 	if len(writable) == 0 {
 		return
 	}
@@ -136,6 +145,37 @@ func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.Tab
 	w("\n// Stmt exposes the underlying statement for what the wrapper does not\n")
 	w("// cover, such as Everything, SetExpr, Exec and One.\n")
 	w("func (u *%sUpdate) Stmt() *sqlb.Update[%s] { return u.stmt }\n", typeName, typeName)
+}
+
+// facadeFields and writableFields are the two column sets this file renders,
+// and neither is a subset of the other: the facade omits hidden columns and
+// carries computed ones, the typed update does the reverse.
+//
+// Named because the import block has to account for both, and computing the
+// sets there separately is how a hidden timestamp came to be set by a file that
+// did not import time. Each renderer states the reason for its own exclusions —
+// renderColumns for hidden, renderUpdate for the primary key and computed.
+
+// facadeFields are the columns the typed facade carries.
+func facadeFields(t *schema.TableDef) []*schema.Field {
+	out := make([]*schema.Field, 0, len(t.Fields()))
+	for _, f := range t.Fields() {
+		if !f.Desc().Hidden {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// writableFields are the columns the typed update can set.
+func writableFields(t *schema.TableDef) []*schema.Field {
+	out := make([]*schema.Field, 0, len(t.Fields()))
+	for _, f := range t.Fields() {
+		if d := f.Desc(); !d.PrimaryKey && !d.Computed() {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // colType is the facade type for a column. Text columns get TextCol, which is

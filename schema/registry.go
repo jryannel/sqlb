@@ -223,6 +223,9 @@ func (r *Registry) Validate() error {
 			if d.Expandable && d.Ref == nil {
 				report(t.name, d.Name, "Expandable is only meaningful on a Ref column")
 			}
+			if d.Computed() || len(d.Needs) > 0 {
+				r.validateComputed(t, d, report)
+			}
 			if d.Searchable && (!isTextual(d.Type) || d.Array) {
 				report(t.name, d.Name, "Searchable requires a text column, got %s", describeType(d))
 			}
@@ -248,6 +251,22 @@ func (r *Registry) Validate() error {
 				if d.Ref.Target == "" {
 					report(t.name, d.Name, "ExternalRef declares no target")
 				}
+				// An enforced reference emits a constraint naming a table, so
+				// unlike the unenforced form its target has to be one. A
+				// module-qualified name is not: the FOREIGN KEY would be
+				// written against a table nothing in this database is called.
+				if _, _, ok := d.Ref.EnforcedTarget(); d.Ref.Enforced && !ok {
+					report(t.name, d.Name,
+						"Enforced needs a target naming a table in this database, and %q is not one; "+
+							"write it as \"organizations.id\" or \"organizations\" — a module-qualified target "+
+							"cannot carry a real foreign key, which is the whole of what a module boundary means",
+						d.Ref.Target)
+				}
+			}
+			if d.Ref != nil && !d.Ref.External && d.Ref.Enforced {
+				// A real reference is always enforced. Reading .Enforced() on
+				// one would suggest the others are not.
+				report(t.name, d.Name, "Enforced applies to an ExternalRef; a Ref already emits a foreign key")
 			}
 			if d.Ref != nil && !d.Ref.External {
 				switch {
@@ -277,7 +296,7 @@ func (r *Registry) Validate() error {
 			report(t.name, "", "%d Scoped columns declared, expected at most one", scoped)
 		}
 
-		for _, idx := range t.indexes {
+		for _, idx := range t.Indexes() {
 			if len(idx.Columns) == 0 {
 				report(t.name, "", "index %q covers no columns", idx.Name)
 			}
@@ -441,6 +460,80 @@ func (r *Registry) validateArray(t *TableDef, d *FieldDesc, report func(string, 
 		// filter with no GIN index still returns the right rows, by scanning
 		// the table for them. ADR-0026 made the same argument for vectors.
 		report(t.name, d.Name, "a Filterable array column needs a GIN index, or every filter over it is a sequential scan: add t.AddIndex(schema.Index{Columns: []string{%q}, Method: \"gin\"})", d.Name)
+	}
+}
+
+// validateComputed refuses the claims a derived column cannot make.
+//
+// Each one is a claim about storage or about stability, and each is silent if
+// it is allowed through: a defaulted computed column emits DDL for a column
+// that does not exist, an indexed one names a column Postgres cannot index, and
+// a volatile sort produces a keyset whose pages disagree with each other about
+// the same row (ADR-0041).
+func (r *Registry) validateComputed(t *TableDef, d *FieldDesc, report func(string, string, string, ...any)) {
+	if !d.Computed() {
+		report(t.name, d.Name, "Needs is only meaningful on a Computed column")
+		return
+	}
+	if n := d.Placeholders(); n != len(d.Needs) {
+		report(t.name, d.Name,
+			"the expression takes %d bind(s) but Needs names %d (%s); each `?` takes the bind at the matching position, and `??` is a literal question mark",
+			n, len(d.Needs), strings.Join(d.Needs, ", "))
+	}
+	for _, key := range d.Needs {
+		if strings.TrimSpace(key) == "" {
+			report(t.name, d.Name, "Needs contains an empty key")
+		}
+	}
+	if d.Searchable {
+		report(t.name, d.Name, "a computed column cannot be Searchable: ?search fans out over text columns with ILIKE, and an expression has no reading there")
+	}
+	if d.Sortable && d.Volatile() {
+		// ADR-0027 keysets on the sort column. An expression reading now() is a
+		// different number on the next page, so the boundary a cursor recorded
+		// no longer means what it meant — page 1 and page 50 disagree about
+		// whether they have already shown a row.
+		report(t.name, d.Name, "a computed column reading a volatile expression cannot be Sortable: the keyset cursor pages on the sort column, and this one does not hold still between pages")
+	}
+	if !d.ReadOnly {
+		report(t.name, d.Name, "a computed column is ReadOnly; there is nothing to write to it")
+	}
+	if d.PrimaryKey {
+		report(t.name, d.Name, "a computed column cannot be the primary key: a row is addressed by something the table stores")
+	}
+	if d.Unique {
+		report(t.name, d.Name, "a computed column cannot be Unique: a unique constraint is an index, and there is no column to index")
+	}
+	if d.Default != nil {
+		report(t.name, d.Name, "a computed column cannot have a Default: nothing writes it, so there is nothing to default")
+	}
+	if d.Ref != nil {
+		report(t.name, d.Name, "a computed column cannot be a reference: a foreign key constrains a stored value")
+	}
+	if d.Scoped {
+		report(t.name, d.Name, "a computed column cannot be Scoped: a tenant is a stored fact, and a scope predicate over an expression cannot be indexed")
+	}
+	if d.SoftDelete {
+		report(t.name, d.Name, "a computed column cannot carry the soft-delete marker")
+	}
+	if d.Array {
+		report(t.name, d.Name, "a computed column cannot be an Array: the array machinery is about a stored column's element type")
+	}
+	if d.Type == TypeVector {
+		report(t.name, d.Name, "a computed column cannot be a vector: an embedding is stored, and a similarity search names the column it is stored in")
+	}
+	if d.Type == TypeEnum {
+		report(t.name, d.Name, "a computed column cannot be an Enum: the value set is enforced by a CHECK constraint, and a computed column emits no DDL to carry one; declare it as Text")
+	}
+	if d.RenamedFrom != "" {
+		report(t.name, d.Name, "a computed column cannot be RenamedFrom another: a rename is a migration, and this column was never in the database")
+	}
+	for _, idx := range t.indexes {
+		for _, c := range idx.Columns {
+			if c == d.Name {
+				report(t.name, d.Name, "index %q covers a computed column; Postgres indexes stored columns, and an expression index is a different declaration this does not emit", idx.Name)
+			}
+		}
 	}
 }
 

@@ -133,20 +133,33 @@ func (r *Registry) Table(name string, specs ...FieldSpec) *TableDef {
 		}
 		t.fields = append(t.fields, s.fields()...)
 	}
-	// An external reference exists to be joined on, so it carries an index
-	// whether or not the declaration named one. The index is added to the
-	// table's own list rather than applied invisibly at render time, so it
-	// shows up in Indexes, the manifest and the generated DDL like any other.
+	r.Add(t)
+	return t
+}
+
+// implicitIndexes are the indexes a column asked for without naming one — today
+// only an external reference, which exists to be joined on and scans the table
+// without one.
+//
+// They are resolved when the index set is read rather than appended here, and
+// that ordering is the whole of it: everything a declaration says about a table
+// after Table() returns — .Index("org_id"), .UniqueIndex("org_id", "code"), an
+// index introspect read back out of the database — arrives later. Deciding
+// earlier meant deciding against an empty list, so a table that went on to
+// declare an index on the same column ended up with two indexes of the same
+// name, and a registry introspect built carried an index the database does not
+// have (issues #54 and #55, found by the drift gate).
+func (t *TableDef) implicitIndexes() []Index {
+	var out []Index
 	for _, f := range t.fields {
 		if f.d.indexWanted && !t.hasLeadingIndex(f.d.Name) {
-			t.indexes = append(t.indexes, Index{
+			out = append(out, Index{
 				Name:    indexName(t.name, []string{f.d.Name}, false),
 				Columns: []string{f.d.Name},
 			})
 		}
 	}
-	r.Add(t)
-	return t
+	return out
 }
 
 // hasLeadingIndex reports whether a column already leads an index, is unique,
@@ -175,8 +188,28 @@ func (t *TableDef) LocalName() string { return t.local }
 // Module is the owning module name, or "" if the table is not in one.
 func (t *TableDef) Module() string { return t.module }
 
-// Fields returns the table's columns in declaration order.
+// Fields returns the table's columns in declaration order, computed ones
+// included: they are columns to every consumer that describes the row — the
+// model, the clients, the CLI, the OpenAPI document.
 func (t *TableDef) Fields() []*Field { return t.fields }
+
+// StoredFields returns the columns the database actually holds.
+//
+// It is what the DDL and the diff read, and the only distinction either of them
+// has to make about a computed column: an expression has no type to declare, no
+// default to write and no ALTER to propose, so a migration that saw one would
+// propose creating a column that must not exist and then propose dropping it
+// again on the next run (ADR-0041).
+func (t *TableDef) StoredFields() []*Field {
+	out := make([]*Field, 0, len(t.fields))
+	for _, f := range t.fields {
+		if f.d.Computed() {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
 
 // Field returns the named column, or nil.
 func (t *TableDef) Field(name string) *Field {
@@ -184,6 +217,17 @@ func (t *TableDef) Field(name string) *Field {
 		if f.d.Name == name {
 			return f
 		}
+	}
+	return nil
+}
+
+// StoredField returns the named column if the database holds it, and nil for a
+// computed one — which is what a migration wants: turning a stored column into
+// a computed one means the storage goes away, and a diff that saw the
+// declaration would leave the old column behind forever.
+func (t *TableDef) StoredField(name string) *Field {
+	if f := t.Field(name); f != nil && !f.d.Computed() {
+		return f
 	}
 	return nil
 }
@@ -209,8 +253,18 @@ func (t *TableDef) Relations() []*Field {
 	return out
 }
 
-// Indexes returns the declared secondary indexes.
-func (t *TableDef) Indexes() []Index { return t.indexes }
+// Indexes returns the table's secondary indexes: the declared ones, and the
+// implicit index an external reference asks for when nothing else already
+// covers its column.
+func (t *TableDef) Indexes() []Index {
+	implicit := t.implicitIndexes()
+	if len(implicit) == 0 {
+		return t.indexes
+	}
+	// Implicit first, which is where they were when Table added them, so the
+	// order of a generated migration does not depend on when this moved.
+	return append(implicit, t.indexes...)
+}
 
 // Checks returns the declared check constraints.
 func (t *TableDef) Checks() []Check { return t.checks }
@@ -251,7 +305,8 @@ func (t *TableDef) RenamedFrom(local string) *TableDef {
 	return t
 }
 
-// Index adds a secondary index over the given columns.
+// Index adds a secondary index over the given columns, named by convention:
+// posts_org_id_idx. Use [TableDef.IndexNamed] when the name matters.
 func (t *TableDef) Index(columns ...string) *TableDef {
 	t.indexes = append(t.indexes, Index{
 		Name:    indexName(t.name, columns, false),
@@ -260,13 +315,50 @@ func (t *TableDef) Index(columns ...string) *TableDef {
 	return t
 }
 
-// UniqueIndex adds a composite unique index.
+// UniqueIndex adds a composite unique index, named by convention:
+// posts_org_id_slug_uniq. Use [TableDef.UniqueIndexNamed] when the name
+// matters, which for a unique index it more often does — see below.
 func (t *TableDef) UniqueIndex(columns ...string) *TableDef {
 	t.indexes = append(t.indexes, Index{
 		Name:    indexName(t.name, columns, true),
 		Columns: columns,
 		Unique:  true,
 	})
+	return t
+}
+
+// IndexNamed adds a secondary index under a name you choose, rather than the
+// one the convention would derive.
+//
+//	t.IndexNamed("idx_projects_org_id", "org_id")
+//
+// It exists for adopting a database somebody else's tool built. A declared
+// index whose name does not match the live one is a rename, and a schema of any
+// size turns "declare the tables sqlb already agrees with" into "rename every
+// index in the database" — which is a migration nobody asked for, on a database
+// where it is the least welcome (issue #57).
+//
+// # An index name is not always inert
+//
+// Postgres reports a violated constraint by name, and matching that name is the
+// standard way to tell one unique violation from another:
+//
+//	pgErr.Code == "23505" && pgErr.ConstraintName == "idx_projects_org_code"
+//
+// So renaming an index can turn a handled collision — retry with the next
+// suffix — into an unhandled 500, without touching the code that handles it.
+// That is the reason this is a declaration rather than a lint: the schema has
+// to be able to say what the name *is*, not merely prefer it.
+func (t *TableDef) IndexNamed(name string, columns ...string) *TableDef {
+	t.indexes = append(t.indexes, Index{Name: name, Columns: columns})
+	return t
+}
+
+// UniqueIndexNamed adds a composite unique index under a name you choose. See
+// [TableDef.IndexNamed], and note that a unique index is the kind whose name an
+// application is most likely to be matching on.
+func (t *TableDef) UniqueIndexNamed(name string, columns ...string) *TableDef {
+	t.indexes = append(t.indexes, Index{Name: name, Columns: columns, Unique: true})
 	return t
 }
 

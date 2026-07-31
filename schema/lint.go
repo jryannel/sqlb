@@ -84,6 +84,25 @@ func (r *Registry) Lint() Diagnostics {
 		for _, f := range t.fields {
 			d := f.Desc()
 
+			// A computed column can never be the leading column of an index —
+			// there is no column to index — so the two index rules below would
+			// fire on every one of them and say nothing actionable. What is
+			// worth saying is said once, here, and the cost differs by tier: a
+			// row-local expression is arithmetic per row, a correlated subquery
+			// is a query per row.
+			if d.Computed() {
+				if d.Filterable || d.Sortable {
+					add(Diagnostic{
+						Rule: "computed-without-index", Table: t.name, Column: d.Name,
+						Severity: SeverityInfo,
+						Message: "column is computed, so filtering or sorting on it evaluates the expression for every candidate row and no index can serve it" +
+							subqueryNote(d),
+						Fix: "keep the expression row-local, or store the value and maintain it — a trigger-kept counter is a real column and can be indexed",
+					})
+				}
+				continue
+			}
+
 			// A filterable column with no index leading a btree means every
 			// request that uses it scans the table.
 			if d.Filterable && !d.Hidden && !indexed[d.Name] && !isLowCardinality(d) {
@@ -269,7 +288,7 @@ func (t *TableDef) indexedColumns() map[string]bool {
 			out[d.Name] = true
 		}
 	}
-	for _, idx := range t.indexes {
+	for _, idx := range t.Indexes() {
 		if len(idx.Columns) > 0 {
 			// Only the leading column of a btree is seekable on its own.
 			out[idx.Columns[0]] = true
@@ -279,7 +298,7 @@ func (t *TableDef) indexedColumns() map[string]bool {
 }
 
 func hasIndexMethod(t *TableDef, column, method string) bool {
-	for _, idx := range t.indexes {
+	for _, idx := range t.Indexes() {
 		if !strings.EqualFold(idx.Method, method) {
 			continue
 		}
@@ -331,4 +350,14 @@ func pkColumn(t *TableDef) string {
 		return ""
 	}
 	return pk.Desc().Name
+}
+
+// subqueryNote adds the sharper half of the computed-column warning when the
+// expression is a subquery: the per-row cost is then a query rather than
+// arithmetic, and it scales with the page size.
+func subqueryNote(d *FieldDesc) string {
+	if !strings.Contains(strings.ToLower(d.Expr), "select") {
+		return ""
+	}
+	return "; this one runs a subquery, so the cost of a page grows with its size"
 }

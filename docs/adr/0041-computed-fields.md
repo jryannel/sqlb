@@ -1,17 +1,18 @@
 # ADR-0041: A computed field is an expression in the row, and the parameterised ones oblige a hook
 
-- **Status:** Exploring — the shape is decided and nothing is built. Additive, so
-  it does not block the tag; [the road to 1.0](../release-1.0.md) already names it
-  the strongest candidate for 1.1
+- **Status:** Working — tiers 1 to 3 are built, `FromGo` is not. Additive, so it
+  landed rather than waiting for 1.1: a schema that declares no computed column
+  compiles to the same SQL it did before
 - **Confidence:** High that the slot is needed — §13.3 of the adoption review
-  ranked it first of six, and it stands unmet. High that `ColumnInfo` is where it
-  goes, because the render path was traced and there is exactly one interception
-  point. High that the parameterised case is real and that
+  ranked it first of six. High that `ColumnInfo` is where it goes: the trace said
+  one interception point and the implementation found exactly one,
+  `(*compiler).column`. High that the parameterised case is real and that
   [#17](https://github.com/jryannel/sqlb/issues/17) as written does not cover it.
+  Medium overall, because nothing outside this repository has used it yet.
   Medium on the correlated-subquery tier being worth `Filterable()` at all. Low on
-  `FromGo`, which is the tier most likely to be cut
+  `FromGo`, which is the tier most likely to be cut and which was not built
 - **Decided:** 2026-07-30
-- **Last reviewed:** 2026-07-30
+- **Last reviewed:** 2026-07-31
 
 ## Context
 
@@ -202,3 +203,45 @@ reversible, a filter grammar is not.
   narrowed one claim: techniques 1, 2 and 4 there survive this ADR unchanged, so
   `schema.Computed` is an addition to the options and not a replacement for
   them — a generated column is still the only one that can be indexed.
+- 2026-07-31 — Built, and the record moves to Working. `schema.Computed` with
+  `FromSQL` and `Needs`, `Builder.Bind`, `Describe(...).Computed` for models sqlb
+  did not generate, a `ComputedColumns` method carried by the generated ones, the
+  mount check extended to unsupplied binds, and `example/computed/declared.go`
+  as the same three values written as declarations. Four things the design did
+  not have, each found by building it:
+
+  **The expression lives in a method, not the struct tag.** Every other thing the
+  runtime knows about a column arrives in `sqlb:"…"`, which is a comma-separated
+  list of words. A SQL expression contains commas, quotes and parentheses, so
+  putting one there means inventing an escape and writing a parser for it.
+  Codegen emits `func (T) ComputedColumns() []sqlb.Computed` instead — Go the
+  compiler checks, and a reader can see what will run. The tag keeps everything
+  else, so a computed column needs no second code path anywhere below it.
+
+  **`FromGo` was not built.** The record already called it the tier most likely
+  to be cut; nothing in `example/computed`'s six fields reaches for it, and the
+  three that motivated the feature are all SQL. Adding it later is additive.
+  This is the ADR's own "what would change our mind" answered by not needing it
+  yet rather than by evidence against it.
+
+  **An expansion does not carry a computed column, and that is a refusal rather
+  than an omission.** `?expand=project` joins the target under `__ex_project`,
+  and requalifying a raw fragment onto an alias is exactly what `qualify.go`
+  refuses to do for a `RawPred` — text cannot be requalified with certainty, and
+  a fragment that silently resolves to the wrong table is worse than an absent
+  key. So an expanded row carries the target's stored columns and its derived
+  ones come from its own endpoint. The design said "expansion follows from one
+  change"; it does not, and this is the honest version.
+
+  **A write's `RETURNING` keeps the row-local expressions and drops the
+  parameterised ones.** The design said `RETURNING` keeps a computed column as an
+  expression, which holds for a bind-free one. A bind is a property of who is
+  asking, and the hooks a write runs receive the row rather than the statement,
+  so there is nowhere to take one from. Rendering it against a missing bind is
+  the failure this whole record exists to prevent, so the column is left out of
+  the write's response and read back by the next query.
+
+  Tier 2's `Filterable()` shipped as the opt-in the record specified, not as a
+  default: a correlated subquery is projection-only unless the declaration says
+  otherwise, and `Lint` reports the cost once per filterable computed column
+  rather than letting the index rules fire on a column that cannot be indexed.

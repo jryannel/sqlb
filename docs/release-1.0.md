@@ -304,12 +304,16 @@ Named so that "it is missing" is not mistaken for "it was forgotten".
 - **Nested `?expand`, and backwards cursors.** Both are already named in
   `compatibility.md` under *Will move*, both are additive, and neither changes
   the meaning of a request that can be sent today.
-- **Declared actions** ([#18](https://github.com/jryannel/sqlb/issues/18)) and
-  **computed fields** ([#17](https://github.com/jryannel/sqlb/issues/17)). The
-  two largest items on the roadmap, and both additive — a schema that does not
-  declare one is unaffected. Computed fields in particular decide whether the
-  generated path survives a real domain, which makes them the strongest
-  candidate for 1.1 and a poor reason to hold 1.0.
+- **Declared actions** ([#18](https://github.com/jryannel/sqlb/issues/18)). The
+  largest item left on the roadmap, and additive — a schema that declares no
+  action is unaffected.
+- ~~**Computed fields** ([#17](https://github.com/jryannel/sqlb/issues/17)).~~
+  Built, additive, and in: `schema.Computed` with `FromSQL` and `Needs`, per
+  [ADR-0041](adr/0041-computed-fields.md). It was deferred as the strongest
+  candidate for 1.1 rather than a blocker; it landed early because it is purely
+  additive — a schema that declares no computed column compiles to the same SQL.
+  What is *not* built is the record's `FromGo` tier, which it already named as
+  the one most likely to be cut.
 - **`sqlb eject`** ([#19](https://github.com/jryannel/sqlb/issues/19)) and
   **`sqlb impact`** ([#21](https://github.com/jryannel/sqlb/issues/21)). Both are
   adoption arguments rather than features. Worth building; not worth blocking a

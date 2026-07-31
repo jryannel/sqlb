@@ -127,20 +127,23 @@ func TestRenderedSchemaCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderSchema: %v", err)
 	}
-	if err := compiles(t, string(src)); err != nil {
+	if err := compilesSchema(t, string(src)); err != nil {
 		t.Fatalf("the rendered schema does not compile: %v\n%s", err, src)
 	}
 }
 
-// compiles builds the rendered schema in a throwaway module that replaces sqlb
-// with this checkout.
+// compilesSchema builds the rendered schema in a throwaway module that replaces
+// sqlb with this checkout. Distinct from compile_test.go's compiles, which
+// builds *generated* packages inside this module: a rendered schema declares
+// the DSL rather than consuming it, so sqlb is the only dependency it needs and
+// a module of its own is the smaller check.
 //
 // go/parser would only prove the source parses, which gofmt already did on the
 // way out. What the bootstrap depends on is that it *builds*: a constructor
 // with the wrong arity, a modifier that does not exist on that type, a
 // dimension rendered as a string — each of those parses perfectly and none of
 // them compiles.
-func compiles(t *testing.T, src string) error {
+func compilesSchema(t *testing.T, src string) error {
 	t.Helper()
 
 	root, err := filepath.Abs("..")

@@ -120,8 +120,15 @@ func (d *Description[T]) Sortable(columns ...string) *Description[T] {
 
 // Searchable includes the columns in the ?search fan-out. It implies
 // Filterable, matching the `search` tag.
+//
+// A computed column cannot be searchable, and saying so panics rather than
+// being ignored — for the reason Computed gives.
 func (d *Description[T]) Searchable(columns ...string) *Description[T] {
 	return d.each("Searchable", columns, func(c *ColumnInfo) {
+		if c.Computed() {
+			panic(fmt.Sprintf("sqlb: Searchable(%q): %s computes that column; ?search fans out over text columns, not expressions",
+				c.Name, d.m.Type))
+		}
 		c.Searchable = true
 		c.Filterable = true
 	})
@@ -170,6 +177,45 @@ func (d *Description[T]) SoftDeleted(column string) *Description[T] {
 	}
 	col.SoftDelete = true
 	d.m.Soft = col
+	return d
+}
+
+// Computed declares that a column is a SQL expression rather than storage: the
+// compiler renders expr wherever the column is named, so the value lands in the
+// projection, and a Filterable or Sortable one reaches WHERE and ORDER BY too.
+//
+//	sqlb.Describe[Task]().
+//	    Table("tasks").
+//	    PrimaryKey("id").
+//	    Computed("is_overdue", "due_date < current_date AND status <> 'done'").
+//	    Filterable("is_overdue")
+//
+// It is the runtime form of schema.Computed, for models sqlb did not generate —
+// the generated ones say the same thing through a ComputedColumns method, which
+// is where the expression goes because a struct tag is a comma-separated list
+// and SQL is not (ADR-0041).
+//
+// The column must already be mapped: a computed value needs a field to scan
+// into, and the field is what puts it in the JSON and in the Go type.
+//
+// Each `?` in expr takes the bind named at the matching position of needs, and
+// `??` is a literal question mark. A bind is supplied per query with
+// [Builder.Bind], which is how a per-viewer expression gets the viewer:
+//
+//	Computed("is_starred",
+//	    "EXISTS (SELECT 1 FROM stars s WHERE s.task_id = tasks.id AND s.member_id = ?)",
+//	    "viewer")
+//
+// Declaring the column writes no value. A query that renders it without the
+// bind fails rather than sending NULL, and [rest.Resource] refuses to mount a
+// resource whose binds no BeforeQuery hook supplies — the same obligation shape
+// Scoped uses, for the same reason: an unbound expression is false for every row
+// forever and looks exactly like a working feature (ADR-0030, ADR-0041).
+func (d *Description[T]) Computed(column, expr string, needs ...string) *Description[T] {
+	col := d.column("Computed", column)
+	if err := setComputed(d.m, col, expr, needs); err != nil {
+		panic(err.Error())
+	}
 	return d
 }
 

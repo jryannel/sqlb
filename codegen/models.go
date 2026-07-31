@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"strconv"
@@ -30,17 +31,31 @@ func renderModels(opts Options) ([]byte, error) {
 	}
 	for _, t := range tables {
 		for _, f := range t.Fields() {
+			// A computed column's expression is carried by a method returning
+			// sqlb.Computed, for the reason renderComputed gives. Ahead of the
+			// override guard, not behind it: an override replaces the column's
+			// Go type and not the fact that it is computed, so the method is
+			// emitted either way and needs the import either way.
+			if f.Desc().Computed() {
+				imports["github.com/jryannel/sqlb"] = true
+			}
 			// The default mapping decides which stdlib import a column needs;
 			// an overridden column brings its own, above.
 			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
 				continue
 			}
-			switch f.Desc().GoType() {
-			case "time.Time", "*time.Time", "[]time.Time":
+			// Contains rather than a case per spelling. The list of spellings
+			// was maintained by hand and was already one short: a nullable
+			// vector renders as *sqlb.Vector, which matched none of them, so
+			// the model named the type with nothing importing it. The wrapping
+			// a nullable or array column adds is not information this switch
+			// wants, so it does not ask for it.
+			switch goType := f.Desc().GoType(); {
+			case strings.Contains(goType, "time.Time"):
 				imports["time"] = true
-			case "json.RawMessage", "*json.RawMessage":
+			case strings.Contains(goType, "json.RawMessage"):
 				imports["encoding/json"] = true
-			case "sqlb.Vector":
+			case strings.Contains(goType, "sqlb.Vector"):
 				// The second thing in this file that is not a plain Go type,
 				// and the first that is a *column*. An embedding needs the
 				// codec that moves it in binary, so the model cannot be
@@ -126,9 +141,54 @@ func renderModels(opts Options) ([]byte, error) {
 		// singulariser guessing the type name back into the table name.
 		fmt.Fprintf(b, "\n// TableName is the table %s maps to.\n", typeName)
 		fmt.Fprintf(b, "func (%s) TableName() string { return %q }\n", typeName, t.Name())
+
+		renderComputed(b, typeName, t)
 	}
 
 	return gofmt(opts.modelsFile(), b.Bytes())
+}
+
+// renderComputed emits the ComputedColumns method for a table with derived
+// columns, and nothing at all for one without.
+//
+// The expression goes in a method rather than in the `sqlb` struct tag, which
+// is where every other thing the runtime knows about a column lives. A tag is a
+// comma-separated list of words; a SQL expression contains commas, quotes and
+// parentheses, and encoding one into a tag would mean inventing an escape and
+// then reading it back with a parser. The method is Go, so the compiler checks
+// it and a reader can see what will be run (ADR-0041).
+func renderComputed(b *bytes.Buffer, typeName string, t *schema.TableDef) {
+	var derived []*schema.FieldDesc
+	for _, f := range t.Fields() {
+		if d := f.Desc(); d.Computed() {
+			derived = append(derived, d)
+		}
+	}
+	if len(derived) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "\n// ComputedColumns are the derived columns %s declares: expressions the\n", typeName)
+	fmt.Fprintf(b, "// query renders in place of a column name. None of them is stored, so none of\n")
+	fmt.Fprintf(b, "// them is written by an insert or an update.\n")
+	fmt.Fprintf(b, "func (%s) ComputedColumns() []sqlb.Computed {\n", typeName)
+	fmt.Fprintln(b, "\treturn []sqlb.Computed{")
+	for _, d := range derived {
+		fmt.Fprintf(b, "\t\t{Name: %q, Expr: %q", d.Name, d.Expr)
+		if len(d.Needs) > 0 {
+			fmt.Fprintf(b, ", Needs: []string{")
+			for i, key := range d.Needs {
+				if i > 0 {
+					fmt.Fprint(b, ", ")
+				}
+				fmt.Fprintf(b, "%q", key)
+			}
+			fmt.Fprint(b, "}")
+		}
+		fmt.Fprintln(b, "},")
+	}
+	fmt.Fprintln(b, "\t}")
+	fmt.Fprintln(b, "}")
 }
 
 // relation is the second half of an expandable reference: the typed field an
