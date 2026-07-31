@@ -419,6 +419,10 @@ cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sql
 cd "$MISE_PROJECT_ROOT/example/fxapp" && go run github.com/jryannel/sqlb/cmd/sqlb impact -error ./noteschema
 '''
 
+[tasks.eject-check]
+description = "Fail if the committed ejected package no longer matches what the schema would produce now. `sqlb eject` writes the way out — the schema as SQL and the resources as plain net/http handlers over pgx — and an exit nobody checks is one that has quietly stopped working by the time it is needed (ADR-0042). Only example/blog commits one, because one worked exit is the claim; the other examples would add gate time and say nothing new. Distinct from generate-check on purpose: generated code is stale when it disagrees with the schema, while an ejected package is *meant* to be edited, so the day a project takes the exit is the day it deletes this gate rather than fixing it."
+run = "go run ./cmd/sqlb eject -check ./example/blog/blogschema"
+
 [tasks.bisect-check]
 description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
@@ -459,7 +463,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
 run = '''
 set -e
 mise run vet
@@ -468,6 +472,7 @@ mise run tidy-check
 mise run deps-check
 mise run generate-check
 mise run impact-check
+mise run eject-check
 mise run test-race
 mise run test-ts
 mise run test-dart

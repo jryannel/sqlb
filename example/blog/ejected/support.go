@@ -1,0 +1,664 @@
+// Ejected from a sqlb schema by `sqlb eject`. This file is yours now:
+// edit it, delete parts of it, or keep regenerating it — `sqlb eject -check`
+// reports drift for as long as you want it to and is meant to be dropped
+// from CI on the day you stop.
+//
+// This is the shared half of the exit: the request parsing, the WHERE
+// assembly and the JSON writing that every endpoint in handlers.go uses. It
+// imports pgx and the standard library, and nothing else.
+
+package ejected
+
+import (
+	"context"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// Schema is schema.sql, embedded so that a test or a bootstrap can apply the
+// whole schema without knowing where the file ended up.
+//
+//go:embed schema.sql
+var Schema string
+
+// DB is what the statements need: a pgx pool, a connection or a transaction,
+// all three of which satisfy it. Narrow on purpose — a handler that takes this
+// cannot begin a transaction it was not given, and a test can hand it whatever
+// it likes.
+type DB interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// scanner is pgx.Row and pgx.Rows both, which is what lets one generated
+// scanner serve a single read and a page.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+var (
+	// ErrNotFound is the id that matched nothing the request was allowed to
+	// see. Handlers turn it into a 404 without saying which of the two it was.
+	ErrNotFound = errors.New("not found")
+	// ErrNoChanges is a PATCH that named no column.
+	ErrNoChanges = errors.New("no columns to change")
+)
+
+// Column is what a request may name, and for what. The capabilities are the
+// ones the schema declared: a column that never opted into filtering is not
+// filterable here either, and the rejection says which columns are.
+type Column struct {
+	Name       string
+	Filterable bool
+	Sortable   bool
+	Searchable bool
+	// Parse turns a query-string value into something pgx can bind.
+	Parse func(string) (any, error)
+}
+
+func findColumn(cols []Column, name string) (Column, bool) {
+	for _, c := range cols {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return Column{}, false
+}
+
+func columnNames(cols []Column, pick func(Column) bool) []string {
+	var out []string
+	for _, c := range cols {
+		if pick(c) {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
+// The operators, as the SQL each one becomes.
+const (
+	OpEq      = "="
+	OpNe      = "<>"
+	OpLt      = "<"
+	OpLte     = "<="
+	OpGt      = ">"
+	OpGte     = ">="
+	OpIn      = "IN"
+	OpNotIn   = "NOT IN"
+	OpIsNull  = "IS NULL"
+	OpNotNull = "IS NOT NULL"
+	OpLike    = "LIKE"
+	OpILike   = "ILIKE"
+	OpBetween = "BETWEEN"
+)
+
+// Condition is one predicate. Or holds a disjunction — ?search fans out over
+// the searchable columns and is the only thing that produces one.
+type Condition struct {
+	Column string
+	Op     string
+	Value  any
+	Value2 any
+	Values []any
+	Or     []Condition
+}
+
+// Order is one ORDER BY term.
+type Order struct {
+	Column string
+	Desc   bool
+}
+
+// Query is everything a read varies by.
+type Query struct {
+	Where  []Condition
+	Order  []Order
+	Limit  int
+	Offset int
+}
+
+// Limits are the resource's declared ceilings, emitted from the schema so the
+// exit refuses the same oversized requests the API did.
+type Limits struct {
+	DefaultPageSize int
+	MaxPageSize     int
+	MaxFilters      int
+	MaxSortTerms    int
+}
+
+// ListRequest is a parsed list query.
+type ListRequest struct {
+	Query   Query
+	Page    int
+	PerPage int
+	Count   bool
+}
+
+// Page is the body of a list response, and is the envelope sqlb served, minus
+// next_cursor: keyset paging did not come out with the rest, so offering the
+// field would be a promise this code cannot keep.
+type Page[T any] struct {
+	Items   []T    `json:"items"`
+	Page    int    `json:"page"`
+	PerPage int    `json:"per_page"`
+	HasMore bool   `json:"has_more"`
+	Total   *int64 `json:"total,omitempty"`
+}
+
+// args accumulates bind parameters and hands back the placeholder for each, so
+// no statement in store.go counts $N by hand.
+type args struct{ values []any }
+
+func (a *args) add(v any) string {
+	a.values = append(a.values, v)
+	return "$" + strconv.Itoa(len(a.values))
+}
+
+func quoteIdent(s string) string {
+	if ns, rel, ok := strings.Cut(s, "."); ok {
+		return quoteIdent(ns) + "." + quoteIdent(rel)
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+func writeWhere(sb *strings.Builder, a *args, conds []Condition) {
+	if len(conds) == 0 {
+		return
+	}
+	sb.WriteString(" WHERE ")
+	for i, c := range conds {
+		if i > 0 {
+			sb.WriteString(" AND ")
+		}
+		writeCondition(sb, a, c)
+	}
+}
+
+func writeCondition(sb *strings.Builder, a *args, c Condition) {
+	if len(c.Or) > 0 {
+		sb.WriteString("(")
+		for i, sub := range c.Or {
+			if i > 0 {
+				sb.WriteString(" OR ")
+			}
+			writeCondition(sb, a, sub)
+		}
+		sb.WriteString(")")
+		return
+	}
+
+	col := quoteIdent(c.Column)
+	switch c.Op {
+	case OpIsNull, OpNotNull:
+		fmt.Fprintf(sb, "%s %s", col, c.Op)
+	case OpIn, OpNotIn:
+		if len(c.Values) == 0 {
+			// An empty list matches nothing, and its negation matches
+			// everything. Rendering "IN ()" instead would not parse.
+			if c.Op == OpIn {
+				sb.WriteString("false")
+			} else {
+				sb.WriteString("true")
+			}
+			return
+		}
+		holes := make([]string, len(c.Values))
+		for i, v := range c.Values {
+			holes[i] = a.add(v)
+		}
+		fmt.Fprintf(sb, "%s %s (%s)", col, c.Op, strings.Join(holes, ", "))
+	case OpBetween:
+		fmt.Fprintf(sb, "%s BETWEEN %s AND %s", col, a.add(c.Value), a.add(c.Value2))
+	default:
+		fmt.Fprintf(sb, "%s %s %s", col, c.Op, a.add(c.Value))
+	}
+}
+
+func writeOrder(sb *strings.Builder, orders []Order) {
+	if len(orders) == 0 {
+		return
+	}
+	sb.WriteString(" ORDER BY ")
+	for i, o := range orders {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(quoteIdent(o.Column))
+		if o.Desc {
+			sb.WriteString(" DESC")
+		} else {
+			sb.WriteString(" ASC")
+		}
+	}
+}
+
+func writeLimit(sb *strings.Builder, limit, offset int) {
+	// Literals rather than parameters, so a plan can see them. Both are
+	// integers this file produced, so there is nothing to inject.
+	if limit > 0 {
+		fmt.Fprintf(sb, " LIMIT %d", limit)
+	}
+	if offset > 0 {
+		fmt.Fprintf(sb, " OFFSET %d", offset)
+	}
+}
+
+// The value parsers. One per column type, chosen when the column table was
+// emitted, so a filter on an int column rejects "abc" here rather than at the
+// database.
+//
+// They are exported because the column table above is a table you edit: adding
+// a column means naming one of these beside it, and a schema that happens to
+// have no float column today should still find ParseFloat here tomorrow.
+
+func ParseText(s string) (any, error) { return s, nil }
+
+func ParseInt(s string) (any, error) {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%q is not a whole number", s)
+	}
+	return n, nil
+}
+
+func ParseFloat(s string) (any, error) {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%q is not a number", s)
+	}
+	return f, nil
+}
+
+func ParseBool(s string) (any, error) {
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		return nil, fmt.Errorf("%q is not true or false", s)
+	}
+	return b, nil
+}
+
+// ParseTime accepts RFC 3339 and a bare date, which are the two spellings a
+// client sends for a timestamp and a date column.
+func ParseTime(s string) (any, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return nil, fmt.Errorf("%q is not an RFC 3339 timestamp or a YYYY-MM-DD date", s)
+}
+
+// operators maps the wire spelling onto the SQL, and says how many operands
+// each takes: 0 for a null test, 2 for between, -1 for a list, 1 otherwise.
+var operators = map[string]struct {
+	sql      string
+	operands int
+	pattern  string
+}{
+	"eq":         {sql: OpEq, operands: 1},
+	"ne":         {sql: OpNe, operands: 1},
+	"neq":        {sql: OpNe, operands: 1},
+	"lt":         {sql: OpLt, operands: 1},
+	"lte":        {sql: OpLte, operands: 1},
+	"gt":         {sql: OpGt, operands: 1},
+	"gte":        {sql: OpGte, operands: 1},
+	"in":         {sql: OpIn, operands: -1},
+	"nin":        {sql: OpNotIn, operands: -1},
+	"isnull":     {sql: OpIsNull, operands: 0},
+	"notnull":    {sql: OpNotNull, operands: 0},
+	"between":    {sql: OpBetween, operands: 2},
+	"like":       {sql: OpLike, operands: 1, pattern: "%s"},
+	"ilike":      {sql: OpILike, operands: 1, pattern: "%s"},
+	"contains":   {sql: OpILike, operands: 1, pattern: "%%%s%%"},
+	"startswith": {sql: OpILike, operands: 1, pattern: "%s%%"},
+	"endswith":   {sql: OpILike, operands: 1, pattern: "%%%s"},
+}
+
+// reserved are the query parameters that are not column filters.
+var reserved = map[string]bool{
+	"page": true, "per_page": true, "sort": true, "search": true, "count": true,
+}
+
+// notEjected are the parameters sqlb served that this code does not.
+//
+// They are refused rather than ignored, and the refusal says so. A client that
+// keeps sending ?expand=author would otherwise get a 200 and a response with a
+// field missing, which is the failure mode an exit must not have.
+var notEjected = map[string]string{
+	"cursor": "keyset pagination did not come out with the exit; page with ?page and ?per_page",
+	"select": "sparse projections did not come out with the exit; the full row is returned",
+	"expand": "relation expansion did not come out with the exit; fetch the related row from its own endpoint",
+	"filter": "the JSON filter tree did not come out with the exit; use the query-parameter operators",
+}
+
+// The ceilings a resource that declared none is held to. They are sqlb's own
+// defaults, copied rather than referenced, so the exit refuses the same
+// oversized requests the API did.
+const (
+	defaultPageSize = 25
+	defaultMaxPage  = 200
+	defaultFilters  = 24
+	defaultSorts    = 4
+)
+
+func (l Limits) resolved() Limits {
+	if l.DefaultPageSize <= 0 {
+		l.DefaultPageSize = defaultPageSize
+	}
+	if l.MaxPageSize <= 0 {
+		l.MaxPageSize = defaultMaxPage
+	}
+	if l.MaxFilters <= 0 {
+		l.MaxFilters = defaultFilters
+	}
+	if l.MaxSortTerms <= 0 {
+		l.MaxSortTerms = defaultSorts
+	}
+	return l
+}
+
+// ParseList turns a query string into a Query, refusing what the resource never
+// offered and what the exit does not carry.
+func ParseList(values url.Values, cols []Column, lim Limits) (ListRequest, error) {
+	lim = lim.resolved()
+	out := ListRequest{Page: 1}
+
+	for name, raw := range values {
+		if reserved[name] {
+			continue
+		}
+		if why, gone := notEjected[name]; gone {
+			return out, &Problem{
+				Status: http.StatusBadRequest,
+				Title:  http.StatusText(http.StatusBadRequest),
+				Detail: "?" + name + " is not served here",
+				Errors: []*ProblemDetail{{Message: why, Location: "query." + name}},
+			}
+		}
+		col, known := findColumn(cols, name)
+		if !known || !col.Filterable {
+			return out, badRequest("query."+name, "unknown or unfilterable column",
+				columnNames(cols, func(c Column) bool { return c.Filterable }))
+		}
+		for _, value := range raw {
+			cond, err := parseCondition(col, value)
+			if err != nil {
+				return out, err
+			}
+			out.Query.Where = append(out.Query.Where, cond)
+		}
+	}
+	if lim.MaxFilters > 0 && len(out.Query.Where) > lim.MaxFilters {
+		return out, badRequest("query", fmt.Sprintf("at most %d filters per request", lim.MaxFilters), nil)
+	}
+
+	if term := values.Get("search"); term != "" {
+		searchable := columnNames(cols, func(c Column) bool { return c.Searchable })
+		if len(searchable) == 0 {
+			return out, badRequest("query.search", "no column here is searchable", nil)
+		}
+		or := make([]Condition, 0, len(searchable))
+		for _, name := range searchable {
+			or = append(or, Condition{Column: name, Op: OpILike, Value: "%" + term + "%"})
+		}
+		out.Query.Where = append(out.Query.Where, Condition{Or: or})
+	}
+
+	if sortParam := values.Get("sort"); sortParam != "" {
+		terms := strings.Split(sortParam, ",")
+		if lim.MaxSortTerms > 0 && len(terms) > lim.MaxSortTerms {
+			return out, badRequest("query.sort", fmt.Sprintf("at most %d sort terms", lim.MaxSortTerms), nil)
+		}
+		for _, term := range terms {
+			name := strings.TrimSpace(term)
+			desc := strings.HasPrefix(name, "-")
+			name = strings.TrimPrefix(name, "-")
+			col, known := findColumn(cols, name)
+			if !known || !col.Sortable {
+				return out, badRequest("query.sort", "unknown or unsortable column "+name,
+					columnNames(cols, func(c Column) bool { return c.Sortable }))
+			}
+			out.Query.Order = append(out.Query.Order, Order{Column: col.Name, Desc: desc})
+		}
+	}
+
+	perPage := lim.DefaultPageSize
+	if raw := values.Get("per_page"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return out, badRequest("query.per_page", "per_page must be a positive whole number", nil)
+		}
+		perPage = n
+	}
+	if lim.MaxPageSize > 0 && perPage > lim.MaxPageSize {
+		perPage = lim.MaxPageSize
+	}
+	page := 1
+	if raw := values.Get("page"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return out, badRequest("query.page", "page must be 1 or more", nil)
+		}
+		page = n
+	}
+
+	switch count := values.Get("count"); count {
+	case "", "none":
+	case "exact":
+		out.Count = true
+	default:
+		return out, badRequest("query.count", "count must be exact or none", []string{"exact", "none"})
+	}
+
+	out.Page, out.PerPage = page, perPage
+	out.Query.Offset = (page - 1) * perPage
+	// One row past the page, so has_more costs a row rather than a count.
+	out.Query.Limit = perPage + 1
+	return out, nil
+}
+
+// parseCondition reads one `op.value` — or a bare value, which is equality.
+func parseCondition(col Column, raw string) (Condition, error) {
+	name, value, hasOp := strings.Cut(raw, ".")
+	spec, known := operators[name]
+	if !hasOp {
+		// A bare "isnull" is the nullary form; anything else is a value.
+		if spec, ok := operators[raw]; ok && spec.operands == 0 {
+			return Condition{Column: col.Name, Op: spec.sql}, nil
+		}
+		known = false
+	}
+	if !known {
+		// Not an operator, so the whole string is the value — which is what
+		// makes ?status=draft mean equality, and what keeps a value containing
+		// a dot working.
+		v, err := col.Parse(raw)
+		if err != nil {
+			return Condition{}, badRequest("query."+col.Name, err.Error(), nil)
+		}
+		return Condition{Column: col.Name, Op: OpEq, Value: v}, nil
+	}
+
+	switch spec.operands {
+	case 0:
+		return Condition{Column: col.Name, Op: spec.sql}, nil
+	case 2:
+		lo, hi, ok := strings.Cut(value, ",")
+		if !ok {
+			return Condition{}, badRequest("query."+col.Name, "between takes two values separated by a comma", nil)
+		}
+		loV, err := col.Parse(lo)
+		if err != nil {
+			return Condition{}, badRequest("query."+col.Name, err.Error(), nil)
+		}
+		hiV, err := col.Parse(hi)
+		if err != nil {
+			return Condition{}, badRequest("query."+col.Name, err.Error(), nil)
+		}
+		return Condition{Column: col.Name, Op: spec.sql, Value: loV, Value2: hiV}, nil
+	case -1:
+		parts := strings.Split(value, ",")
+		vals := make([]any, 0, len(parts))
+		for _, part := range parts {
+			v, err := col.Parse(part)
+			if err != nil {
+				return Condition{}, badRequest("query."+col.Name, err.Error(), nil)
+			}
+			vals = append(vals, v)
+		}
+		return Condition{Column: col.Name, Op: spec.sql, Values: vals}, nil
+	default:
+		if spec.pattern != "" {
+			// A pattern operator is text, and the value is escaped so that a %
+			// or an _ in it matches itself rather than becoming a wildcard.
+			return Condition{Column: col.Name, Op: spec.sql,
+				Value: fmt.Sprintf(spec.pattern, escapeLike(value))}, nil
+		}
+		v, err := col.Parse(value)
+		if err != nil {
+			return Condition{}, badRequest("query."+col.Name, err.Error(), nil)
+		}
+		return Condition{Column: col.Name, Op: spec.sql, Value: v}, nil
+	}
+}
+
+// escapeLike neutralises the pattern metacharacters in a user's search term.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	return r.Replace(s)
+}
+
+// parseID reads the {id} path segment with the primary key's own parser.
+func parseID(raw string, cols []Column, pk string) (any, error) {
+	col, ok := findColumn(cols, pk)
+	if !ok {
+		return raw, nil
+	}
+	v, err := col.Parse(raw)
+	if err != nil {
+		return nil, badRequest("path.id", err.Error(), nil)
+	}
+	return v, nil
+}
+
+// Problem is the error body, RFC 9457 shaped — the same one sqlb served, so a
+// client's error handling does not change on the way out.
+type Problem struct {
+	Type   string           `json:"type,omitempty"`
+	Title  string           `json:"title,omitempty"`
+	Status int              `json:"status,omitempty"`
+	Detail string           `json:"detail,omitempty"`
+	Errors []*ProblemDetail `json:"errors,omitempty"`
+}
+
+// ProblemDetail is one rejected parameter or field. Allowed carries what would
+// have worked instead, which is the half of an error message that saves a round
+// trip.
+type ProblemDetail struct {
+	Message  string   `json:"message"`
+	Location string   `json:"location,omitempty"`
+	Allowed  []string `json:"allowed,omitempty"`
+}
+
+func (p *Problem) Error() string {
+	if p.Detail != "" {
+		return p.Detail
+	}
+	return p.Title
+}
+
+func badRequest(location, message string, allowed []string) *Problem {
+	return &Problem{
+		Status: http.StatusBadRequest,
+		Title:  http.StatusText(http.StatusBadRequest),
+		Detail: message,
+		Errors: []*ProblemDetail{{Message: message, Location: location, Allowed: allowed}},
+	}
+}
+
+// WriteProblem writes an error response. Anything that is not already a
+// Problem is a 500 whose detail is not the caller's business.
+func WriteProblem(w http.ResponseWriter, err error) {
+	var p *Problem
+	if !errors.As(err, &p) {
+		p = &Problem{
+			Status: http.StatusInternalServerError,
+			Title:  http.StatusText(http.StatusInternalServerError),
+			Detail: "internal server error",
+		}
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(p.Status)
+	_ = json.NewEncoder(w).Encode(p)
+}
+
+// WriteJSON writes a success response.
+func WriteJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if body != nil {
+		_ = json.NewEncoder(w).Encode(body)
+	}
+}
+
+// notFound is the 404 an id that matched nothing produces. It says nothing
+// about whether the row exists outside the caller's scope, because that
+// distinction is exactly what a tenant boundary must not leak.
+func notFound(resource string) *Problem {
+	return &Problem{
+		Status: http.StatusNotFound,
+		Title:  http.StatusText(http.StatusNotFound),
+		Detail: "no " + resource + " matched",
+	}
+}
+
+// readBody reads a request body, capped so that a handler cannot be made to
+// buffer an arbitrary amount of memory. The cap is generous and editable, and
+// it is here rather than absent because this is a file somebody now owns.
+func readBody(r *http.Request) ([]byte, error) {
+	defer func() { _ = r.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+	if err != nil {
+		return nil, badRequest("body", "could not read the request body", nil)
+	}
+	if int64(len(data)) > maxBodyBytes {
+		return nil, &Problem{
+			Status: http.StatusRequestEntityTooLarge,
+			Title:  http.StatusText(http.StatusRequestEntityTooLarge),
+			Detail: fmt.Sprintf("request body is larger than %d bytes", maxBodyBytes),
+		}
+	}
+	return data, nil
+}
+
+// maxBodyBytes caps a request body at one megabyte.
+const maxBodyBytes int64 = 1 << 20
+
+// confineFor runs a resource's Confine hook, if it has one.
+func confineFor(r *http.Request, confine func(*http.Request) ([]Condition, error)) ([]Condition, error) {
+	if confine == nil {
+		return nil, nil
+	}
+	return confine(r)
+}
+
+// assignFor runs a resource's Assign hook, if it has one.
+func assignFor(r *http.Request, assign func(*http.Request) (map[string]any, error)) (map[string]any, error) {
+	if assign == nil {
+		return nil, nil
+	}
+	return assign(r)
+}

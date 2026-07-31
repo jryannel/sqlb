@@ -103,6 +103,8 @@ go install github.com/jryannel/sqlb/cmd/sqlb@latest
 sqlb generate ./schema                # models, typed columns, REST bodies, manifest, clients
 sqlb check ./schema                   # the CI drift gate: writes nothing, fails if stale
 sqlb migrate -name adds_slug ./schema # the migration that closes the gap
+sqlb eject ./schema                   # the way out: the schema as SQL, the resources as
+                                      # plain net/http handlers over pgx, importing no sqlb
 ```
 
 The argument is the package that declares your schema, and the package says what
@@ -120,6 +122,14 @@ migration, which diffs against nothing.
 The schema DSL and code generation are both optional: `sqlb.Describe[T]()`
 layers the same capabilities over structs you already have, including stock
 [sqlc](docs/with-sqlc.md) output, without editing them.
+
+And the way out is generated too. `sqlb eject` writes a package that depends on
+pgx and the standard library — your schema as DDL, your statements as SQL you
+can read, your endpoints as `net/http` handlers — with everything it does not
+carry refused by name rather than quietly missing.
+[`example/blog/ejected`](example/blog/ejected/) is a committed one, and a test
+serves it beside the generated resources it came from and compares the answers
+request by request. See [the way out](docs/eject.md).
 
 ## Status
 

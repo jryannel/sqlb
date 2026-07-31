@@ -314,10 +314,18 @@ Named so that "it is missing" is not mistaken for "it was forgotten".
   additive — a schema that declares no computed column compiles to the same SQL.
   What is *not* built is the record's `FromGo` tier, which it already named as
   the one most likely to be cut.
-- **`sqlb eject`** ([#19](https://github.com/jryannel/sqlb/issues/19)) and
-  **`sqlb impact`** ([#21](https://github.com/jryannel/sqlb/issues/21)). Both are
-  adoption arguments rather than features. Worth building; not worth blocking a
-  freeze.
+- ~~**`sqlb eject`** ([#19](https://github.com/jryannel/sqlb/issues/19))~~ Built:
+  the schema as SQL and the resources as plain `net/http` handlers over pgx, with
+  what it does not carry refused by name and a comparison test against the
+  generated resources it replaces ([ADR-0042](adr/0042-the-exit-is-generated.md)).
+  It was deferred as an adoption argument rather than a feature; it landed early
+  because the argument is the one thing a pre-1.0 library with no consumers can
+  actually answer.
+- **`sqlb impact`** ([#21](https://github.com/jryannel/sqlb/issues/21)). Half of
+  it is built — a REST-contract diff against a committed baseline
+  ([ADR-0039](adr/0039-a-schema-edit-is-an-api-edit.md)) — and what the issue
+  asks for beyond that is the blast-radius report: which endpoints, which client
+  types, which DDL statements one edit touches.
 - ~~**A pgx-native `Executor`** — unless stream B says otherwise.~~ Stream B said
   otherwise. It is now the opposite of a deferral: it is the one item that has to
   land **before** the tag, because it breaks `Executor` and afterwards that is a
