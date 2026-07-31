@@ -357,6 +357,12 @@ func renderRef(b *strings.Builder, d *schema.FieldDesc, names map[string]string)
 	switch {
 	case ref.External:
 		fmt.Fprintf(b, "schema.ExternalRef(%s, %s)", strconv.Quote(ref.Name), strconv.Quote(ref.Target))
+		if ref.Enforced {
+			// The constraint is real, so the rendered declaration has to say
+			// so — otherwise the round trip loses a foreign key the database
+			// has and the next diff proposes dropping it.
+			b.WriteString(".Enforced()")
+		}
 	case ref.Table == nil:
 		return fmt.Errorf("reference %q has no target table", ref.Name)
 	default:

@@ -228,11 +228,18 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 		}
 		switch {
 		case d.Ref != nil && d.Ref.External:
+			// An external reference carries a constraint only when it was
+			// declared Enforced, and then the manifest names the table and
+			// column that constraint points at — a reader auditing the
+			// boundary wants to know which of the two kinds this is.
+			table, column, enforced := d.Ref.EnforcedTarget()
 			cm.References = &RefManifest{
 				Relation: d.Ref.Name,
 				External: true,
 				Target:   d.Ref.Target,
-				Enforced: false,
+				Table:    table,
+				Column:   column,
+				Enforced: enforced,
 			}
 		case d.Ref != nil && d.Ref.Table != nil:
 			cm.References = &RefManifest{
@@ -246,7 +253,7 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 		tm.Columns = append(tm.Columns, cm)
 	}
 
-	for _, idx := range t.indexes {
+	for _, idx := range t.Indexes() {
 		tm.Indexes = append(tm.Indexes, IndexManifest{
 			Name: idx.Name, Columns: idx.Columns, Unique: idx.Unique, Method: idx.Method,
 		})

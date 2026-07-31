@@ -85,6 +85,34 @@ An external reference cannot be `Expandable`, and cannot declare an `Inverse`
 either: expanding it in either direction would reach a table this module does
 not own, and nothing about the other side is resolvable.
 
+## A real foreign key to a table you have not declared
+
+`Ref` needs the target's `*TableDef` and `ExternalRef` emits no constraint,
+which leaves the case an incremental adoption always reaches: the database has a
+live, enforced foreign key, and the table it points at has not been declared yet.
+
+```go
+schema.ExternalRef("org", "organizations.id").Enforced().Filterable()
+```
+
+`Enforced` emits the `FOREIGN KEY` against the *name*, without resolving it.
+`"organizations.id"` names the table and the column; a bare `"organizations"`
+means its `id`. A module-qualified target is refused, because a constraint has to
+name a table in this database and being unable to is the whole of what a module
+boundary means.
+
+It gives up exactly what the paragraph above bought: two modules joined this way
+can no longer be migrated or deployed independently, and neither can move to its
+own database without dropping the constraint. That is the right trade when both
+tables are already in one database with the constraint already there — an
+adoption — and the wrong one across a boundary you intend to keep. Expansion is
+still refused: a constraint says the row exists, it does not give this schema the
+target's columns.
+
+`introspect` produces this form for any foreign key whose target is outside the
+tables it read, which is what stops a schema-vs-database gate proposing
+`DROP CONSTRAINT` forever.
+
 ## What a reference cannot express
 
 Two limits worth knowing before you meet them.
