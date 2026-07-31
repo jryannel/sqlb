@@ -1,8 +1,8 @@
 # ADR-0043: A declared action generates the envelope, and the verb stays plain Go
 
-- **Status:** Exploring — written before the code, deliberately. Nothing is
-  built, and the record exists so that the shape is argued where it is cheap to
-  argue rather than in a diff
+- **Status:** Working — built, and `example/tasks` completes a task through it
+  against Postgres. Additive: a schema that declares no verb generates what it
+  generated before, `Register`'s signature included
 - **Confidence:** High that the gap is real and large — the adoption review
   measured verbs at 780 lines against 464 for all of CRUD on the same handlers,
   so the part sqlb does not generate is bigger than the part it does. High that
@@ -93,9 +93,7 @@ compiler.
 
 ```go
 Task.Action(schema.Action{
-    Name:   "complete",
-    Method: schema.POST,
-    Path:   "/{id}/complete",
+    Name: "complete",
     Body: schema.Body(
         schema.Text("note").Nullable(),
         schema.Timestamp("completed_at"),
@@ -103,6 +101,11 @@ Task.Action(schema.Action{
     Writes: []string{"status", "closed_at"},
 })
 ```
+
+`Path` defaults to `/{id}/` plus the name, which is what nearly every verb
+wants. There is no `Method`: an action is a POST, and the alternatives are
+either the RPC surface this record declines to become or a spelling of DELETE
+that CRUD already has.
 
 `Action` returns `*TableDef` and mirrors `Expose(schema.REST{…})` and
 `AddIndex(schema.Index{…})` — the established idiom for "a table says one more
@@ -283,3 +286,51 @@ them is this record arguing with itself.
   compiler a job. One thing the issue's framing understates: the row lock. Every
   verb is a read-modify-write, and generating the fetch is the only reason
   `FOR UPDATE` can arrive without anyone remembering it.
+- 2026-07-31 — Built, and the record moves to Working. `schema.Action` with
+  `Body`/`Writes`, `rest.Action` and `rest.CollectionAction`, a generated
+  `Actions` struct and `Register` parameter, the verb in the TypeScript, Dart
+  and CLI emitters, actions in `sqlb.json` and in the `sqlb impact` diff, and
+  `example/tasks` completing a task against Postgres. Five things the design did
+  not have, each found by building it:
+
+  **`schema.Action` was already taken.** By the foreign-key referential action —
+  `OnDelete(schema.Cascade)` — which this record's own `Decision` block did not
+  notice. It is renamed `RefAction`, on the argument that two meanings of
+  "action" in one package outlive everyone who could explain them and that this
+  is the side almost nobody writes by name: the constants carry the meaning at
+  every call site, and the whole rename touched four non-test files.
+
+  **`Method` is gone, and its absence is the record being narrow on purpose.**
+  Every legal value was POST. A `GET` action is the RPC surface *What would
+  change our mind* already says needs its own record, and a `DELETE` one is a
+  spelling of an operation CRUD has. A field with one legal value documents an
+  ambition rather than a decision, and adding it later is additive.
+
+  **The input type is emitted even when the action declares no body.** The
+  design implied a body type only where there was a body, which would have made
+  declaring the first property a change to the signature of the func the
+  application already wrote. Emitting an empty struct costs a type nobody reads
+  and makes `Body` genuinely additive. The *operation* still reads no request
+  body — `ActionSpec.HasBody` decides that separately — because an empty struct
+  registered as a required body would make the commonest verb there is refuse a
+  request that carries nothing.
+
+  **The summary cannot be defaulted where it is declared.** "Complete a task"
+  needs the singular of the table name, and `schema` deliberately has no
+  singulariser: codegen's is allowed to guess because a wrong guess in a Go type
+  name is cosmetic, and one baked into an OpenAPI document is not. So the
+  default is filled in downstream, and the collection form says "Purge archived
+  tasks" rather than inventing an article for an endpoint that addresses no row.
+
+  **`Writes` naming a `ReadOnly` column is correct, and worth saying out loud.**
+  `example/tasks` completes a task by writing `status` and `completed_at`, and
+  the second is `ReadOnly`. The two do not disagree: `ReadOnly` says no
+  *request* may set the column, and the envelope writes it on the server's
+  authority from the row the verb mutated — the same standing the `BeforeUpdate`
+  hook that owns it today has. The validator refuses a computed column and the
+  primary key, and lets this through.
+
+  One thing the design got right that only the example proves: the escape hatch
+  is load-bearing. `completeTask` writes a comment row through `sqlb.TxFrom`,
+  the `BeforeCreate` hook supplies its `workspace_id`, and a refused completion
+  rolls the comment back with it — none of which the declaration mentions.

@@ -418,7 +418,7 @@ func renderRef(b *strings.Builder, d *schema.FieldDesc, names map[string]string)
 	return nil
 }
 
-func actionExpr(a schema.Action) string {
+func actionExpr(a schema.RefAction) string {
 	switch a {
 	case schema.Cascade:
 		return "schema.Cascade"
@@ -434,7 +434,7 @@ func actionExpr(a schema.Action) string {
 	// Unreachable through the DSL, but rendering an unknown action as a string
 	// literal would produce Go that does not compile, which is the better
 	// failure than one that compiles and means something else.
-	return "schema.Action(" + strconv.Quote(string(a)) + ")"
+	return "schema.RefAction(" + strconv.Quote(string(a)) + ")"
 }
 
 // fieldConstructor picks the DSL constructor for a column.

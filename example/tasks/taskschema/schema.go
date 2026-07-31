@@ -256,6 +256,30 @@ var Task = schema.Table("tasks",
 		DefaultPageSize: 20,
 		MaxPageSize:     100,
 		MaxFilters:      12,
+	}).
+	// The transition PATCH cannot express, and the reason declared actions
+	// exist (ADR-0043).
+	//
+	// Completing a task is not "set status to done". It is a rule — a task
+	// already done cannot be completed again — plus two columns that have to
+	// move together, because the check constraint above forbids the state where
+	// only one of them did. Today a client says it by PATCHing status and
+	// trusting a hook to fill completed_at, which works and is invisible: the
+	// TypeScript client, the Dart client and the CLI see a status column, not a
+	// transition, and every one of them has to be told by hand.
+	//
+	// Writes names completed_at even though the column is ReadOnly, and the two
+	// do not disagree. ReadOnly says no *request* may set it; the envelope
+	// writes it from the row the verb mutated, on the server, which is the same
+	// standing the BeforeUpdate hook has.
+	Action(schema.Action{
+		Name: "complete",
+		Body: schema.Body(
+			schema.Text("note").Nullable().
+				Comment("Recorded as a comment on the task, in the same transaction."),
+		),
+		Writes:      []string{"status", "completed_at"},
+		Description: "Marks the task done and stamps its completion time. A task that is already done is refused with a 409.",
 	})
 
 // Comment is a note on a task. It exists mainly to give the demo a second

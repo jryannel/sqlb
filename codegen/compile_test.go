@@ -78,6 +78,12 @@ func TestGeneratedGoCompiles(t *testing.T) {
 		"computedoverride": {Registry: computedFixture(), Types: []codegen.TypeOverride{
 			{Type: schema.TypeBool, GoType: "pgtype.Bool", Import: "github.com/jackc/pgx/v5/pgtype"},
 		}},
+		// Declared actions (#18): an Actions struct whose fields are func
+		// types, a parameter on Register, and one input type per verb. It is
+		// the first thing in this file whose imports are earned by a request
+		// body rather than by a column — context by the signatures, time by a
+		// body property on a table whose own columns need neither.
+		"actions": {Registry: actionFixture()},
 	})
 }
 

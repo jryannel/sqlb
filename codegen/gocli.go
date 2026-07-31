@@ -225,6 +225,7 @@ func cliResourceSection(b *bytes.Buffer, r cliResource) {
 	if r.ops.Has(schema.OpDelete) {
 		fmt.Fprintf(b, "\tcmd.AddCommand(new%sDeleteCommand(c))\n", r.goPlural)
 	}
+	cliActionAdds(b, r)
 	fmt.Fprintln(b, "\treturn cmd\n}")
 
 	if r.ops.Has(schema.OpList) {
@@ -242,6 +243,7 @@ func cliResourceSection(b *bytes.Buffer, r cliResource) {
 	if r.ops.Has(schema.OpDelete) {
 		cliDeleteCommand(b, r)
 	}
+	cliActionCommands(b, r)
 }
 
 // canUpdate reports whether a patch command would have anything to write. A

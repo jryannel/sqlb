@@ -1655,6 +1655,19 @@ class TaskPatch {
   Map<String, dynamic> toJson() => Map<String, dynamic>.of(_changes);
 }
 
+/// The request body for POST /tasks/{id}/complete.
+class CompleteTaskInput {
+  /// Builds a request body. A property with no default here is one the
+  /// action declares as required.
+  const CompleteTaskInput({this.note});
+
+  /// Recorded as a comment on the task, in the same transaction.
+  final String? note;
+
+  /// The JSON body. Absent properties are the ones left unset.
+  Map<String, dynamic> toJson() => {if (note != null) 'note': _wire(note)};
+}
+
 // ---------------------------------------------------------------------- users
 
 /// A row of users.
@@ -2852,6 +2865,19 @@ Future<Task> updateTask(
 }) async {
   final path = _itemPath('/tasks', id);
   final json = await request(_patch(path, body.toJson(), cancel));
+  return _row(json, Task.fromJson);
+}
+
+/// POST /tasks/{id}/complete — complete a task.
+Future<Task> completeTask(
+  Transport request,
+  Object id,
+  CompleteTaskInput body, {
+  Object? cancel,
+}) async {
+  final item = _itemPath('/tasks', id);
+  final path = '$item/complete';
+  final json = await request(_post(path, body.toJson(), cancel));
   return _row(json, Task.fromJson);
 }
 

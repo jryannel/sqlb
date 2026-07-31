@@ -284,6 +284,7 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 	fmt.Fprintln(b, "}")
 
 	tsBodyTypes(b, t, typeName)
+	tsActionBodies(b, t, typeName)
 }
 
 // tsForwardRelations is the expandable references declared on t, keyed by the
@@ -527,6 +528,8 @@ func tsTransport(b *bytes.Buffer, r tsResource) {
 		fmt.Fprintf(b, "export function delete%s(request: Transport, id: string | number, signal?: AbortSignal): Promise<void> {\n", name)
 		fmt.Fprintf(b, "  return request({ method: 'DELETE', path: itemPath(%s, id), signal });\n}\n", tsString(r.path))
 	}
+
+	tsActionFunctions(b, r)
 }
 
 // tsKeys emits the query-key factory.

@@ -149,7 +149,7 @@ the section it bears on, and move on.
 | [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Accepted | High |
 | [0041](0041-computed-fields.md) | A computed field is an expression in the row, and the parameterised ones oblige a hook | Working | Medium |
 | [0042](0042-the-exit-is-generated.md) | The exit is generated, and what it does not carry is named | Working | Medium |
-| [0043](0043-declared-actions.md) | A declared action generates the envelope, and the verb stays plain Go | Exploring | Medium |
+| [0043](0043-declared-actions.md) | A declared action generates the envelope, and the verb stays plain Go | Working | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.

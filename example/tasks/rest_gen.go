@@ -3,6 +3,7 @@
 package tasks
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"time"
@@ -286,13 +287,43 @@ func (u TaskPatch) Changes() (map[string]any, error) {
 	return out, nil
 }
 
+// CompleteTaskInput is the request body for /tasks/{id}/complete.
+//
+// A property with a default or one that may be null is a pointer, so that
+// leaving it out is distinguishable from sending its zero value.
+type CompleteTaskInput struct {
+	Note *string `json:"note,omitempty"` // Recorded as a comment on the task, in the same transaction.
+}
+
+// Actions carries the domain funcs the declared actions call.
+//
+// Each field is the verb of one action, and the envelope around it —
+// the id, the scoped fetch, the transaction, the write set and the
+// response — is generated. What the func does is the application's.
+//
+// A field left nil is refused when Register mounts the resource, not by
+// the request that would have called it.
+type Actions struct {
+	// CompleteTask runs POST /tasks/{id}/complete.
+	//
+	// Marks the task done and stamps its completion time. A task that is already done is refused with a 409.
+	//
+	// The envelope persists `status` and `completed_at` afterwards, and nothing else.
+	CompleteTask func(context.Context, *Task, CompleteTaskInput) error
+}
+
 // Register mounts every exposed resource on api.
 //
 // The handlers are rest.Resource, instantiated per model. Registration is
 // generic rather than reflective because query hooks are keyed by type: a
 // BeforeQuery hook registered on a model applies to its REST reads too, which
 // is how tenant scoping stops being something each handler must remember.
-func Register(api huma.API, db sqlb.Executor) error {
+//
+// The schema declares actions, so this takes the funcs that run inside
+// their envelopes. That parameter is the compiler's half of the bargain:
+// an action added to the schema fails the build here rather than serving a
+// route nobody wired.
+func Register(api huma.API, db sqlb.Executor, actions Actions) error {
 	if err := rest.Resource[Comment, CommentCreate, rest.None[Comment]](api, db, rest.Options{
 		Path:            "/comments",
 		Name:            "comment",
@@ -327,7 +358,7 @@ func Register(api huma.API, db sqlb.Executor) error {
 	}); err != nil {
 		return err
 	}
-	if err := rest.Resource[Task, TaskCreate, TaskPatch](api, db, rest.Options{
+	tasksOptions := rest.Options{
 		Path:            "/tasks",
 		Name:            "task",
 		Tag:             "tasks",
@@ -337,7 +368,19 @@ func Register(api huma.API, db sqlb.Executor) error {
 		MaxPageSize:     100,
 		MaxFilters:      12,
 		Expandable:      []string{"list"},
-	}); err != nil {
+	}
+	if err := rest.Resource[Task, TaskCreate, TaskPatch](api, db, tasksOptions); err != nil {
+		return err
+	}
+	if err := rest.Action[Task, CompleteTaskInput](api, db, tasksOptions, rest.ActionSpec{
+		Name:        "complete",
+		Path:        "/tasks/{id}/complete",
+		Field:       "CompleteTask",
+		Summary:     "Complete a task",
+		Description: "Marks the task done and stamps its completion time. A task that is already done is refused with a 409.",
+		Writes:      []string{"status", "completed_at"},
+		HasBody:     true,
+	}, actions.CompleteTask); err != nil {
 		return err
 	}
 	if err := rest.Resource[User, rest.None[User], rest.None[User]](api, db, rest.Options{

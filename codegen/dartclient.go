@@ -279,6 +279,7 @@ func dartRowSection(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) e
 	fmt.Fprintln(b, "}")
 
 	dartBodyTypes(b, t, base)
+	dartActionBodies(b, t, base)
 	return nil
 }
 
@@ -1099,6 +1100,8 @@ func dartTransport(b *bytes.Buffer, r dartResource) {
 		fmt.Fprintln(b, "  await request(_delete(path, cancel));")
 		fmt.Fprintln(b, "}")
 	}
+
+	dartActionMethods(b, r)
 }
 
 // dartPager emits the cursor-walking constructor for one listable resource.

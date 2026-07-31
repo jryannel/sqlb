@@ -332,6 +332,23 @@
           "nullable": true,
           "read_only": true
         }
+      ],
+      "actions": [
+        {
+          "name": "complete",
+          "path": "/tasks/{id}/complete",
+          "body": [
+            {
+              "name": "note",
+              "type": "text",
+              "nullable": true
+            }
+          ],
+          "writes": [
+            "status",
+            "completed_at"
+          ]
+        }
       ]
     },
     {

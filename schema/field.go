@@ -117,8 +117,8 @@ type Reference struct {
 	Name     string // relation name, e.g. "org" for column "org_id"
 	Table    *TableDef
 	Column   string // referenced column; defaults to the target primary key
-	OnDelete Action
-	OnUpdate Action
+	OnDelete RefAction
+	OnUpdate RefAction
 
 	// External marks a reference across a module boundary. No FOREIGN KEY is
 	// emitted for one, so the modules stay independently deployable and
@@ -758,7 +758,7 @@ func (f *Field) Scoped() *Field {
 // OnDelete sets the foreign key delete action. It panics if the field is not a
 // reference: that is a schema authoring bug, and failing at init is more useful
 // than failing at request time.
-func (f *Field) OnDelete(a Action) *Field {
+func (f *Field) OnDelete(a RefAction) *Field {
 	if f.d.Ref == nil {
 		panic(fmt.Sprintf("sqlb/schema: OnDelete on non-reference column %q", f.d.Name))
 	}
@@ -767,7 +767,7 @@ func (f *Field) OnDelete(a Action) *Field {
 }
 
 // OnUpdate sets the foreign key update action.
-func (f *Field) OnUpdate(a Action) *Field {
+func (f *Field) OnUpdate(a RefAction) *Field {
 	if f.d.Ref == nil {
 		panic(fmt.Sprintf("sqlb/schema: OnUpdate on non-reference column %q", f.d.Name))
 	}

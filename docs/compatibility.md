@@ -87,6 +87,13 @@ Named in advance, so the break is a documented plan rather than a surprise.
 - **Nested `?expand`.** One level resolves today. If nesting lands it arrives as
   a longer name — `?expand=list.workspace` — under a depth limit, so nothing a
   request can send today changes meaning.
+- ~~**`schema.Action`, the referential one.**~~ Landed with declared actions
+  ([ADR-0043](adr/0043-declared-actions.md)), which needed that noun for a
+  domain verb. The foreign-key type is now `schema.RefAction`; the constants
+  every call site actually writes — `schema.Cascade`, `schema.SetNull` and the
+  rest — are unchanged, so a schema breaks only if it named the type. The
+  mechanical edit is `schema.Action` → `schema.RefAction` in a foreign-key
+  position.
 - **Backwards cursors.** Paging goes forward only. If `?before=` lands it is a
   new parameter alongside `?cursor=`, so again nothing a request can send today
   changes meaning. [ADR-0027](adr/0027-keyset-pagination.md) says what would

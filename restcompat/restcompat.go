@@ -81,11 +81,13 @@ const (
 	FacetExpand   Facet = "expand"      // ?expand relations
 	FacetCreate   Facet = "create-body" // the POST body
 	FacetPatch    Facet = "patch-body"  // the PATCH body
+	FacetAction   Facet = "action"      // a declared domain verb and its body
 )
 
 var facetOrder = map[Facet]int{
 	FacetResource: 0, FacetOps: 1, FacetResponse: 2, FacetFilter: 3,
 	FacetSort: 4, FacetExpand: 5, FacetCreate: 6, FacetPatch: 7,
+	FacetAction: 8,
 }
 
 // Break is one classified delta between two generated contracts.
@@ -221,6 +223,8 @@ func diffResource(o, n resource, add func(Break)) {
 		}
 		diffField(n.path, o.fields[name], nv, add)
 	}
+
+	diffActions(n.path, o.actions, n.actions, add)
 }
 
 // diffRemoved reports the breaks caused by a column leaving the schema.
@@ -442,6 +446,10 @@ type ResourceSnap struct {
 	Path   string      `json:"path"`
 	Ops    []string    `json:"ops"` // create, read, update, delete, list
 	Fields []FieldSnap `json:"fields"`
+	// Actions are the declared domain verbs. A snapshot recorded before they
+	// existed has none, which reads correctly: every verb in the new schema is
+	// an addition.
+	Actions []ActionSnap `json:"actions,omitempty"`
 }
 
 // FieldSnap is one column's contract-relevant shape. Storage-only properties —
@@ -521,6 +529,7 @@ func Capture(r *schema.Registry) Snapshot {
 			}
 			res.Fields = append(res.Fields, fs)
 		}
+		res.Actions = captureActions(t, path)
 		s.Resources = append(s.Resources, res)
 	}
 	sort.Slice(s.Resources, func(i, j int) bool {
@@ -538,6 +547,10 @@ type resource struct {
 	ops    schema.Op
 	order  []string // column names, in declaration order, for stable output
 	fields map[string]*fieldView
+	// actions are the declared verbs, by name. Unlike a column, a verb has no
+	// separate comparison form: the snapshot shape is already exactly what the
+	// diff reads.
+	actions map[string]ActionSnap
 }
 
 // fieldView is the contract-relevant view of one column. It carries only what
@@ -576,7 +589,7 @@ func (f *fieldView) requiredAtCreate() bool {
 func index(s Snapshot) map[string]resource {
 	out := map[string]resource{}
 	for _, rs := range s.Resources {
-		res := resource{path: rs.Path, fields: map[string]*fieldView{}}
+		res := resource{path: rs.Path, fields: map[string]*fieldView{}, actions: map[string]ActionSnap{}}
 		for _, name := range rs.Ops {
 			for _, c := range canonicalOps {
 				if c.name == name {
@@ -604,6 +617,9 @@ func index(s Snapshot) map[string]resource {
 			}
 			res.order = append(res.order, fs.Name)
 			res.fields[fs.Name] = fv
+		}
+		for _, as := range rs.Actions {
+			res.actions[as.Name] = as
 		}
 		out[rs.Path] = res
 	}

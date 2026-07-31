@@ -115,6 +115,7 @@ type TableDef struct {
 	indexes []Index
 	checks  []Check
 	rest    *REST
+	actions []Action
 }
 
 // Table declares a table and registers it in the default registry. This is the

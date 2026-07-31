@@ -347,6 +347,8 @@ func (r *Registry) Validate() error {
 						"drop OpDelete from Expose and route DELETE to an update of deleted_at")
 			}
 		}
+
+		r.validateActions(t, report)
 	}
 
 	// Duplicate REST paths would make routing order-dependent.

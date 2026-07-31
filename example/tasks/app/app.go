@@ -122,7 +122,9 @@ func New(cfg Config) (*Server, error) {
 	// search, pagination and an OpenAPI operation per exposed table — and no
 	// mention anywhere in it of workspaces, tokens or roles, because the hooks
 	// already cover those for every read the handlers issue.
-	if err := tasks.Register(api, hooked); err != nil {
+	if err := tasks.Register(api, hooked, tasks.Actions{
+		CompleteTask: completeTask,
+	}); err != nil {
 		return nil, fmt.Errorf("app: mounting the generated resources: %w", err)
 	}
 

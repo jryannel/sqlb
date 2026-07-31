@@ -1191,6 +1191,7 @@ func newTasksCommand(c *Client) *cobra.Command {
 	cmd.AddCommand(newTasksGetCommand(c))
 	cmd.AddCommand(newTasksCreateCommand(c))
 	cmd.AddCommand(newTasksUpdateCommand(c))
+	cmd.AddCommand(newTasksCompleteCommand(c))
 	return cmd
 }
 
@@ -1588,6 +1589,38 @@ once, at create.`,
 		`Set a column to null, which no value flag can express. Repeatable.
 Columns: assignee_id, due_at.`)
 	registerCompletion(cmd, "set-null", []string{"assignee_id", "due_at"})
+	return cmd
+}
+
+// newTasksCompleteCommand is POST /tasks/{id}/complete.
+func newTasksCompleteCommand(c *Client) *cobra.Command {
+	var (
+		valNote string
+	)
+	cmd := &cobra.Command{
+		Use:   "complete <id>",
+		Short: "Complete a task",
+		Long: `POST /tasks/{id}/complete
+
+Marks the task done and stamps its completion time. A task that is already done is refused with a 409.
+
+A verb on one row. The server fetches it, runs the transition, and answers
+with the row as it now stands.
+
+This writes status, completed_at, and no other column.`,
+		Example: "  taskctl tasks complete <id>",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			body := map[string]any{}
+			if cmd.Flags().Changed("note") {
+				body["note"] = valNote
+			}
+			return c.run(cmd, Request{Method: http.MethodPost, Path: itemPath("/tasks", args[0]) + "/complete", Body: body}, false)
+		},
+	}
+	flags := cmd.Flags()
+	flags.StringVar(&valNote, "note", "",
+		"Recorded as a comment on the task, in the same transaction. Optional.")
 	return cmd
 }
 

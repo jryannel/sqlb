@@ -174,5 +174,6 @@ quietest wrong answer in the system. See
 - [Filtering and search](filtering.md) — the grammar and what it compiles to
 - [Pagination](pagination.md) — offset, cursors, and `total`
 - [Expanding relations](expand.md) — `?expand`, both directions
+- [Actions](actions.md) — a domain verb with a generated envelope
 - [Rejections](errors.md) — what a refusal says and why
 - [API compatibility](compatibility.md) — what a schema edit does to the contract

@@ -744,6 +744,24 @@
         "expandable": [
           "list"
         ],
+        "actions": [
+          {
+            "name": "complete",
+            "path": "/tasks/{id}/complete",
+            "method": "POST",
+            "body": [
+              {
+                "name": "note",
+                "type": "text",
+                "nullable": true
+              }
+            ],
+            "writes": [
+              "status",
+              "completed_at"
+            ]
+          }
+        ],
         "examples": [
           "GET /tasks?id=eq.VALUE",
           "GET /tasks?sort=-title\u0026page=2\u0026per_page=20",

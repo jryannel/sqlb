@@ -83,15 +83,21 @@ func (t Type) GoType() string {
 	return "any"
 }
 
-// Action is a foreign key referential action.
-type Action string
+// RefAction is a foreign key referential action.
+//
+// It was spelled Action until a table needed that noun for a domain verb
+// ([TableDef.Action], ADR-0043). Two meanings of "action" in one package is
+// the kind of ambiguity that outlives everyone who could explain it, and this
+// is the side almost nobody writes by name — the constants below carry the
+// meaning at every call site.
+type RefAction string
 
 const (
-	NoAction   Action = "NO ACTION"
-	Restrict   Action = "RESTRICT"
-	Cascade    Action = "CASCADE"
-	SetNull    Action = "SET NULL"
-	SetDefault Action = "SET DEFAULT"
+	NoAction   RefAction = "NO ACTION"
+	Restrict   RefAction = "RESTRICT"
+	Cascade    RefAction = "CASCADE"
+	SetNull    RefAction = "SET NULL"
+	SetDefault RefAction = "SET DEFAULT"
 )
 
 // Default describes a column default. Raw is emitted verbatim into DDL; Value

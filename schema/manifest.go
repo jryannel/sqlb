@@ -152,7 +152,40 @@ type RESTManifest struct {
 	// boundary, which is exactly the join this schema will not perform.
 	Expandable []string `json:"expandable,omitempty"`
 
+	// Actions are the domain verbs the table declares. Without them an agent
+	// reading this document sees a CRUD-only API and concludes that completing
+	// a task means PATCHing its status — which is the transition the verb
+	// exists to own (ADR-0043).
+	Actions []ActionManifest `json:"actions,omitempty"`
+
 	Examples []string `json:"examples,omitempty"`
+}
+
+// ActionManifest documents one declared verb.
+type ActionManifest struct {
+	Name string `json:"name"`
+	// Path is the full route, resource path included.
+	Path   string `json:"path"`
+	Method string `json:"method"`
+	// Summary is the one-line description, as it appears in the OpenAPI
+	// document.
+	Summary string `json:"summary,omitempty"`
+	// Body names the request body's properties. An action that declares none
+	// carries no body at all, which is not the same as one whose properties
+	// happen to be optional.
+	Body []ActionProperty `json:"body,omitempty"`
+	// Writes names the columns the envelope persists after the verb returns.
+	// It is what makes the blast radius of a route readable rather than
+	// something to be inferred from a handler.
+	Writes []string `json:"writes,omitempty"`
+}
+
+// ActionProperty is one property of an action's request body.
+type ActionProperty struct {
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Nullable bool     `json:"nullable,omitempty"`
+	Enum     []string `json:"enum,omitempty"`
 }
 
 // OperatorDoc documents one filter operator.
@@ -314,8 +347,32 @@ func (t *TableDef) restManifest(inverses []InverseRelation) *RESTManifest {
 			rm.Expandable = append(rm.Expandable, inv.Name)
 		}
 	}
+	for _, a := range t.actions {
+		rm.Actions = append(rm.Actions, a.manifest(t.rest.Path))
+	}
 	rm.Examples = t.examples(rm)
 	return rm
+}
+
+// manifest documents one action for the machine-readable surface.
+func (a Action) manifest(resourcePath string) ActionManifest {
+	am := ActionManifest{
+		Name:    a.Name,
+		Path:    a.FullPath(resourcePath),
+		Method:  "POST",
+		Summary: a.Summary,
+		Writes:  a.Writes,
+	}
+	for _, f := range a.Body {
+		d := f.Desc()
+		am.Body = append(am.Body, ActionProperty{
+			Name:     d.Name,
+			Type:     string(d.Type),
+			Nullable: d.Nullable,
+			Enum:     d.EnumValues,
+		})
+	}
+	return am
 }
 
 // examples renders a few requests that are valid against this resource. A

@@ -340,7 +340,7 @@ func splitList(s string) []string {
 
 // referentialAction maps confdeltype and confupdtype onto the DSL's actions.
 // "a" is NO ACTION, which the DDL layer omits because it is the default.
-func referentialAction(code string) (schema.Action, bool) {
+func referentialAction(code string) (schema.RefAction, bool) {
 	switch code {
 	case "a", "":
 		return schema.NoAction, true

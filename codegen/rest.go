@@ -75,13 +75,27 @@ func renderREST(opts Options) ([]byte, error) {
 		}
 	}
 
+	acts := actionsOf(exposed)
+	if len(acts) > 0 {
+		// Actions names the funcs by their signature, and every one of those
+		// signatures says context.Context.
+		imports["context"] = true
+		actionBodyImports(imports, acts)
+	}
+
 	b := header(opts.Package, sortedSet(imports))
 
 	for _, t := range exposed {
 		renderCreateBody(b, t, ov)
 		renderUpdateBody(b, t, ov)
 	}
-	renderRegister(b, opts.Registry, exposed)
+	for _, a := range acts {
+		renderActionInput(b, a)
+	}
+	if len(acts) > 0 {
+		renderActions(b, acts)
+	}
+	renderRegister(b, opts.Registry, exposed, len(acts) > 0)
 
 	return gofmt(opts.restFile(), b.Bytes())
 }
@@ -337,13 +351,21 @@ func omitEmpty(optional bool) string {
 	return ""
 }
 
-func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.TableDef) {
+func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.TableDef, hasActions bool) {
 	fmt.Fprintf(b, "\n// Register mounts every exposed resource on api.\n")
 	fmt.Fprintf(b, "//\n// The handlers are rest.Resource, instantiated per model. Registration is\n")
 	fmt.Fprintf(b, "// generic rather than reflective because query hooks are keyed by type: a\n")
 	fmt.Fprintf(b, "// BeforeQuery hook registered on a model applies to its REST reads too, which\n")
 	fmt.Fprintf(b, "// is how tenant scoping stops being something each handler must remember.\n")
-	fmt.Fprintln(b, "func Register(api huma.API, db sqlb.Executor) error {")
+	if hasActions {
+		fmt.Fprintf(b, "//\n// The schema declares actions, so this takes the funcs that run inside\n")
+		fmt.Fprintf(b, "// their envelopes. That parameter is the compiler's half of the bargain:\n")
+		fmt.Fprintf(b, "// an action added to the schema fails the build here rather than serving a\n")
+		fmt.Fprintf(b, "// route nobody wired.\n")
+		fmt.Fprintln(b, "func Register(api huma.API, db sqlb.Executor, actions Actions) error {")
+	} else {
+		fmt.Fprintln(b, "func Register(api huma.API, db sqlb.Executor) error {")
+	}
 	for _, t := range exposed {
 		typeName := TypeName(t.LocalName())
 		r := t.Rest()
@@ -355,7 +377,17 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 			update = typeName + "Patch"
 		}
 
-		fmt.Fprintf(b, "\tif err := rest.Resource[%s, %s, %s](api, db, rest.Options{\n", typeName, create, update)
+		// A table with verbs binds its options to a name, because the resource
+		// and every action on it are one exposure and must not be able to
+		// disagree about the path, the tag or the transaction policy.
+		acts := actionsOf([]*schema.TableDef{t})
+		optsVar := ""
+		if len(acts) > 0 {
+			optsVar = unexportedGoName(t.LocalName()) + "Options"
+			fmt.Fprintf(b, "\t%s := rest.Options{\n", optsVar)
+		} else {
+			fmt.Fprintf(b, "\tif err := rest.Resource[%s, %s, %s](api, db, rest.Options{\n", typeName, create, update)
+		}
 		fmt.Fprintf(b, "\t\tPath: %q,\n", r.Path)
 		fmt.Fprintf(b, "\t\tName: %q,\n", Singular(t.LocalName()))
 		fmt.Fprintf(b, "\t\tTag:  %q,\n", r.Tag)
@@ -382,7 +414,14 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 			}
 			fmt.Fprintf(b, "\t\tExpandable: []string{%s},\n", strings.Join(quoted, ", "))
 		}
-		fmt.Fprintf(b, "\t}); err != nil {\n\t\treturn err\n\t}\n")
+		if len(acts) == 0 {
+			fmt.Fprintf(b, "\t}); err != nil {\n\t\treturn err\n\t}\n")
+			continue
+		}
+		fmt.Fprintf(b, "\t}\n")
+		fmt.Fprintf(b, "\tif err := rest.Resource[%s, %s, %s](api, db, %s); err != nil {\n\t\treturn err\n\t}\n",
+			typeName, create, update, optsVar)
+		renderActionCalls(b, optsVar, acts)
 	}
 	fmt.Fprintln(b, "\treturn nil\n}")
 }

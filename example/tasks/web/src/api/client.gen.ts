@@ -444,6 +444,12 @@ export interface TaskPatch {
   position?: number;
 }
 
+/** The request body for `POST /tasks/{id}/complete`. */
+export interface CompleteTaskInput {
+  /** Recorded as a comment on the task, in the same transaction. */
+  note?: string | null;
+}
+
 // ------------------------------------------------------------------ users
 
 /** A row of users. */
@@ -955,6 +961,11 @@ export function createTask(request: Transport, body: TaskCreate, signal?: AbortS
 /** `PATCH /tasks/{id}` — write the columns the body names, and no others. */
 export function updateTask(request: Transport, id: string | number, body: TaskPatch, signal?: AbortSignal): Promise<Task> {
   return request({ method: 'PATCH', path: itemPath('/tasks', id), body, signal });
+}
+
+/** `POST /tasks/{id}/complete` — complete a task. */
+export function completeTask(request: Transport, id: string | number, body: CompleteTaskInput, signal?: AbortSignal): Promise<Task> {
+  return request({ method: 'POST', path: itemPath('/tasks', id) + '/complete', body, signal });
 }
 
 /**
