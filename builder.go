@@ -3,6 +3,7 @@ package sqlb
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 )
 
@@ -34,10 +35,14 @@ type Builder[T any] struct {
 	// the context a hook reads its tenant from — the same reason the parent's
 	// own hooks do not run at build time either. See expand.go.
 	expandScope map[string][]Pred
-	limit       *int
-	offset      *int
-	lock        string
-	err         error
+	// binds are the values a computed column's Needs names, one shared slot per
+	// key so that a viewer named in the projection, the WHERE and the ORDER BY
+	// is sent to the database once. See Bind.
+	binds  map[string]*sharedValue
+	limit  *int
+	offset *int
+	lock   string
+	err    error
 }
 
 type joinClause struct {
@@ -100,6 +105,15 @@ func (b *Builder[T]) Clone() *Builder[T] {
 			c.expandScope[k] = append([]Pred(nil), v...)
 		}
 	}
+	if b.binds != nil {
+		// The map is copied and the slots are not: rebinding a key on the copy
+		// must not reach the original, while a value already bound is the same
+		// parameter in both, which is what makes it one placeholder.
+		c.binds = make(map[string]*sharedValue, len(b.binds))
+		for k, v := range b.binds {
+			c.binds[k] = v
+		}
+	}
 	if b.limit != nil {
 		v := *b.limit
 		c.limit = &v
@@ -115,6 +129,56 @@ func (b *Builder[T]) Clone() *Builder[T] {
 func (b *Builder[T]) UseDialect(d Dialect) *Builder[T] {
 	b.dialect = d
 	return b
+}
+
+// Bind supplies the value a computed column declared it needs.
+//
+// A computed column whose expression takes a bind is answered per request — is
+// this row starred *by the caller* — so the value cannot be in the schema and
+// has to arrive with the query:
+//
+//	sqlb.On[Project]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Project]) error {
+//	    q.Bind("viewer", memberFrom(ctx))
+//	    return nil
+//	})
+//
+// The value binds once however many times the expression is rendered: the
+// projection, a filter on the column and an ordering by it all resolve to the
+// same placeholder.
+//
+// Binding a key no computed column names is harmless and does nothing. The
+// failure worth catching is the other one — a column whose bind never arrives —
+// and it is caught twice: the query fails rather than rendering NULL, and
+// [rest.Resource] refuses at startup to mount a resource with no hook to supply
+// it (ADR-0030, ADR-0041).
+func (b *Builder[T]) Bind(key string, value any) *Builder[T] {
+	if b.binds == nil {
+		b.binds = make(map[string]*sharedValue, 1)
+	}
+	b.binds[key] = &sharedValue{value: value}
+	return b
+}
+
+// Bound reports the binds this query carries, for a caller inspecting one.
+func (b *Builder[T]) Bound() []string {
+	out := make([]string, 0, len(b.binds))
+	for k := range b.binds {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// computedSet is the model's derived columns as they stand for this query,
+// with whatever binds it carries. Nil when the model computes nothing, which
+// is the common case and costs one length check.
+func (b *Builder[T]) computedSet() *computedSet {
+	set := computedSetOf(b.model)
+	if set == nil {
+		return nil
+	}
+	set.binds = b.binds
+	return set
 }
 
 // As aliases the table, which is required for self-joins.
@@ -291,6 +355,9 @@ func (b *Builder[T]) compile(c *compiler) {
 	if b.joined() {
 		defer c.qualifyTo(b.from())()
 	}
+	// A derived column resolves under this statement's table and under a bare
+	// name, which is how every term a caller can write reaches it.
+	defer c.withComputed(b.from(), b.computedSet())()
 
 	c.write("SELECT ")
 	if b.distinct {
@@ -364,6 +431,14 @@ func (b *Builder[T]) compileProjection(c *compiler) {
 				c.write(", ")
 			}
 			c.column(Column{Table: b.alias, Name: col.Name})
+			// An expression has no name of its own, and the scan matches result
+			// columns to fields by name. Aliasing it back to the column it was
+			// declared as is what makes `(due_date < current_date)` arrive as
+			// is_overdue.
+			if col.Computed() {
+				c.write(" AS ")
+				c.ident(col.Name)
+			}
 		}
 		return
 	}
@@ -372,9 +447,15 @@ func (b *Builder[T]) compileProjection(c *compiler) {
 			c.write(", ")
 		}
 		c.expr(s.expr)
-		if s.alias != "" {
+		alias := s.alias
+		if alias == "" {
+			// Same reason as above, for the projection filter.Apply builds:
+			// it names columns, including derived ones, as plain F(name).
+			alias = c.derivedAlias(s.expr)
+		}
+		if alias != "" {
 			c.write(" AS ")
-			c.ident(s.alias)
+			c.ident(alias)
 		}
 	}
 }

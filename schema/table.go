@@ -148,8 +148,28 @@ func (t *TableDef) LocalName() string { return t.local }
 // Module is the owning module name, or "" if the table is not in one.
 func (t *TableDef) Module() string { return t.module }
 
-// Fields returns the table's columns in declaration order.
+// Fields returns the table's columns in declaration order, computed ones
+// included: they are columns to every consumer that describes the row — the
+// model, the clients, the CLI, the OpenAPI document.
 func (t *TableDef) Fields() []*Field { return t.fields }
+
+// StoredFields returns the columns the database actually holds.
+//
+// It is what the DDL and the diff read, and the only distinction either of them
+// has to make about a computed column: an expression has no type to declare, no
+// default to write and no ALTER to propose, so a migration that saw one would
+// propose creating a column that must not exist and then propose dropping it
+// again on the next run (ADR-0041).
+func (t *TableDef) StoredFields() []*Field {
+	out := make([]*Field, 0, len(t.fields))
+	for _, f := range t.fields {
+		if f.d.Computed() {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
 
 // Field returns the named column, or nil.
 func (t *TableDef) Field(name string) *Field {
@@ -157,6 +177,17 @@ func (t *TableDef) Field(name string) *Field {
 		if f.d.Name == name {
 			return f
 		}
+	}
+	return nil
+}
+
+// StoredField returns the named column if the database holds it, and nil for a
+// computed one — which is what a migration wants: turning a stored column into
+// a computed one means the storage goes away, and a diff that saw the
+// declaration would leave the old column behind forever.
+func (t *TableDef) StoredField(name string) *Field {
+	if f := t.Field(name); f != nil && !f.d.Computed() {
+		return f
 	}
 	return nil
 }

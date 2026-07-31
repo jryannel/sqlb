@@ -554,7 +554,7 @@ func constraints(t *schema.TableDef) []constraint {
 		})
 	}
 
-	for _, f := range t.Fields() {
+	for _, f := range t.StoredFields() {
 		d := f.Desc()
 		if d.Unique && !d.PrimaryKey {
 			out = append(out, constraint{
@@ -622,7 +622,7 @@ func foreignKeyRef(d *schema.FieldDesc) fkRef {
 // does not depend on another table, followed by any COMMENT statements.
 func createTable(t *schema.TableDef, opts diffOptions) (string, error) {
 	var lines []string
-	for _, f := range t.Fields() {
+	for _, f := range t.StoredFields() {
 		def, err := columnDef(f.Desc(), opts)
 		if err != nil {
 			return "", err
@@ -658,7 +658,7 @@ func commentStatements(t *schema.TableDef) []string {
 	if t.Comment() != "" {
 		out = append(out, commentOnTable(t.Name(), t.Comment()))
 	}
-	for _, f := range t.Fields() {
+	for _, f := range t.StoredFields() {
 		if d := f.Desc(); d.Comment != "" {
 			out = append(out, commentOnColumn(t.Name(), d.Name, d.Comment))
 		}

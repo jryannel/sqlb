@@ -284,6 +284,28 @@ func derivedIndexName(t *schema.TableDef, idx schema.Index) string {
 func renderField(d *schema.FieldDesc, names map[string]string) (string, error) {
 	var b strings.Builder
 
+	// A computed column is its own constructor and takes none of the modifiers
+	// below: every one of them is a statement about storage, and Validate
+	// refuses each. Nothing introspected is ever computed — a database has no
+	// such column to read back — so this is here for a registry that was
+	// declared rather than imported.
+	if d.Computed() {
+		constant, err := typeConstant(d.Type)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "schema.Computed(%s, %s, schema.FromSQL(%s))",
+			strconv.Quote(d.Name), constant, strconv.Quote(d.Expr))
+		if len(d.Needs) > 0 {
+			quoted := make([]string, len(d.Needs))
+			for i, key := range d.Needs {
+				quoted[i] = strconv.Quote(key)
+			}
+			fmt.Fprintf(&b, ".Needs(%s)", strings.Join(quoted, ", "))
+		}
+		return b.String(), nil
+	}
+
 	if d.Ref != nil {
 		if err := renderRef(&b, d, names); err != nil {
 			return "", err
@@ -385,6 +407,41 @@ func actionExpr(a schema.Action) string {
 // modifier: schema.UUIDv7(name) is a uuid column that already carries the
 // generator, so rendering it as UUID(...).Default(GenUUIDv7()) would be correct
 // but would not look like anything a person writes.
+// typeConstant names the schema.Type constant for a logical type, for the one
+// declaration that takes the type as an argument rather than choosing a
+// constructor from it.
+func typeConstant(t schema.Type) (string, error) {
+	switch t {
+	case schema.TypeText:
+		return "schema.TypeText", nil
+	case schema.TypeVarchar:
+		return "schema.TypeVarchar", nil
+	case schema.TypeInt:
+		return "schema.TypeInt", nil
+	case schema.TypeBigInt:
+		return "schema.TypeBigInt", nil
+	case schema.TypeFloat:
+		return "schema.TypeFloat", nil
+	case schema.TypeNumeric:
+		return "schema.TypeNumeric", nil
+	case schema.TypeBool:
+		return "schema.TypeBool", nil
+	case schema.TypeUUID:
+		return "schema.TypeUUID", nil
+	case schema.TypeTimestamp:
+		return "schema.TypeTimestamp", nil
+	case schema.TypeDate:
+		return "schema.TypeDate", nil
+	case schema.TypeTime:
+		return "schema.TypeTime", nil
+	case schema.TypeJSON:
+		return "schema.TypeJSON", nil
+	case schema.TypeBytes:
+		return "schema.TypeBytes", nil
+	}
+	return "", fmt.Errorf("no schema.Type constant for %q", t)
+}
+
 func fieldConstructor(d *schema.FieldDesc) (string, error) {
 	name := strconv.Quote(d.Name)
 	switch d.Type {

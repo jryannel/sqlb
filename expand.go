@@ -311,6 +311,16 @@ func writeRowObject(c *compiler, target *Model, alias string) {
 		if col.Hidden {
 			continue
 		}
+		// A computed column is SQL text written against the target's own table,
+		// and here the target is joined under an alias. Rewriting a raw fragment
+		// onto that alias is precisely what qualify.go refuses to do for a
+		// RawPred, and for the same reason: text cannot be requalified with
+		// certainty, and a fragment silently resolving to the wrong table is
+		// worse than an absent key. So an expanded row carries the target's
+		// stored columns; its derived ones are answered by its own endpoint.
+		if col.Computed() {
+			continue
+		}
 		if !first {
 			c.write(", ")
 		}

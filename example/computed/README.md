@@ -1,11 +1,12 @@
-# Derived values: four Postgres techniques, and where sqlb's ceiling is
+# Derived values: five techniques, and which one to reach for
 
 A project has a due date and two task counters. A list page wants six things the
 row does not literally contain: `totalTasks`, `completedTasks`, `openTasks`,
 `isOverdue`, `progress %`, and `isStarred`.
 
-Those six are not one problem. They are four, and picking the wrong technique for
-one of them is the difference between an index scan and a subquery per row.
+Those six are not one problem. They are four kinds of problem, and picking the
+wrong technique for one of them is the difference between an index scan and a
+subquery per row.
 
 Run it:
 
@@ -22,11 +23,14 @@ what `SQL()` exists for.
 |---|---|---|---|---|
 | the same row, immutably | `GENERATED ALWAYS AS … STORED` | yes | yes | **yes** |
 | other rows | a trigger-maintained counter | yes | yes | **yes** |
-| the same row + `now()` | a projected expression | yes¹ | yes¹ | no |
-| **who is asking** | a projected expression **with a bind** | yes¹ | yes¹ | no |
+| the same row + `now()` | `schema.Computed` | yes | no¹ | no |
+| the same row, stably | `schema.Computed` | yes | yes | no |
+| **who is asking** | `schema.Computed` + `Needs` | yes | yes | no |
 
-¹ through hand-written `sqlb.Raw`, not through the filter grammar — see the
-ceiling below.
+¹ a keyset cursor pages on the sort column, so an expression that reads
+`now()` cannot be one — the declaration is refused rather than the request.
+Technique 3 is the same SQL written per call site, which is still what a
+one-query expression wants; §5 is the declared form and what it buys.
 
 The first two produce ordinary columns. sqlb needs to be told nothing about
 them: they are `Filterable`, `Sortable`, and reachable from the REST filter
@@ -133,12 +137,54 @@ cannot ask for `?filter=isOverdue.eq.true` no matter what the SQL can do. That i
 not a gap in what sqlb can *express* — the SQL above is proof it can — it is a
 gap in what sqlb can *declare*, and the declaration is what the emitters read.
 
-That gap is the whole argument of
-[ADR-0041](../../docs/adr/0041-computed-fields.md) and
-[issue #17](https://github.com/jryannel/sqlb/issues/17): a `schema.Computed` slot
-that writes the expression once, puts the field in every emitted artefact, and —
-for the `isStarred` case — obliges a hook to supply the bind, so a per-viewer
-field that nobody wired up fails at mount instead of returning `false` forever.
+Both of those are what [ADR-0041](../../docs/adr/0041-computed-fields.md) and
+[issue #17](https://github.com/jryannel/sqlb/issues/17) argued for, and both are
+closed below.
 
-Techniques 1, 2 and 4 survive that ADR unchanged. Only technique 3 is the
-placeholder.
+## 5 · Declare it
+
+```go
+schema.Computed("is_overdue", schema.TypeBool,
+    schema.FromSQL("(due_date IS NOT NULL AND due_date < current_date AND open_tasks > 0)")).
+    Filterable()
+
+schema.Computed("is_starred", schema.TypeBool,
+    schema.FromSQL("EXISTS (SELECT 1 FROM project_stars s "+
+        "WHERE s.project_id = projects.id AND s.member_id = ?)")).
+    Needs("viewer").Filterable()
+```
+
+`declared.go` is the same three values written this way, and its tests assert
+what the declaration buys over technique 3:
+
+- **The expression is written once.** The compiler substitutes it wherever the
+  column is named, so `?filter=is_overdue.eq.true`, `?sort=-progress` and the
+  projection all render from one string.
+- **The viewer binds once.** `Bind("viewer", …)` is `$1` in the projection *and*
+  in the predicate — the facility `sqlb.Near` proved worth having for a query
+  vector, now reachable by any declared column.
+- **Every emitter sees the field.** It is in the row type, the JSON, the
+  TypeScript and Dart types, the CLI's column set and the OpenAPI document,
+  because to all of them it is a column.
+- **An unsupplied bind fails loudly.** `rest.Resource` refuses to mount a
+  resource whose `Needs` no `BeforeQuery` hook satisfies, so a per-viewer field
+  nobody wired up is a startup error rather than `false` for every row forever.
+
+And what it costs, stated as plainly:
+
+- **No index, ever.** A declared expression is evaluated per candidate row. That
+  is why techniques 1 and 2 come first in this file and are not deprecated by
+  this one — `Lint` says so too, once per filterable computed column.
+- **`Sortable` is refused on a volatile expression.** `is_overdue` reads
+  `current_date`, so a keyset cursor paging on it would compare this page's
+  boundary against next page's value. `progress` is arithmetic over two stored
+  columns and may be sorted.
+- **The SQL is unchecked until a query runs.** It is raw text in the schema, so
+  a typo surfaces at the database rather than at generate time.
+- **An expansion does not carry one.** `?expand=project` joins the target under
+  an alias, and a raw fragment cannot be requalified onto it with certainty — the
+  same refusal `qualify.go` already makes for `RawPred`. An expanded row carries
+  the target's stored columns; its derived ones come from its own endpoint.
+
+Techniques 1, 2 and 4 survive unchanged. Technique 3 remains the answer for an
+expression only one query wants, since a declaration is a property of the table.

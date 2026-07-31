@@ -50,6 +50,45 @@ type ColumnInfo struct {
 	// mounted.
 	Scoped     bool
 	SoftDelete bool
+
+	// Expr is the SQL a computed column renders as, in place of its name. It
+	// arrives from the model's ComputedColumns method or from Describe, never
+	// from a struct tag: the expression is SQL, and a tag is a comma-separated
+	// list (ADR-0041).
+	Expr string
+	// Needs names the binds Expr's `?` placeholders take, in order. A computed
+	// column with none is row-local; one with a bind is answered per request,
+	// and the value comes from Builder.Bind — which a BeforeQuery hook calls,
+	// and which rest refuses to mount a resource without.
+	Needs []string
+}
+
+// Computed reports whether this column is an expression rather than storage.
+// Such a column is projected and may be filtered or sorted on, and it is never
+// written: no insert names it, no update sets it, and no migration creates it.
+func (c *ColumnInfo) Computed() bool { return c.Expr != "" }
+
+// Computed declares one derived column: a SQL expression the compiler renders
+// wherever the column is named, rather than a value the table stores.
+//
+// Generated models return these from ComputedColumns; a hand-written one can
+// implement the method itself, or say the same thing through Describe.
+type Computed struct {
+	// Name is the column name — the key in the JSON, the name a filter or a
+	// sort spells, and the alias the projection scans back through.
+	Name string
+	// Expr is the SQL, written against this table's own columns. Each `?` in
+	// it takes the bind named at the matching position of Needs; a doubled
+	// `??` is a literal question mark, as in Raw.
+	Expr string
+	// Needs names the binds Expr takes, in order.
+	Needs []string
+}
+
+// Deriver is a model that declares computed columns. Generated models with a
+// schema.Computed field implement it.
+type Deriver interface {
+	ComputedColumns() []Computed
 }
 
 // Model is the reflected mapping between a Go struct and a table.
@@ -58,6 +97,13 @@ type Model struct {
 	Table   string
 	Columns []*ColumnInfo
 	PK      *ColumnInfo
+
+	// Derived are the computed columns, in declaration order. They are also in
+	// Columns — a computed column is a column, which is what makes Hidden,
+	// Filterable and the whole capability vocabulary apply to it unchanged —
+	// and this is the list for the callers that need only them, the mount check
+	// among them.
+	Derived []*ColumnInfo
 
 	// Relations are the expandable references this model declares — the
 	// struct fields carrying an expanded row rather than a column of their
@@ -72,6 +118,9 @@ type Model struct {
 	Soft  *ColumnInfo
 
 	byName map[string]*ColumnInfo
+	// byDerived is Derived keyed by name, built once here so that compiling a
+	// statement is a map lookup per column reference rather than a scan.
+	byDerived map[string]*ColumnInfo
 	// inUse is set the first time a statement is built against this model.
 	// Describe refuses to mutate a model past that point: doing so is a data
 	// race against every in-flight query, and a description that silently
@@ -158,7 +207,89 @@ func buildModel(t reflect.Type) (*Model, error) {
 	if err := resolveRelations(m); err != nil {
 		return nil, err
 	}
+	if err := applyComputed(m); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// applyComputed attaches the expressions a model declares to the columns they
+// belong to.
+//
+// A computed column is an ordinary struct field with an ordinary `db` tag —
+// that is what makes it scan, and what makes every capability apply to it — so
+// the expression is the only thing that cannot be said in a tag, and this is
+// where it is said.
+func applyComputed(m *Model) error {
+	d, ok := reflect.New(m.Type).Interface().(Deriver)
+	if !ok {
+		return nil
+	}
+	for _, comp := range d.ComputedColumns() {
+		col := m.byName[comp.Name]
+		if col == nil {
+			return fmt.Errorf(
+				"sqlb: model %s computes %q but maps no field to that column (columns: %s)",
+				m.Type, comp.Name, strings.Join(m.ColumnNames(), ", "))
+		}
+		if err := setComputed(m, col, comp.Expr, comp.Needs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setComputed marks one column computed, refusing the combinations that would
+// be silently wrong.
+func setComputed(m *Model, col *ColumnInfo, expr string, needs []string) error {
+	if strings.TrimSpace(expr) == "" {
+		return fmt.Errorf("sqlb: model %s computes %q with an empty expression", m.Type, col.Name)
+	}
+	if n := placeholderCount(expr); n != len(needs) {
+		return fmt.Errorf(
+			"sqlb: model %s computes %q with %d placeholder(s) but names %d bind(s) (%s); "+
+				"each `?` takes the bind at the matching position, and `??` is a literal question mark",
+			m.Type, col.Name, n, len(needs), strings.Join(needs, ", "))
+	}
+	if col.Searchable {
+		// ?search fans out over text columns with ILIKE (ADR-0037). There is no
+		// reading of that over an expression which is not either a lie about
+		// what was searched or a table scan nobody asked for.
+		return fmt.Errorf("sqlb: model %s computes %q and marks it searchable; a computed column cannot be part of the ?search fan-out",
+			m.Type, col.Name)
+	}
+	// Nothing writes an expression. Marking it here rather than asking every
+	// caller to check Computed() is what keeps the create and update bodies,
+	// the insert column list and the REST write paths correct without knowing
+	// this feature exists.
+	col.ReadOnly = true
+	col.Expr = expr
+	col.Needs = append([]string(nil), needs...)
+	if m.byDerived == nil {
+		m.byDerived = map[string]*ColumnInfo{}
+	}
+	if _, again := m.byDerived[col.Name]; !again {
+		m.Derived = append(m.Derived, col)
+	}
+	m.byDerived[col.Name] = col
+	return nil
+}
+
+// placeholderCount counts the binds an expression takes, treating `??` as an
+// escaped literal exactly as Raw does.
+func placeholderCount(expr string) int {
+	n := 0
+	for i := 0; i < len(expr); i++ {
+		if expr[i] != '?' {
+			continue
+		}
+		if i+1 < len(expr) && expr[i+1] == '?' {
+			i++
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // modelOfType is ModelOf without the type parameter, for resolving a relation's

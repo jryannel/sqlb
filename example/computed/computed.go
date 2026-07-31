@@ -1,11 +1,12 @@
 // Package computed shows how to get a derived value — one the row does not
 // store — out of Postgres through sqlb.
 //
-// There is no `schema.Computed` yet; [ADR-0041] designs one and says why. This
-// package is what the four techniques look like without it, and three of the
-// four are not going away when it lands: a column Postgres maintains is cheaper
-// than an expression evaluated per read, and it is the right answer often
-// enough that a declaration slot should not be allowed to hide it.
+// [schema.Computed] now declares one, and declared.go is this package's three
+// derived values written that way. The four techniques below are still here
+// because three of them did not go away when it landed: a column Postgres
+// maintains is cheaper than an expression evaluated per read, and it is the
+// right answer often enough that a declaration slot should not be allowed to
+// hide it. [ADR-0041] says which tier is which.
 //
 // The four, in the order to reach for them:
 //
@@ -25,7 +26,11 @@
 // (1) and (2) produce ordinary columns, so sqlb needs to be told nothing: they
 // are Filterable, Sortable and indexable like any other, and the only sqlb-side
 // decision is ReadOnly, which keeps them out of the generated request bodies.
-// (3) is where the ceiling is, and where ADR-0041 aims.
+// (3) is where the ceiling was, and where schema.Computed now sits — see
+// declared.go, which produces the same SQL from a declaration the emitters can
+// read. What (3) still has that a declaration does not is a per-call-site
+// expression: schema.Computed is a property of the table, so a value only one
+// query wants is still a RawSel.
 //
 // [ADR-0041]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0041-computed-fields.md
 package computed

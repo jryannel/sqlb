@@ -518,7 +518,7 @@ func (d *differ) tableAltered(cur, tgt *schema.TableDef) error {
 // for why that is a no-op rather than an error.
 func columnRenames(cur, tgt *schema.TableDef) map[string]string {
 	out := map[string]string{}
-	for _, f := range tgt.Fields() {
+	for _, f := range tgt.StoredFields() {
 		td := f.Desc()
 		old := td.RenamedFrom
 		if old == "" || cur.Field(old) == nil || cur.Field(td.Name) != nil {
@@ -535,7 +535,10 @@ func (d *differ) columns(cur, tgt *schema.TableDef, cols map[string]string) erro
 		renamedFrom[name] = old
 	}
 
-	for _, f := range tgt.Fields() {
+	// A computed column is not storage, so the diff does not see one: it has no
+	// type to create, no default to alter, and a database that does not have it
+	// is not behind.
+	for _, f := range tgt.StoredFields() {
 		td := f.Desc()
 		existing := cur.Field(td.Name)
 		if existing == nil {
@@ -557,7 +560,9 @@ func (d *differ) columns(cur, tgt *schema.TableDef, cols map[string]string) erro
 	}
 	for _, f := range cur.Fields() {
 		cd := f.Desc()
-		if tgt.Field(cd.Name) != nil || cols[cd.Name] != "" {
+		// StoredField rather than Field: a column the target now computes is a
+		// column the database should stop holding, so the drop is proposed.
+		if tgt.StoredField(cd.Name) != nil || cols[cd.Name] != "" {
 			continue
 		}
 		// The column drop runs after the renames, so it and its Down are both
@@ -1134,7 +1139,7 @@ func (d *differ) indexCreated(tgt *schema.TableDef, idx schema.Index) {
 // goes, even a trailing one.
 func coversDroppedColumn(idx schema.Index, tgt *schema.TableDef) bool {
 	for _, col := range idx.Columns {
-		if tgt.Field(col) == nil {
+		if tgt.StoredField(col) == nil {
 			return true
 		}
 	}

@@ -147,7 +147,7 @@ the section it bears on, and move on.
 | [0038](0038-collections-are-flat.md) | A collection has one path, and the parent is a filter | Working | High |
 | [0039](0039-a-schema-edit-is-an-api-edit.md) | A schema edit is an API edit, and the break is diffed | Exploring | Medium |
 | [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Accepted | High |
-| [0041](0041-computed-fields.md) | A computed field is an expression in the row, and the parameterised ones oblige a hook † | Exploring | Medium |
+| [0041](0041-computed-fields.md) | A computed field is an expression in the row, and the parameterised ones oblige a hook | Working | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.
