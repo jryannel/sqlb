@@ -97,6 +97,18 @@ type ColumnManifest struct {
 	// has.
 	Scoped     bool `json:"scoped,omitempty"`
 	SoftDelete bool `json:"softDelete,omitempty"`
+
+	// Computed reports that the column is an expression rather than storage.
+	// A consumer reading the manifest to decide what a schema edit costs needs
+	// the distinction: this column appears in every response and in no
+	// migration.
+	Computed bool `json:"computed,omitempty"`
+	// Needs names the per-request binds the expression takes. It is the
+	// obligation half — a resource exposing this column does not mount until a
+	// hook supplies each of them — and it is listed for the same reason Scoped
+	// is: a reader auditing the boundary wants to see what the server had to
+	// have done.
+	Needs []string `json:"needs,omitempty"`
 }
 
 // RefManifest describes a relationship. External references carry a target
@@ -200,6 +212,8 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 			Immutable:  d.Immutable,
 			Scoped:     d.Scoped,
 			SoftDelete: d.SoftDelete,
+			Computed:   d.Computed(),
+			Needs:      d.Needs,
 		}
 		for _, c := range []struct {
 			on   bool

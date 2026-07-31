@@ -78,6 +78,22 @@ type FieldDesc struct {
 	// it. Nothing else reads it.
 	RenamedFrom string
 
+	// Expr is the SQL a computed column renders as, in place of its name, and
+	// it is the one thing about a column that no struct tag can carry: a tag is
+	// a comma-separated list and SQL is not. Codegen writes it into a
+	// ComputedColumns method instead (ADR-0041).
+	//
+	// A column with an expression stores nothing. It emits no DDL in either
+	// direction, no insert names it and no update sets it — and it is a column
+	// everywhere else, so Hidden hides it, Filterable gates it, and it lands in
+	// the row type, the JSON, the client types and the CLI like any other.
+	Expr string
+	// Needs names the binds Expr's `?` placeholders take, in order. A computed
+	// column with none is row-local. One with a bind is answered per request,
+	// and the value arrives through Builder.Bind — which rest refuses to mount
+	// a resource without.
+	Needs []string
+
 	Ref *Reference
 }
 
@@ -203,6 +219,98 @@ func Vector(name string, dim int) *Field {
 	f := newField(name, TypeVector)
 	f.d.Dim = dim
 	f.d.Hidden = true
+	return f
+}
+
+// Computed declares a derived column: an expression the query renders in place
+// of a column name, rather than a value the table stores.
+//
+//	schema.Computed("is_overdue", schema.TypeBool,
+//	    schema.FromSQL("due_date < current_date AND open_tasks > 0")).
+//	    Filterable().Sortable()
+//
+// It is a column everywhere it matters — it lands in the row type, the JSON,
+// the TypeScript and Dart types and the CLI column set, and Hidden, Filterable
+// and Sortable gate it exactly as they gate a stored one. What it is not is
+// storage: it emits no DDL in either direction, Diff does not see it, no insert
+// names it and no update assigns it. ADR-0041 has the shape and the reasons.
+//
+// # What each form may claim
+//
+// The expression is rendered as written, so a name in it resolves the way
+// Postgres resolves it. In a statement that joins — one with `?expand` in it —
+// a bare column name shared with the joined table is ambiguous and Postgres
+// says so; qualify it with the table's own name when that is a possibility.
+//
+// A row-local expression may be Filterable and Sortable, since the compiler can
+// put it in a WHERE and an ORDER BY as readily as in the projection:
+//
+//	schema.Computed("is_overdue", schema.TypeBool,
+//	    schema.FromSQL("due_date < current_date AND open_tasks > 0")).Filterable()
+//
+// A correlated subquery is projection-only unless Filterable is written out,
+// because a subquery in a WHERE runs once per row — the declaration is the
+// acknowledgement that this was considered:
+//
+//	schema.Computed("total_tasks", schema.TypeInt,
+//	    schema.FromSQL("(SELECT count(*) FROM tasks t WHERE t.project_id = projects.id)"))
+//
+// A parameterised expression takes its value from the request. Each `?` binds
+// the key named at the matching position of Needs, and `??` is a literal
+// question mark:
+//
+//	schema.Computed("is_starred", schema.TypeBool,
+//	    schema.FromSQL("EXISTS (SELECT 1 FROM stars s "+
+//	        "WHERE s.project_id = projects.id AND s.member_id = ?)")).
+//	    Needs("viewer").Filterable()
+//
+// Needs writes no value, exactly as [Field.Scoped] writes no predicate. What it
+// does is oblige a hook: rest.Resource refuses to mount the resource until a
+// BeforeQuery hook calls Bind for every key it names. Without that check an
+// unbound expression renders `member_id = NULL`, returns false for every row
+// forever, and looks precisely like a feature that works (ADR-0030).
+//
+// # What it will not accept
+//
+// Searchable, ever: ?search fans out over text columns with ILIKE, and there is
+// no coherent reading of that over an expression. Sortable over a volatile
+// expression — one reading now() or random() — because a keyset pages on the
+// sort column and an unstable one lets page 1 and page 50 disagree about a row.
+// A default, a primary key, a unique constraint, a reference or an index, all
+// of which are statements about storage. Validate reports each of them.
+func Computed(name string, t Type, e ComputedExpr) *Field {
+	f := newField(name, t)
+	f.d.Expr = e.sql
+	// Nothing can write an expression, and saying so here rather than asking
+	// every write path to check is what keeps the generated create and update
+	// bodies correct without knowing this feature exists.
+	f.d.ReadOnly = true
+	return f
+}
+
+// ComputedExpr is how a computed column is produced. Build one with FromSQL.
+//
+// It is a type rather than a bare string so that the declaration reads as a
+// choice — today FromSQL is the only one, and ADR-0041 stages a Go-side form as
+// a separate decision rather than an argument that changes meaning.
+type ComputedExpr struct{ sql string }
+
+// FromSQL computes a column from a SQL expression over the row's own columns.
+//
+// The expression is raw SQL and nothing parses it: `sqlb generate` refuses the
+// declarations below that are wrong on their face — a Searchable computed
+// column, a volatile Sortable one, a bind count that disagrees with Needs — but
+// a typo inside the SQL reaches Postgres. That is the cost [ADR-0024]'s bar
+// admits here because there is finally a consumer for the annotation, and
+// [sqlb.Builder.Explain] against a real database is what catches it early.
+//
+// [ADR-0024]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0024-no-annotation-slot.md
+func FromSQL(sql string) ComputedExpr { return ComputedExpr{sql: sql} }
+
+// Needs names the binds this column's expression takes, in the order its `?`
+// placeholders appear. See [Computed].
+func (f *Field) Needs(keys ...string) *Field {
+	f.d.Needs = append(f.d.Needs, keys...)
 	return f
 }
 
@@ -636,3 +744,47 @@ func (d *FieldDesc) Capabilities() string {
 // external reference does, since a soft foreign key exists to be joined on and
 // one without an index scans the table.
 func (d *FieldDesc) IndexWanted() bool { return d.indexWanted }
+
+// Computed reports whether the column is an expression rather than storage.
+// The DDL emitters read it to skip the column, and Diff reads it to not see it
+// at all.
+func (d *FieldDesc) Computed() bool { return d.Expr != "" }
+
+// Placeholders counts the binds a computed expression takes, treating `??` as
+// the escaped literal that Raw does.
+func (d *FieldDesc) Placeholders() int {
+	n := 0
+	for i := 0; i < len(d.Expr); i++ {
+		if d.Expr[i] != '?' {
+			continue
+		}
+		if i+1 < len(d.Expr) && d.Expr[i+1] == '?' {
+			i++
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// volatileMarkers are the expressions whose value changes between two readings
+// within one query's lifetime. A computed column sorted on one of them cannot
+// carry a keyset: the boundary a cursor recorded is compared against a
+// different number on the next page (ADR-0027).
+var volatileMarkers = []string{
+	"now(", "current_date", "current_time", "current_timestamp", "localtime",
+	"localtimestamp", "clock_timestamp(", "statement_timestamp(", "timeofday(",
+	"random(",
+}
+
+// Volatile reports whether a computed expression reads something that does not
+// hold still.
+func (d *FieldDesc) Volatile() bool {
+	lower := strings.ToLower(d.Expr)
+	for _, marker := range volatileMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}

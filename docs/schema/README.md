@@ -108,6 +108,81 @@ Three rules, all reported by `schema.Validate`:
 Elements are the scalar types; not `JSON`, not `Bytes`, and one dimension only.
 Filtering one is [`has` / `hasany` / `hasall`](../rest/filtering.md#array-columns-take-containment-and-nothing-else).
 
+### Computed columns
+
+A `Computed` column is an expression rather than storage. It emits no DDL — the
+table Postgres holds does not have it — and it is a column to everything above
+Postgres: it is in the row type, the JSON, the TypeScript and Dart types, the
+CLI's columns and the OpenAPI document, and `Filterable` and `Sortable` gate it
+exactly as they gate a stored one.
+
+```go
+schema.Computed("is_overdue", schema.TypeBool,
+    schema.FromSQL("due_date < current_date AND open_tasks > 0")).
+    Filterable(),
+
+schema.Computed("total_tasks", schema.TypeInt,
+    schema.FromSQL("(SELECT count(*) FROM tasks t WHERE t.project_id = projects.id)")),
+
+schema.Computed("is_starred", schema.TypeBool,
+    schema.FromSQL("EXISTS (SELECT 1 FROM stars s "+
+        "WHERE s.project_id = projects.id AND s.member_id = ?)")).
+    Needs("viewer").Filterable(),
+```
+
+The compiler substitutes the expression wherever the column is named, so one
+declaration reaches the projection, `?filter=is_overdue.eq.true` and
+`?sort=-progress` at once. The projection aliases it back to the column name,
+which is what lets the row scan into the field.
+
+**A subquery is projection-only unless you say otherwise.** Writing
+`Filterable()` on one is the acknowledgement that a subquery in a `WHERE` runs
+once per candidate row.
+
+**`Needs` supplies what the request knows.** Each `?` takes the bind named at the
+matching position, and the value arrives with the query:
+
+```go
+sqlb.On[Project]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Project]) error {
+    q.Bind("viewer", memberFrom(ctx))
+    return nil
+})
+```
+
+Like `Scoped`, the declaration writes no value — it obliges a hook. A resource
+whose binds nothing supplies does not mount, because an unbound expression would
+render `member_id = NULL`, answer `false` for every row forever, and look exactly
+like a feature that works. The bind is sent once however many times the
+expression appears in the statement.
+
+Four rules, reported by `schema.Validate`:
+
+- a computed column cannot be `Searchable` — `?search` fans out over text columns
+  with `ILIKE`, and an expression has no reading there;
+- it cannot be `Sortable` if its expression is volatile — one reading `now()` or
+  `current_date` is a different value on the next page, and the keyset cursor
+  pages on the sort column;
+- it cannot be a primary key, unique, defaulted, a reference, indexed or an
+  enum — each is a statement about storage;
+- `Needs` must name exactly as many binds as the expression takes.
+
+Nothing parses the SQL: `sqlb generate` refuses the four rules above, but a typo
+inside the expression reaches Postgres, and `Explain` against a real database is
+what catches it early.
+
+Nothing writes one: it is absent from the generated create and update bodies and
+from every `INSERT`, and a write's `RETURNING` reads back the bind-free ones so a
+`POST` response carries them without a second read. A parameterised one is left
+out of `RETURNING` — a write has no viewer to bind — and arrives on the next
+read.
+
+An index can never serve one, which is why a trigger-maintained counter or a
+`GENERATED ALWAYS AS … STORED` column is still the better answer when the value
+allows it; `schema.Lint` says so once per filterable computed column.
+[`example/computed`](../../example/computed/) is the five techniques side by
+side, and [ADR-0041](../adr/0041-computed-fields.md) is why the tiers are drawn
+where they are.
+
 ### Groups
 
 `Timestamps()` and `SoftDelete()` insert several columns as a unit:

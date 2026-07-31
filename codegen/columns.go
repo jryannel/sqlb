@@ -103,9 +103,14 @@ func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.Tab
 	// The primary key stays out. It addresses the row rather than being part of
 	// what an update writes, and Stmt() is there for the rare case that is
 	// genuinely meant.
+	//
+	// A computed column stays out too, and for a different reason: ReadOnly is
+	// a rule about who may write, and a computed column has nothing to write
+	// to. A setter for one would compile and then fail every statement it was
+	// used in.
 	var writable []*schema.Field
 	for _, f := range t.Fields() {
-		if !f.Desc().PrimaryKey {
+		if d := f.Desc(); !d.PrimaryKey && !d.Computed() {
 			writable = append(writable, f)
 		}
 	}

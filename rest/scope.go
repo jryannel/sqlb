@@ -3,6 +3,7 @@ package rest
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jryannel/sqlb"
@@ -51,7 +52,8 @@ type obligation struct {
 // the arrangement example/tasks arrived at by hand, and this is that
 // arrangement made compulsory.
 func checkObligations[T any](m *sqlb.Model, exec sqlb.Executor, opts Options) error {
-	if m.Scope == nil && m.Soft == nil {
+	bound := computedNeeds(m)
+	if m.Scope == nil && m.Soft == nil && len(bound) == 0 {
 		return nil
 	}
 
@@ -62,6 +64,13 @@ func checkObligations[T any](m *sqlb.Model, exec sqlb.Executor, opts Options) er
 	if m.Soft != nil {
 		reads = append(reads, fmt.Sprintf("%s declares a soft delete", m.Soft.Name))
 	}
+	// A computed column whose expression takes a bind wants the same hook, and
+	// for the same shape of reason: nothing writes the value, so a resource
+	// mounted without one renders the expression against a bind that never
+	// arrives. The query fails rather than answering falsely — which is better
+	// than the scope case was — but it fails on every list, so a startup error
+	// naming the column is the cheaper place to find out (ADR-0041).
+	reads = append(reads, bound...)
 
 	required := map[string]*obligation{}
 	require := func(hook, ops string, because []string) {
@@ -127,7 +136,16 @@ func checkObligations[T any](m *sqlb.Model, exec sqlb.Executor, opts Options) er
 	// it — the same courtesy a rejected filter gets, and for the same reason:
 	// one round trip per mistake is a bad way to learn a rule (ADR-0011).
 	var b strings.Builder
-	fmt.Fprintf(&b, "rest: %s exposes %s, and nothing confines %s", opts.Path, opts.Ops, m.Type)
+	// "confines" still, when a scope or a soft delete is among the unmet
+	// obligations, because that is what the reader is looking for. A resource
+	// whose only gap is an unsupplied bind is a different sentence, and saying
+	// the wrong one sends someone hunting for a tenant predicate that is
+	// already there.
+	what := "nothing confines"
+	if onlyBinds(missing) {
+		what = "nothing supplies the computed binds of"
+	}
+	fmt.Fprintf(&b, "rest: %s exposes %s, and %s %s", opts.Path, opts.Ops, what, m.Type)
 	for _, o := range missing {
 		fmt.Fprintf(&b, "\n  %s: %s is not registered (%s)",
 			o.ops, o.hook, strings.Join(dedupe(o.because), "; "))
@@ -135,6 +153,49 @@ func checkObligations[T any](m *sqlb.Model, exec sqlb.Executor, opts Options) er
 	b.WriteString("\n  register them on the registry this handle resolves against, before mounting;" +
 		"\n  or drop the declaration, which is the honest way to say the rows are not confined")
 	return fmt.Errorf("%s", b.String())
+}
+
+// onlyBinds reports whether every unmet reason is a computed column's bind, so
+// that the headline can say what is actually missing.
+func onlyBinds(missing []*obligation) bool {
+	for _, o := range missing {
+		for _, because := range o.because {
+			if !strings.Contains(because, "is computed from the ") {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// computedNeeds describes the per-request binds this model's derived columns
+// take, one line each, in declaration order.
+func computedNeeds(m *sqlb.Model) []string {
+	var out []string
+	for _, col := range m.Derived {
+		if len(col.Needs) == 0 {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s is computed from the %s bind",
+			col.Name, quoteAll(col.Needs)))
+	}
+	return out
+}
+
+// quoteAll renders bind keys for a message: `"viewer"`, or `"viewer" and "org"`.
+func quoteAll(keys []string) string {
+	quoted := make([]string, len(keys))
+	for i, k := range keys {
+		quoted[i] = strconv.Quote(k)
+	}
+	switch len(quoted) {
+	case 1:
+		return quoted[0]
+	case 2:
+		return quoted[0] + " and " + quoted[1]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+	}
 }
 
 func dedupe(ss []string) []string {

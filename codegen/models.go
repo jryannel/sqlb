@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"strconv"
@@ -45,6 +46,11 @@ func renderModels(opts Options) ([]byte, error) {
 				// and the first that is a *column*. An embedding needs the
 				// codec that moves it in binary, so the model cannot be
 				// importable without sqlb the way the rest of them are.
+				imports["github.com/jryannel/sqlb"] = true
+			}
+			// A computed column's expression is carried by a method returning
+			// sqlb.Computed, for the reason renderComputed gives.
+			if f.Desc().Computed() {
 				imports["github.com/jryannel/sqlb"] = true
 			}
 		}
@@ -126,9 +132,54 @@ func renderModels(opts Options) ([]byte, error) {
 		// singulariser guessing the type name back into the table name.
 		fmt.Fprintf(b, "\n// TableName is the table %s maps to.\n", typeName)
 		fmt.Fprintf(b, "func (%s) TableName() string { return %q }\n", typeName, t.Name())
+
+		renderComputed(b, typeName, t)
 	}
 
 	return gofmt(opts.modelsFile(), b.Bytes())
+}
+
+// renderComputed emits the ComputedColumns method for a table with derived
+// columns, and nothing at all for one without.
+//
+// The expression goes in a method rather than in the `sqlb` struct tag, which
+// is where every other thing the runtime knows about a column lives. A tag is a
+// comma-separated list of words; a SQL expression contains commas, quotes and
+// parentheses, and encoding one into a tag would mean inventing an escape and
+// then reading it back with a parser. The method is Go, so the compiler checks
+// it and a reader can see what will be run (ADR-0041).
+func renderComputed(b *bytes.Buffer, typeName string, t *schema.TableDef) {
+	var derived []*schema.FieldDesc
+	for _, f := range t.Fields() {
+		if d := f.Desc(); d.Computed() {
+			derived = append(derived, d)
+		}
+	}
+	if len(derived) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "\n// ComputedColumns are the derived columns %s declares: expressions the\n", typeName)
+	fmt.Fprintf(b, "// query renders in place of a column name. None of them is stored, so none of\n")
+	fmt.Fprintf(b, "// them is written by an insert or an update.\n")
+	fmt.Fprintf(b, "func (%s) ComputedColumns() []sqlb.Computed {\n", typeName)
+	fmt.Fprintln(b, "\treturn []sqlb.Computed{")
+	for _, d := range derived {
+		fmt.Fprintf(b, "\t\t{Name: %q, Expr: %q", d.Name, d.Expr)
+		if len(d.Needs) > 0 {
+			fmt.Fprintf(b, ", Needs: []string{")
+			for i, key := range d.Needs {
+				if i > 0 {
+					fmt.Fprint(b, ", ")
+				}
+				fmt.Fprintf(b, "%q", key)
+			}
+			fmt.Fprint(b, "}")
+		}
+		fmt.Fprintln(b, "},")
+	}
+	fmt.Fprintln(b, "\t}")
+	fmt.Fprintln(b, "}")
 }
 
 // relation is the second half of an expandable reference: the typed field an

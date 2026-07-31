@@ -75,10 +75,18 @@ func (i *Insert[T]) Omit(columns ...string) *Insert[T] {
 // the typo nor the column it was meant to be.
 func (i *Insert[T]) checkColumns(method string, columns []string) {
 	for _, name := range columns {
-		if i.model.Column(name) == nil {
+		col := i.model.Column(name)
+		if col == nil {
 			if i.err == nil {
 				i.err = fmt.Errorf("sqlb: %s names %q, which is not a column of %s (have: %s)",
 					method, name, i.model.Table, strings.Join(i.model.ColumnNames(), ", "))
+			}
+			return
+		}
+		if col.Computed() {
+			if i.err == nil {
+				i.err = fmt.Errorf("sqlb: %s names %q, which %s computes rather than stores; there is nothing to write to it",
+					method, name, i.model.Table)
 			}
 			return
 		}
@@ -193,6 +201,13 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 func (i *Insert[T]) columns() []*ColumnInfo {
 	var out []*ColumnInfo
 	for _, col := range i.model.Columns {
+		// A computed column has no storage to write to. Naming one explicitly
+		// through Only is refused in checkColumns; here it is simply not
+		// written, which is what makes an ordinary insert of a struct carrying
+		// a derived field work at all.
+		if col.Computed() {
+			continue
+		}
 		if i.only != nil && !i.only[col.Name] {
 			continue
 		}
@@ -314,8 +329,8 @@ func UpdateRows[T any]() *Update[T] {
 
 // Set assigns a value to a column.
 func (u *Update[T]) Set(column string, value any) *Update[T] {
-	if u.model.Column(column) == nil {
-		return u.fail("sqlb: %q is not a column of %s", column, u.model.Table)
+	if err := u.writable(column); err != nil {
+		return u.fail("%s", err)
 	}
 	u.sets = append(u.sets, assignment{column: column, value: Param{Value: value}})
 	return u
@@ -324,11 +339,24 @@ func (u *Update[T]) Set(column string, value any) *Update[T] {
 // SetExpr assigns an expression, for updates computed from the current row
 // such as a counter increment.
 func (u *Update[T]) SetExpr(column string, value Expr) *Update[T] {
-	if u.model.Column(column) == nil {
-		return u.fail("sqlb: %q is not a column of %s", column, u.model.Table)
+	if err := u.writable(column); err != nil {
+		return u.fail("%s", err)
 	}
 	u.sets = append(u.sets, assignment{column: column, value: value})
 	return u
+}
+
+// writable reports why a column cannot be assigned, or nil.
+func (u *Update[T]) writable(column string) error {
+	col := u.model.Column(column)
+	if col == nil {
+		return fmt.Errorf("sqlb: %q is not a column of %s", column, u.model.Table)
+	}
+	if col.Computed() {
+		return fmt.Errorf("sqlb: %q is computed by %s rather than stored, so it cannot be assigned; "+
+			"set the columns its expression reads instead", column, u.model.Table)
+	}
+	return nil
 }
 
 // Where narrows the affected rows.
@@ -373,6 +401,8 @@ func (u *Update[T]) SQL() (string, []any, error) {
 	}
 
 	c := newCompiler(u.dialect)
+	// A WHERE may name a derived column even though a SET may not.
+	defer c.withComputed(u.model.Table, computedSetOf(u.model))()
 	c.write("UPDATE ")
 	c.table(u.model.Table)
 	c.write(" SET ")
@@ -502,6 +532,7 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 		return "", nil, ErrUnscoped
 	}
 	c := newCompiler(d.dialect)
+	defer c.withComputed(d.model.Table, computedSetOf(d.model))()
 	c.write("DELETE FROM ")
 	c.table(d.model.Table)
 	if len(d.where) > 0 {
@@ -547,11 +578,31 @@ func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 
 // writeReturning appends RETURNING over every mapped column, so that callers
 // see database-generated values without a follow-up read.
+//
+// A computed column is returned as its expression, so that a POST response
+// carries the derived fields without a second read — with one exception. A
+// parameterised expression needs a bind, and a mutation has nowhere to take one
+// from: the value is a property of who is asking, and the hooks a write runs
+// receive the row rather than the statement. Such a column is left out of
+// RETURNING rather than rendered against a bind that is not there, so the field
+// holds its zero value in the write's response and its real one from the next
+// read (ADR-0041).
 func writeReturning(c *compiler, m *Model) {
 	c.write(" RETURNING ")
-	for n, col := range m.Columns {
-		if n > 0 {
+	first := true
+	for _, col := range m.Columns {
+		if col.Computed() && len(col.Needs) > 0 {
+			continue
+		}
+		if !first {
 			c.write(", ")
+		}
+		first = false
+		if col.Computed() {
+			c.computedExpr(col, &computedSet{})
+			c.write(" AS ")
+			c.ident(col.Name)
+			continue
 		}
 		c.ident(col.Name)
 	}

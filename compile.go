@@ -61,6 +61,168 @@ type compiler struct {
 	// are two parameters, and deduplicating them would be a different and much
 	// larger promise.
 	shared map[*sharedValue]int
+
+	// computed maps a qualifier onto the derived columns that resolve under it:
+	// the statement's own table, and "" for the unqualified names a filter, a
+	// sort or a projection writes. It is what turns one declaration into four
+	// renderings — see column.
+	computed map[string]*computedSet
+}
+
+// computedSet is one model's derived columns and the binds their expressions
+// take, as they stand for the statement being compiled.
+type computedSet struct {
+	cols  map[string]*ColumnInfo
+	binds map[string]*sharedValue
+}
+
+// computedSetOf is the set for a statement carrying no binds of its own — a
+// mutation, whose WHERE may still name a row-local derived column. Nil when the
+// model computes nothing.
+func computedSetOf(m *Model) *computedSet {
+	if len(m.Derived) == 0 {
+		return nil
+	}
+	return &computedSet{cols: m.byDerived}
+}
+
+// withComputed makes set the derived columns of qualifier — and of unqualified
+// names, which every filter, sort and projection term writes — returning a
+// function that restores the previous mapping.
+//
+// The restore matters for the same reason qualifyTo's does: compilation nests,
+// and a grouped count wrapping the query in a subselect must not leave the
+// outer statement holding the inner one's columns.
+func (c *compiler) withComputed(qualifier string, set *computedSet) func() {
+	if set == nil || len(set.cols) == 0 {
+		return func() {}
+	}
+	if c.computed == nil {
+		c.computed = make(map[string]*computedSet, 2)
+	}
+	prevBase, hadBase := c.computed[""]
+	prevQual, hadQual := c.computed[qualifier]
+	c.computed[""] = set
+	c.computed[qualifier] = set
+	return func() {
+		restore := func(key string, prev *computedSet, had bool) {
+			if had {
+				c.computed[key] = prev
+				return
+			}
+			delete(c.computed, key)
+		}
+		restore("", prevBase, hadBase)
+		restore(qualifier, prevQual, hadQual)
+	}
+}
+
+// derived resolves a column reference to a computed column, or nil.
+func (c *compiler) derived(col Column) (*ColumnInfo, *computedSet) {
+	if c.computed == nil {
+		return nil, nil
+	}
+	set := c.computed[col.Table]
+	if set == nil {
+		return nil, nil
+	}
+	return set.cols[col.Name], set
+}
+
+// derivedAlias is the name a projected expression should be aliased back to,
+// or "" for a term that is not a bare reference to a derived column.
+func (c *compiler) derivedAlias(e Expr) string {
+	var col Column
+	switch n := e.(type) {
+	case Column:
+		col = n
+	case Field:
+		col = n.Column()
+	default:
+		return ""
+	}
+	if derived, _ := c.derived(col); derived != nil {
+		return derived.Name
+	}
+	return ""
+}
+
+// computedExpr renders a derived column's expression in place of its name,
+// parenthesised so that what surrounds it cannot change what it means.
+//
+// The `?` placeholders are renumbered into the dialect's scheme exactly as raw
+// does, except that each one resolves through the bind it was declared to need
+// — and binds once: a value named in the projection, the WHERE and the ORDER BY
+// is one parameter, which is the facility Near proved worth having and this is
+// the general case of.
+func (c *compiler) computedExpr(col *ColumnInfo, set *computedSet) {
+	// Parenthesised unless the expression already is. Both spellings are
+	// common — a subquery brings its own parentheses, and the convention this
+	// codebase's own raw fragments follow is to wrap them — and doubling them
+	// makes every logged statement and every test assertion carry a pair
+	// nobody wrote.
+	wrap := !wrapped(col.Expr)
+	if wrap {
+		c.write("(")
+	}
+	used := 0
+	for i := 0; i < len(col.Expr); i++ {
+		ch := col.Expr[i]
+		if ch != '?' {
+			c.sb.WriteByte(ch)
+			continue
+		}
+		if i+1 < len(col.Expr) && col.Expr[i+1] == '?' {
+			c.sb.WriteByte('?')
+			i++
+			continue
+		}
+		key := col.Needs[used]
+		used++
+		slot, bound := set.binds[key]
+		if !bound {
+			// Rendering NULL instead would return false for every row forever
+			// and look like a working feature, which is the failure the
+			// declaration exists to close (ADR-0041).
+			c.fail("sqlb: computed column %q needs the %q bind, and nothing supplied it; "+
+				"call Bind(%q, value) on the query, or register a BeforeQuery hook that does",
+				col.Name, key, key)
+			return
+		}
+		c.expr(sharedParam{slot: slot})
+	}
+	if wrap {
+		c.write(")")
+	}
+}
+
+// wrapped reports whether one pair of parentheses already encloses the whole
+// expression.
+//
+// It is deliberately conservative: the scan does not know about string
+// literals, so a quoted parenthesis can only make it answer "not wrapped",
+// which adds a redundant pair. The other direction — dropping the parentheses
+// from something the surroundings could re-associate — is the one that would
+// change meaning, and it requires the first parenthesis to close at the last
+// character, which is what being wrapped is.
+func wrapped(expr string) bool {
+	s := strings.TrimSpace(expr)
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return false
+	}
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		if depth == 0 && i < len(s)-1 {
+			return false
+		}
+	}
+	return depth == 0
 }
 
 func newCompiler(d Dialect) *compiler {
@@ -142,7 +304,17 @@ func (c *compiler) qualifyTo(base string) func() {
 // outright (SQLSTATE 42702) rather than picking. Resolving to the base table is
 // what the caller meant — every unqualified name it can write, from ?select,
 // ?sort or a filter, names a column of the model being queried.
+// A computed column is intercepted here, and here only. Every consumer already
+// resolves through a *ColumnInfo and renders through this function — the filter
+// parser builds predicates as F(col.Name), sorts the same way, and the default
+// projection names the model's columns — so substituting the expression once is
+// what puts a derived value in WHERE, ORDER BY and the projection at the same
+// time (ADR-0041).
 func (c *compiler) column(col Column) {
+	if derived, set := c.derived(col); derived != nil {
+		c.computedExpr(derived, set)
+		return
+	}
 	table := col.Table
 	if table == "" {
 		table = c.base
