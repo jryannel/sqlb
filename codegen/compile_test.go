@@ -59,6 +59,13 @@ func TestGeneratedGoCompiles(t *testing.T) {
 		// A vector column, which is hidden and so reaches the Go artefacts
 		// only.
 		"vector": {Registry: vectorFixture()},
+		// The columns file's two halves disagree about hidden columns: the
+		// facade omits them, the typed update sets them. A hidden column whose
+		// type needs an import is the shape where that matters.
+		"hidden": {Registry: hiddenFixture()},
+		// A nullable vector, which renders as *sqlb.Vector — the spelling the
+		// models emitter's import switch did not have a case for.
+		"nullablevector": {Registry: nullableVectorFixture()},
 	})
 }
 
@@ -102,6 +109,29 @@ func bodyOverrideFixture() *schema.Registry {
 		schema.Ref("org", orgs).OnDelete(schema.Cascade),
 		schema.Text("title"),
 	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList})
+	return r
+}
+
+func hiddenFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	r.Table("users",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("name"),
+		// Both types that need an import, hidden, and nothing else in the
+		// schema needing either — so the facade's field set alone accounts for
+		// neither.
+		schema.Timestamp("last_seen_at").Hidden(),
+		schema.JSON("audit").Hidden(),
+	)
+	return r
+}
+
+func nullableVectorFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	r.Table("chunks",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Vector("embedding", 1536).Nullable(),
+	)
 	return r
 }
 
