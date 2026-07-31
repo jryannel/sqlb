@@ -41,6 +41,22 @@ const (
 	TypeVector Type = "vector"
 )
 
+// Types is every logical column type, in declaration order.
+//
+// It exists so that a consumer which must handle all of them can be checked
+// against the list rather than against its author's memory. That is not
+// hypothetical: `introspect` imported a vector column and `RenderSchema` could
+// not write one back out, so the bootstrap that turns a 69-table database into
+// 69 declarations to review failed on the one type the rest of the toolchain
+// already handled (issue #53). A test walks this list now.
+func Types() []Type {
+	return []Type{
+		TypeText, TypeVarchar, TypeInt, TypeBigInt, TypeFloat, TypeNumeric,
+		TypeBool, TypeUUID, TypeTimestamp, TypeDate, TypeTime, TypeJSON,
+		TypeBytes, TypeEnum, TypeVector,
+	}
+}
+
 // GoType returns the Go type that codegen emits for a non-null column of this
 // type. Nullable columns are emitted as pointers to it.
 func (t Type) GoType() string {
