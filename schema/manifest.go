@@ -239,7 +239,7 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 		tm.Columns = append(tm.Columns, cm)
 	}
 
-	for _, idx := range t.indexes {
+	for _, idx := range t.Indexes() {
 		tm.Indexes = append(tm.Indexes, IndexManifest{
 			Name: idx.Name, Columns: idx.Columns, Unique: idx.Unique, Method: idx.Method,
 		})

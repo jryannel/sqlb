@@ -20,6 +20,7 @@ func build(cat *catalog, opts Options) (*schema.Registry, *Report, error) {
 	}
 
 	byTable := groupByTable(cat)
+	selectTables(byTable, opts, rep)
 	order, err := dependencyOrder(cat, byTable, rep)
 	if err != nil {
 		return nil, rep, err
@@ -174,21 +175,34 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 	cons := classify(name, p.constraints, rep)
 
 	fields := make([]schema.FieldSpec, 0, len(p.columns))
+	// A column this package cannot declare takes its dependents with it. One
+	// tsvector column used to abort the import of a whole database: the column
+	// was skipped correctly, the index over it was not, and the registry then
+	// failed its own validation with an error blaming this package for building
+	// something impossible (issue #54).
+	skipped := map[string]bool{}
 	for _, col := range p.columns {
 		f, ok := buildColumn(name, col, cons, built, rep)
-		if ok {
-			fields = append(fields, f)
+		if !ok {
+			skipped[col.Name] = true
+			continue
 		}
+		fields = append(fields, f)
 	}
 
 	t := r.Table(local, fields...)
 	if p.table.Comment != "" {
 		t.Describe(p.table.Comment)
 	}
-	if cons.pk != nil && cons.pk.Name != name+"_pkey" {
+	if cons.pk != nil && cons.pk.Name != name+"_pkey" && !skipped[cons.pk.Columns[0]] {
 		t.PrimaryKeyNamed(cons.pk.Name)
 	}
 	for _, c := range cons.tableChecks {
+		if col, dependent := namesSkippedColumn(c.Expr, skipped); dependent {
+			rep.add(name, c.Name, "check constrains "+col+
+				", which was not imported, so the check cannot be declared either", c.Expr)
+			continue
+		}
 		t.Check(c.Name, c.Expr)
 	}
 	for _, idx := range p.indexes {
@@ -197,12 +211,71 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 				"which the DSL cannot declare", idx.Def)
 			continue
 		}
+		if col, dependent := coversSkippedColumn(idx.Columns, skipped); dependent {
+			rep.add(name, idx.Name, "index covers "+col+
+				", which was not imported, so the index cannot be declared either", idx.Def)
+			continue
+		}
 		t.AddIndex(schema.Index{
 			Name: idx.Name, Columns: idx.Columns, Unique: idx.Unique,
 			Method: indexMethod(idx.Method), Where: idx.Where,
 		})
 	}
 	return t, nil
+}
+
+// coversSkippedColumn reports whether an index names a column that was not
+// imported, and which one.
+func coversSkippedColumn(columns []string, skipped map[string]bool) (string, bool) {
+	for _, c := range columns {
+		if skipped[c] {
+			return c, true
+		}
+	}
+	return "", false
+}
+
+// namesSkippedColumn reports whether a CHECK expression mentions a column that
+// was not imported.
+//
+// The match is on word boundaries over the expression text, which is a heuristic
+// and is deliberately the conservative direction: a check wrongly kept would
+// produce DDL naming a column the registry does not have, while a check wrongly
+// dropped is one line in the report and a constraint the diff proposes adding —
+// visible either way, and only one of them fails the whole import.
+func namesSkippedColumn(expr string, skipped map[string]bool) (string, bool) {
+	if len(skipped) == 0 {
+		return "", false
+	}
+	for col := range skipped {
+		if mentionsWord(expr, col) {
+			return col, true
+		}
+	}
+	return "", false
+}
+
+// mentionsWord reports whether s contains word delimited by something other
+// than an identifier character, so that "search_vector" does not match inside
+// "search_vector_backup".
+func mentionsWord(s, word string) bool {
+	isIdentByte := func(b byte) bool {
+		return b == '_' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+	}
+	for i := 0; ; {
+		j := strings.Index(s[i:], word)
+		if j < 0 {
+			return false
+		}
+		start := i + j
+		end := start + len(word)
+		beforeOK := start == 0 || !isIdentByte(s[start-1])
+		afterOK := end == len(s) || !isIdentByte(s[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		i = start + len(word)
+	}
 }
 
 // indexMethod omits btree, which is the dialect default and which the DDL layer
@@ -512,4 +585,39 @@ func plainField(name string, t schema.Type, typeArg int) *schema.Field {
 	// columnType only returns types this switch covers, so reaching here means
 	// the two have drifted apart.
 	panic("introspect: no constructor for type " + string(t))
+}
+
+// selectTables narrows the import to what Options asked for.
+//
+// It removes tables from the grouped catalog rather than filtering later, so
+// everything downstream — the dependency order, the foreign keys, the report —
+// sees one set of tables and cannot disagree about which. A foreign key into a
+// table that was excluded is not lost by this: it imports as an enforced
+// external reference, which is the shape a partial declaration needs anyway
+// (issue #55).
+func selectTables(byTable map[string]*tableParts, opts Options, rep *Report) {
+	if len(opts.Only) > 0 {
+		wanted := make(map[string]bool, len(opts.Only))
+		for _, name := range opts.Only {
+			wanted[name] = true
+			if _, present := byTable[name]; !present {
+				// Reported rather than ignored: a typo here silently shrinks
+				// what a drift gate covers, and a gate that checks less than it
+				// says is worse than no gate.
+				rep.add(name, "", "named in Only but not present in the schema being read", "")
+			}
+		}
+		for name := range byTable {
+			if !wanted[name] {
+				delete(byTable, name)
+			}
+		}
+	}
+	for _, name := range opts.Exclude {
+		if _, present := byTable[name]; !present {
+			rep.add(name, "", "named in Exclude but not present in the schema being read", "")
+			continue
+		}
+		delete(byTable, name)
+	}
 }

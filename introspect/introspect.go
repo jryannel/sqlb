@@ -52,6 +52,28 @@ type Options struct {
 	// Tables without the prefix are left alone and reported, since a module
 	// registry would silently rename them on the way back out.
 	Module string
+
+	// Only limits the import to the named tables. Empty reads everything,
+	// which is what an import of a database sqlb is taking over wants.
+	//
+	// A drift gate wants the opposite. An incremental adoption declares a
+	// handful of tables while the database holds dozens, and diffing a
+	// declaration of five tables against an import of sixty-nine reports the
+	// other sixty-four as tables to drop — so the gate has to narrow one side,
+	// and this is where it is narrowed (issue #54). Names are storage names,
+	// before any module prefix is stripped, because that is what the database
+	// calls them.
+	//
+	// A named table that is not in the database is reported rather than
+	// ignored: a typo in this list would otherwise silently shrink what the
+	// gate checks, which is the one failure a gate must not have.
+	Only []string
+
+	// Exclude drops the named tables from the import. It applies after Only,
+	// so the two compose — read this schema except the queue tables — and it
+	// is the right shape for the migration-history table every runner keeps,
+	// which no declaration will ever describe.
+	Exclude []string
 }
 
 func (o Options) schemaName() string {

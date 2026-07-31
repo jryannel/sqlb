@@ -293,7 +293,7 @@ func (r *Registry) Validate() error {
 			report(t.name, "", "%d Scoped columns declared, expected at most one", scoped)
 		}
 
-		for _, idx := range t.indexes {
+		for _, idx := range t.Indexes() {
 			if len(idx.Columns) == 0 {
 				report(t.name, "", "index %q covers no columns", idx.Name)
 			}
