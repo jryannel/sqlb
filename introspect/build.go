@@ -387,16 +387,55 @@ func newField(col columnRow, t schema.Type, typeArg int, isArray bool, cons *con
 		if fk.RefTable == table {
 			rep.add(table, col.Name, "self-referential foreign key, which the DSL cannot "+
 				"declare; the column is imported without it", fk.Def)
+		} else if f := externalRefField(col, fk, t); f != nil {
+			// The target is outside what was read — a table in another schema,
+			// or one this import deliberately left out — but the constraint is
+			// real and the declaration can say so without resolving it
+			// (issue #55). Importing it as a plain column instead is what made
+			// a drift gate propose dropping a live foreign key forever.
+			return f
 		} else {
 			rep.add(table, col.Name, "foreign key points at "+fk.RefTable+
-				", which is not in the schema being read; the column is imported "+
-				"without it", fk.Def)
+				", which is not in the schema being read, and its column or table name "+
+				"cannot be declared; the column is imported without it", fk.Def)
 		}
 	}
 	if values, isEnum := cons.enums[col.Name]; isEnum && t == schema.TypeText {
 		return schema.Enum(col.Name, values...)
 	}
 	return plainField(col.Name, t, typeArg)
+}
+
+// externalRefField imports a foreign key whose target is not in the schema
+// being read, as an enforced external reference.
+//
+// The column type comes from the column itself rather than from the target's
+// primary key, because the target is a name here and nothing about it is
+// resolvable — which is the entire point of the enforced form. Returns nil when
+// the constraint cannot be declared at all, in which case the caller reports it
+// and imports the column plainly.
+func externalRefField(col columnRow, fk constraintRow, t schema.Type) *schema.Field {
+	if len(fk.RefCols) != 1 {
+		return nil
+	}
+	target := fk.RefTable + "." + fk.RefCols[0]
+	f := schema.ExternalRef(relationName(col.Name), target).Enforced().OfType(t)
+	if f.Name() != col.Name {
+		f.Named(col.Name)
+	}
+	if _, _, ok := f.Desc().Ref.EnforcedTarget(); !ok {
+		return nil
+	}
+	if onDelete, ok := referentialAction(fk.OnDelete); ok {
+		f.OnDelete(onDelete)
+	}
+	if onUpdate, ok := referentialAction(fk.OnUpdate); ok {
+		f.OnUpdate(onUpdate)
+	}
+	if fk.Name != fk.Table+"_"+col.Name+"_fkey" {
+		f.ConstraintNamed(fk.Name)
+	}
+	return f
 }
 
 func refField(col columnRow, fk constraintRow, target *schema.TableDef,

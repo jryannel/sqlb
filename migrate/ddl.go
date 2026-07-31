@@ -303,11 +303,21 @@ func columnDef(d *schema.FieldDesc, opts diffOptions) (string, error) {
 	return b.String(), nil
 }
 
-// hasForeignKey reports whether the column produces a FOREIGN KEY. An external
-// reference deliberately does not: that is the whole point of module
-// isolation (ADR-0015).
+// hasForeignKey reports whether the column produces a FOREIGN KEY.
+//
+// An external reference deliberately does not — that is the whole point of
+// module isolation (ADR-0015) — unless it was declared Enforced, which is the
+// adoption case: a live constraint whose target table has not been declared
+// yet, and which a diff would otherwise propose dropping (issue #55).
 func hasForeignKey(d *schema.FieldDesc) bool {
-	return d.Ref != nil && !d.Ref.External && d.Ref.Table != nil
+	if d.Ref == nil {
+		return false
+	}
+	if d.Ref.External {
+		_, _, ok := d.Ref.EnforcedTarget()
+		return ok
+	}
+	return d.Ref.Table != nil
 }
 
 // Constraint names follow the conventions Postgres itself uses, so that a
@@ -600,13 +610,21 @@ func constraints(t *schema.TableDef) []constraint {
 
 func foreignKeyRef(d *schema.FieldDesc) fkRef {
 	r := d.Ref
-	col := r.Column
-	if col == "" {
-		if pk := r.Table.PrimaryKey(); pk != nil {
-			col = pk.Name()
+	var table, col string
+	if r.External {
+		// The target is a name rather than a declaration, which is the point:
+		// the constraint can be emitted without the target table being in this
+		// schema at all.
+		table, col, _ = r.EnforcedTarget()
+	} else {
+		table, col = r.Table.Name(), r.Column
+		if col == "" {
+			if pk := r.Table.PrimaryKey(); pk != nil {
+				col = pk.Name()
+			}
 		}
 	}
-	out := fkRef{column: d.Name, table: r.Table.Name(), refColumn: col}
+	out := fkRef{column: d.Name, table: table, refColumn: col}
 	// NO ACTION is the Postgres default, so emitting it would only add noise
 	// and make a diff against an introspected schema look like a change.
 	if r.OnDelete != "" && r.OnDelete != schema.NoAction {

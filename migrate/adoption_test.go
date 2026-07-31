@@ -196,3 +196,90 @@ func TestAdoptingATableProposesNothing(t *testing.T) {
 		t.Errorf("an accurate declaration should propose nothing:\n%s", render(changes))
 	}
 }
+
+// A partial declaration can describe a live foreign key without declaring the
+// table it points at, which is what an incremental adoption needs and neither
+// existing spelling gave it (issue #55).
+func TestEnforcedExternalRefEmitsAForeignKey(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("projects",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.ExternalRef("org", "organizations.id").Enforced().OnDelete(schema.Cascade),
+		)
+	})
+
+	changes := diff(t, nil, target)
+	c := find(t, changes, "FOREIGN KEY")
+	for _, want := range []string{
+		`ADD CONSTRAINT "projects_org_id_fkey"`,
+		`FOREIGN KEY ("org_id") REFERENCES "organizations" ("id") ON DELETE CASCADE`,
+	} {
+		if !strings.Contains(c.Up, want) {
+			t.Errorf("the constraint is missing %q:\n%s", want, c.Up)
+		}
+	}
+}
+
+// A bare table name means its id, which is the convention the rest of the DSL
+// already assumes.
+func TestEnforcedExternalRefDefaultsToTheIdColumn(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("projects",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.ExternalRef("org", "organizations").Enforced(),
+		)
+	})
+	c := find(t, diff(t, nil, target), "FOREIGN KEY")
+	if !strings.Contains(c.Up, `REFERENCES "organizations" ("id")`) {
+		t.Errorf("want the id column:\n%s", c.Up)
+	}
+}
+
+// Unenforced stays unenforced: module isolation is the default and this changes
+// nothing about it (ADR-0015).
+func TestExternalRefWithoutEnforcedStillEmitsNoForeignKey(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("projects",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.ExternalRef("org", "organizations.id"),
+		)
+	})
+	for _, c := range diff(t, nil, target) {
+		if strings.Contains(c.Up, "FOREIGN KEY") {
+			t.Errorf("an unenforced external reference emitted a constraint:\n%s", c.Up)
+		}
+	}
+}
+
+// The declaration a drift gate compares against: the database has the
+// constraint, the schema says so, and nothing is proposed.
+func TestEnforcedExternalRefDiffsCleanAgainstTheDatabase(t *testing.T) {
+	declare := func(r *schema.Registry) {
+		r.Table("projects",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.ExternalRef("org", "organizations.id").Enforced().OnDelete(schema.Cascade),
+		)
+	}
+	if changes := diff(t, build(declare), build(declare)); len(changes) != 0 {
+		t.Errorf("an accurate declaration should propose nothing:\n%s", render(changes))
+	}
+}
+
+// A target that cannot name a table in this database is refused at validation,
+// naming the two forms that work.
+func TestEnforcedExternalRefRefusesAModuleQualifiedTarget(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("projects",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.ExternalRef("user", "platform/users.users.id").Enforced(),
+	)
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("a module-qualified target cannot carry a foreign key")
+	}
+	for _, want := range []string{"organizations.id", "module boundary"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+}

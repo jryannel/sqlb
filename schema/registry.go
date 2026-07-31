@@ -248,6 +248,22 @@ func (r *Registry) Validate() error {
 				if d.Ref.Target == "" {
 					report(t.name, d.Name, "ExternalRef declares no target")
 				}
+				// An enforced reference emits a constraint naming a table, so
+				// unlike the unenforced form its target has to be one. A
+				// module-qualified name is not: the FOREIGN KEY would be
+				// written against a table nothing in this database is called.
+				if _, _, ok := d.Ref.EnforcedTarget(); d.Ref.Enforced && !ok {
+					report(t.name, d.Name,
+						"Enforced needs a target naming a table in this database, and %q is not one; "+
+							"write it as \"organizations.id\" or \"organizations\" — a module-qualified target "+
+							"cannot carry a real foreign key, which is the whole of what a module boundary means",
+						d.Ref.Target)
+				}
+			}
+			if d.Ref != nil && !d.Ref.External && d.Ref.Enforced {
+				// A real reference is always enforced. Reading .Enforced() on
+				// one would suggest the others are not.
+				report(t.name, d.Name, "Enforced applies to an ExternalRef; a Ref already emits a foreign key")
 			}
 			if d.Ref != nil && !d.Ref.External {
 				switch {
