@@ -141,6 +141,45 @@ func TestRestImportsAnOverrideOnlyWhereABodyNamesIt(t *testing.T) {
 	}
 }
 
+// An override replaces a column's Go type and not the fact that it is
+// computed, so the ComputedColumns method is emitted either way and needs its
+// sqlb import either way.
+//
+// The import was recorded behind the guard that skips an overridden column,
+// which is right for the stdlib imports the default mapping decides — an
+// override brings its own — and wrong for this one, which is earned by the
+// method rather than by the field's type. An overridden computed column
+// produced a models file declaring ComputedColumns() []sqlb.Computed with
+// nothing importing sqlb.
+func TestOverriddenComputedColumnStillImportsSqlb(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("projects",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Int("open_tasks"),
+		schema.Computed("is_overdue", schema.TypeBool,
+			schema.FromSQL("open_tasks > 0")).Filterable(),
+	)
+	// The override has to match the computed column, which is what puts it
+	// behind the guard. Matching by type is the narrowest way to say so.
+	models := generateWith(t, codegen.Options{
+		Registry: r,
+		Types: []codegen.TypeOverride{
+			{Type: schema.TypeBool, GoType: "pgtype.Bool", Import: "github.com/jackc/pgx/v5/pgtype"},
+		},
+	})["models_gen.go"]
+
+	for _, want := range []string{
+		"IsOverdue pgtype.Bool", // the override did apply
+		"func (Project) ComputedColumns() []sqlb.Computed {",
+		`"github.com/jryannel/sqlb"`,
+		`"github.com/jackc/pgx/v5/pgtype"`,
+	} {
+		if !contains(models, want) {
+			t.Errorf("models missing %q:\n%s", want, models)
+		}
+	}
+}
+
 // The four things an override must not reach. This is the record's actual
 // claim, and it is why the test names each of them separately rather than
 // asserting one golden file.

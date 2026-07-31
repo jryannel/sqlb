@@ -66,6 +66,18 @@ func TestGeneratedGoCompiles(t *testing.T) {
 		// A nullable vector, which renders as *sqlb.Vector — the spelling the
 		// models emitter's import switch did not have a case for.
 		"nullablevector": {Registry: nullableVectorFixture()},
+		// Computed columns (#58), which are in the facade but not in the typed
+		// update, and which put a sqlb.Computed-returning method on the model.
+		// A construct this new is exactly what the case list is for; the
+		// fixture is computed_test.go's, so the two cannot describe different
+		// schemas under the same name.
+		"computed": {Registry: computedFixture()},
+		// The same, overridden. The computed column's sqlb import is earned by
+		// the method rather than by the field's type, so it must survive the
+		// guard that skips an overridden column.
+		"computedoverride": {Registry: computedFixture(), Types: []codegen.TypeOverride{
+			{Type: schema.TypeBool, GoType: "pgtype.Bool", Import: "github.com/jackc/pgx/v5/pgtype"},
+		}},
 	})
 }
 

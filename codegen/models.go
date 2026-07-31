@@ -31,6 +31,14 @@ func renderModels(opts Options) ([]byte, error) {
 	}
 	for _, t := range tables {
 		for _, f := range t.Fields() {
+			// A computed column's expression is carried by a method returning
+			// sqlb.Computed, for the reason renderComputed gives. Ahead of the
+			// override guard, not behind it: an override replaces the column's
+			// Go type and not the fact that it is computed, so the method is
+			// emitted either way and needs the import either way.
+			if f.Desc().Computed() {
+				imports["github.com/jryannel/sqlb"] = true
+			}
 			// The default mapping decides which stdlib import a column needs;
 			// an overridden column brings its own, above.
 			if _, replaced := ov.base(t.Name(), f.Desc()); replaced {
@@ -52,11 +60,6 @@ func renderModels(opts Options) ([]byte, error) {
 				// and the first that is a *column*. An embedding needs the
 				// codec that moves it in binary, so the model cannot be
 				// importable without sqlb the way the rest of them are.
-				imports["github.com/jryannel/sqlb"] = true
-			}
-			// A computed column's expression is carried by a method returning
-			// sqlb.Computed, for the reason renderComputed gives.
-			if f.Desc().Computed() {
 				imports["github.com/jryannel/sqlb"] = true
 			}
 		}
