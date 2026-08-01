@@ -25,6 +25,22 @@ than asserted.
 
 The sections below take each in turn, leading with what it does better.
 
+### The rest of the table an evaluator builds
+
+These are not compared at length below, because sqlb's relationship to each is
+one line. They are here because leaving them out does not stop anyone reaching
+for them — it only stops this page being useful when they do. Star counts and
+importer counts checked August 2026.
+
+| Tool | What it is | How sqlb relates |
+|---|---|---|
+| [**GORM**](https://github.com/go-gorm/gorm) | The default Go ORM. ~40k stars, ~87,000 importers — the most-used database library in Go by a wide margin | **An alternative**, and the first comparison most evaluators make. GORM is a full ORM with associations, callbacks and auto-migration; sqlb is a builder plus an HTTP surface and declines to be an ORM. If your team wants an ORM, this is the one, and the [when not to use sqlb](#when-not-to-use-sqlb) list already says so |
+| [**go-jet/jet**](https://github.com/go-jet/jet) | Type-safe SQL builder generated from the live database. ~3.8k stars | **Overlapping at the builder**, and stronger there: jet's column references are generated types, so a misspelling is a compile error rather than sqlb's runtime one. No HTTP layer, no capability model |
+| [**stephenafamo/bob**](https://github.com/stephenafamo/bob) | Query builder and ORM generated from the schema, the modern successor to SQLBoiler. ~1.8k stars, ~69 importers | **Overlapping at the builder.** Its importer count is in sqlb's range rather than ent's, which is worth saying plainly after this page's opener claims everything here is more used |
+| [**squirrel**](https://github.com/Masterminds/squirrel) | The classic fluent builder, usually paired with sqlc for the dynamic half. ~8k stars, no commit since April 2024 | **Overlapping**, and the pairing sqlb is proposing to replace: squirrel gives conditional predicates and nothing above them, and its maintenance has stopped |
+| [**prest**](https://github.com/prest/prest) | "PostgREST in Go" — a standalone binary exposing tables over HTTP. ~4.6k stars | **An alternative to `rest`**, and an honest contrast: [GO-2025-3941](https://github.com/advisories/GHSA-p46v-f2x8-qp98) is a systemic SQL-injection advisory against it, found by an independent review. sqlb's answer to that class is structural — every value is a bind parameter and every identifier is validated against the model — which is a claim worth checking rather than believing |
+| **The incumbent** | Huma or oapi-codegen for the handlers, hand-rolled query-parameter parsing for the filters, openapi-typescript or hey-api for the client | **This is the workflow sqlb replaces**, and the one most projects are actually on. It works. What it costs is that the allow-list, the rejection messages and the client are three hand-maintained things that drift from the schema independently — which is the whole of sqlb's argument, and why `rest` is built *on* Huma rather than against it |
+
 ## sqlc
 
 **What it does better.** sqlc reads your actual SQL and generates types from it,
@@ -62,10 +78,20 @@ ecosystem.
   no M2M vocabulary, and no relation-spanning predicate — see
   [ADR-0022](adr/0022-references-declare-their-inverse.md) for what is missing
   and why.
-- **Maturity.** Thousands of stars, production use at scale, and an ecosystem —
-  `entrest` and `entoas` generate an OpenAPI spec plus handlers with filtering,
+- **Maturity.** ~17.2k stars and ~4,000 importers on pkg.go.dev, production use
+  at scale, and an extension for this exact job: [`entrest`](https://github.com/lrstanley/entrest)
+  generates an OpenAPI spec *and* an HTTP handler implementation with filtering,
   pagination and eager-loaded edges, which covers a large fraction of what
   `rest` does here.
+
+  Two corrections to what this page used to say, both of which cut against
+  sqlb's case in one direction and for it in the other.
+  [`entoas`](https://github.com/ent/contrib/tree/master/entoas) is spec-only —
+  *"Generate a fully compliant, extendable OpenAPI Specification document"*, with
+  the README pointing elsewhere for a server — so only entrest generates
+  handlers. And entrest is one maintainer, 41 stars and created in June 2024,
+  which is a thinner "ecosystem" than the word implies, and thinner than ent
+  itself by a wide margin.
 - **The privacy layer is the same idea as `BeforeQuery`**, arrived at first.
   Opt in per schema, and it then applies to every query and mutation of that
   type regardless of call site.
@@ -100,10 +126,15 @@ difference and it is not in sqlb's favour.
 
 ## PostgREST
 
-**What it does better.** No Go code, no deployment beyond the database, and
-years of production use. If the API you want is a faithful projection of your
-tables and the rules are expressible as row-level security, PostgREST is less
-work than anything on this page.
+**What it does better.** No Go code, no application layer to write, and years of
+production use. If the API you want is a faithful projection of your tables and
+the rules are expressible as row-level security, PostgREST is less work than
+anything on this page.
+
+(This page used to say "no deployment beyond the database", which is not true:
+PostgREST is its own Haskell server process to deploy, configure and operate.
+The argument does not need the overstatement — what it saves you is the
+*application*, not the process.)
 
 **The trade.** Authorization is Postgres roles and RLS; there is no application
 layer, so business rules become RLS policies, `SECURITY DEFINER` functions or
@@ -130,8 +161,16 @@ mechanical. It does not apply migrations and does not track which have run.
 
 If migrations are the problem you are solving, use Atlas. sqlb's migration layer
 exists so that a schema declared in Go can reach the database at all, not to
-compete with a dedicated tool. The two are compatible: Atlas can consume the
-SQL files sqlb writes.
+compete with a dedicated tool. The two are compatible: Atlas can consume the SQL
+files sqlb writes.
+
+**One thing that changed, and that this recommendation should carry.** Since
+v0.38 (October 2025), [`atlas migrate lint` is Atlas Pro only](https://atlasgo.io/versioned/lint)
+— $9 per developer per month plus $59 per CI project per month. The linting is
+the part of Atlas this page was pointing at hardest, so "use Atlas" now has a
+price tag on it. Everything else above still holds, and sqlb's own
+[lock-aware sequencing](migrations/rollout.md) covers a much narrower set of
+changes than a linter does.
 
 ## Bun
 
@@ -146,6 +185,14 @@ parameter parsing, the allow-lists and the rejection messages yourself. That
 work is the thing sqlb is trying to delete, and it is also the work where a
 missing allow-list becomes a leak.
 
+**The sharper difference, for a Postgres project.** Bun is built on
+`database/sql` — you hand `bun.NewDB` a `*sql.DB` and a dialect. sqlb is
+pgx-native since [ADR-0040](adr/0040-the-driver-is-a-dependency.md). So Bun cannot
+join a `pgx.Tx`: an application already holding one for its pgx or sqlc code
+cannot put a Bun query inside it without going through `database/sql` for
+everything. That is the whole of the sqlc coexistence story above, and it is not
+available on the other side.
+
 ## What is actually unique here
 
 Stripped down, one thing on this page is not done elsewhere:
@@ -155,10 +202,14 @@ Stripped down, one thing on this page is not done elsewhere:
 > constrains reads from both — and an unlisted column is a 400, not a leak.
 
 - PostgREST gives the grammar and no place for Go domain logic.
-- ent gives filtering, but the filter surface and the query builder are
-  different code paths.
 - sqlc cannot express a conditional predicate at all.
-- Bun gives the builder and nothing above it.
+- Bun and the typed builders give the builder and nothing above it.
+- ent plus entrest is the one real counter-example, and the honest version of
+  this claim has to name it: entrest compiles URL filters into ent predicates
+  that pass through ent's privacy layer, which is the same shape. What is left
+  is narrower — not done elsewhere *in one tool, over structs you did not
+  generate, with the capability vocabulary in the core schema rather than in an
+  extension's annotations*.
 
 Second, smaller: `Explain`-as-a-gate. It validates a query against the live
 schema without running it, so it fails on a migration that was written and never
@@ -182,6 +233,9 @@ Stated plainly, because a comparison page that cannot answer this is marketing:
 
 ---
 
-*Claims about other projects were checked against their documentation in July
-2026 and carry links. They will go stale; if you find one that has, please open
-an issue — an out-of-date comparison is worse than none.*
+*Claims about other projects were checked against their documentation, their
+repositories and pkg.go.dev in August 2026, and carry links. They will go stale;
+if you find one that has, please open an issue — an out-of-date comparison is
+worse than none. [Issue #79](https://github.com/jryannel/sqlb/issues/79) is what
+that looks like working, and four of the six things it corrected made sqlb's
+case weaker rather than stronger.*
