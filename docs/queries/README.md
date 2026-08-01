@@ -101,3 +101,5 @@ by the compiler.
 - [Hooks](hooks.md) — where domain logic lives
 - [Inspecting and tracing](inspecting.md) — `SQL()`, `Explain`, wrapping the
   executor
+- [Testing an application on sqlb](testing.md) — the database-free double, and
+  what it can and cannot answer

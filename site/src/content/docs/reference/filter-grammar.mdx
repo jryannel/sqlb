@@ -180,11 +180,12 @@ silently matching nothing.
 | `MaxListValues` | 100 | Values in one `in`/`nin` list |
 | `MaxValueLength` | 256 | Bytes in one filter value or search term |
 | `MaxGroupDepth` | 3 | Nesting of `or=`/`and=` groups |
+| `MaxOffset` | 100 000 | Rows `?page=`/`?offset=` may skip |
 
 The first three are per-resource in `schema.REST`; the rest are package
 constants, overridable on `filter.Options`.
 
-Three of them exist because the obvious budget is the wrong one:
+Four of them exist because the obvious budget is the wrong one:
 
 - **`MaxFilters` counts leaf conditions, not parameters.** Counting top-level
   parameters would leave the budget open to a single group holding as many
@@ -195,6 +196,10 @@ Three of them exist because the obvious budget is the wrong one:
 - **`MaxValueLength`** — the pattern operators pass their operand through
   unescaped on purpose, so a value is a lever on how much work a scan does, and
   a long one is a cheap way to pull it.
+- **`MaxOffset`** — every other dimension of a request costs what it says, but
+  an offset costs the rows it skips: `?page=50000000` asks Postgres to produce
+  and discard ten billion rows for a page of twenty-five. Cursor paging has no
+  such cost, but it is opt-in per request, so it is not a bound.
 
 A page size above the maximum is **capped rather than rejected** — a client
 asking for too much gets the maximum. The others *are* rejections, naming the
@@ -202,7 +207,14 @@ count and the limit: `%d filters requested, the limit is %d`,
 `operator %q was given %d values, the limit is %d`,
 `value is %d bytes, the limit is %d`.
 
-`page` below 1 and a negative `offset` are both rejected.
+`page` below 1 and a negative `offset` are both rejected, as is one past
+`MaxOffset` — that rejection names the budget and points at `?cursor=`, which
+reads deeper for free.
+
+A reserved parameter that means one thing per request — `sort`, `search`,
+`select`, `filter`, `cursor`, `page`, `limit` and the rest — is rejected when
+sent twice rather than reading the first and dropping the rest. `or=` and `and=`
+are the exceptions: several of either is a request with several groups.
 
 ## Cursors
 

@@ -462,6 +462,63 @@ func TestCursorOverAnExpressionOrderingIsRefused(t *testing.T) {
 	}
 }
 
+// A joined column that happens to share the primary key's bare name is the
+// hand-written-join footgun the cursor machinery used to walk into: `o.id` is
+// not `users.id`, and matching on the name alone made Stable believe the
+// ordering was already total, made CursorFor encode the *base* row's id as the
+// position on the join's column, and made After seek `"o"."id" < $1` with that
+// wrong value. Silently wrong pages, which is the single failure keyset paging
+// exists to prevent (#72).
+func TestCursorOverAJoinedColumnIsRefused(t *testing.T) {
+	// Stable must not believe the key is present: `o.id` is a different column.
+	sql, _, err := sqlb.Query[User]().
+		Join("orgs", "o", sqlb.F("o.id").EqField(sqlb.F("users.org_id"))).
+		OrderBy(sqlb.F("o.id").Desc()).
+		Stable().
+		SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, `ORDER BY "o"."id" DESC, "users"."id" DESC`) {
+		t.Errorf("Stable did not add the tiebreaker, so the ordering is not total:\n%s", sql)
+	}
+
+	// And a cursor over that ordering is refused rather than encoding the base
+	// row's value as a position on the joined column.
+	_, err = sqlb.Query[User]().
+		Join("orgs", "o", sqlb.F("o.id").EqField(sqlb.F("users.org_id"))).
+		OrderBy(sqlb.F("o.id").Desc()).
+		CursorFor(User{ID: "u1"})
+	if err == nil {
+		t.Fatal("a cursor over a joined column was accepted; it encodes the base row's " +
+			"value as the position on another table's column")
+	}
+	if errors.Is(err, sqlb.ErrBadCursor) {
+		t.Error("this is the caller's mistake, not the client's, so it should not read as a bad cursor")
+	}
+	for _, want := range []string{`"o"."id"`, "users"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal should name the term and the table that would work, got: %v", err)
+		}
+	}
+}
+
+// The other direction, so the refusal above is not a ban on qualifying at all:
+// the base table's own name is how a caller writing a join spells its side, and
+// it still resolves.
+func TestCursorOverTheBaseTableQualifiedIsAccepted(t *testing.T) {
+	c, err := sqlb.Query[User]().
+		Join("orgs", "o", sqlb.F("o.id").EqField(sqlb.F("users.org_id"))).
+		OrderBy(sqlb.F("users.name").Asc()).
+		CursorFor(User{ID: "u1", Name: "Ada"})
+	if err != nil {
+		t.Fatalf("CursorFor over the base table's own qualifier: %v", err)
+	}
+	if c == "" {
+		t.Error("CursorFor returned an empty cursor")
+	}
+}
+
 // Paging to the end and asking for one more page should return nothing, not
 // everything — the zero Pred that Where would skip is the trap here.
 func TestExhaustedOrderingSeeksNothing(t *testing.T) {

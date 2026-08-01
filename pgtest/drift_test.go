@@ -94,7 +94,7 @@ func drift(t *testing.T, pool *pgxpool.Pool, declared *schema.Registry) []migrat
 	if err != nil {
 		t.Fatalf("reading the database: %v", err)
 	}
-	if _, err := shadow.NormalizeChecks(ctx, pool, declared, shadow.Options{}); err != nil {
+	if _, err := shadow.Normalize(ctx, pool, declared, shadow.Options{}); err != nil {
 		t.Fatalf("normalising the declared checks: %v", err)
 	}
 	changes, err := migrate.Diff(current, declared)

@@ -186,6 +186,8 @@ func Action[T, In any](api huma.API, db sqlb.Executor, opts Options, spec Action
 		return err
 	}
 
+	fetch := b.actionSelection(writes)
+
 	run := func(ctx context.Context, id string, body In) (*itemOutput[T], error) {
 		key, err := b.key(id)
 		if err != nil {
@@ -193,7 +195,7 @@ func Action[T, In any](api huma.API, db sqlb.Executor, opts Options, spec Action
 		}
 		out, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
 			q := sqlb.Query[T]().
-				Select(b.selection()...).
+				Select(fetch...).
 				Where(sqlb.F(b.model.PK.Name).Eq(key))
 			if len(writes) > 0 {
 				// A verb that changes the row is a read-modify-write across a
@@ -347,4 +349,39 @@ func (b *binding[T]) writeSet(spec ActionSpec) ([]*sqlb.ColumnInfo, error) {
 		out = append(out, col)
 	}
 	return out, nil
+}
+
+// actionSelection is the projection the envelope's fetch uses: the default one,
+// plus any column the action declared it writes that the default leaves out.
+//
+// The default projection is every *non-hidden* column, and the write-back takes
+// its values off the struct the verb mutated. So a Hidden column in Writes —
+// a secret, an internal counter, exactly what Hidden exists for — reached the
+// verb as its zero value, and a read-modify-write on it (`p.Counter++`, rotating
+// a suffix onto a secret) persisted a value derived from zero over the stored
+// one. Under the FOR UPDATE lock whose entire purpose is correct
+// read-modify-write (#67).
+//
+// Projecting them is strictly better than refusing them: they are about to be
+// written, so the verb has to see what they currently hold. The response
+// projection is unchanged — it is b.selectable, so a Hidden column is fetched
+// and written but still never serialised.
+func (b *binding[T]) actionSelection(writes []*sqlb.ColumnInfo) []sqlb.Selectable {
+	items := b.selection()
+	for _, col := range writes {
+		if b.isSelectable(col.Name) {
+			continue
+		}
+		items = append(items, sqlb.F(col.Name))
+	}
+	return items
+}
+
+func (b *binding[T]) isSelectable(name string) bool {
+	for _, col := range b.selectable {
+		if col.Name == name {
+			return true
+		}
+	}
+	return false
 }

@@ -102,7 +102,12 @@ func (b *Builder[T]) Stable() *Builder[T] {
 		return b
 	}
 	for _, o := range b.orders {
-		if col, ok := o.expr.(Column); ok && col.Name == key.Name {
+		// Matched on qualifier as well as name. A join can bring in a column
+		// that shares the primary key's bare name — `OrderBy(F("o.id"))` over
+		// a joined `orgs o` — and reading that as "the key is already in the
+		// ordering" left the ordering not total, which is the one thing this
+		// method exists to guarantee (#72).
+		if col, ok := o.expr.(Column); ok && col.Name == key.Name && b.ownColumn(col) {
 			return b
 		}
 	}
@@ -183,6 +188,14 @@ func (b *Builder[T]) CursorFor(row T) (Cursor, error) {
 	return Cursor(base64.RawURLEncoding.EncodeToString(buf)), nil
 }
 
+// ownColumn reports whether a reference names a column of the queried model's
+// own table. An unqualified name does, since that is what the compiler resolves
+// it to; so does one qualified with the table's own name, which is how a
+// caller writing a join spells the base side.
+func (b *Builder[T]) ownColumn(col Column) bool {
+	return col.Table == "" || col.Table == b.model.Table
+}
+
 // keysetTerm is one ordering term resolved back to the model column it names.
 type keysetTerm struct {
 	col  *ColumnInfo
@@ -217,6 +230,20 @@ func (b *Builder[T]) keysetTerms() ([]keysetTerm, error) {
 			return nil, fmt.Errorf(
 				"sqlb: cursor pagination orders by columns only, and this query orders by an expression; " +
 					"order by a column, or page with Limit and Offset")
+		}
+		// A qualified column that is not the base table's is refused rather
+		// than resolved against the model. The name may exist on both sides of
+		// a join, and resolving it here took the *base* row's value, its type
+		// and its nullability as the position on a column of another table:
+		// After then sought a boundary the query had never reached, and the
+		// pages were silently wrong rather than an error — which is the single
+		// failure keyset paging exists to prevent (#72).
+		if !b.ownColumn(col) {
+			return nil, fmt.Errorf(
+				"sqlb: cursor pagination orders by columns of %s, and this query orders by %q.%q; "+
+					"a joined column's value is not on the row a cursor is built from — "+
+					"order by a column of %s, or page with Limit and Offset",
+				b.model.Table, col.Table, col.Name, b.model.Table)
 		}
 		info := b.model.Column(col.Name)
 		if info == nil {

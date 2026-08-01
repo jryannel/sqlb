@@ -1,6 +1,6 @@
 package shadow
 
-// Making a declared CHECK comparable with an introspected one.
+// Making a declared boolean expression comparable with an introspected one.
 //
 // Postgres does not store a check expression as it was written. It stores a
 // parse tree, and pg_get_expr renders that back in a canonical spelling: fully
@@ -18,6 +18,13 @@ package shadow
 // and re-adds the check — every run, forever, with an ACCESS EXCLUSIVE lock
 // attached. That is issue #24, and it had gone unnoticed because nothing before
 // `sqlb migrate` compared a *declared* check with an *introspected* one.
+//
+// A partial index's WHERE is the same expression stored the same way, and it
+// arrived as the same complaint from the same direction: `Where: "latitude IS
+// NOT NULL"` never matched the live index, and adding the parentheses Postgres
+// had added made it match (issue #63). The diff a consumer saw proposed
+// creating an index that already existed, with DDL that read identically to
+// what the database held. So it goes through the same probe.
 //
 // # Why not normalise the strings
 //
@@ -58,9 +65,9 @@ import (
 // only way it could matter — hence a name nothing would choose.
 const probeName = "sqlb_normalize_probe"
 
-// NormalizeChecks rewrites every CHECK expression in reg into the spelling
-// Postgres stores, so that reg can be compared with a registry that introspect
-// produced.
+// Normalize rewrites every CHECK expression and every partial-index predicate in
+// reg into the spelling Postgres stores, so that reg can be compared with a
+// registry that introspect produced.
 //
 // db must be connected to a database in which reg's tables already exist —
 // which is what the shadow database is, immediately after Build. Everything
@@ -71,8 +78,8 @@ const probeName = "sqlb_normalize_probe"
 // yields the same string, so running it over a registry introspect built is
 // safe and does nothing.
 //
-// A check that cannot be probed is left exactly as declared, and named in the
-// returned slice. That is the right default rather than an error: a check
+// An expression that cannot be probed is left exactly as declared, and named in
+// the returned slice. That is the right default rather than an error: a check
 // referring to a column this migration is about to add cannot be evaluated
 // against the table as it stands today, and it is also, necessarily, a check
 // the diff should report as new. Failing the whole run for it would make the
@@ -89,9 +96,9 @@ const probeName = "sqlb_normalize_probe"
 // this rewrites declarations underneath them. The rewritten expression is
 // semantically identical and Postgres stores the same thing either way, so what
 // changes is the text, not the schema; but it does change.
-func NormalizeChecks(ctx context.Context, db DB, reg *schema.Registry, opts Options) ([]string, error) {
+func Normalize(ctx context.Context, db DB, reg *schema.Registry, opts Options) ([]string, error) {
 	if db == nil {
-		return nil, fmt.Errorf("shadow: NormalizeChecks needs a database connection")
+		return nil, fmt.Errorf("shadow: Normalize needs a database connection")
 	}
 	if reg == nil {
 		return nil, nil
@@ -107,7 +114,8 @@ func NormalizeChecks(ctx context.Context, db DB, reg *schema.Registry, opts Opti
 
 	var unprobed []string
 	for _, t := range reg.Tables() {
-		if len(t.Checks()) == 0 {
+		predicates := partialIndexes(t)
+		if len(t.Checks()) == 0 && len(predicates) == 0 {
 			continue
 		}
 		table := qualify(opts.Schema, t.Name())
@@ -133,8 +141,33 @@ func NormalizeChecks(ctx context.Context, db DB, reg *schema.Registry, opts Opti
 			}
 			t.ReplaceCheckExpr(c.Name, normalised)
 		}
+
+		// The same probe. A partial-index predicate and a CHECK expression are
+		// both boolean expressions over the table's columns, and pg_get_expr
+		// renders them through the same code — which is asserted against a real
+		// Postgres in pgtest rather than assumed here.
+		for _, idx := range predicates {
+			normalised, err := probe(ctx, tx, table, idx.Where)
+			if err != nil {
+				unprobed = append(unprobed, t.Name()+"."+idx.Name+" (index predicate): "+oneLine(err))
+				continue
+			}
+			t.ReplaceIndexWhere(idx.Name, normalised)
+		}
 	}
 	return unprobed, nil
+}
+
+// partialIndexes lists the indexes on t that carry a predicate, which are the
+// only ones with anything to normalise.
+func partialIndexes(t *schema.TableDef) []schema.Index {
+	var out []schema.Index
+	for _, idx := range t.Indexes() {
+		if idx.Where != "" {
+			out = append(out, idx)
+		}
+	}
+	return out
 }
 
 // tableExists asks whether the name resolves, without raising the error a cast

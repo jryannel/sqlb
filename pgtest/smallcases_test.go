@@ -416,3 +416,70 @@ func TestAggregateOverAnEmptyRangeNeedsCoalesce(t *testing.T) {
 		t.Errorf("count = %d, want 0", n)
 	}
 }
+
+// Batched is a row whose defaulted column has a default worth telling apart
+// from a zero: the whole question is whether a zero-valued row in a mixed batch
+// takes the default or writes its zero.
+type Batched struct {
+	ID    int64  `db:"id" sqlb:"pk,default"`
+	Name  string `db:"name" sqlb:"filter"`
+	Tier  string `db:"tier" sqlb:"filter,default"`
+	Quota int64  `db:"quota" sqlb:"filter,default"`
+}
+
+func (Batched) TableName() string { return "batched" }
+
+// A defaulted column left zero takes its default whether or not a batch-mate
+// filled it in.
+//
+// InsertRows omits a defaulted column only when *every* row leaves it zero, so
+// in a mixed batch the column stays and the zero row used to bind an explicit
+// zero: the same row got the database's default when inserted alone and a zero
+// when inserted beside a neighbour (#73). The fix emits the DEFAULT keyword in
+// that row's own tuple, and this is where the claim that Postgres accepts a
+// per-position DEFAULT in a multi-row VALUES stops being something read in a
+// manual.
+func TestMixedBatchTakesTheDefaultPerRow(t *testing.T) {
+	ctx := context.Background()
+	db := freshStockDB(t)
+	mustExec(t, db, `
+		CREATE TABLE batched (
+			id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+			name  text   NOT NULL,
+			tier  text   NOT NULL DEFAULT 'free',
+			quota bigint NOT NULL DEFAULT 100
+		)`)
+	h := sqlb.New(db)
+
+	set := &Batched{Name: "set", Tier: "pro", Quota: 5}
+	unset := &Batched{Name: "unset"}
+
+	stored, err := sqlb.InsertRows(set, unset).Exec(ctx, h)
+	if err != nil {
+		t.Fatalf("mixed batch: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored %d rows, want 2", len(stored))
+	}
+
+	if stored[0].Tier != "pro" || stored[0].Quota != 5 {
+		t.Errorf("the row that set its columns stored %+v, want tier=pro quota=5", stored[0])
+	}
+	// The whole point. Before the fix this was tier="" — which this table's
+	// NOT NULL would have caught — and quota=0, which it would not.
+	if stored[1].Tier != "free" || stored[1].Quota != 100 {
+		t.Errorf("the row that left its defaulted columns zero stored %+v, "+
+			"want the table's defaults tier=free quota=100", stored[1])
+	}
+
+	// And the same row alone stores the same thing, which is the property that
+	// was violated: a row's semantics must not depend on its batch-mates.
+	solo := &Batched{Name: "solo"}
+	one, err := sqlb.InsertRows(solo).Exec(ctx, h)
+	if err != nil {
+		t.Fatalf("solo insert: %v", err)
+	}
+	if one[0].Tier != stored[1].Tier || one[0].Quota != stored[1].Quota {
+		t.Errorf("solo stored %+v but the same row in a batch stored %+v", one[0], stored[1])
+	}
+}

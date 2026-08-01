@@ -94,6 +94,75 @@ type Index struct {
 	// sorted key order, because a map has none and a migration that reorders
 	// its own DDL between runs is a diff nobody can read.
 	With map[string]string
+
+	// Orders names the sort order each column is indexed under, keyed by column
+	// name, in the same shape Opclasses uses and for the same reason: the DDL
+	// layer renders it without knowing anything about index position.
+	//
+	// An absent entry is ascending with Postgres's default null placement,
+	// which is what almost every index wants. It is here because for the
+	// indexes that do not, the ordering *is* the index — an index backing
+	// `ORDER BY position ASC NULLS FIRST, created_at DESC` is unusable in any
+	// other order — and a declaration that could not say so proposed dropping
+	// the live index and could not tell "missing" from "differently ordered"
+	// (issue #64).
+	//
+	//	AddIndex(schema.Index{
+	//	    Name:    "idx_tasks_project_position",
+	//	    Columns: []string{"project_id", "position", "created_at"},
+	//	    Orders: map[string]schema.IndexOrder{
+	//	        "position":   {Nulls: schema.NullsFirst},
+	//	        "created_at": {Desc: true},
+	//	    },
+	//	})
+	Orders map[string]IndexOrder
+}
+
+// IndexOrder is one column's sort order within an index.
+//
+// Structured rather than written SQL, because a written suffix would have to
+// reproduce Postgres's normalisation to compare equal — it omits ASC, and omits
+// the null placement that follows from the direction — and that is the failure
+// mode issue #63 is about. A zero IndexOrder means ascending with the default
+// placement, so a map entry is only ever needed for a column that departs from
+// it.
+type IndexOrder struct {
+	Desc  bool
+	Nulls Nulls
+}
+
+// Nulls is where NULLs sort within one index column. The zero value follows
+// Postgres's own default, which is not a single placement: NULLS LAST for
+// ascending, NULLS FIRST for descending.
+type Nulls string
+
+const (
+	NullsDefault Nulls = ""
+	NullsFirst   Nulls = "first"
+	NullsLast    Nulls = "last"
+)
+
+// Suffix renders the order as the DDL fragment that follows the column, empty
+// when the order is the one Postgres assumes.
+//
+// Normalised the way Postgres normalises: an explicit ASC is dropped, and so is
+// a null placement that already follows from the direction. That is what makes
+// two spellings of the same order compare equal, and it is why Suffix is also
+// what the diff fingerprints — a declaration written `{Desc: true, Nulls:
+// NullsFirst}` and one written `{Desc: true}` are the same index, and reading
+// the second back from the catalog must not propose replacing the first.
+func (o IndexOrder) Suffix() string {
+	var out string
+	if o.Desc {
+		out = " DESC"
+	}
+	switch {
+	case o.Nulls == NullsFirst && !o.Desc:
+		out += " NULLS FIRST"
+	case o.Nulls == NullsLast && o.Desc:
+		out += " NULLS LAST"
+	}
+	return out
 }
 
 // Check is a table-level check constraint.
@@ -379,6 +448,16 @@ func (t *TableDef) Check(name, expr string) *TableDef {
 	return t
 }
 
+// ReplaceIndexWhere rewrites a partial index's predicate, for the same reason
+// and by the same caller as ReplaceCheckExpr below.
+//
+// A partial-index predicate is stored the way a CHECK is — as a parse tree,
+// rendered back by pg_get_expr — so `latitude IS NOT NULL` comes back as
+// `(latitude IS NOT NULL)` and a declaration written the obvious way never
+// matches the live index. The diff then proposes creating an index that is
+// already there, with DDL that looks identical to what the database holds
+// (issue #63).
+//
 // ReplaceCheckExpr rewrites the expression of an already-declared check, and
 // reports whether there was one by that name.
 //
@@ -392,11 +471,21 @@ func (t *TableDef) Check(name, expr string) *TableDef {
 //
 // The only reliable way to compare them is to put the declared expression
 // through the same normalisation, which means asking a Postgres. That is what
-// shadow.NormalizeChecks does, and this is how it writes the answer back.
+// shadow.Normalize does, and this is how it writes the answer back.
 // Comparing the two spellings textually instead was rejected: stripping
 // parentheses can make two genuinely different expressions look equal, and a
 // diff that reports "unchanged" for a changed constraint is silently wrong,
 // where churn is merely loud.
+func (t *TableDef) ReplaceIndexWhere(name, expr string) bool {
+	for i := range t.indexes {
+		if t.indexes[i].Name == name {
+			t.indexes[i].Where = expr
+			return true
+		}
+	}
+	return false
+}
+
 func (t *TableDef) ReplaceCheckExpr(name, expr string) bool {
 	for i := range t.checks {
 		if t.checks[i].Name == name {

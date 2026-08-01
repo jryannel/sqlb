@@ -190,7 +190,7 @@ const staleAfter = time.Hour
 // without this a Ctrl-C during `sqlb generate` leaves a directory behind in a
 // tree the user is about to `git add`. That is not hypothetical: one of them
 // reached a commit and had to be caught by hand.
-func newScratch(moduleDir string) (string, func(), error) {
+func newScratch(moduleDir string, stderr io.Writer) (string, func(), error) {
 	tmp, err := os.MkdirTemp(moduleDir, driverPrefix)
 	if err != nil {
 		return "", nil, err
@@ -222,7 +222,7 @@ func newScratch(moduleDir string) (string, func(), error) {
 			// on its own and there is nothing left to remove.
 			return
 		}
-		_ = os.RemoveAll(tmp)
+		removeScratch(tmp, stderr)
 		// Exit the way a shell expects a signalled process to, rather than
 		// with a bare 1. `sqlb check` in a script reports staleness with an
 		// exit code, and an interrupted run must stay distinguishable from
@@ -240,8 +240,31 @@ func newScratch(moduleDir string) (string, func(), error) {
 		// close safe rather than a race with a delivery.
 		signal.Stop(sigs)
 		close(sigs)
-		_ = os.RemoveAll(tmp)
+		removeScratch(tmp, stderr)
 	}, nil
+}
+
+// removeScratch deletes a scratch directory, retries once, and says so if it
+// still cannot.
+//
+// The retry is for macOS, where a removal racing concurrent filesystem activity
+// fails transiently and succeeds a moment later. The report is the part that
+// matters: the discarded error was the reason a leaked directory was both
+// invisible and unattributable, and it failed the very test that polices
+// leaking (#78). A failure here is not worth ending the run over — the work the
+// user asked for is done by the time this runs — but it must not be silent.
+func removeScratch(dir string, stderr io.Writer) {
+	err := os.RemoveAll(dir)
+	if err == nil {
+		return
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err = os.RemoveAll(dir); err == nil {
+		return
+	}
+	if stderr != nil {
+		_, _ = fmt.Fprintf(stderr, "sqlb: could not remove the scratch directory %s: %v\n", dir, err)
+	}
 }
 
 // sweepScratch removes scratch directories abandoned by earlier runs.
@@ -318,7 +341,7 @@ func drive(p *pkg, args []string, stdout, stderr io.Writer) error {
 	// races with one that is still on disk. Removing it is newScratch's job,
 	// which is more than a defer because it is somebody's working tree.
 	sweepScratch(p.Module.Dir)
-	tmp, done, err := newScratch(p.Module.Dir)
+	tmp, done, err := newScratch(p.Module.Dir, stderr)
 	if err != nil {
 		return fmt.Errorf(
 			"could not create a temporary directory in %s, which is where the driver has "+

@@ -88,6 +88,59 @@ func TestActionFetchesRunsAndWritesTheDeclaredColumns(t *testing.T) {
 	}
 }
 
+// A Hidden column in Writes is the case the default projection cannot serve.
+// The fetch selects every *non-hidden* column and the write-back reads its
+// values off the struct the verb mutated, so the verb used to be handed a zero
+// value for exactly the columns Hidden exists for — a secret, an internal
+// counter — and any read-modify-write on one persisted a value derived from
+// zero over the stored one, under the FOR UPDATE lock whose whole purpose is
+// that this cannot happen (#67).
+func TestAnActionWritingAHiddenColumnFetchesIt(t *testing.T) {
+	cols := append(postCols(), "secret")
+	row := append(postRow("p1", "Hello"), "stored-secret")
+	db := newFakeDB(t, reply{cols: cols, rows: [][]any{row}})
+
+	spec := completeSpec()
+	spec.Writes = []string{"secret"}
+
+	var seen string
+	api := mountAction(t, db.db, spec, func(_ context.Context, p *Post, _ CompletePost) error {
+		seen = p.Secret
+		p.Secret = p.Secret + "-rotated"
+		return nil
+	})
+
+	resp := api.Post("/posts/p1/complete", map[string]any{})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+
+	if seen != "stored-secret" {
+		t.Errorf("the verb was handed secret = %q, want the stored value", seen)
+	}
+
+	var fetch string
+	for _, stmt := range db.statements() {
+		if strings.HasPrefix(stmt, "SELECT") {
+			fetch = stmt
+			break
+		}
+	}
+	// The load-bearing assertion, and the one that fails without the fix: the
+	// fake answers with the columns it was scripted with rather than with the
+	// ones the statement asked for, so what a real Postgres would withhold is
+	// visible here only in the SQL.
+	if !strings.Contains(fetch, `"secret"`) {
+		t.Errorf("the fetch does not project the column the action writes:\n%s", fetch)
+	}
+
+	// Fetched and written, but still never serialised: projecting a Hidden
+	// column for the write-back must not put it in the response.
+	if strings.Contains(resp.Body.String(), "secret") {
+		t.Errorf("the hidden column reached the response: %s", resp.Body)
+	}
+}
+
 // A declared write set means read-modify-write, and a read-modify-write across
 // a round trip that does not lock is a lost update waiting for a second client.
 func TestAnActionThatWritesLocksTheRow(t *testing.T) {

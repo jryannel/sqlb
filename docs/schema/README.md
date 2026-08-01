@@ -43,6 +43,7 @@ This page covers the column vocabulary and the table-level constructs.
 | `Int(name)` | `int` | `int32` |
 | `BigInt(name)` | `bigint` | `int64` |
 | `Float(name)` / `Numeric(name)` | `float` / `numeric` | `float64` |
+| `Numeric(name, p, s)` | `numeric(p, s)` | `float64` |
 | `Bool(name)` | `bool` | `bool` |
 | `UUID(name)` | `uuid` | `string` |
 | `Timestamp(name)` | `timestamptz` | `time.Time` |
@@ -215,10 +216,37 @@ pair written out.
 ```
 
 `AddIndex` takes a fully specified `Index` for what the shorthands do not cover
-— GIN indexes, and partial indexes via `Where`. A partial unique index is often
-the cleanest way to state a domain rule the type system cannot:
+— GIN indexes, partial indexes via `Where`, and per-column sort order via
+`Orders`. A partial unique index is often the cleanest way to state a domain
+rule the type system cannot:
 `UNIQUE (book_id, borrower_id) WHERE returned_at IS NULL` makes borrowing a book
 you already have out impossible, and borrowing it again next year ordinary.
+
+`Orders` is what an index backing a specific `ORDER BY` needs, because there the
+ordering *is* the index — one built for
+`ORDER BY position ASC NULLS FIRST, created_at DESC` serves nothing else:
+
+```go
+AddIndex(schema.Index{
+    Name:    "idx_tasks_project_position",
+    Columns: []string{"project_id", "position", "created_at"},
+    Orders: map[string]schema.IndexOrder{
+        "position":   {Nulls: schema.NullsFirst},
+        "created_at": {Desc: true},
+    },
+})
+```
+
+An absent entry is ascending with Postgres's default null placement, and a
+placement that already follows from the direction is dropped when the DDL is
+rendered — so a declaration and what `pg_get_indexdef` hands back agree, and two
+spellings of the same order do not propose replacing each other.
+
+A partial index's `Where` is hand-written SQL, and Postgres stores it as a parse
+tree rather than as text: `latitude IS NOT NULL` comes back as
+`(latitude IS NOT NULL)`. `sqlb migrate` puts the declared predicate through the
+same normalisation before diffing (`shadow.Normalize`), so you write it the way
+you would say it rather than the way Postgres would print it.
 
 `Index` and `UniqueIndex` name the index by convention — `posts_org_id_idx`,
 `posts_org_id_slug_uniq`. `IndexNamed` and `UniqueIndexNamed` take the name

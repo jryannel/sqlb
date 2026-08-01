@@ -40,3 +40,35 @@ ORDER BY status;
 -- A plain lookup, included only so the generated Author struct exists for the
 -- adoption test to point sqlb.Describe at.
 SELECT * FROM authors WHERE id = $1;
+
+-- name: ListPosts :many
+-- The exception, and the one query here that is NOT what sqlc is good at.
+--
+-- This is stage 1 of docs/refactoring-from-sqlc.md: a filterable list endpoint
+-- written the only way static SQL can express one. Every optional filter
+-- becomes an arm that is always sent and usually means nothing, which is the
+-- documented sqlc workaround rather than a strawman — see comparisons.md.
+--
+-- It is here to be replaced, not to be imitated. stage1.go calls it, stage2.go
+-- through stage4.go do the same job, and refactor_test.go holds all four to the
+-- same answers.
+--
+-- What the shape costs, beyond reading badly:
+--
+--   * Three predicates reach Postgres on every request, each guarded by a NULL
+--     check the planner has to see through. Stage 2 sends only what was asked.
+--   * The sort is baked in. `ORDER BY published_at DESC` cannot become
+--     `ORDER BY view_count ASC` without a second copy of the whole query, so a
+--     column the UI can sort by is a query, and n columns times two directions
+--     is 2n of them.
+--   * Nothing here says which columns a *client* may filter on. That decision
+--     lives in whatever handler assembles these parameters, so it is reviewable
+--     only by reading that handler — where ADR-0006 puts it in the schema.
+SELECT * FROM posts
+WHERE org_id = @org_id
+  AND deleted_at IS NULL
+  AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (sqlc.narg('min_views')::bigint IS NULL OR view_count >= sqlc.narg('min_views')::bigint)
+  AND (sqlc.narg('search')::text IS NULL OR title ILIKE '%' || sqlc.narg('search')::text || '%')
+ORDER BY published_at DESC
+LIMIT @page_limit;

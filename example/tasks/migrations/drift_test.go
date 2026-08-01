@@ -20,7 +20,7 @@
 // go through the generated code and do not want a registry appearing underneath
 // them.
 //
-// And shadow.NormalizeChecks rewrites the declared check expressions in place —
+// And shadow.Normalize rewrites the declared check expressions in place —
 // there is one registry, and no way to diff against a copy. A test binary of
 // its own bounds that to this file.
 package migrations_test
@@ -139,7 +139,7 @@ func TestTheHistoryStillBuildsTheDeclaredSchema(t *testing.T) {
 	// declaration in the author's, and the diff below is never empty — issue
 	// #24, which is exactly the failure this gate would otherwise report every
 	// run and train everyone to ignore.
-	unprobed, err := shadow.NormalizeChecks(ctx, pool, target, shadow.Options{})
+	unprobed, err := shadow.Normalize(ctx, pool, target, shadow.Options{})
 	if err != nil {
 		t.Fatalf("normalising the declared checks: %v", err)
 	}
@@ -193,7 +193,7 @@ func assertOnlyKnownGaps(t *testing.T, report *introspect.Report) {
 }
 
 // snapshotChecks records the declared check expressions so they can be put back
-// after NormalizeChecks rewrites them.
+// after Normalize rewrites them.
 //
 // Unnecessary today, since this binary runs one test and then exits. It is here
 // so that the second test added to this package does not silently inherit a

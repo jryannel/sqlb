@@ -65,6 +65,18 @@ const (
 	// a lever on how much work a scan does, and a long one is a cheap way to
 	// pull that lever.
 	MaxValueLength = 256
+	// MaxOffset bounds how far into a result set offset paging may reach.
+	// Offset paging is the one untrusted-input dimension the grammar left
+	// open, and it is the cheapest per-request scan-cost lever it has:
+	// `?page=50000000` asks Postgres to produce and discard ten billion rows
+	// before returning a page of twenty-five. Cursor paging has no such cost,
+	// but it is opt-in per request, so it is not a bound.
+	//
+	// Generous on purpose — a hundred thousand rows is past where offset paging
+	// is a good idea and well past where any human is browsing — because the
+	// point is to have a ceiling, not to pick the right depth for a resource.
+	// Override it per resource like the others.
+	MaxOffset = 100_000
 )
 
 // Options configures parsing for one resource.
@@ -84,6 +96,10 @@ type Options struct {
 	// filter value or search term.
 	MaxListValues  int
 	MaxValueLength int
+	// MaxOffset bounds how deep ?page= and ?offset= may reach. A request past
+	// it is refused with a message pointing at ?cursor=, which has no such
+	// cost.
+	MaxOffset int
 
 	// Expandable lists the relation names ?expand may name. Parsing validates
 	// against it and Apply performs the join, so a parsed ?expand is never
@@ -139,6 +155,13 @@ func (o Options) maxValueLength() int {
 		return o.MaxValueLength
 	}
 	return MaxValueLength
+}
+
+func (o Options) maxOffset() int {
+	if o.MaxOffset > 0 {
+		return o.MaxOffset
+	}
+	return MaxOffset
 }
 
 // Query is a parsed request: predicates, ordering, projection and pagination,
@@ -251,6 +274,37 @@ var reserved = map[string]bool{
 	"cursor": true, TreeParam: true,
 }
 
+// singleValued names the reserved parameters that mean one thing per request.
+// Everything reserved is here except "or" and "and", which conjoin by design —
+// several of either is a request with several groups, not a request that said
+// the same thing twice.
+//
+// It exists because the parser reads these with [firstValue], which is
+// url.Values.Get and therefore drops every occurrence after the first. That is
+// the one place the package ignored input rather than refusing it: `?sort=a&sort=b`
+// sorted by `a` and said nothing, while a repeated *per-column* filter parameter
+// conjoins — an asymmetry a caller cannot see from the outside.
+var singleValued = map[string]bool{
+	"select": true, "sort": true, "order": true, "search": true,
+	"expand": true, "limit": true, "offset": true, "page": true,
+	"per_page": true, "count": true, "cursor": true, TreeParam: true,
+}
+
+// refuseRepeats reports every single-valued reserved parameter a request sent
+// more than once, phrased like the cursor/page refusal: name what was sent and
+// say what to do about it.
+func (p *parser) refuseRepeats(values url.Values) {
+	for _, key := range sortedKeys(values) {
+		if !singleValued[key] {
+			continue
+		}
+		if n := len(values[key]); n > 1 {
+			p.errf(key, values[key][0],
+				"sent %d times; %s takes one value per request", n, key)
+		}
+	}
+}
+
 // Parse compiles URL query parameters into a Query.
 //
 // Every problem found is reported, not just the first, so a caller fixing a
@@ -261,6 +315,10 @@ func Parse(values url.Values, opts Options) (*Query, error) {
 	}
 	p := &parser{opts: opts, model: opts.Model}
 	q := &Query{PageSize: opts.defaultPageSize()}
+
+	// Before anything is read, because what follows reads only the first
+	// occurrence of each of these and the rest would vanish unremarked.
+	p.refuseRepeats(values)
 
 	// Filters, in sorted parameter order so the generated SQL is stable.
 	for _, key := range sortedKeys(values) {
@@ -1053,28 +1111,39 @@ func (p *parser) parsePagination(values url.Values, q *Query) {
 		return
 	}
 
+	// The offset budget, applied to both spellings of the same thing. Without
+	// it `?page=50000000` is a request for ten billion discarded rows, and
+	// `?page=9223372036854775807` overflows (n-1)*size into a negative offset
+	// that fails at the database rather than at validation. Both are computed in
+	// int64 and compared before anything narrows.
+	budget := int64(p.opts.maxOffset())
+
 	if raw := firstValue(values, "page"); raw != "" {
-		n, err := strconv.Atoi(raw)
+		n, err := strconv.ParseInt(raw, 10, 64)
 		switch {
 		case err != nil:
 			p.errf("page", raw, "not a number")
 		case n < 1:
 			p.errf("page", raw, "must be at least 1")
+		case (n - 1) > budget/int64(size):
+			p.errf("page", raw, "starts past the offset budget of %d rows; use ?cursor= to read deeper", budget)
 		default:
-			q.Page = n
-			q.Offset = (n - 1) * size
+			q.Page = int(n)
+			q.Offset = int(n-1) * size
 		}
 		return
 	}
 	if raw := firstValue(values, "offset"); raw != "" {
-		n, err := strconv.Atoi(raw)
+		n, err := strconv.ParseInt(raw, 10, 64)
 		switch {
 		case err != nil:
 			p.errf("offset", raw, "not a number")
 		case n < 0:
 			p.errf("offset", raw, "must not be negative")
+		case n > budget:
+			p.errf("offset", raw, "is past the offset budget of %d rows; use ?cursor= to read deeper", budget)
 		default:
-			q.Offset = n
+			q.Offset = int(n)
 		}
 	}
 	if q.Page == 0 {

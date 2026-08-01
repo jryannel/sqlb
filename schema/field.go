@@ -26,7 +26,11 @@ type FieldDesc struct {
 	Type Type
 	// Array makes the column a one-dimensional Postgres array of Type.
 	Array bool
-	Size  int // varchar length; 0 means unbounded
+	Size  int // varchar length, or a numeric's precision; 0 means unbounded
+	// Scale is a numeric's scale — the digits after the point. Meaningful only
+	// beside a Size, since numeric(s) is not a thing: a numeric declares a
+	// precision or nothing.
+	Scale int
 	// Dim is the number of components in a TypeVector column, and is part of
 	// the type rather than a constraint on it: Postgres will not store a
 	// 768-component value in a vector(1536). Zero for every other type.
@@ -187,11 +191,47 @@ func newField(name string, t Type) *Field {
 
 // Column type constructors.
 
-func Text(name string) *Field      { return newField(name, TypeText) }
-func Int(name string) *Field       { return newField(name, TypeInt) }
-func BigInt(name string) *Field    { return newField(name, TypeBigInt) }
-func Float(name string) *Field     { return newField(name, TypeFloat) }
-func Numeric(name string) *Field   { return newField(name, TypeNumeric) }
+func Text(name string) *Field   { return newField(name, TypeText) }
+func Int(name string) *Field    { return newField(name, TypeInt) }
+func BigInt(name string) *Field { return newField(name, TypeBigInt) }
+func Float(name string) *Field  { return newField(name, TypeFloat) }
+
+// Numeric is an exact decimal. Called with no arguments it is unbounded —
+// `numeric` — which is what a rate, a rating or anything else that wants
+// arbitrary precision should be.
+//
+// Given a precision and a scale it renders `numeric(p, s)`, which is a
+// *different type* from the unbounded one and the only faithful way to declare
+// a column an existing database already has that way. A schema that could not
+// say so had two bad options: declare it unbounded and hold a permanent
+// `add column` waiver in the drift gate, or leave the column out and have the
+// model, the REST surface and the generated clients silently lack a field the
+// hand-written API carries (issue #81).
+//
+//	schema.Numeric("rating")                     // numeric
+//	schema.Numeric("contracted_hours", 5, 2)     // numeric(5, 2)
+//
+// A precision alone is legal Postgres — `numeric(5)` means `numeric(5, 0)` —
+// and is accepted here as the one-argument form. More than two arguments is a
+// declaration error, reported when the field is resolved rather than silently
+// truncated.
+func Numeric(name string, precision ...int) *Field {
+	f := newField(name, TypeNumeric)
+	switch len(precision) {
+	case 0:
+	case 1:
+		f.d.Size = precision[0]
+	case 2:
+		f.d.Size, f.d.Scale = precision[0], precision[1]
+	default:
+		// Panic, like the other declaration errors here: a schema is Go, this
+		// runs at init, and a wrong declaration should not compile into a
+		// process that then writes DDL from it.
+		panic(fmt.Sprintf("sqlb/schema: Numeric(%q) takes a precision and an optional scale, got %d arguments",
+			name, len(precision)))
+	}
+	return f
+}
 func Bool(name string) *Field      { return newField(name, TypeBool) }
 func UUID(name string) *Field      { return newField(name, TypeUUID) }
 func Timestamp(name string) *Field { return newField(name, TypeTimestamp) }

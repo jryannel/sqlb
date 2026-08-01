@@ -14,6 +14,18 @@
 //
 // See docs/with-sqlc.md for which queries belong on which side.
 //
+// The other half of the story is what moving one query across actually costs,
+// and stage1.go through stage4.go are the worked version: one list endpoint in
+// four spellings, from static SQL to a generated REST resource, each a place a
+// project can stop. docs/refactoring-from-sqlc.md narrates them.
+//
+// The two test files divide the claims by what can honestly be asserted where.
+// refactor_test.go runs against a stub and covers what each stage *sends* and
+// *refuses*; an equivalence asserted there would pass no matter what SQL the
+// stages produced, since the stub answers everything identically. That claim —
+// the four return the same rows — needs a real planner and lives in
+// pgtest/refactor_test.go.
+//
 // Regenerating is two steps because they are two tools, and only the first is
 // a go:generate directive:
 //

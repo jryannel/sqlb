@@ -78,6 +78,50 @@ CREATE INDEX idx_chunks_embedding ON document_chunks
 
 COMMENT ON TABLE document_chunks IS 'Chunks of a document, with their embeddings.';
 COMMENT ON COLUMN document_chunks.embedding IS 'The embedding, 1536 wide.';
+
+-- The three shapes an adoption sweep found next, each of which used to leave
+-- the loop above with something to reconcile by hand.
+--
+-- members.supervisor_id is a self-referential foreign key (#82): declarable
+-- only as ExternalRef, since Ref inside members' own definition is a Go
+-- initialisation cycle, and reported by the import as undeclarable until it
+-- was taught the same spelling.
+--
+-- members ↔ images is a foreign-key cycle (#80). The import used to drop every
+-- table on it, with advice a consumer could not follow.
+--
+-- contracted_hours_per_week is a numeric with a precision (#81), which is a
+-- different type from an unbounded numeric and was skipped outright.
+CREATE TABLE members (
+    id                        uuid PRIMARY KEY,
+    org_id                    uuid NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+    name                      text NOT NULL,
+    supervisor_id             uuid,
+    profile_image_id          uuid,
+    contracted_hours_per_week numeric(5,2),
+    hired_on                  date,
+    CONSTRAINT members_supervisor_id_fkey FOREIGN KEY (supervisor_id)
+        REFERENCES members (id) ON DELETE SET NULL
+);
+
+CREATE TABLE images (
+    id         uuid PRIMARY KEY,
+    creator_id uuid NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    url        text NOT NULL
+);
+
+ALTER TABLE members ADD CONSTRAINT members_profile_image_id_fkey
+    FOREIGN KEY (profile_image_id) REFERENCES images (id) ON DELETE SET NULL;
+
+-- An ExternalRef wants an index on the column it joins on, so the two sides of
+-- the loop only agree if the database has one. That is the same index anybody
+-- would create here anyway.
+CREATE INDEX members_supervisor_id_idx ON members (supervisor_id);
+CREATE INDEX members_profile_image_id_idx ON members (profile_image_id);
+
+-- An ordered index (#64), whose ordering is the index: this one backs
+-- ORDER BY hired_on DESC, name ASC NULLS FIRST.
+CREATE INDEX idx_members_roster ON members (org_id, hired_on DESC, name NULLS FIRST);
 `
 
 // readBack introspects a database and fails the test on anything the DSL could

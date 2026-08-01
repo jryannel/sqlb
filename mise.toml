@@ -241,8 +241,12 @@ run = '''
 # checking that it *does* fire for `rest`. Three earlier guards in this repo
 # reported success while verifying nothing.
 
-# rest is an adapter onto huma, and the generated example mounts it.
-huma_ok='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
+# rest is an adapter onto huma, and the generated examples mount it. withsqlc
+# is on this list only because its stage 4 does — the point that example makes
+# is that taking the REST layer is the step where a project accepts a web
+# framework it did not choose, so the example that says so has to pay it too.
+# Stages 1 through 3 of that package take nothing beyond pgx.
+huma_ok='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog github.com/jryannel/sqlb/example/withsqlc github.com/jryannel/sqlb/example/evolve'
 
 # third_party lists the non-stdlib, non-sqlb packages one package imports,
 # transitively. A stdlib path has no dot in its first element, which is what
@@ -385,6 +389,11 @@ description = "Fail if committed generated code does not match what the schema w
 run = '''
 set -e
 go run ./cmd/sqlb check ./example/blog/blogschema
+# The schema-evolution example. Its generated code drifts like any other, and
+# it is the one example where that is only half the story: what the migration
+# history builds is checked in pgtest/evolve, which needs a database and so
+# cannot be here.
+go run ./cmd/sqlb check ./example/evolve/evolveschema
 # The one schema package under internal/. It exists because the driver is
 # compiled inside the module now; a regression putting it back outside would
 # make this command unable to read such a package at all, since Go refuses the
@@ -418,6 +427,12 @@ description = "Fail if a schema edit has changed the generated REST contract in 
 run = '''
 set -e
 go run ./cmd/sqlb impact -error ./example/blog/blogschema
+# example/evolve is the example this gate exists for: its history contains a
+# rename that is a clean migration and a broken client at once. The committed
+# baseline is the post-rename contract, so this passes — what it protects is
+# the *next* edit. example/evolve/history_test.go is where the rename is shown
+# breaking something, by diffing against the contract as it stood before.
+go run ./cmd/sqlb impact -error ./example/evolve/evolveschema
 # example/tasks is its own module, so like generate-check it needs a line of its
 # own; the root module's package list cannot reach its schema.
 cd "$MISE_PROJECT_ROOT/example/tasks" && go run github.com/jryannel/sqlb/cmd/sqlb impact -error ./taskschema

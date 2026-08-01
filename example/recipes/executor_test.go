@@ -3,10 +3,12 @@ package recipes_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/recipes"
 )
@@ -106,3 +108,31 @@ func Example_executorTransactionCapability() {
 	// pool: true
 	// tx:   true in a transaction: true
 }
+
+// quickstartOpen is the connect-and-query snippet from docs/start/quickstart.md,
+// compiled rather than trusted. It is never called — a pool is not something a
+// unit test opens — and its whole job is to fail `go build` if the shape of the
+// documented first path stops being real.
+//
+// It exists because that page had gone stale in the one way documentation
+// cannot be reviewed into correctness: the pgx flip (ADR-0040) redefined
+// Executor over pgx types, `*sql.DB` stopped satisfying it, and step 3 of the
+// page a new adopter is guaranteed to reach did not compile for as long as it
+// took someone to try it (#65).
+func quickstartOpen(ctx context.Context) error {
+	db, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = sqlb.Query[recipes.Post]().
+		Where(sqlb.F("status").Eq("published")).
+		OrderBy(sqlb.F("created_at").Desc()).
+		Limit(50).
+		All(ctx, db)
+	return err
+}
+
+// Referenced so the linter's unused check does not remove the gate above.
+var _ = quickstartOpen

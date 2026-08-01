@@ -680,6 +680,112 @@ func TestCursorAgainstADifferentSortIsRejected(t *testing.T) {
 	}
 }
 
+// Offset paging is bounded like every other untrusted-input dimension. A deep
+// offset is the cheapest per-request scan-cost lever the grammar has, and the
+// silly end of it — page 2^63-1 — used to overflow (page-1)*size into a negative
+// offset that failed at the database rather than at validation.
+func TestOffsetPagingIsBounded(t *testing.T) {
+	for _, tc := range []struct{ query, param string }{
+		{"page=50000000", "page"},
+		{"page=9223372036854775807", "page"},
+		{"offset=1000000", "offset"},
+	} {
+		values, err := url.ParseQuery(tc.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = filter.Parse(values, opts())
+		errs, ok := filter.AsErrors(err)
+		if !ok {
+			t.Errorf("Parse(%q) = %v, want a refusal", tc.query, err)
+			continue
+		}
+		if len(errs) != 1 || errs[0].Param != tc.param {
+			t.Errorf("Parse(%q) errors = %v, want one about %s", tc.query, errs, tc.param)
+			continue
+		}
+		// The refusal is also where cursor paging gets discovered.
+		if !strings.Contains(errs[0].Reason, "cursor") {
+			t.Errorf("reason = %q, want it to point at cursor paging", errs[0].Reason)
+		}
+	}
+}
+
+// And the budget is a ceiling, not a ban: an ordinary page still parses, and the
+// bound is overridable per resource like the others.
+func TestOffsetPagingWithinTheBudgetStillParses(t *testing.T) {
+	values, _ := url.ParseQuery("page=40&per_page=25")
+	q, err := filter.Parse(values, opts())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if q.Offset != 975 {
+		t.Errorf("Offset = %d, want 975", q.Offset)
+	}
+
+	o := opts()
+	o.MaxOffset = 10
+	values, _ = url.ParseQuery("offset=11")
+	if _, err := filter.Parse(values, o); err == nil {
+		t.Error("a per-resource MaxOffset of 10 accepted offset=11")
+	}
+}
+
+// A reserved parameter that means one thing per request must say so when it is
+// sent twice. The parser reads these with url.Values.Get, so a second occurrence
+// used to vanish: `?sort=title&sort=views` sorted by title and reported nothing,
+// while a repeated per-column filter parameter conjoins — an asymmetry no caller
+// could see.
+func TestRepeatedSingleValuedParametersAreRefused(t *testing.T) {
+	for _, query := range []string{
+		"sort=title&sort=views",
+		"search=a&search=b",
+		"select=title&select=body",
+		"page=1&page=2",
+		"limit=1&limit=2",
+		"cursor=a&cursor=b",
+		"filter=%7B%7D&filter=%7B%7D",
+	} {
+		values, err := url.ParseQuery(query)
+		if err != nil {
+			t.Fatalf("bad test query %q: %v", query, err)
+		}
+		_, err = filter.Parse(values, opts())
+		errs, ok := filter.AsErrors(err)
+		if !ok {
+			t.Errorf("Parse(%q) = %v, want a refusal naming the repeated parameter", query, err)
+			continue
+		}
+		want := strings.SplitN(query, "=", 2)[0]
+		var found bool
+		for _, e := range errs {
+			if e.Param == want && strings.Contains(e.Reason, "one value per request") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("Parse(%q) errors = %v, want one about %q", query, errs, want)
+		}
+	}
+}
+
+// The other direction: parameters that conjoin by design still take repeats, and
+// so does a per-column filter. Without this the fix above would be a regression
+// dressed as a refusal.
+func TestRepeatedGroupAndColumnParametersStillConjoin(t *testing.T) {
+	values, err := url.ParseQuery("or=(views.gte.10,draft.eq.true)&or=(status.eq.a,status.eq.b)&views=gte.1&views=lte.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := filter.Parse(values, opts())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(q.Where) != 4 {
+		t.Errorf("Where has %d predicates, want 4 (two groups and two column filters)", len(q.Where))
+	}
+}
+
 func TestCursorConflictsWithOffset(t *testing.T) {
 	values, err := url.ParseQuery("cursor=abc&offset=20")
 	if err != nil {

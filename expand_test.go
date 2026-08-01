@@ -534,6 +534,74 @@ func TestExpandRefusesAnUnqualifiableHook(t *testing.T) {
 	}
 }
 
+// expOwner is an expansion target that declares a computed column, and expDoc
+// is a parent that expands to it. They are their own pair rather than a field on
+// expList because a computed column changes the target's projection, and every
+// assertion above is written against the projection expList has.
+type expOwner struct {
+	ID        string `db:"id" json:"id" sqlb:"pk"`
+	Name      string `db:"name" json:"name"`
+	Quota     int32  `db:"quota" json:"quota"`
+	Used      int32  `db:"used" json:"used"`
+	OverQuota bool   `db:"over_quota" json:"over_quota" sqlb:"filter"`
+}
+
+func (expOwner) TableName() string { return "owners" }
+
+func (expOwner) ComputedColumns() []sqlb.Computed {
+	return []sqlb.Computed{{Name: "over_quota", Expr: "used > quota"}}
+}
+
+type expDoc struct {
+	ID      string `db:"id" json:"id" sqlb:"pk"`
+	OwnerID string `db:"owner_id" json:"owner_id" sqlb:"filter,expand"`
+
+	Owner *expOwner `db:"-" json:"owner,omitempty" sqlb:"expands=owner_id"`
+}
+
+func (expDoc) TableName() string { return "docs" }
+
+// A hook predicate naming a computed column of the expansion target is refused,
+// because there is nothing to qualify onto the alias: a computed column has no
+// storage, so `"__ex_owner"."over_quota"` is a column the database does not
+// have. It used to compile and fail at request time with a bare Postgres 42703
+// naming a column the schema plainly declares — and only when the hooked model
+// was expanded, so every direct-read test passed (#76).
+func TestExpandRefusesAHookOnAComputedColumnOfTheTarget(t *testing.T) {
+	target := sqlb.On[expOwner]()
+	defer target.Reset()
+
+	target.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expOwner]) error {
+		q.Where(sqlb.F("over_quota").Eq(false))
+		return nil
+	})
+
+	h := newHarness(t, []string{"id", "owner_id", "__expand_owner"}, nil)
+	defer h.close()
+
+	_, err := sqlb.Query[expDoc]().Expand("owner").All(context.Background(), h.db)
+	if err == nil {
+		t.Fatal("a hook predicate on a computed column was carried across the join; " +
+			"it compiles to a column that does not exist and fails as a bare 42703")
+	}
+	for _, want := range []string{"over_quota", "computed", "expOwner"} {
+		if !contains(err.Error(), want) {
+			t.Errorf("the refusal should name the hook's column, the reason and the model, got: %v", err)
+		}
+	}
+
+	// The refusal is about the expansion, not about the column: reading the
+	// hooked model directly still applies the predicate, computed and all.
+	direct := newHarness(t, []string{"id", "name", "quota", "used", "over_quota"}, nil)
+	defer direct.close()
+	if _, err := sqlb.Query[expOwner]().All(context.Background(), direct.db); err != nil {
+		t.Fatalf("a direct read of the hooked model should still work: %v", err)
+	}
+	if !contains(direct.lastQuery(), "used > quota") {
+		t.Errorf("the hook's predicate should reach a direct read:\n%s", direct.lastQuery())
+	}
+}
+
 // A query with no expansion, or one whose target registered nothing, is
 // unchanged — the resolution costs one map lookup and adds no predicate.
 func TestExpandWithoutTargetHooksIsUnchanged(t *testing.T) {

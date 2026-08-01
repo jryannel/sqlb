@@ -201,7 +201,7 @@ func (b *Builder[T]) resolveExpansionScopes(ctx context.Context, exec Executor) 
 		if len(preds) == 0 {
 			continue
 		}
-		qualified, err := qualifyPreds(preds, target.Table, expandAlias(name))
+		qualified, err := qualifyPreds(preds, target, expandAlias(name))
 		if err != nil {
 			return fmt.Errorf("%w (expanding %q on %s)", err, name, b.model.Type.Name())
 		}

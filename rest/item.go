@@ -180,7 +180,12 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T
 		Tags:          []string{opts.tag()},
 		Security:      opts.Security,
 		DefaultStatus: statusCreated,
+		// Create takes no query parameter at all, so every one of them is a
+		// mistake — a typo'd `?exapnd=` here used to be answered with a 201 while
+		// the same typo on the GET was answered with a 400.
+		RejectUnknownQueryParameters: true,
 		Responses: errorResponses(reg,
+			http.StatusBadRequest,
 			http.StatusUnprocessableEntity, http.StatusInternalServerError),
 	}, func(ctx context.Context, in *createInput[C]) (*createdOutput[T], error) {
 		value, err := in.Body.Row()
@@ -229,6 +234,9 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		Description: "Only the fields the request carries are written. " + opts.Description,
 		Tags:        []string{opts.tag()},
 		Security:    opts.Security,
+		// As on create: the operation declares no query parameter, so anything
+		// in the query string is a mistake and is named rather than dropped.
+		RejectUnknownQueryParameters: true,
 		Responses: errorResponses(reg,
 			http.StatusBadRequest, http.StatusNotFound,
 			http.StatusUnprocessableEntity, http.StatusInternalServerError),
