@@ -12,6 +12,7 @@
 ?deleted_at=isnull            null tests
 ?views=between.10,20          ranges
 ?or=(status.eq.draft,age.lt.18)   explicit disjunction, nestable
+?and=(…) ?not=(…)             the other two groups; not=(a,b) is NOT (a AND b)
 ?sort=-created_at,title       "-" for descending; created_at.desc also works
                               (where NULLs go is declared on the column)
 ?select=id,title              projection (the primary key is always kept)
@@ -50,9 +51,21 @@ has no spelling in this grammar.
 The `n`-prefixed forms follow `nin`'s convention, and they exist because a
 *per-column* parameter has nowhere to put a `not`: those parameters conjoin, so
 negation has to live in the operator. The JSON tree can spell either, and the
-two compile to the same statement. The group parameters are the exception that
-proves the rule — `?or=(…)` is a single node carried by one parameter — and
-whether `?not=(…)` should join them is [issue #98](https://github.com/jryannel/sqlb/issues/98).
+two compile to the same statement.
+
+The group parameters are the exception that proves the rule — `?or=(…)` is a
+single node carried by one parameter — and `?not=(…)` is one of them. Several
+`?not=` on a request conjoin like any group parameter, so two of them are
+`NOT A AND NOT B`.
+
+A group is variadic by syntax, so `?not=(a,b)` has to mean something: it reads
+as `NOT (a AND b)`, which keeps the conjunction a group already carries and
+makes `?not=(…)` the exact inverse of `?and=(…)`. The JSON tree refuses a
+second child under `not` instead of choosing, and the difference is deliberate:
+there an explicit `and` wrapper costs one node, while here it would cost the
+terseness this grammar exists for. The two spell the same set — `?not=(a,b)` is
+the tree's `not` over an `and` — so no filter is expressible in one and not the
+other.
 
 **A negation is not a complement.** `nhas` is `NOT (…)`, evaluated by SQL's
 three-valued logic, so a row whose column is NULL matches neither `has` nor
@@ -247,8 +260,9 @@ bounds the cost of a single query. Both default to the `filter` package's values
 when left zero, and both are worth setting per resource in the schema's
 `Expose`.
 
-Nesting in `?or=(…)` is bounded too, so a deeply nested group is a rejection
-rather than a stack the parser walks.
+Nesting in a group parameter is bounded too — `?or=(…)`, `?and=(…)` and
+`?not=(…)` share the one limit — so a deeply nested group is a rejection rather
+than a stack the parser walks.
 
 ## Next
 

@@ -321,3 +321,33 @@ func TestSecurityIsAbsentUnlessAsked(t *testing.T) {
 		t.Errorf("an unconfigured resource documented Security %v", op.Security)
 	}
 }
+
+// Every group parameter the parser reads must also be advertised, or a caller
+// reading the document cannot discover a shape the server accepts. `not` was
+// added to the grammar in #98 and this is the check that it did not stop at
+// the parser.
+func TestListDocumentsEveryGroupParameter(t *testing.T) {
+	db := newFakeDB(t)
+	api := mount(t, db.db, postOptions())
+	params := paramsOf(t, api, "/posts")
+
+	for _, name := range []string{"or", "and", "not"} {
+		p := params[name]
+		if p == nil {
+			t.Errorf("group parameter %q is not documented", name)
+			continue
+		}
+		if p.In != "query" {
+			t.Errorf("%s: In = %q, want query", name, p.In)
+		}
+		// Groups conjoin, so each is a repeatable parameter rather than a
+		// single value — the document has to say so or a client generator
+		// will emit the wrong type.
+		if p.Schema == nil || p.Schema.Type != "array" {
+			t.Errorf("%s: schema should be an array, so repeats are expressible", name)
+		}
+	}
+	if d := params["not"].Description; !strings.Contains(d, "NOT (a AND b)") {
+		t.Errorf("not: description should state how several conditions read, got %q", d)
+	}
+}

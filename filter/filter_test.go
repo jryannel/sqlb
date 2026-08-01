@@ -803,3 +803,147 @@ func TestCursorConflictsWithOffset(t *testing.T) {
 		t.Errorf("reason = %q, want it to name the conflicting parameter", errs[0].Reason)
 	}
 }
+
+// The query-parameter grammar gained `not=(…)` in #98, completing the triple
+// `or`/`and`/`not` that the JSON tree already had. These pin the four things
+// that decision rests on.
+func TestNotGroup(t *testing.T) {
+	t.Run("negates a group, so a nested De Morgan is the parser's job", func(t *testing.T) {
+		sql, args := compile(t, "not=(or(status.eq.draft,views.lt.5))")
+		want := `WHERE NOT (("status" = $1) OR ("views" < $2))`
+		if !strings.Contains(sql, want) {
+			t.Errorf("sql = %q\nwant it to contain %q", sql, want)
+		}
+		if len(args) != 2 || args[0] != "draft" {
+			t.Errorf("args = %v", args)
+		}
+	})
+
+	// A group is variadic by syntax, so the bare list has to mean something.
+	t.Run("a bare list reads as NOT (a AND b), inverting and=(…) exactly", func(t *testing.T) {
+		not, _ := compile(t, "not=(status.eq.draft,views.lt.5)")
+		and, _ := compile(t, "and=(status.eq.draft,views.lt.5)")
+		// The conjunctive form, wrapped in NOT, verbatim — that is what makes
+		// `?not=(…)` the exact inverse of `?and=(…)` rather than merely similar.
+		conj := whereClause(t, and)
+		if want := "NOT (" + conj + ")"; whereClause(t, not) != want {
+			t.Errorf("not WHERE = %q\nwant %q", whereClause(t, not), want)
+		}
+	})
+
+	t.Run("nests inside another group", func(t *testing.T) {
+		sql, _ := compile(t, "or=(status.eq.draft,not(views.lt.5))")
+		want := `WHERE ("status" = $1) OR (NOT ("views" < $2))`
+		if !strings.Contains(sql, want) {
+			t.Errorf("sql = %q\nwant it to contain %q", sql, want)
+		}
+	})
+
+	// Group parameters conjoin, and `not` is one: several of them are
+	// NOT A AND NOT B, which is what a reader expects and what `or`/`and`
+	// already do.
+	t.Run("repeats conjoin rather than being refused", func(t *testing.T) {
+		values, err := url.ParseQuery("not=(status.eq.draft)&not=(views.lt.5)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		q, err := filter.Parse(values, opts())
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if len(q.Where) != 2 {
+			t.Errorf("Where has %d predicates, want 2", len(q.Where))
+		}
+	})
+
+	// The bounds are the group bounds; nothing new threads through.
+	t.Run("is bounded by the same nesting limit", func(t *testing.T) {
+		deep := "not=(" + strings.Repeat("not(", 6) + "status.eq.a" + strings.Repeat(")", 6) + ")"
+		values, err := url.ParseQuery(deep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := filter.Parse(values, opts()); err == nil {
+			t.Fatal("expected the nesting limit to refuse this")
+		}
+	})
+
+	// The nested form requires the parenthesis, so an item that merely starts
+	// with "not" is still read as a column reference. Without the guard it
+	// would be swallowed as a malformed group and the caller would be told
+	// about parentheses rather than about their column.
+	t.Run("an item starting with not is still read as a column", func(t *testing.T) {
+		values, err := url.ParseQuery("or=(notreally.eq.x,status.eq.draft)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = filter.Parse(values, opts())
+		if err == nil {
+			t.Fatal("expected an unknown-column error")
+		}
+		if !strings.Contains(err.Error(), "notreally") {
+			t.Errorf("error = %v\nwant it to name the column rather than the group syntax", err)
+		}
+	})
+}
+
+// The two grammars have to agree: that is the argument that settled `not`
+// compiling to a bare SQL NOT rather than IS NOT TRUE, so it is worth a test
+// rather than a convention. Each case is one logical filter written both ways.
+func TestGrammarsAgree(t *testing.T) {
+	cases := []struct {
+		name   string
+		params string
+		tree   string
+	}{
+		{
+			name:   "negated disjunction",
+			params: "not=(or(status.eq.draft,views.lt.5))",
+			tree:   `{"op":"not","children":[{"op":"or","children":[{"op":"eq","field":"status","value":"draft"},{"op":"lt","field":"views","value":5}]}]}`,
+		},
+		{
+			name:   "bare list is the tree's not over an explicit and",
+			params: "not=(status.eq.draft,views.lt.5)",
+			tree:   `{"op":"not","children":[{"op":"and","children":[{"op":"eq","field":"status","value":"draft"},{"op":"lt","field":"views","value":5}]}]}`,
+		},
+		{
+			name:   "negation nested inside a disjunction",
+			params: "or=(status.eq.draft,not(views.lt.5))",
+			tree:   `{"op":"or","children":[{"op":"eq","field":"status","value":"draft"},{"op":"not","children":[{"op":"lt","field":"views","value":5}]}]}`,
+		},
+		{
+			// The leaf complement and the group negation are different
+			// spellings that must not be different filters.
+			name:   "leaf complement equals the negated leaf",
+			params: "not=(status.eq.draft)",
+			tree:   `{"op":"not","children":[{"op":"eq","field":"status","value":"draft"}]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fromParams, argsA := compile(t, tc.params)
+			fromTree, argsB := compile(t, "filter="+url.QueryEscape(tc.tree))
+			if fromParams != fromTree {
+				t.Errorf("the two grammars compiled differently:\n  params: %s\n  tree:   %s", fromParams, fromTree)
+			}
+			if len(argsA) != len(argsB) {
+				t.Errorf("args differ: %v vs %v", argsA, argsB)
+			}
+		})
+	}
+}
+
+// whereClause returns everything between WHERE and ORDER BY, so a test can
+// compare two statements' predicates without restating the projection.
+func whereClause(t *testing.T, sql string) string {
+	t.Helper()
+	start := strings.Index(sql, "WHERE ")
+	if start < 0 {
+		t.Fatalf("no WHERE in %q", sql)
+	}
+	rest := sql[start+len("WHERE "):]
+	if end := strings.Index(rest, " ORDER BY "); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
+}

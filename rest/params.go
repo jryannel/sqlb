@@ -113,6 +113,13 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 			Description: strings.Replace(groupDoc, "Disjunction", "Conjunction", 1),
 			Schema:      &huma.Schema{Type: "array", Items: &huma.Schema{Type: "string"}},
 		},
+		&huma.Param{
+			Name: "not", In: "query", Explode: ptr(true),
+			Description: strings.Replace(groupDoc, "Disjunction", "Negation", 1) +
+				" Several conditions read as `NOT (a AND b)`, so this is the exact " +
+				"inverse of `and`.",
+			Schema: &huma.Schema{Type: "array", Items: &huma.Schema{Type: "string"}},
+		},
 	)
 
 	params = append(params, &huma.Param{
