@@ -220,6 +220,7 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 			Name: idx.Name, Columns: idx.Columns, Unique: idx.Unique,
 			Method: indexMethod(idx.Method), Where: idx.Where,
 			Opclasses: opclassesByColumn(idx),
+			Orders:    ordersByColumn(idx),
 			With:      storageParameters(idx.Options),
 		})
 	}
@@ -619,6 +620,39 @@ func opclassesByColumn(idx indexRow) map[string]string {
 			out = make(map[string]string, 1)
 		}
 		out[idx.Columns[i]] = class
+	}
+	return out
+}
+
+// ordersByColumn decodes pg_index.indoption into the per-column sort orders the
+// schema declares, dropping the ones that are Postgres's default.
+//
+// The bitmask is Postgres's own: bit 0 is DESC, bit 1 is NULLS FIRST. Only a
+// column that departs from the default gets an entry, so an ordinary index
+// imports with a nil map and reads exactly as it did before this existed.
+func ordersByColumn(idx indexRow) map[string]schema.IndexOrder {
+	var out map[string]schema.IndexOrder
+	for i, opt := range idx.Sort {
+		if i >= len(idx.Columns) {
+			break
+		}
+		order := schema.IndexOrder{Desc: opt&1 != 0}
+		switch {
+		case opt&2 != 0:
+			order.Nulls = schema.NullsFirst
+		default:
+			order.Nulls = schema.NullsLast
+		}
+		// Normalised the way the declaration is, so the two compare equal: the
+		// placement that follows from the direction is the default and is not
+		// recorded.
+		if order.Suffix() == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]schema.IndexOrder, 1)
+		}
+		out[idx.Columns[i]] = order
 	}
 	return out
 }

@@ -57,7 +57,22 @@ func declare(r *schema.Registry) {
 		Check("views_non_negative", `"views" >= 0`).
 		Index("org_id", "status").
 		Index("title").
-		AddIndex(schema.Index{Columns: []string{"tags"}, Method: "gin"})
+		AddIndex(schema.Index{Columns: []string{"tags"}, Method: "gin"}).
+		// An ordered index, whose ordering *is* the index: this one backs
+		// `ORDER BY status ASC NULLS FIRST, published_on DESC`, and an index on
+		// the same three columns in any other order would not serve it. Here
+		// rather than in a test of its own because what has to hold is that it
+		// survives the round trip — declaring an ordering the import could not
+		// read back proposed dropping the live index on every run, and could
+		// not tell "missing" from "differently ordered" (issue #64).
+		AddIndex(schema.Index{
+			Name:    "articles_feed_idx",
+			Columns: []string{"org_id", "status", "published_on"},
+			Orders: map[string]schema.IndexOrder{
+				"status":       {Nulls: schema.NullsFirst},
+				"published_on": {Desc: true},
+			},
+		})
 }
 
 func TestGeneratedDDLAppliesAndReadsBackUnchanged(t *testing.T) {

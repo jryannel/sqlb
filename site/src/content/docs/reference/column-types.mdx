@@ -159,7 +159,16 @@ schema.Table("posts", …).
 ```
 
 `AddIndex` takes a fully specified `Index` for what the shorthands do not cover:
-a `Method` for GIN, a `Where` for a partial index.
+a `Method` for GIN, a `Where` for a partial index, an `Orders` entry per column
+for a `DESC` or `NULLS FIRST` index.
+
+`Orders` maps a column name to `schema.IndexOrder{Desc, Nulls}`; an absent entry
+is ascending with Postgres's default placement, and a placement that follows
+from the direction is dropped when the DDL is rendered, so a declaration matches
+what `pg_get_indexdef` hands back. `Where` is hand-written SQL, and
+`sqlb migrate` normalises the declared predicate through Postgres before
+diffing — write `latitude IS NOT NULL`, not the parenthesised form the catalog
+stores.
 
 `Expose` is what publishes the table over HTTP; without it the table is
 reachable from Go and has no REST surface. Its fields:

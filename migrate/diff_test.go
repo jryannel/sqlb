@@ -355,6 +355,62 @@ func TestDiffPartialAndMethodIndex(t *testing.T) {
 	}
 }
 
+// An index column can carry its own ordering, because for some indexes the
+// ordering *is* the index: one backing `ORDER BY position ASC NULLS FIRST,
+// created_at DESC` is unusable in any other order. Before this the DDL got the
+// columns right and the rest wrong, so the diff proposed dropping the live
+// index (issue #64).
+func TestDiffOrderedIndex(t *testing.T) {
+	ordered := func(orders map[string]schema.IndexOrder) *schema.Registry {
+		return build(func(r *schema.Registry) {
+			r.Table("tasks",
+				schema.UUIDv7("id").PrimaryKey(),
+				schema.UUIDv7("project_id"),
+				schema.Int("position").Nullable(),
+				schema.Timestamp("created_at"),
+			).AddIndex(schema.Index{
+				Name:    "tasks_feed_idx",
+				Columns: []string{"project_id", "position", "created_at"},
+				Orders:  orders,
+			})
+		})
+	}
+
+	target := ordered(map[string]schema.IndexOrder{
+		"position":   {Nulls: schema.NullsFirst},
+		"created_at": {Desc: true},
+	})
+	idx := find(t, diff(t, nil, target), "tasks_feed_idx")
+	want := `CREATE INDEX "tasks_feed_idx" ON "tasks" ` +
+		`("project_id", "position" NULLS FIRST, "created_at" DESC);`
+	if idx.Up != want {
+		t.Fatalf("\n got: %s\nwant: %s", idx.Up, want)
+	}
+
+	// The ordering is part of the index's identity: changing it is a replace,
+	// not a no-op. Without this in the fingerprint a reordered index compared
+	// equal and stayed as it was.
+	changed := ordered(map[string]schema.IndexOrder{
+		"position":   {Nulls: schema.NullsFirst},
+		"created_at": {},
+	})
+	if got := diff(t, target, changed); len(got) == 0 {
+		t.Error("changing a column's sort order produced no change")
+	}
+
+	// And the normalisation, in both directions. Postgres omits a null
+	// placement that follows from the direction, so a declaration spelling it
+	// out and one leaving it implicit are the same index — proposing to replace
+	// one with the other is the cosmetic-diff failure issue #63 is about.
+	explicit := ordered(map[string]schema.IndexOrder{
+		"position":   {Nulls: schema.NullsFirst},
+		"created_at": {Desc: true, Nulls: schema.NullsFirst},
+	})
+	if got := diff(t, target, explicit); len(got) != 0 {
+		t.Errorf("two spellings of the same ordering proposed a change:\n%s", render(got))
+	}
+}
+
 func TestDiffDropTable(t *testing.T) {
 	current := build(func(r *schema.Registry) {
 		r.Table("legacy", schema.UUIDv7("id").PrimaryKey(), schema.Text("note"))

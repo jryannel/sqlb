@@ -45,9 +45,9 @@ func TestADeclaredCheckRoundTripsToNoChange(t *testing.T) {
 
 	// Without normalisation this is where it went wrong, and the assertion
 	// below would report a drop and an add.
-	unprobed, err := shadow.NormalizeChecks(context.Background(), db, reg, shadow.Options{})
+	unprobed, err := shadow.Normalize(context.Background(), db, reg, shadow.Options{})
 	if err != nil {
-		t.Fatalf("NormalizeChecks: %v", err)
+		t.Fatalf("Normalize: %v", err)
 	}
 	if len(unprobed) != 0 {
 		t.Fatalf("a check against an existing table could not be probed: %v", unprobed)
@@ -81,8 +81,8 @@ func TestAChangedCheckIsStillReportedAsChanged(t *testing.T) {
 	// to be a real test of the risk the edit has to be one that *normalises*
 	// close to the original — hence a change of operator inside the same shape.
 	edited := checked("status <> 'done' AND completed_at IS NOT NULL")
-	if _, err := shadow.NormalizeChecks(context.Background(), db, edited, shadow.Options{}); err != nil {
-		t.Fatalf("NormalizeChecks: %v", err)
+	if _, err := shadow.Normalize(context.Background(), db, edited, shadow.Options{}); err != nil {
+		t.Fatalf("Normalize: %v", err)
 	}
 
 	changes, err := migrate.Diff(current, edited)
@@ -102,7 +102,7 @@ func TestAChangedCheckIsStillReportedAsChanged(t *testing.T) {
 // Normalising a registry introspect produced must be a no-op, because its
 // expressions are already in Postgres's spelling. Without this the function
 // could not safely be applied to both sides of a comparison.
-func TestNormalizeChecksIsIdempotent(t *testing.T) {
+func TestNormalizeIsIdempotent(t *testing.T) {
 	db := freshDB(t)
 	applySchema(t, db, checked(declaredCheck))
 	reg := importRegistry(t, db)
@@ -111,8 +111,8 @@ func TestNormalizeChecksIsIdempotent(t *testing.T) {
 		t.Fatal("introspection found no checks, so this test compares nothing")
 	}
 
-	if _, err := shadow.NormalizeChecks(context.Background(), db, reg, shadow.Options{}); err != nil {
-		t.Fatalf("NormalizeChecks: %v", err)
+	if _, err := shadow.Normalize(context.Background(), db, reg, shadow.Options{}); err != nil {
+		t.Fatalf("Normalize: %v", err)
 	}
 	after := checkExprs(reg)
 
@@ -137,7 +137,7 @@ func TestAnUnprobeableCheckIsReportedAndDoesNotStopTheRest(t *testing.T) {
 	// is what adding a column with a check on it looks like at this moment.
 	reg.Tables()[0].Check("mentions_a_column_that_is_not_there_yet", "not_a_column > 0")
 
-	unprobed, err := shadow.NormalizeChecks(context.Background(), db, reg, shadow.Options{})
+	unprobed, err := shadow.Normalize(context.Background(), db, reg, shadow.Options{})
 	if err != nil {
 		t.Fatalf("an unprobeable check failed the whole run: %v", err)
 	}
@@ -168,4 +168,102 @@ func checkExprs(reg *schema.Registry) map[string]string {
 		}
 	}
 	return out
+}
+
+// Issue #63: a partial index's predicate is stored the way a CHECK is, and
+// arrived as the same complaint from the same direction.
+//
+// `Where: "latitude IS NOT NULL"` never matched the live index; adding the
+// parentheses Postgres itself had added made it match. The diff a consumer saw
+// proposed CREATE INDEX for an index that was already there, with DDL that read
+// identically to what the database held — and a drift gate that reports a
+// difference the author cannot see teaches people to add waivers.
+
+// partial is a schema with one partial index, its predicate written the way a
+// person writes it: no redundant parentheses.
+func partial(expr string) *schema.Registry {
+	r := schema.NewRegistry()
+	r.Table("work_packages",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.UUIDv7("project_id"),
+		schema.Float("latitude").Nullable(),
+	).AddIndex(schema.Index{
+		Name:    "idx_work_packages_location_by_project",
+		Columns: []string{"project_id"},
+		Where:   expr,
+	})
+	return r
+}
+
+const declaredPredicate = "latitude IS NOT NULL"
+
+func TestADeclaredPartialIndexRoundTripsToNoChange(t *testing.T) {
+	db := freshDB(t)
+	reg := partial(declaredPredicate)
+
+	applySchema(t, db, reg)
+	current := importRegistry(t, db)
+
+	unprobed, err := shadow.Normalize(context.Background(), db, reg, shadow.Options{})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if len(unprobed) != 0 {
+		t.Fatalf("a predicate against an existing table could not be probed: %v", unprobed)
+	}
+
+	// The claim the probe rests on: pg_get_expr renders a partial-index
+	// predicate and a CHECK expression through the same code, so the CHECK
+	// probe is a valid normaliser for a predicate. Asserted rather than
+	// assumed — if the two ever diverge, this is where it shows.
+	got := reg.Tables()[0].Indexes()
+	var normalised string
+	for _, idx := range got {
+		if idx.Name == "idx_work_packages_location_by_project" {
+			normalised = idx.Where
+		}
+	}
+	if normalised == declaredPredicate {
+		t.Errorf("the predicate was not normalised at all: %q", normalised)
+	}
+	for _, idx := range current.Tables()[0].Indexes() {
+		if idx.Name == "idx_work_packages_location_by_project" && idx.Where != normalised {
+			t.Errorf("the probe and the catalog disagree about the same predicate:\n"+
+				"  probed:  %q\n  catalog: %q", normalised, idx.Where)
+		}
+	}
+
+	changes, err := migrate.Diff(current, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("a schema diffed against itself produced %d change(s):\n%s",
+			len(changes), describe(changes))
+	}
+}
+
+// The direction that matters more, for the same reason as the CHECK case: a
+// normalisation that made two different predicates compare equal would produce
+// no migration at all, which is a silent wrong answer where the churn it
+// replaces was merely loud.
+func TestAChangedPartialIndexPredicateIsStillReportedAsChanged(t *testing.T) {
+	db := freshDB(t)
+
+	applySchema(t, db, partial(declaredPredicate))
+	current := importRegistry(t, db)
+
+	edited := partial("latitude IS NULL")
+	if _, err := shadow.Normalize(context.Background(), db, edited, shadow.Options{}); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+
+	changes, err := migrate.Diff(current, edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) == 0 {
+		t.Fatal("inverting a partial index's predicate produced no migration, so " +
+			"normalisation has made different indexes compare equal")
+	}
 }

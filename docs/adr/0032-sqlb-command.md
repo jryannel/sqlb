@@ -144,9 +144,9 @@ asymmetry: stripping parentheses loses information — `(a OR b) AND c` and
 equal, and a diff that says "unchanged" produces no migration at all. That
 failure is silent; the one it replaces is loud, visible churn.
 
-So `shadow.NormalizeChecks` adds each declared expression to the replayed table,
+So `shadow.Normalize` adds each declared expression to the replayed table,
 reads back what Postgres stored, and rolls back — correct by construction, at one
-round trip per check. Each probe takes a savepoint, because Postgres aborts a
+round trip per expression. Each probe takes a savepoint, because Postgres aborts a
 transaction on any error and one unprobeable check would take down every check
 after it. A check that cannot be probed is reported and left as declared, since
 the ordinary reason is that it names a column this migration adds. `migrate.Diff`
@@ -196,3 +196,10 @@ files rather than fail.
   database open at the right moment, which was not an argument this record made
   for the design and is now one of the better ones.
 - 2026-07-30 — Condensed.
+- 2026-08-01 — #63: a partial index's `WHERE` is stored the way a CHECK is, and
+  arrived as the same complaint from the same direction — a declaration that
+  never matched the live index, and a diff proposing DDL identical to what the
+  database already held. It goes through the same probe now, so
+  `NormalizeChecks` is `Normalize`. That the mechanism extended without argument
+  is the evidence for the paragraph above: having a database open at that moment
+  keeps paying.
