@@ -443,6 +443,7 @@ func paramDocs() []ParamDoc {
 		{"offset", "offset=100 — alternative to page"},
 		{"or", "or=(a.eq.1,b.gt.2) — explicit disjunction, nestable"},
 		{"and", "and=(a.eq.1,b.gt.2) — explicit conjunction"},
+		{"not", "not=(a.eq.1,b.gt.2) — negation; several conditions are NOT (a AND b)"},
 	}
 }
 

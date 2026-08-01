@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -1015,6 +1016,30 @@ func TestCountIgnoresTheCursor(t *testing.T) {
 	for _, stmt := range db.statements() {
 		if strings.Contains(stmt, "count(*)") && strings.Contains(stmt, `"id" > `) {
 			t.Errorf("the count query carried the cursor boundary:\n%s", stmt)
+		}
+	}
+}
+
+// A group parameter has to survive the whole path — huma's parameter binding,
+// filter.Parse, and filter.Apply — not just filter.Parse, which is where the
+// package's own tests stop. `not` is the newest of the three (#98), and the
+// failure this closes is a parser that understands a parameter the mounted
+// resource never passes it.
+func TestNotGroupReachesTheStatement(t *testing.T) {
+	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
+	api := mount(t, db.db, postOptions())
+
+	resp := api.Get("/posts?not=" + url.QueryEscape("(status.eq.draft,view_count.lt.3)"))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+
+	stmt := db.lastStatement()
+	// The bare list is the conjunction, negated — NOT (a AND b) — so both
+	// conditions must be inside one NOT rather than negated separately.
+	for _, want := range []string{`NOT (("status" = $1) AND ("view_count" < $2))`} {
+		if !strings.Contains(stmt, want) {
+			t.Errorf("statement missing %q:\n%s", want, stmt)
 		}
 	}
 }

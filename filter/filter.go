@@ -316,14 +316,16 @@ const TreeParam = "filter"
 var reserved = map[string]bool{
 	"select": true, "sort": true, "order": true, "search": true,
 	"expand": true, "limit": true, "offset": true, "page": true,
-	"per_page": true, "or": true, "and": true, "count": true,
-	"cursor": true, TreeParam: true,
+	"per_page": true, "or": true, "and": true, "not": true,
+	"count": true, "cursor": true, TreeParam: true,
 }
 
 // singleValued names the reserved parameters that mean one thing per request.
-// Everything reserved is here except "or" and "and", which conjoin by design —
-// several of either is a request with several groups, not a request that said
-// the same thing twice.
+// Everything reserved is here except the group parameters — "or", "and" and
+// "not" — which conjoin by design: several of them is a request with several
+// groups, not a request that said the same thing twice. Read through the
+// negation that is still the same rule, since several `not` groups are
+// NOT A AND NOT B.
 //
 // It exists because the parser reads these with [firstValue], which is
 // url.Values.Get and therefore drops every occurrence after the first. That is
@@ -389,6 +391,11 @@ func Parse(values url.Values, opts Options) (*Query, error) {
 	}
 	for _, raw := range values["and"] {
 		if pred, ok := p.parseGroup("and", raw, 0); ok {
+			q.Where = append(q.Where, pred)
+		}
+	}
+	for _, raw := range values["not"] {
+		if pred, ok := p.parseGroup("not", raw, 0); ok {
 			q.Where = append(q.Where, pred)
 		}
 	}
@@ -991,6 +998,12 @@ func (p *parser) parseGroup(param, raw string, depth int) (sqlb.Pred, bool) {
 			}
 			continue
 		}
+		if inner, isNested := strings.CutPrefix(item, "not"); isNested && strings.HasPrefix(inner, "(") {
+			if sub, ok := p.parseGroup("not", inner, depth+1); ok {
+				preds = append(preds, sub)
+			}
+			continue
+		}
 
 		name, rest, found := strings.Cut(item, ".")
 		if !found {
@@ -1014,8 +1027,21 @@ func (p *parser) parseGroup(param, raw string, depth int) (sqlb.Pred, bool) {
 	if len(preds) == 0 {
 		return sqlb.Pred{}, false
 	}
-	if param == "or" {
+	switch param {
+	case "or":
 		return sqlb.Or(preds...), true
+	case "not":
+		// A parenthesised group is variadic by syntax, so `not(a,b)` has to
+		// mean something. NOT (a AND b) is the reading that keeps the default
+		// conjunction a group already carries, and it makes `?not=(…)` the
+		// exact inverse of `?and=(…)`.
+		//
+		// The JSON tree refuses a second child here rather than choosing, and
+		// the difference is deliberate: there the explicit wrapper costs one
+		// node, while here it would cost the terseness this grammar exists for.
+		// Both spell the same set — `?not=(a,b)` is the tree's `not` over an
+		// `and` — so no filter is expressible in one and not the other.
+		return sqlb.Not(sqlb.And(preds...)), true
 	}
 	return sqlb.And(preds...), true
 }
