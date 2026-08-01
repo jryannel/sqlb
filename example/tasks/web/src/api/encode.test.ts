@@ -56,6 +56,25 @@ test('hasany and hasall take element lists', () => {
   );
 });
 
+// The negated forms take the same operand shapes as their positives: nhas one
+// element, nhasany and nhasall a list. Pinned here because nhas reaches the
+// encoder's default branch while the other two are named in the list case, so
+// a wrong operand shape would only show up on the wire.
+test('the negated containment operators encode like their positives', () => {
+  assert.equal(
+    encodeListQuery({ where: { labels: { nhas: 'urgent' } } }),
+    'labels=nhas.urgent',
+  );
+  assert.equal(
+    encodeListQuery({ where: { labels: { nhasany: ['a', 'b'] } } }),
+    'labels=nhasany.a%2Cb',
+  );
+  assert.equal(
+    encodeListQuery({ where: { labels: { nhasall: ['a', 'b'] } } }),
+    'labels=nhasall.a%2Cb',
+  );
+});
+
 test('a bare array is whole-array equality, as a bare scalar is scalar equality', () => {
   assert.equal(
     encodeListQuery({ where: { labels: ['a', 'b'] } }),

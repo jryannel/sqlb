@@ -223,6 +223,77 @@ func TestArrayOperatorsAgainstPostgres(t *testing.T) {
 		// Every array contains the empty one, including the empty array.
 		{"hasall of nothing", sqlb.F("tags").HasAll(), []int64{1, 2, 3, 4}},
 		{"eq compares whole arrays", sqlb.F("tags").Eq(sqlb.Array("go", "sql")), []int64{1}},
+
+		// The negations. Each is its positive's complement over these rows,
+		// which have no NULL tags — the NULL column is where that stops being
+		// true, and TestNegatedArrayOperatorsAreThreeValued covers it.
+		{"nhas", sqlb.F("tags").NotHas("go"), []int64{3, 4}},
+		{"nhas matches everything", sqlb.F("tags").NotHas("cobol"), []int64{1, 2, 3, 4}},
+		{"nhasany", sqlb.F("tags").NotHasAny("sql", "rust"), []int64{2, 4}},
+		{"nhasall", sqlb.F("tags").NotHasAll("go", "sql"), []int64{2, 3, 4}},
+		// The empty-set constants, confirmed against Postgres rather than read
+		// off the rendered SQL: hasall of nothing matches every row, so its
+		// negation matches none.
+		{"nhasall of nothing", sqlb.F("tags").NotHasAll(), nil},
+		{"nhasany of nothing", sqlb.F("tags").NotHasAny(), []int64{1, 2, 3, 4}},
+		{"hasany of nothing", sqlb.F("tags").HasAny(), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ids(t, tt.pred); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("matched %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A negated array operator is `NOT (...)`, not a complement: a NULL column
+// satisfies neither the operator nor its negation, because the comparison under
+// the NOT is NULL and negating NULL is NULL. That is the same answer `nin`
+// already gives on a NULL column, and it is the behaviour a caller has to know
+// about — the row they expected to "not have the tag" is simply absent.
+//
+// This is proven against Postgres rather than asserted from the rendered SQL,
+// because the whole claim is about how Postgres evaluates three-valued logic.
+func TestNegatedArrayOperatorsAreThreeValued(t *testing.T) {
+	ctx := context.Background()
+	db := arrayTable(t)
+
+	// notes is the nullable array column. Row 2 leaves it NULL.
+	if _, err := db.Exec(ctx, `INSERT INTO array_rows (id, notes) VALUES (1, '{"go"}'), (2, NULL)`); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	ids := func(t *testing.T, pred sqlb.Pred) []int64 {
+		t.Helper()
+		found, err := sqlb.Query[ArrayRow]().Where(pred).OrderBy(sqlb.F("id").Asc()).All(ctx, db)
+		if err != nil {
+			t.Fatalf("query: %v", err)
+		}
+		var out []int64
+		for _, r := range found {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+
+	tests := []struct {
+		name string
+		pred sqlb.Pred
+		want []int64
+	}{
+		{"has skips the NULL row", sqlb.F("notes").Has("go"), []int64{1}},
+		// The row that matters: 2 is not returned by either direction.
+		{"nhas also skips the NULL row", sqlb.F("notes").NotHas("go"), nil},
+		{"nhas of an absent element", sqlb.F("notes").NotHas("rust"), []int64{1}},
+		{"nhasany skips the NULL row", sqlb.F("notes").NotHasAny("rust"), []int64{1}},
+		{"nhasall skips the NULL row", sqlb.F("notes").NotHasAll("rust"), []int64{1}},
+		// Reaching the NULL rows is a separate condition, spelled as one.
+		{
+			"isnull beside it reaches the row",
+			sqlb.Or(sqlb.F("notes").NotHas("go"), sqlb.F("notes").IsNull()),
+			[]int64{2},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

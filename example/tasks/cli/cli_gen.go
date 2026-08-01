@@ -1337,7 +1337,7 @@ Repeat the flag to conjoin conditions. Operators: eq, ne, gt, gte, lt, lte, in, 
 		`Free-form labels. Filter with has, hasany or hasall.
 Filter on labels, an array column: written operator.value, or a bare
 comma-separated list for whole-array equality.
-Repeat the flag to conjoin conditions. Operators: eq, ne, has, hasany, hasall.`)
+Repeat the flag to conjoin conditions. Operators: eq, ne, has, hasany, hasall, nhas, nhasany, nhasall.`)
 	flags.StringArrayVar(&filterStatus, "status", nil,
 		`Filter on status, written operator.value, or a bare value for equality.
 Repeat the flag to conjoin conditions. Operators: eq, ne, gt, gte, lt, lte, in, nin, between, like, ilike, contains, startswith, endswith.

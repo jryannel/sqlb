@@ -147,6 +147,16 @@ export interface ArrayComparison<E> {
   hasany?: readonly E[];
   /** The array contains all of these. */
   hasall?: readonly E[];
+  /** The array does not contain this element.
+   *
+   * The `n`-prefixed operators are negations, not complements: a row whose
+   * column is null matches neither `has` nor `nhas`. Pair one with
+   * `isnull` when the null rows should be included. */
+  nhas?: E;
+  /** The array shares no element with these. */
+  nhasany?: readonly E[];
+  /** The array is missing at least one of these. */
+  nhasall?: readonly E[];
 }
 
 /** One column's filter: a bare value for equality, or an operator object. */
@@ -201,6 +211,8 @@ function appendCond(out: URLSearchParams, column: string, cond: unknown): void {
       case 'nin':
       case 'hasany':
       case 'hasall':
+      case 'nhasany':
+      case 'nhasall':
         out.append(column, op + '.' + (value as Scalar[]).map(encodeMember).join(','));
         break;
       case 'between': {

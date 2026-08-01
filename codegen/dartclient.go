@@ -1847,7 +1847,16 @@ class Cond<T extends Object> {
 class ArrayCond<T extends Object> {
   /// Builds a condition. Every operator is optional; the unset ones are not
   /// sent.
-  const ArrayCond({this.eq, this.ne, this.has, this.hasAny, this.hasAll});
+  const ArrayCond({
+    this.eq,
+    this.ne,
+    this.has,
+    this.hasAny,
+    this.hasAll,
+    this.notHas,
+    this.notHasAny,
+    this.notHasAll,
+  });
 
   /// The whole array, compared element by element.
   final List<T>? eq;
@@ -1864,6 +1873,15 @@ class ArrayCond<T extends Object> {
   /// The array contains all of these.
   final List<T>? hasAll;
 
+  /// The array does not contain this element.
+  final T? notHas;
+
+  /// The array shares no element with these.
+  final List<T>? notHasAny;
+
+  /// The array is missing at least one of these.
+  final List<T>? notHasAll;
+
   void _encode(_Query out, String column) => _containment(
     out,
     column,
@@ -1872,6 +1890,9 @@ class ArrayCond<T extends Object> {
     has: has,
     hasAny: hasAny,
     hasAll: hasAll,
+    notHas: notHas,
+    notHasAny: notHasAny,
+    notHasAll: notHasAll,
   );
 }
 
@@ -1886,6 +1907,9 @@ class NullableArrayCond<T extends Object> {
     this.has,
     this.hasAny,
     this.hasAll,
+    this.notHas,
+    this.notHasAny,
+    this.notHasAll,
     this.isNull,
     this.notNull,
   });
@@ -1905,6 +1929,18 @@ class NullableArrayCond<T extends Object> {
   /// The array contains all of these.
   final List<T>? hasAll;
 
+  /// The array does not contain this element.
+  ///
+  /// This is a negation, not a complement: a row whose column is NULL matches
+  /// neither [has] nor [notHas]. Pass [isNull] beside it to include those rows.
+  final T? notHas;
+
+  /// The array shares no element with these.
+  final List<T>? notHasAny;
+
+  /// The array is missing at least one of these.
+  final List<T>? notHasAll;
+
   /// The column is NULL, which is not the same as holding no elements.
   final bool? isNull;
 
@@ -1920,6 +1956,9 @@ class NullableArrayCond<T extends Object> {
       has: has,
       hasAny: hasAny,
       hasAll: hasAll,
+      notHas: notHas,
+      notHasAny: notHasAny,
+      notHasAll: notHasAll,
     );
     _nullChecks(out, column, isNull: isNull, notNull: notNull);
   }
@@ -2366,6 +2405,9 @@ T _asEnum<T>(T? Function(String) byWire, Object v) {
   return byWire(value) ?? (throw UnknownEnumValue('$T', value));
 }
 
+/// The negated forms are negations, not complements: a row whose column is null
+/// matches neither [has] nor [notHas]. Pass isNull beside one to include those
+/// rows.
 void _containment(
   _Query out,
   String column, {
@@ -2374,6 +2416,9 @@ void _containment(
   Object? has,
   List<Object?>? hasAny,
   List<Object?>? hasAll,
+  Object? notHas,
+  List<Object?>? notHasAny,
+  List<Object?>? notHasAll,
 }) {
   if (eq != null) out.add(column, 'eq.${eq.map(_member).join(',')}');
   if (ne != null) out.add(column, 'ne.${ne.map(_member).join(',')}');
@@ -2383,6 +2428,13 @@ void _containment(
   }
   if (hasAll != null) {
     out.add(column, 'hasall.${hasAll.map(_member).join(',')}');
+  }
+  if (notHas != null) out.add(column, 'nhas.${_scalar(notHas)}');
+  if (notHasAny != null) {
+    out.add(column, 'nhasany.${notHasAny.map(_member).join(',')}');
+  }
+  if (notHasAll != null) {
+    out.add(column, 'nhasall.${notHasAll.map(_member).join(',')}');
   }
 }
 
