@@ -388,6 +388,15 @@ func (f Field) ContainsJSON(doc string) Pred {
 	})
 }
 
+// NotContainsJSON matches rows whose jsonb column does not contain doc. Like
+// the negated array operators it is three-valued: a NULL column satisfies
+// neither this nor ContainsJSON.
+//
+// Worth naming because containment is not equality: this excludes a row whose
+// document holds every key in doc, and keeps a row that holds some of them. It
+// is the negation of "doc is a subset", not "doc is absent".
+func (f Field) NotContainsJSON(doc string) Pred { return Not(f.ContainsJSON(doc)) }
+
 // escapeLike neutralises LIKE metacharacters so that a user typing "50%" in a
 // search box searches for the literal string rather than a wildcard.
 func escapeLike(s string) string {
