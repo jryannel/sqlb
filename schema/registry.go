@@ -487,9 +487,18 @@ func (r *Registry) validateComputed(t *TableDef, d *FieldDesc, report func(strin
 			report(t.name, d.Name, "Needs contains an empty key")
 		}
 	}
-	if d.Searchable {
-		report(t.name, d.Name, "a computed column cannot be Searchable: ?search fans out over text columns with ILIKE, and an expression has no reading there")
-	}
+	// Searchable is deliberately *not* refused here. The reason this check used
+	// to give — "an expression has no reading there" — is a claim about type,
+	// and the general rule above already enforces it: Searchable requires a
+	// text column, computed or stored. What the blanket refusal added was the
+	// refusal of a computed column whose declared type *is* text, which has a
+	// perfectly good ILIKE reading and is the only way to search across a
+	// relation (#93).
+	//
+	// The other half of the objection was cost — ?search over a correlated
+	// subquery runs it per candidate row. That is now a decision the resource
+	// makes rather than one every reader of the model inherits: a computed
+	// column reaches a resource only if the resource selects it (#92).
 	if d.Sortable && d.Volatile() {
 		// ADR-0027 keysets on the sort column. An expression reading now() is a
 		// different number on the next page, so the boundary a cursor recorded

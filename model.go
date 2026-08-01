@@ -271,13 +271,17 @@ func setComputed(m *Model, col *ColumnInfo, expr string, needs []string) error {
 				"each `?` takes the bind at the matching position, and `??` is a literal question mark",
 			m.Type, col.Name, n, len(needs), strings.Join(needs, ", "))
 	}
-	if col.Searchable {
-		// ?search fans out over text columns with ILIKE (ADR-0037). There is no
-		// reading of that over an expression which is not either a lie about
-		// what was searched or a table scan nobody asked for.
-		return fmt.Errorf("sqlb: model %s computes %q and marks it searchable; a computed column cannot be part of the ?search fan-out",
-			m.Type, col.Name)
-	}
+	// Searchable is allowed. ?search fans out over text columns with ILIKE
+	// (ADR-0037), and a computed column declared as text has exactly that
+	// reading — it was refused here because most computed columns are not text,
+	// which is a claim about type that the schema's own "Searchable requires a
+	// text column" rule already makes.
+	//
+	// What the refusal cost was the only way to search across a relation: a
+	// chat named in the UI by its participants has no name column of its own,
+	// so fanning out over its own columns finds nothing and does it with a 200
+	// (#93). The remaining objection was cost, and it is answered where cost
+	// belongs — a resource searches an expression only if it selected it (#92).
 	// Nothing writes an expression. Marking it here rather than asking every
 	// caller to check Computed() is what keeps the create and update bodies,
 	// the insert column list and the REST write paths correct without knowing

@@ -138,7 +138,21 @@ which is what lets the row scan into the field.
 
 **A subquery is projection-only unless you say otherwise.** Writing
 `Filterable()` on one is the acknowledgement that a subquery in a `WHERE` runs
-once per candidate row.
+once per candidate row. `Searchable()` says the same thing about `?search`, and
+is allowed on a computed column whose declared type is text — which is the only
+way to search across a relation:
+
+```go
+schema.Computed("participant_names", schema.TypeText,
+    schema.FromSQL("(SELECT string_agg(m.display_name, ' ') FROM members m "+
+        "WHERE m.id = ANY(chats.participant_ids))")).
+    Searchable(),
+```
+
+A chat is named in the UI by whoever is in it — a direct message has no `name`
+at all — so fanning out over the chat's own columns finds nothing for exactly
+the rows a search is for, and answers 200 while doing it
+([#93](https://github.com/jryannel/sqlb/issues/93)).
 
 **Reading one is opt-in, because the model is shared.** A computed column is
 declared on the model and usually wanted by one screen, so nothing projects it

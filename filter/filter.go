@@ -1034,7 +1034,7 @@ func (p *parser) parseSearch(term string) (sqlb.Pred, bool) {
 	}
 	var preds []sqlb.Pred
 	for _, col := range p.model.Columns {
-		if col.Searchable && !col.Hidden {
+		if col.Searchable && !col.Hidden && p.opts.computedAllowed(col) {
 			preds = append(preds, sqlb.F(col.Name).Contains(term))
 		}
 	}

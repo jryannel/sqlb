@@ -64,12 +64,15 @@ func TestComputedRefusals(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "searchable",
+			// Not "a computed column cannot be Searchable" any more — that
+			// refusal was a claim about type wearing a claim about expressions,
+			// and the general rule makes it directly (#93).
+			name: "searchable over a non-text expression",
 			build: func(r *schema.Registry) {
 				r.Table("a", schema.UUIDv7("id").PrimaryKey(),
-					schema.Computed("label", schema.TypeText, schema.FromSQL("upper(name)")).Searchable())
+					schema.Computed("ok", schema.TypeBool, schema.FromSQL("n > 0")).Searchable())
 			},
-			want: "cannot be Searchable",
+			want: "Searchable requires a text column",
 		},
 		{
 			name: "sortable over a volatile expression",
@@ -205,5 +208,50 @@ func TestComputedLint(t *testing.T) {
 	}
 	if !found {
 		t.Error("a filterable computed column should be reported once")
+	}
+}
+
+// The declaration #93 needs, and the one the blanket refusal made impossible: a
+// text expression over a related table, searchable.
+//
+// A chat is named in the UI by whoever is in it — a direct message has no name
+// column at all — so "type a colleague's name to find the conversation" cannot
+// be answered by fanning out over the chat's own columns. It can be answered by
+// one text expression that renders the participants' names, and that expression
+// is a computed column.
+func TestATextComputedColumnMayBeSearchable(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("chats",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("name").Nullable().Searchable(),
+		schema.Computed("participant_names", schema.TypeText,
+			schema.FromSQL("(SELECT string_agg(m.display_name, ' ') FROM members m "+
+				"WHERE m.id = ANY(chats.participant_ids))")).
+			Searchable(),
+	).Expose(schema.REST{Path: "/chats", Ops: schema.OpList})
+
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a searchable text expression was refused: %v", err)
+	}
+}
+
+// And the guard that has to survive it: the cost of searching a correlated
+// subquery is real, so it stays a per-resource decision rather than something
+// the declaration imposes on every reader. That is enforced in filter, not
+// here, but the declaration being legal is what makes the pairing testable.
+func TestASearchableComputedColumnIsStillReadOnly(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("chats",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Computed("participant_names", schema.TypeText,
+			schema.FromSQL("(SELECT 'x')")).Searchable(),
+	)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	for _, f := range r.Tables()[0].Fields() {
+		if d := f.Desc(); d.Name == "participant_names" && !d.ReadOnly {
+			t.Error("a searchable computed column is writable")
+		}
 	}
 }

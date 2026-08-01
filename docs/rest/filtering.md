@@ -160,6 +160,12 @@ WHERE ("title" ILIKE $1) OR ("body" ILIKE $2)
 -- args: %50\%% %50\%%
 ```
 
+A `Searchable` computed column joins the fan-out as an expression, which is how
+a search reaches past the row: a chat named in the UI by whoever is in it has no
+`name` of its own, so a computed text column rendering the participants' names
+is what makes it findable. The resource pays for that subquery only if it
+selected the column — see `rest.Options.Computed`.
+
 Which columns join that fan-out is a privacy decision as much as an API one — an
 address column that is filterable but not searchable answers "find my own
 record" and refuses to answer "who here uses example.com". See

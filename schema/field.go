@@ -339,12 +339,21 @@ func Vector(name string, dim int) *Field {
 //
 // # What it will not accept
 //
-// Searchable, ever: ?search fans out over text columns with ILIKE, and there is
-// no coherent reading of that over an expression. Sortable over a volatile
-// expression — one reading now() or random() — because a keyset pages on the
-// sort column and an unstable one lets page 1 and page 50 disagree about a row.
+// Sortable over a volatile expression — one reading now() or random() —
+// because a keyset pages on the sort column and an unstable one lets page 1 and
+// page 50 disagree about a row.
 // A default, a primary key, a unique constraint, a reference or an index, all
 // of which are statements about storage. Validate reports each of them.
+//
+// Searchable used to be on this list and is not any more. The reason given was
+// that "?search fans out over text columns with ILIKE and an expression has no
+// reading there" — which is a claim about *type*, and the rule that Searchable
+// requires a text column already makes it, for stored and computed columns
+// alike. What the blanket refusal actually cost was the only way to search
+// across a relation, since a chat named by its participants has no name column
+// of its own to fan out over (#93). The cost objection — a correlated subquery
+// per candidate row — is answered where cost belongs: a resource searches an
+// expression only if it selected it (#92).
 func Computed(name string, t Type, e ComputedExpr) *Field {
 	f := newField(name, t)
 	f.d.Expr = e.sql
@@ -365,9 +374,9 @@ type ComputedExpr struct{ sql string }
 // FromSQL computes a column from a SQL expression over the row's own columns.
 //
 // The expression is raw SQL and nothing parses it: `sqlb generate` refuses the
-// declarations below that are wrong on their face — a Searchable computed
-// column, a volatile Sortable one, a bind count that disagrees with Needs — but
-// a typo inside the SQL reaches Postgres. That is the cost [ADR-0024]'s bar
+// declarations that are wrong on their face — a volatile Sortable one, a bind
+// count that disagrees with Needs, a Searchable one whose type is not text —
+// but a typo inside the SQL reaches Postgres. That is the cost [ADR-0024]'s bar
 // admits here because there is finally a consumer for the annotation, and
 // [sqlb.Builder.Explain] against a real database is what catches it early.
 //
