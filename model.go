@@ -51,6 +51,19 @@ type ColumnInfo struct {
 	// request does not — and cannot — ask for it.
 	SortNulls NullsOrder
 
+	// PGType is the schema's logical type for the column — "date",
+	// "timestamptz", "text" — carried through the struct tag that codegen
+	// writes. It is empty for a hand-written model that has not said
+	// otherwise, so every reader of it must treat "unknown" as a real answer
+	// rather than a default.
+	//
+	// It exists because Type is not enough: timestamptz, date and time are one
+	// Go type and three different things to Postgres, and an expanded row
+	// serialises each of them differently. Reading the Go type alone made an
+	// expansion over a date column answer 500 (#84). Describe.SQLType is the
+	// hand-written half.
+	PGType string
+
 	// Obligations, from the same tag. Nothing on the request path reads
 	// either: they are the schema's statement that this model's rows are
 	// confined by something, and they are checked once, where a resource is
@@ -438,6 +451,8 @@ func applyCapabilities(c *ColumnInfo, tag string) {
 			case "nullslast":
 				c.SortNulls = NullsLast
 			}
+		case "type":
+			c.PGType = arg
 		case "search":
 			c.Searchable = true
 			c.Filterable = true

@@ -63,9 +63,9 @@ func TestGeneratedModels(t *testing.T) {
 		`OrgID string ` + "`" + `db:"org_id"`, // initialism: org_id → OrgID
 		`PublishedAt *time.Time`,              // nullable → pointer
 		`ViewCount int64`,
-		`db:"title" json:"title" sqlb:"filter,sort,search"`, // capabilities reach the tag
-		`db:"secret" json:"-" sqlb:"hidden"`,                // hidden is in the model but never on the wire
-		"type BlogEntryStatus string",                       // enum type
+		`db:"title" json:"title" sqlb:"type:text,filter,sort,search"`, // type and capabilities reach the tag
+		`db:"secret" json:"-" sqlb:"type:text,hidden"`,                // hidden is in the model but never on the wire
+		"type BlogEntryStatus string",                                 // enum type
 		`BlogEntryStatusDraft BlogEntryStatus = "draft"`,
 		"Status BlogEntryStatus", // column uses the enum type
 	} {
@@ -602,7 +602,7 @@ func TestExpandableReferenceEmitsARelationField(t *testing.T) {
 	}
 	// The key itself is untouched — it is still a column, and still the thing
 	// a filter names.
-	if !contains(models, "AuthorID string `db:\"author_id\" json:\"author_id\" sqlb:\"expand\"`") {
+	if !contains(models, "AuthorID string `db:\"author_id\" json:\"author_id\" sqlb:\"type:uuid,expand\"`") {
 		t.Errorf("the foreign key column should be unchanged:\n%s", models)
 	}
 	// A reference nobody marked Expandable gets no relation field: the join is
@@ -713,7 +713,7 @@ func TestInverseEmitsACollectionOnTheTarget(t *testing.T) {
 		t.Errorf("an inverse that was never exposed should emit no field:\n%s", models)
 	}
 	// And the referencing side is unchanged — the reverse costs it nothing.
-	if !contains(models, "AuthorID string `db:\"author_id\" json:\"author_id\" sqlb:\"filter,expand\"`") {
+	if !contains(models, "AuthorID string `db:\"author_id\" json:\"author_id\" sqlb:\"type:uuid,filter,expand\"`") {
 		t.Errorf("the foreign key column should be unchanged:\n%s", models)
 	}
 }

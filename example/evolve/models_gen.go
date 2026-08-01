@@ -6,11 +6,11 @@ import "time"
 
 // Customer whoever a ticket is on behalf of.
 type Customer struct {
-	ID           string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	EmailAddress string    `db:"email_address" json:"email_address" sqlb:"filter,search"`
-	Name         string    `db:"name" json:"name" sqlb:"filter,sort,search"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt    time.Time `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	ID           string    `db:"id" json:"id" sqlb:"type:uuid,pk,default,filter,readonly"`
+	EmailAddress string    `db:"email_address" json:"email_address" sqlb:"type:text,filter,search"`
+	Name         string    `db:"name" json:"name" sqlb:"type:text,filter,sort,search"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at" sqlb:"type:timestamptz,default,sort,readonly"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at" sqlb:"type:timestamptz,default,sort,readonly"`
 }
 
 // TableName is the table Customer maps to.
@@ -18,12 +18,12 @@ func (Customer) TableName() string { return "customers" }
 
 // SupportAgent someone who answers tickets.
 type SupportAgent struct {
-	ID        string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	Email     string    `db:"email" json:"email"`
-	Name      string    `db:"name" json:"name" sqlb:"filter,sort,search"`
-	Active    bool      `db:"active" json:"active" sqlb:"default,filter"`
-	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	ID        string    `db:"id" json:"id" sqlb:"type:uuid,pk,default,filter,readonly"`
+	Email     string    `db:"email" json:"email" sqlb:"type:text"`
+	Name      string    `db:"name" json:"name" sqlb:"type:text,filter,sort,search"`
+	Active    bool      `db:"active" json:"active" sqlb:"type:bool,default,filter"`
+	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"type:timestamptz,default,sort,readonly"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at" sqlb:"type:timestamptz,default,sort,readonly"`
 }
 
 // TableName is the table SupportAgent maps to.
@@ -50,15 +50,15 @@ const (
 
 // Ticket one request from one customer.
 type Ticket struct {
-	ID         string         `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	CustomerID string         `db:"customer_id" json:"customer_id" sqlb:"filter,expand"`
+	ID         string         `db:"id" json:"id" sqlb:"type:uuid,pk,default,filter,readonly"`
+	CustomerID string         `db:"customer_id" json:"customer_id" sqlb:"type:uuid,filter,expand"`
 	Customer   *Customer      `db:"-" json:"customer,omitempty" sqlb:"expands=customer_id"` // filled in by ?expand=customer
-	Subject    string         `db:"subject" json:"subject" sqlb:"filter,sort,search"`
-	Body       string         `db:"body" json:"body" sqlb:"filter,search"`
-	Status     TicketStatus   `db:"status" json:"status" sqlb:"default,filter,sort"`
-	Priority   TicketPriority `db:"priority" json:"priority" sqlb:"default,filter,sort"`
-	CreatedAt  time.Time      `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt  time.Time      `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	Subject    string         `db:"subject" json:"subject" sqlb:"type:text,filter,sort,search"`
+	Body       string         `db:"body" json:"body" sqlb:"type:text,filter,search"`
+	Status     TicketStatus   `db:"status" json:"status" sqlb:"type:enum,default,filter,sort"`
+	Priority   TicketPriority `db:"priority" json:"priority" sqlb:"type:enum,default,filter,sort"`
+	CreatedAt  time.Time      `db:"created_at" json:"created_at" sqlb:"type:timestamptz,default,sort,readonly"`
+	UpdatedAt  time.Time      `db:"updated_at" json:"updated_at" sqlb:"type:timestamptz,default,sort,readonly"`
 }
 
 // TableName is the table Ticket maps to.

@@ -326,10 +326,45 @@ func writeRowObject(c *compiler, target *Model, alias string) {
 		}
 		first = false
 		c.write(sqlStringLiteral(col.Name) + ", ")
-		c.column(Column{Table: alias, Name: col.Name})
+		writeRowObjectValue(c, col, alias)
 	}
 	c.write(")")
 }
+
+// writeRowObjectValue writes one column's value into the row object, casting
+// where Postgres's JSON form is not the form the Go field decodes.
+//
+// A date is the case that found this. json_build_object serialises a date
+// column as "2026-07-01", and the Go field for it is a time.Time, which
+// encoding/json parses strictly as RFC 3339 — so expanding a relation whose
+// target had a date column answered 500 (#84).
+//
+// The cast is on the SQL side rather than the decode side because the two
+// representations were already inconsistent, and the expansion held the side
+// nothing expected: a *direct* read of the same column scans through pgx into a
+// time.Time and Go marshals it RFC 3339, which is what both generated clients
+// document receiving. So this does not choose a wire format, it stops the
+// expansion from contradicting the one already in effect.
+//
+// AT TIME ZONE 'UTC' rather than ::timestamptz, and that is the whole
+// correctness of it: ::timestamptz resolves through the session's TimeZone, so
+// under TimeZone=Europe/Berlin the date 2026-07-01 would come back as
+// 2026-06-30T22:00:00Z and the column would lose a day. UTC midnight is what a
+// direct read produces.
+func writeRowObjectValue(c *compiler, col *ColumnInfo, alias string) {
+	if col.PGType != pgTypeDate {
+		c.column(Column{Table: alias, Name: col.Name})
+		return
+	}
+	c.write("(")
+	c.column(Column{Table: alias, Name: col.Name})
+	c.write("::timestamp AT TIME ZONE 'UTC')")
+}
+
+// pgTypeDate is schema.TypeDate's value. It is a literal rather than an import
+// because this package does not depend on the schema package — the type
+// arrives as text through the struct tag, and the tag is the contract.
+const pgTypeDate = "date"
 
 // sqlStringLiteral renders s as a single-quoted SQL string.
 //

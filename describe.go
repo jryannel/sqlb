@@ -140,6 +140,22 @@ func (d *Description[T]) SortNullsLast(columns ...string) *Description[T] {
 	})
 }
 
+// SQLType names the columns' Postgres type — "date", "timestamptz", "time" —
+// for the cases where the Go type does not determine it.
+//
+//	d.SQLType("date", "due_on", "invoiced_on")
+//
+// A generated model carries this in its struct tag and needs no call. A
+// hand-written one does, because those three types are all time.Time in Go and
+// an expanded row serialises each of them differently: without it, expanding a
+// relation whose target has a date column answers 500 (#84).
+//
+// The name is the schema package's logical type, which is also the Postgres
+// one for every type where the two differ only in spelling.
+func (d *Description[T]) SQLType(name string, columns ...string) *Description[T] {
+	return d.each("SQLType", columns, func(c *ColumnInfo) { c.PGType = name })
+}
+
 // Searchable includes the columns in the ?search fan-out. It implies
 // Filterable, matching the `search` tag.
 //

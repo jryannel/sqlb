@@ -394,14 +394,31 @@ func jsonTag(d *schema.FieldDesc) string {
 	return fmt.Sprintf("json:%q", d.Name)
 }
 
-// capTag renders the `sqlb` struct tag, omitted entirely when a column has no
-// capabilities so the common case stays readable.
+// capTag renders the `sqlb` struct tag, omitted entirely when a column has
+// nothing to say so the common case stays readable.
+//
+// The logical type leads, and it is written for every column rather than only
+// the ones a bug has been found on: timestamptz, date and time are one Go type
+// and three different things to Postgres, so a runtime reading `reflect.Type`
+// alone cannot tell them apart — which is how expanding a relation over a date
+// column came to answer 500 (#84).
+//
+// It is composed here rather than added to FieldDesc.Capabilities because a
+// type is not a capability. Capabilities are the things a request may reach the
+// column through, and putting the type in that list made the schema's own
+// documentation print it twice on one line.
 func capTag(d *schema.FieldDesc) string {
-	caps := d.Capabilities()
-	if caps == "" {
+	parts := make([]string, 0, 2)
+	if d.Type != "" {
+		parts = append(parts, "type:"+string(d.Type))
+	}
+	if caps := d.Capabilities(); caps != "" {
+		parts = append(parts, caps)
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(` sqlb:%q`, caps)
+	return fmt.Sprintf(` sqlb:%q`, strings.Join(parts, ","))
 }
 
 func lowerFirst(s string) string {

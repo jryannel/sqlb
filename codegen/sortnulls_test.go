@@ -22,11 +22,11 @@ func TestDeclaredNullPlacementReachesTheGeneratedTag(t *testing.T) {
 	models := generate(t, r)["models_gen.go"]
 
 	for _, want := range []string{
-		`sqlb:"sort:nullslast"`,
-		`sqlb:"sort:nullsfirst"`,
-		// The column that declares nothing keeps the bare token, so a schema
-		// that never uses this generates byte-identical models to before.
-		`db:"created_at" json:"created_at" sqlb:"sort"`,
+		`sqlb:"type:timestamptz,sort:nullslast"`,
+		`sqlb:"type:timestamptz,sort:nullsfirst"`,
+		// The column that declares nothing keeps the bare token beside the
+		// type, rather than acquiring a placement it never asked for.
+		`db:"created_at" json:"created_at" sqlb:"type:timestamptz,sort"`,
 	} {
 		if !contains(models, want) {
 			t.Errorf("models are missing %q:\n%s", want, models)

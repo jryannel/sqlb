@@ -33,7 +33,7 @@ func TestGeneratedModelCarriesTheExpression(t *testing.T) {
 	models := generate(t, computedFixture())["models_gen.go"]
 
 	for _, want := range []string{
-		`IsOverdue bool ` + "`" + `db:"is_overdue" json:"is_overdue" sqlb:"filter,readonly"` + "`",
+		`IsOverdue bool ` + "`" + `db:"is_overdue" json:"is_overdue" sqlb:"type:bool,filter,readonly"` + "`",
 		"func (Project) ComputedColumns() []sqlb.Computed {",
 		`{Name: "is_overdue", Expr: "due_date < current_date AND open_tasks > 0"},`,
 		`Needs: []string{"viewer"}`,
