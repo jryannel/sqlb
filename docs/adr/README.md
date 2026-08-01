@@ -151,6 +151,7 @@ the section it bears on, and move on.
 | [0042](0042-the-exit-is-generated.md) | The exit is generated, and what it does not carry is named | Working | Medium |
 | [0043](0043-declared-actions.md) | A declared action generates the envelope, and the verb stays plain Go | Working | Medium |
 | [0044](0044-the-container-is-an-adapter.md) | The container is an adapter, and the contribution types are the contract | Exploring | Medium |
+| [0045](0045-the-stream-is-a-seam.md) | The stream is a seam, and its first source is honest about being in-process | Working | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.

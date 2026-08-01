@@ -39,6 +39,7 @@ func newServer(t *testing.T, db *pgxpool.Pool) http.Handler {
 	if err != nil {
 		t.Fatalf("assembling the server: %v", err)
 	}
+	t.Cleanup(srv.Close)
 	return srv.Handler
 }
 

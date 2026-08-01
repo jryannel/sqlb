@@ -51,6 +51,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | [`auth/jwt.go`](auth/jwt.go) | HS256 in the standard library, with the three checks that make a verifier safe rather than merely working. |
 | [`app/auth_routes.go`](app/auth_routes.go) | Register and login: the endpoints that establish the identity everything else is scoped by. |
 | [`app/hooks.go`](app/hooks.go) | Also where the comment invariant lives: two writes in one transaction, and `AfterCommit` for the side effect. |
+| [`app/events.go`](app/events.go) | The change feed. The one path a `BeforeQuery` hook does not reach, and the filter that closes it. |
 | [`cmd/migrate/main.go`](cmd/migrate/main.go) | The generated baseline, plus three things the DSL cannot express. |
 | [`web/`](web/) | The generated TypeScript client, and the hand-written transport it takes. The schema reaches the browser without a second declaration. |
 | [`mobile/`](mobile/) | The generated Dart client, plus the cursor pager an infinite-scrolling list needs. The same schema reaches a phone. |
@@ -77,6 +78,29 @@ an unauthenticated request; the hooks refuse to build a query without claims. Th
 second exists because the interesting failures are the ones where the first is
 bypassed — a background job, a test, a future gRPC surface. Neither ever falls
 back to "no restriction", which is the shape most tenancy bugs take.
+
+### The one path the diagram does not cover
+
+`GET /events` is a Server-Sent Events stream that tells a client which rows
+changed, so it can refetch. It is the one route where `BeforeQuery` does *not*
+do the work, and that is not an oversight in the wiring — an invalidation is
+published by a write rather than read through a query, so no read hook is on the
+path at all. Without a filter, every subscriber would receive every workspace's
+row ids and their timing.
+
+[`app/events.go`](app/events.go) closes it with three lines of comparison, and
+the thing being compared comes from the schema: `workspace_id` is `.Scoped()`, so
+each event carries the workspace of the row that changed. The same declaration
+that obliges the read hooks to exist is what makes the feed filterable — which is
+the argument for declaring an obligation rather than writing a predicate.
+
+The events are addresses, never rows. A client is told `tasks/{id} changed` and
+refetches through `GET /tasks/{id}`, where every predicate above applies as
+usual. Deletes are in the feed with their key because a delete here is a soft
+delete, and a soft delete is an `UPDATE`.
+
+The source is in-process, so this demo is single-replica and at-most-once. See
+[`docs/rest/events.md`](../../docs/rest/events.md).
 
 ## Where the generated layer stops
 
