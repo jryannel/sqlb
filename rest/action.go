@@ -234,7 +234,7 @@ func Action[T, In any](api huma.API, db sqlb.Executor, opts Options, spec Action
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
-		return &itemOutput[T]{Body: row[T]{value: out, cols: b.selectable, names: b.jsonName}}, nil
+		return &itemOutput[T]{Body: row[T]{value: out, cols: b.selectable, keys: b.jsonKey}}, nil
 	}
 
 	op := huma.Operation{

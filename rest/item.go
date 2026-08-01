@@ -122,7 +122,7 @@ func registerRead[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
 		return &itemOutput[T]{Body: row[T]{
-			value: found, cols: b.selectable, names: b.jsonName,
+			value: found, cols: b.selectable, keys: b.jsonKey,
 			expand: b.relationsFor(expand),
 		}}, nil
 	}
@@ -218,7 +218,7 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
-		return &createdOutput[T]{Body: row[T]{value: created, cols: b.selectable, names: b.jsonName}}, nil
+		return &createdOutput[T]{Body: row[T]{value: created, cols: b.selectable, keys: b.jsonKey}}, nil
 	})
 }
 
@@ -284,7 +284,7 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
-		return &itemOutput[T]{Body: row[T]{value: updated, cols: b.selectable, names: b.jsonName}}, nil
+		return &itemOutput[T]{Body: row[T]{value: updated, cols: b.selectable, keys: b.jsonKey}}, nil
 	})
 }
 
