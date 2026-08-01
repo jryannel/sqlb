@@ -367,6 +367,10 @@
     {
       "name": "and",
       "form": "and=(a.eq.1,b.gt.2) — explicit conjunction"
+    },
+    {
+      "name": "not",
+      "form": "not=(a.eq.1,b.gt.2) — negation; several conditions are NOT (a AND b)"
     }
   ]
 }
