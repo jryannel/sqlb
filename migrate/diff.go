@@ -40,6 +40,13 @@ import (
 // what the paragraph above is about. `sqlb migrate` makes the call; anything
 // diffing against introspect.Registry output should too.
 //
+// A caller that skips it gets a diff whose statements look identical to what
+// the database already has, which is the part of both reports that cost the
+// most to work out. So a rebuilt index and a replaced CHECK whose expression
+// differs only in formatting say so in their Comment — an explanation, never a
+// decision: see onlyThePredicateFormattingDiffers for why that distinction is
+// the whole of its safety.
+//
 // Enums are unaffected: an enum is text plus a CHECK (ADR-0017), and introspect
 // reads the values back out of the normalised form rather than comparing it.
 //
@@ -851,6 +858,12 @@ func (d *differ) addConstraintChange(table string, c constraint, prev *constrain
 	case len(removed) > 0:
 		ch.Comment += " (no longer permits " + joinQuoted(removed) +
 			"; rows still holding one will fail — migrate them first)"
+	case prev != nil && onlyTheDefinitionFormattingDiffers(*prev, c):
+		// Replacing a CHECK with one that reads the same is issue #24 seen from
+		// the consumer's side, and this is where it gets to say so. Below the
+		// enum clause, which is about a change in what the constraint permits
+		// and outranks a remark about how it is spelled.
+		ch.Comment += formattingNote("expression")
 	case prev == nil:
 		ch.Comment += " (existing rows must already satisfy it or this fails)"
 	}
@@ -1069,7 +1082,15 @@ func (d *differ) indexes(cur, tgt *schema.TableDef, cols map[string]string) {
 			continue
 		}
 		d.indexDropped(cur, tgt, orig[name], curIdx[name])
-		d.indexCreated(tgt, t)
+		// A rebuild whose statement looks identical to the index already there
+		// is what issue #63 was reported as, and the difference it does not
+		// show is whitespace. Normalising the declared side is the fix and it
+		// is a call the caller makes; this is for the caller who did not.
+		var note string
+		if onlyThePredicateFormattingDiffers(t, curIdx[name]) {
+			note = formattingNote("predicate")
+		}
+		d.indexCreated(tgt, t, note)
 	}
 
 	// Same definition, different name: rebuilding an index to change its name
@@ -1100,7 +1121,7 @@ func (d *differ) indexes(cur, tgt *schema.TableDef, cols map[string]string) {
 	}
 	for _, name := range sortedKeys(tgtIdx) {
 		if !usedTgt[name] {
-			d.indexCreated(tgt, tgtIdx[name])
+			d.indexCreated(tgt, tgtIdx[name], "")
 		}
 	}
 }
@@ -1127,12 +1148,15 @@ func (d *differ) indexDropped(cur, tgt *schema.TableDef, orig, renamed schema.In
 	})
 }
 
-func (d *differ) indexCreated(tgt *schema.TableDef, idx schema.Index) {
+// indexCreated emits the creation of an index. note is appended to the comment
+// and is usually empty; it carries the one thing the statement cannot say about
+// itself, which is that it may be rebuilding an index that is already right.
+func (d *differ) indexCreated(tgt *schema.TableDef, idx schema.Index, note string) {
 	// The table already holds rows, so building the index without
 	// CONCURRENTLY would lock it against writes for the duration.
 	needs, needsTable := indexNeeds(tgt.Name(), idx)
 	d.createIndexes = append(d.createIndexes, Change{
-		Comment:      "index " + idx.Name,
+		Comment:      "index " + idx.Name + note,
 		Up:           createIndex(tgt, idx, true),
 		Down:         dropIndex(idx.Name, true),
 		Stage:        StageConcurrent,

@@ -203,3 +203,24 @@ files rather than fail.
   `NormalizeChecks` is `Normalize`. That the mechanism extended without argument
   is the evidence for the paragraph above: having a database open at that moment
   keeps paying.
+- 2026-08-01 — The other half of #63, which is about the reporting rather than
+  the normalisation. Three issues — #24, #56 and this one — shared a shape: a
+  declaration is compared with the database as text, and the diff proposes a
+  statement identical to what is already there. Normalising fixes it for callers
+  who call it; `Diff` is a pure function and cannot call it for them. So a
+  rebuilt partial index, and a hand-written CHECK replaced under its own name,
+  now say in their `Comment` when the expression differs only in formatting.
+
+  The heuristic this record rejects is the same one, used for a different job:
+  it explains a diff the exact comparison already decided, and never decides
+  one. A wrong answer there is a misleading sentence on a correct migration; a
+  wrong answer in the comparison is a schema edit that never reaches the
+  database. The clause is worded to survive being wrong — `(a OR b) AND c` and
+  `a OR (b AND c)` reduce alike, and they do differ only in parenthesisation, so
+  it reports that rather than claiming the two are the same expression.
+
+  Not attached to every constraint. A primary key, a unique, a foreign key and
+  an enum's CHECK are rendered from column names and values on both sides rather
+  than carried through as text, so a difference between two of those is never
+  formatting — and naming a normalisation step that does not touch them would be
+  advice that cannot help.

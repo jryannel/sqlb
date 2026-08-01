@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -848,6 +849,88 @@ func indexDef(idx schema.Index) string {
 		idx.Unique, idx.Method, strings.Join(idx.Columns, ","),
 		strings.Join(classes, ","), strings.Join(orders, ","),
 		storageParameters(idx.With), idx.Where)
+}
+
+// Explaining a rebuild whose statement looks identical to what is already
+// there.
+//
+// A declared expression is compared with an introspected one as text, and
+// Postgres does not hand back the text it was given. shadow.Normalize is what
+// puts the declared side through the same rendering; a caller diffing against
+// introspect.Registry without making that call gets a diff proposing to replace
+// a CHECK or rebuild a partial index with a statement it cannot tell apart from
+// the one already in effect. Issues #24, #56 and #63 were all reported from
+// that position, and each took someone measuring both sides to work out that
+// the difference was whitespace.
+//
+// The two functions below recognise that shape so the change can say so. They
+// are the heuristic comparison shadow/normalize.go rejects, and they are safe
+// here for one reason: nothing branches on them. The drop and the add are
+// already decided, by the exact comparison, before either is asked; all they do
+// is choose a sentence to attach. A wrong answer here is a misleading comment
+// on a correct migration, where a wrong answer there would be a schema edit
+// that never reaches the database.
+//
+// The sentence is worded to survive being wrong about it. Reducing
+// `(a OR b) AND c` and `a OR (b AND c)` alike is exactly why this cannot decide
+// equality — and "these differ only in parenthesisation" is a true statement
+// about that pair too, which is why the comment says that rather than "these
+// are the same expression".
+
+// onlyThePredicateFormattingDiffers reports whether two indexes of the same
+// name are identical apart from a predicate that differs only in spacing,
+// parentheses and casts.
+func onlyThePredicateFormattingDiffers(a, b schema.Index) bool {
+	if a.Where == b.Where || a.Where == "" || b.Where == "" {
+		return false
+	}
+	// Everything else identical, or the predicate is not the story.
+	bare := func(idx schema.Index) schema.Index { idx.Where = ""; return idx }
+	if indexDef(bare(a)) != indexDef(bare(b)) {
+		return false
+	}
+	return reduceExpression(a.Where) == reduceExpression(b.Where)
+}
+
+// onlyTheDefinitionFormattingDiffers is the same question for a constraint
+// replaced under its own name.
+//
+// Both sides must be hand-written CHECKs, which is exactly the set
+// shadow.Normalize rewrites. Everything else a constraint can be — a primary
+// key, a unique, a foreign key, the CHECK an enum column renders — is built
+// from column names and values on both sides rather than carried through as
+// text, so a difference between two of those is never formatting, and saying it
+// might be would point the reader at a normalisation step that does not touch
+// them.
+func onlyTheDefinitionFormattingDiffers(a, b constraint) bool {
+	if !a.handWritten || !b.handWritten || a.def == b.def {
+		return false
+	}
+	return reduceExpression(a.def) == reduceExpression(b.def)
+}
+
+// castSuffix matches the `::type` Postgres renders onto a literal. It stops at
+// the first word, so a two-word type name such as `::double precision` is only
+// half removed — which loses a hint rather than inventing one, and inventing
+// one is the failure worth avoiding.
+var castSuffix = regexp.MustCompile(`::"?[a-zA-Z_][a-zA-Z0-9_]*"?(\s*\[\s*\])?`)
+
+// reduceExpression strips what Postgres's rendering adds and a person does not
+// write: parentheses, casts on literals, and its own spacing. Only ever used to
+// explain a diff — see the comment above onlyThePredicateFormattingDiffers.
+func reduceExpression(s string) string {
+	s = castSuffix.ReplaceAllString(s, "")
+	s = strings.NewReplacer("(", " ", ")", " ").Replace(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// formattingNote is the clause both cases attach, written once so that a reader
+// who has seen it on an index recognises it on a constraint. what names the
+// thing that differs, in the words the declaration uses for it.
+func formattingNote(what string) string {
+	return " (the " + what + " differs from the existing one only in spacing, " +
+		"parentheses or casts; if this change comes back every run, the declared " +
+		"schema has not been through shadow.Normalize)"
 }
 
 // renamedIndex returns the index as it will read once cols have been renamed.
