@@ -51,9 +51,10 @@ func mountStarred(t *testing.T, db sqlb.Executor) error {
 	t.Helper()
 	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
 	return rest.Resource[Starred, starredCreate, starredUpdate](api, db, rest.Options{
-		Path: "/starred",
-		Name: "starred",
-		Ops:  rest.CRUD | rest.OpList,
+		Path:     "/starred",
+		Name:     "starred",
+		Ops:      rest.CRUD | rest.OpList,
+		Computed: []string{"is_starred"},
 	})
 }
 
@@ -96,5 +97,59 @@ func TestResourceAcceptsAComputedColumnWithAHook(t *testing.T) {
 
 	if err := mountStarred(t, db); err != nil {
 		t.Fatalf("mounting a resource whose bind a hook supplies: %v", err)
+	}
+}
+
+// The other half of the obligation, and the reason it moved: a resource that
+// does not select the column is not asked for its bind.
+//
+// Before #92 this mount failed, because the model declares is_starred and the
+// check read the model. The model is shared — the same rows are served by a
+// screen that wants the column and by endpoints that do not — so an obligation
+// every mount inherited was an obligation with no failure behind it for most of
+// them.
+func TestResourceWithoutTheComputedColumnNeedsNoBind(t *testing.T) {
+	db := sqlb.New(newFakeDB(t).db).WithHooks(sqlb.NewRegistry())
+
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	err := rest.Resource[Starred, starredCreate, starredUpdate](api, db, rest.Options{
+		Path: "/starred",
+		Name: "starred",
+		Ops:  rest.CRUD | rest.OpList,
+		// No Computed: the resource never renders is_starred.
+	})
+	if err != nil {
+		t.Fatalf("a resource that does not select the computed column was refused: %v", err)
+	}
+}
+
+// Naming a column the model does not compute is a mounting error, for the
+// reason an unknown Expandable is: at request time it would parse cleanly and
+// serve a resource quietly missing the value somebody declared it should carry.
+func TestResourceRefusesAnUnknownComputedName(t *testing.T) {
+	db := sqlb.New(newFakeDB(t).db).WithHooks(sqlb.NewRegistry())
+
+	tests := []struct {
+		name, column, want string
+	}{
+		{"unknown", "is_starre", "has no such column"},
+		{"stored", "title", "stores that column rather than computing it"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+			err := rest.Resource[Starred, starredCreate, starredUpdate](api, db, rest.Options{
+				Path:     "/starred",
+				Name:     "starred",
+				Ops:      rest.OpList,
+				Computed: []string{tc.column},
+			})
+			if err == nil {
+				t.Fatalf("Computed %q was accepted", tc.column)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error does not say what is wrong (%q missing): %v", tc.want, err)
+			}
+		})
 	}
 }

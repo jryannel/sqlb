@@ -52,7 +52,7 @@ type obligation struct {
 // the arrangement example/tasks arrived at by hand, and this is that
 // arrangement made compulsory.
 func checkObligations[T any](m *sqlb.Model, exec sqlb.Executor, opts Options) error {
-	bound := computedNeeds(m)
+	bound := computedNeeds(m, opts.Computed)
 	if m.Scope == nil && m.Soft == nil && len(bound) == 0 {
 		return nil
 	}
@@ -168,12 +168,22 @@ func onlyBinds(missing []*obligation) bool {
 	return true
 }
 
-// computedNeeds describes the per-request binds this model's derived columns
+// computedNeeds describes the per-request binds this resource's derived columns
 // take, one line each, in declaration order.
-func computedNeeds(m *sqlb.Model) []string {
+//
+// Only the columns the resource selects. The obligation follows the selection
+// because the cost does: a model may declare a per-viewer column for one screen
+// and be read by three endpoints that never project it, and making all four
+// register a hook for a bind three of them never render is an obligation with
+// no failure behind it (#92).
+func computedNeeds(m *sqlb.Model, selected []string) []string {
+	wanted := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		wanted[name] = true
+	}
 	var out []string
 	for _, col := range m.Derived {
-		if len(col.Needs) == 0 {
+		if len(col.Needs) == 0 || !wanted[col.Name] {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s is computed from the %s bind",

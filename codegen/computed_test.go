@@ -82,3 +82,15 @@ func TestComputedEmitsNoDDL(t *testing.T) {
 		t.Errorf("the stored columns should still be created:\n%s", ddl.String())
 	}
 }
+
+// A generated resource opts into the columns its table declares, so its
+// responses are unchanged by #92's opt-in. That is the half of the change that
+// must *not* be visible: what the opt-in alters is everything else reading the
+// model — a hand-written query no longer inherits a list screen's correlated
+// subqueries or its per-request binds.
+func TestAGeneratedMountOptsIntoItsComputedColumns(t *testing.T) {
+	rest := generate(t, computedFixture())["rest_gen.go"]
+	if want := `Computed: []string{"is_overdue", "is_starred"}`; !contains(rest, want) {
+		t.Errorf("generated mount is missing %q:\n%s", want, rest)
+	}
+}

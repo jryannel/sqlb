@@ -414,6 +414,19 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 			}
 			fmt.Fprintf(b, "\t\tExpandable: []string{%s},\n", strings.Join(quoted, ", "))
 		}
+		// Computed likewise comes from the columns. A computed column declared
+		// on an exposed table is one the schema meant this resource to serve,
+		// so the generated mount serves all of them and its responses are
+		// unchanged by the opt-in. What the opt-in changes is everything
+		// *else* reading the model: a hand-written query no longer inherits a
+		// list screen's correlated subqueries, or its per-request binds (#92).
+		if names := computedColumns(t); len(names) > 0 {
+			quoted := make([]string, len(names))
+			for i, name := range names {
+				quoted[i] = fmt.Sprintf("%q", name)
+			}
+			fmt.Fprintf(b, "\t\tComputed: []string{%s},\n", strings.Join(quoted, ", "))
+		}
 		if len(acts) == 0 {
 			fmt.Fprintf(b, "\t}); err != nil {\n\t\treturn err\n\t}\n")
 			continue
@@ -446,4 +459,20 @@ func opsExpr(ops schema.Op) string {
 		return "0"
 	}
 	return strings.Join(parts, " | ")
+}
+
+// computedColumns names the table's derived columns, in declaration order.
+//
+// Hidden ones are skipped for the reason they are skipped everywhere: a column
+// that never leaves the process is not part of a response, and listing it would
+// make the resource pay for an expression nothing reads.
+func computedColumns(t *schema.TableDef) []string {
+	var out []string
+	for _, f := range t.Fields() {
+		d := f.Desc()
+		if d.Computed() && !d.Hidden {
+			out = append(out, d.Name)
+		}
+	}
+	return out
 }

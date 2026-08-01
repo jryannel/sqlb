@@ -111,8 +111,39 @@ type Options struct {
 	// request-time surprise.
 	Expandable []string
 
+	// Computed lists the computed columns this resource is willing to pay for.
+	// Empty means none, and none is the default on purpose.
+	//
+	// A computed column is declared on the model, which is shared, and wanted
+	// by one screen. Projecting every declared one attached a correlated
+	// subquery per column to every read of the model, and a column carrying a
+	// Needs bind made unrelated reads fail outright (#92). So declaring stays
+	// global — the expression, its type, its binds — and *selecting* is per
+	// resource, beside the other things a mount already decides.
+	//
+	// A column not listed here is not reachable from this resource at all: not
+	// projected, not filterable, not sortable, and not nameable in ?select.
+	// Being unreachable rather than merely unprojected is what keeps the cost
+	// opt-in, since a filter on a correlated subquery costs what the projection
+	// would have.
+	Computed []string
+
 	// DisableSearch rejects ?search even when columns are searchable.
 	DisableSearch bool
+}
+
+// computedAllowed reports whether a column may be reached from this resource.
+// Stored columns always may; a computed one has to be named in Options.
+func (o Options) computedAllowed(col *sqlb.ColumnInfo) bool {
+	if col == nil || !col.Computed() {
+		return true
+	}
+	for _, name := range o.Computed {
+		if name == col.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func (o Options) defaultPageSize() int {
@@ -178,6 +209,10 @@ type Query struct {
 	Limit    int
 	Offset   int
 
+	// Computed names the computed columns this resource selects, copied from
+	// Options so that Apply projects exactly what parsing validated against.
+	Computed []string
+
 	// Cursor is the keyset position `?cursor=` asked to resume from, empty for
 	// the first page. It is the alternative to Page and Offset rather than an
 	// addition to them: a request carrying both is refused, since the two
@@ -211,7 +246,18 @@ func Apply[T any](b *sqlb.Builder[T], q *Query) *sqlb.Builder[T] {
 	if len(q.Select) > 0 {
 		names = append(names, q.Select...)
 	} else {
+		// Every non-hidden column, minus the computed ones this resource did
+		// not ask for. Without the second half a correlated subquery declared
+		// for one screen is attached to every list of the model, and one
+		// carrying a Needs bind fails the request outright (#92).
+		selects := make(map[string]bool, len(q.Computed))
+		for _, name := range q.Computed {
+			selects[name] = true
+		}
 		for _, col := range b.Model().Selectable() {
+			if col.Computed() && !selects[col.Name] {
+				continue
+			}
 			names = append(names, col.Name)
 		}
 	}
@@ -314,7 +360,7 @@ func Parse(values url.Values, opts Options) (*Query, error) {
 		return nil, fmt.Errorf("filter: Options.Model is required")
 	}
 	p := &parser{opts: opts, model: opts.Model}
-	q := &Query{PageSize: opts.defaultPageSize()}
+	q := &Query{PageSize: opts.defaultPageSize(), Computed: opts.Computed}
 
 	// Before anything is read, because what follows reads only the first
 	// occurrence of each of these and the rest would vanish unremarked.
@@ -438,8 +484,10 @@ func (p *parser) errAllowed(param, value, reason string, allowed []string) {
 func (p *parser) filterableColumn(name string) *sqlb.ColumnInfo {
 	col := p.model.Column(name)
 	// A hidden column is reported as unknown rather than as un-filterable, so
-	// that its existence cannot be probed by reading the rejection.
-	if col == nil || col.Hidden {
+	// that its existence cannot be probed by reading the rejection. A computed
+	// column this resource does not select is unknown in the plainer sense:
+	// it is declared on the model, and this endpoint does not have it (#92).
+	if col == nil || col.Hidden || !p.opts.computedAllowed(col) {
 		p.errAllowed(name, "", "unknown parameter", p.capable(capFilter))
 		return nil
 	}
@@ -463,7 +511,11 @@ const (
 func (p *parser) capable(c capability) []string {
 	var out []string
 	for _, col := range p.model.Columns {
-		if col.Hidden {
+		// A computed column this resource does not select is not part of its
+		// surface, so it is absent from the "allowed" lists too — naming it in
+		// a rejection would advertise a column every request for it is about
+		// to be refused for (#92).
+		if col.Hidden || !p.opts.computedAllowed(col) {
 			continue
 		}
 		switch c {
@@ -1027,7 +1079,7 @@ func (p *parser) parseSort(raw string) []sqlb.Order {
 
 		col := p.model.Column(term)
 		switch {
-		case col == nil || col.Hidden:
+		case col == nil || col.Hidden || !p.opts.computedAllowed(col):
 			p.errAllowed("sort", term, "unknown column", p.capable(capSort))
 			continue
 		case !col.Sortable:
@@ -1080,8 +1132,8 @@ func (p *parser) parseSelect(raw string) []string {
 			continue
 		}
 		col := p.model.Column(name)
-		if col == nil || col.Hidden {
-			p.errAllowed("select", name, "unknown column", columnNames(p.model.Selectable()))
+		if col == nil || col.Hidden || !p.opts.computedAllowed(col) {
+			p.errAllowed("select", name, "unknown column", p.selectableNames())
 			continue
 		}
 		out = append(out, col.Name)
@@ -1409,4 +1461,20 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// selectableNames is the projection surface of *this resource*: every non-hidden
+// column, minus the computed ones the resource does not select.
+//
+// Model.Selectable is model-wide and cannot answer this — the same model may be
+// mounted twice with different computed sets (#92).
+func (p *parser) selectableNames() []string {
+	out := make([]string, 0, len(p.model.Columns))
+	for _, col := range p.model.Selectable() {
+		if !p.opts.computedAllowed(col) {
+			continue
+		}
+		out = append(out, col.Name)
+	}
+	return out
 }
