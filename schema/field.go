@@ -53,6 +53,16 @@ type FieldDesc struct {
 	Searchable bool // included in the ?search fan-out
 	Expandable bool // relation may be pulled in via ?expand (references only)
 
+	// SortNulls is where NULLs sit whenever ?sort names this column, in either
+	// direction. Empty leaves Postgres's default, which is NULLS LAST for
+	// ascending and NULLS FIRST for descending — not one placement but two, so
+	// a column whose NULLs mean something cannot rely on it (#88).
+	//
+	// It is the same Nulls the index orders use, and deliberately so: a
+	// resource sorted `published_at DESC NULLS LAST` wants the index declared
+	// the same way, and one vocabulary makes the pair legible as a pair.
+	SortNulls Nulls
+
 	// Write protection, enforced by the REST layer. Go code going through the
 	// query engine directly is trusted and bypasses these.
 	ReadOnly  bool // never settable through REST
@@ -666,8 +676,41 @@ func (f *Field) Filterable() *Field {
 }
 
 // Sortable allows the column to appear in ?sort.
-func (f *Field) Sortable() *Field {
+//
+// An optional [Nulls] fixes where NULLs sit whenever this column is sorted on,
+// in either direction:
+//
+//	Timestamp("published_at").Sortable(schema.NullsLast)
+//
+// Without it the placement is Postgres's default, which follows the direction —
+// NULLS LAST ascending, NULLS FIRST descending. That default is right for a
+// column whose NULLs are incidental and wrong for one whose NULLs mean
+// something: a NULL `published_at` means "not published", which belongs at the
+// bottom of the feed and not at the top of it, and `?sort=-published_at` puts
+// it at the top (#88).
+//
+// It is declared here rather than spelled per request because it is a property
+// of what the column *means*, not of what a particular caller wants — which is
+// also why the generated clients need no new syntax to get it right.
+func (f *Field) Sortable(nulls ...Nulls) *Field {
 	f.d.Sortable = true
+	switch len(nulls) {
+	case 0:
+	case 1:
+		switch nulls[0] {
+		case NullsDefault, NullsFirst, NullsLast:
+			f.d.SortNulls = nulls[0]
+		default:
+			panic(fmt.Sprintf("sqlb/schema: Sortable(%q): unknown null placement %q, expected schema.NullsFirst or schema.NullsLast",
+				f.d.Name, string(nulls[0])))
+		}
+	default:
+		// Panic for the reason Numeric does: a schema is Go, this runs at init,
+		// and a wrong declaration should not compile into a process that then
+		// serves ORDER BY from it.
+		panic(fmt.Sprintf("sqlb/schema: Sortable(%q) takes at most one null placement, got %d",
+			f.d.Name, len(nulls)))
+	}
 	return f
 }
 
@@ -876,7 +919,17 @@ func (d *FieldDesc) Capabilities() string {
 	add(d.PrimaryKey, "pk")
 	add(d.Default != nil, "default")
 	add(d.Filterable, "filter")
-	add(d.Sortable, "sort")
+	// The null placement rides on the capability that carries it rather than
+	// becoming a capability of its own: it has no meaning without `sort`, and a
+	// separate token could be written without one.
+	switch {
+	case d.Sortable && d.SortNulls == NullsFirst:
+		add(true, "sort:nullsfirst")
+	case d.Sortable && d.SortNulls == NullsLast:
+		add(true, "sort:nullslast")
+	default:
+		add(d.Sortable, "sort")
+	}
 	add(d.Searchable, "search")
 	add(d.Expandable, "expand")
 	add(d.ReadOnly, "readonly")

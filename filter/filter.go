@@ -1036,13 +1036,37 @@ func (p *parser) parseSort(raw string) []sqlb.Order {
 		}
 
 		f := sqlb.F(col.Name)
+		o := f.Asc()
 		if desc {
-			out = append(out, f.Desc())
-			continue
+			o = f.Desc()
 		}
-		out = append(out, f.Asc())
+		out = append(out, withDeclaredNulls(o, col))
 	}
 	return out
+}
+
+// withDeclaredNulls applies the column's declared null placement to one term.
+//
+// The grammar has no spelling for it, and that is the design rather than a gap:
+// where NULLs belong is a property of what the column means — a NULL
+// `published_at` means "not published", which belongs last however the feed is
+// sorted — so it is declared once on the column and every request gets it
+// right, including the ones a generated client builds (#88).
+//
+// Left alone, the placement is Postgres's own, which is NULLS LAST ascending
+// and NULLS FIRST descending. That is the default the declaration exists to
+// escape: it flips underneath a column the moment `?sort=published_at` becomes
+// `?sort=-published_at`, so a column that means something by being NULL cannot
+// use it.
+func withDeclaredNulls(o sqlb.Order, col *sqlb.ColumnInfo) sqlb.Order {
+	switch col.SortNulls {
+	case sqlb.NullsFirst:
+		return o.NullsFirst()
+	case sqlb.NullsLast:
+		return o.NullsLast()
+	default:
+		return o
+	}
 }
 
 func (p *parser) parseSelect(raw string) []string {

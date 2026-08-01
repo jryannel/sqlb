@@ -487,9 +487,9 @@ func (c *compiler) orders(orders []Order) {
 			c.write(" ASC")
 		}
 		switch o.nulls {
-		case nullsFirst:
+		case NullsFirst:
 			c.write(" NULLS FIRST")
-		case nullsLast:
+		case NullsLast:
 			c.write(" NULLS LAST")
 		}
 	}

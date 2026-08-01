@@ -303,6 +303,19 @@ func diffField(path string, o, n *fieldView, add func(Break)) {
 		"filter removed; a request using it now 400s", "filter added", add)
 	capDelta(path, FacetSort, n.name, o.sortable, n.sortable,
 		"sort key removed", "sort key added", add)
+	// A null placement change keeps every request working and answers it in a
+	// different order, which is the shape of break a capability diff cannot
+	// see: no parameter was removed, so capDelta above is silent. It is
+	// breaking rather than neutral because an outstanding cursor was issued
+	// under the old placement and is refused under the new one, and because a
+	// client that renders "latest first" starts rendering the un-dated rows
+	// first without changing a line (#88).
+	if o.sortable && n.sortable && o.sortNulls != n.sortNulls {
+		add(Break{LevelBreaking, path, FacetSort, n.name, fmt.Sprintf(
+			"null placement changed from %s to %s; lists come back in a different order "+
+				"and cursors issued under the old one are refused",
+			placementPhrase(o.sortNulls), placementPhrase(n.sortNulls))})
+	}
 	capDelta(path, FacetExpand, n.relName, o.expandable, n.expandable,
 		"expand relation removed", "expand relation added", add)
 
@@ -507,6 +520,7 @@ type FieldSnap struct {
 	Immutable   bool     `json:"immutable,omitempty"`
 	Filterable  bool     `json:"filterable,omitempty"`
 	Sortable    bool     `json:"sortable,omitempty"`
+	SortNulls   string   `json:"sort_nulls,omitempty"`
 	Expandable  bool     `json:"expandable,omitempty"`
 	RenamedFrom string   `json:"renamed_from,omitempty"`
 }
@@ -559,6 +573,7 @@ func Capture(r *schema.Registry) Snapshot {
 				Immutable:   d.Immutable,
 				Filterable:  d.Filterable,
 				Sortable:    d.Sortable,
+				SortNulls:   string(d.SortNulls),
 				Expandable:  d.Expandable,
 				RenamedFrom: d.RenamedFrom,
 			}
@@ -609,6 +624,7 @@ type fieldView struct {
 	immutable  bool
 	filterable bool
 	sortable   bool
+	sortNulls  string
 	expandable bool
 
 	// renamedFrom is not a property of the contract but the hint that matches
@@ -655,6 +671,7 @@ func index(s Snapshot) map[string]resource {
 				immutable:   fs.Immutable,
 				filterable:  fs.Filterable,
 				sortable:    fs.Sortable,
+				sortNulls:   fs.SortNulls,
 				expandable:  fs.Expandable,
 				renamedFrom: fs.RenamedFrom,
 			}
@@ -741,4 +758,18 @@ func quote(vs []string) string {
 		q[i] = fmt.Sprintf("%q", v)
 	}
 	return strings.Join(q, ", ")
+}
+
+// placementPhrase names a null placement for a diff line, including the default
+// one — a break that reads "changed from  to nulls last" is a break a reader
+// has to decode, so the empty declaration gets words too.
+func placementPhrase(n string) string {
+	switch schema.Nulls(n) {
+	case schema.NullsFirst:
+		return "nulls first"
+	case schema.NullsLast:
+		return "nulls last"
+	default:
+		return "the Postgres default (nulls last ascending, nulls first descending)"
+	}
 }

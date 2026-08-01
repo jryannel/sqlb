@@ -118,6 +118,28 @@ func (d *Description[T]) Sortable(columns ...string) *Description[T] {
 	return d.each("Sortable", columns, func(c *ColumnInfo) { c.Sortable = true })
 }
 
+// SortNullsFirst makes the columns sort NULLs before real values, in either
+// direction, and marks them sortable.
+//
+// SortNullsLast is the same the other way. Both exist because Postgres's
+// default placement is not one placement but two — NULLS LAST ascending, NULLS
+// FIRST descending — so a column whose NULLs mean something ("not published
+// yet") reverses its intent when the direction flips. Declaring it here is the
+// hand-written half of what `Sortable(schema.NullsLast)` says in a schema.
+func (d *Description[T]) SortNullsFirst(columns ...string) *Description[T] {
+	return d.each("SortNullsFirst", columns, func(c *ColumnInfo) {
+		c.Sortable, c.SortNulls = true, NullsFirst
+	})
+}
+
+// SortNullsLast makes the columns sort NULLs after real values, in either
+// direction, and marks them sortable. See [Description.SortNullsFirst].
+func (d *Description[T]) SortNullsLast(columns ...string) *Description[T] {
+	return d.each("SortNullsLast", columns, func(c *ColumnInfo) {
+		c.Sortable, c.SortNulls = true, NullsLast
+	})
+}
+
 // Searchable includes the columns in the ?search fan-out. It implies
 // Filterable, matching the `search` tag.
 //

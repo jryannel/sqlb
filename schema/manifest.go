@@ -91,6 +91,14 @@ type ColumnManifest struct {
 	Capabilities []string     `json:"capabilities,omitempty"`
 	References   *RefManifest `json:"references,omitempty"`
 
+	// SortNulls is where NULLs sit when this column is sorted on, present only
+	// when the column departs from Postgres's direction-following default. It
+	// is beside Capabilities rather than in it because it is not a capability:
+	// a request cannot ask for it and cannot decline it, and a reader deciding
+	// what an endpoint returns wants to know that `?sort=-published_at` puts
+	// the NULLs at the bottom rather than the top (#88).
+	SortNulls string `json:"sortNulls,omitempty"`
+
 	// Obligations, kept out of Capabilities because a capability is something
 	// a request may reach and these are things the server must have done. A
 	// client generator has no use for either; a reader auditing the boundary
@@ -247,6 +255,7 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 			SoftDelete: d.SoftDelete,
 			Computed:   d.Computed(),
 			Needs:      d.Needs,
+			SortNulls:  string(d.SortNulls),
 		}
 		for _, c := range []struct {
 			on   bool

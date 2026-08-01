@@ -44,6 +44,13 @@ type ColumnInfo struct {
 	Immutable  bool
 	Hidden     bool
 
+	// SortNulls is where NULLs sit whenever this column is sorted on, in either
+	// direction. The zero value leaves Postgres's own default, which follows
+	// the direction rather than being one placement. It is declared on the
+	// column because it is a property of what the column means (#88), so a
+	// request does not — and cannot — ask for it.
+	SortNulls NullsOrder
+
 	// Obligations, from the same tag. Nothing on the request path reads
 	// either: they are the schema's statement that this model's rows are
 	// confined by something, and they are checked once, where a resource is
@@ -409,7 +416,13 @@ func collectColumns(m *Model, t reflect.Type, prefix []int) error {
 
 func applyCapabilities(c *ColumnInfo, tag string) {
 	for _, part := range strings.Split(tag, ",") {
-		switch strings.TrimSpace(part) {
+		// A capability may carry an argument after a colon. Only `sort` does
+		// today; splitting here rather than in that one case keeps an unknown
+		// `name:arg` falling through to the same silent ignore an unknown bare
+		// name already gets, instead of being read as a column capability
+		// nobody declared.
+		name, arg, _ := strings.Cut(strings.TrimSpace(part), ":")
+		switch name {
 		case "":
 		case "pk":
 			c.PrimaryKey = true
@@ -419,6 +432,12 @@ func applyCapabilities(c *ColumnInfo, tag string) {
 			c.Filterable = true
 		case "sort":
 			c.Sortable = true
+			switch arg {
+			case "nullsfirst":
+				c.SortNulls = NullsFirst
+			case "nullslast":
+				c.SortNulls = NullsLast
+			}
 		case "search":
 			c.Searchable = true
 			c.Filterable = true

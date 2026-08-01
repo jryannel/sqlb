@@ -628,15 +628,29 @@ func anySlice[T any](vs []T) []any {
 type Order struct {
 	expr  Expr
 	desc  bool
-	nulls nullsOrder
+	nulls NullsOrder
 }
 
-type nullsOrder uint8
+// NullsOrder is where NULLs sit relative to real values within one ORDER BY
+// term.
+//
+// The zero value is Postgres's own default, and the thing worth knowing about
+// that default is that it is not a single placement: NULLS LAST for ascending,
+// NULLS FIRST for descending. So a column whose NULLs carry a meaning — a NULL
+// `published_at` meaning "not published" — cannot rely on it. The placement
+// that is right for the column flips underneath it the moment the direction
+// flips, which is what makes the ordering a property worth declaring rather
+// than leaving to the query (#88).
+//
+// Exported because it is what a [ColumnInfo] declares and what the REST sort
+// grammar reads back; [Order.NullsFirst] and [Order.NullsLast] remain the way
+// a hand-written query says the same thing.
+type NullsOrder uint8
 
 const (
-	nullsDefault nullsOrder = iota
-	nullsFirst
-	nullsLast
+	NullsDefault NullsOrder = iota
+	NullsFirst
+	NullsLast
 )
 
 // Asc orders by the column ascending.
@@ -646,10 +660,10 @@ func (f Field) Asc() Order { return Order{expr: f.Column()} }
 func (f Field) Desc() Order { return Order{expr: f.Column(), desc: true} }
 
 // NullsFirst places NULLs before other values.
-func (o Order) NullsFirst() Order { o.nulls = nullsFirst; return o }
+func (o Order) NullsFirst() Order { o.nulls = NullsFirst; return o }
 
 // NullsLast places NULLs after other values.
-func (o Order) NullsLast() Order { o.nulls = nullsLast; return o }
+func (o Order) NullsLast() Order { o.nulls = NullsLast; return o }
 
 // OrderBy orders by an arbitrary expression, ascending.
 func OrderBy(e Expr) Order { return Order{expr: e} }
