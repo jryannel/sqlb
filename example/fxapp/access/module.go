@@ -1,7 +1,7 @@
 // Package access decides which space a request speaks for.
 //
 // A space presents a shared secret as a bearer token, and the middleware turns
-// it into a verified principal on the request context — through the sqlbfx
+// it into a verified principal on the request context — through sqlb's
 // principal seam, so the hooks that read it back never name this package's
 // mechanism. That is the whole of it, and it is deliberately the smallest
 // thing that is still a boundary rather than a convention: the alternative an
@@ -19,10 +19,10 @@ package access
 import (
 	"go.uber.org/fx"
 
-	"github.com/jryannel/sqlb/sqlbfx"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 )
 
 var Module = fx.Module("access",
 	fx.Provide(NewConfig),
-	sqlbfx.ProvideMiddleware(Config.Middleware),
+	fxkit.ProvideMiddleware(Config.Middleware),
 )

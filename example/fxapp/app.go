@@ -9,7 +9,7 @@
 // # What to read, and in what order
 //
 //	noteschema/schema.go   the source of truth: two tables, one of them a tenant
-//	platform.go            the sqlbfx kit, fed by this application's configuration
+//	platform.go            the fxkit glue, fed by this application's configuration
 //	store/module.go        the generated resources, mounted on the scoped handle
 //	notes/hooks.go         the space boundary, one registration per statement kind
 //	app_test.go            the claims above, asserted — including the one that fails
@@ -36,12 +36,14 @@ import (
 // this one. That is the split a platform repository makes into two modules —
 // see the studio-apps/core layout, where the first half is an
 // appbase.Standard() every product composes and the second is the product.
-// The four glue packages this example used to hand-write (dbbase, sqlbkit,
-// httpkit) are now the sqlbfx kit they were promoted into (ADR-0044), and
-// platform.go is what is left: the configuration boundary.
+// The glue packages this example used to hand-write (dbbase, sqlbkit, httpkit)
+// are now one package, fxkit, and platform.go is what is left: the
+// configuration boundary. fxkit was briefly a published module and is not one
+// any more — ADR-0044 has the reversal, and fxkit/doc.go states the four
+// obligations that make a copy of it correct.
 func Modules() fx.Option {
 	return fx.Options(
-		// Platform: the logger and the sqlbfx kit — pool, migrations, the
+		// Platform: the logger and the fxkit glue — pool, migrations, the
 		// scoped and unscoped handles, chi + Huma, and the four value groups
 		// the modules below contribute to.
 		Platform(),

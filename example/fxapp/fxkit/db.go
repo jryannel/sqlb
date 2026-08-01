@@ -1,4 +1,4 @@
-package sqlbfx
+package fxkit
 
 import (
 	"context"
@@ -72,7 +72,7 @@ func newPool(p poolParams) (*pgxpool.Pool, error) {
 
 	poolCfg, err := pgxpool.ParseConfig(p.Cfg.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("sqlbfx: reading the database URL: %w", err)
+		return nil, fmt.Errorf("fxkit: reading the database URL: %w", err)
 	}
 	if p.Cfg.MaxConns > 0 {
 		poolCfg.MaxConns = p.Cfg.MaxConns
@@ -86,9 +86,9 @@ func newPool(p poolParams) (*pgxpool.Pool, error) {
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
-		return nil, fmt.Errorf("sqlbfx: opening the database: %w", err)
+		return nil, fmt.Errorf("fxkit: opening the database: %w", err)
 	}
-	log.Debug("sqlbfx: pool opened", "max_conns", poolCfg.MaxConns)
+	log.Debug("fxkit: pool opened", "max_conns", poolCfg.MaxConns)
 
 	p.Lc.Append(fx.Hook{
 		OnStop: func(context.Context) error {

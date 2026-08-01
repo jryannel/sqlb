@@ -150,7 +150,7 @@ the section it bears on, and move on.
 | [0041](0041-computed-fields.md) | A computed field is an expression in the row, and the parameterised ones oblige a hook | Working | Medium |
 | [0042](0042-the-exit-is-generated.md) | The exit is generated, and what it does not carry is named | Working | Medium |
 | [0043](0043-declared-actions.md) | A declared action generates the envelope, and the verb stays plain Go | Working | Medium |
-| [0044](0044-the-container-is-an-adapter.md) | The container is an adapter, and the contribution types are the contract | Exploring | Medium |
+| [0044](0044-the-container-is-an-adapter.md) | The container is an adapter, and the adapter is glue to copy | Working | High |
 | [0045](0045-the-stream-is-a-seam.md) | The stream is a seam, and its first source is honest about being in-process | Working | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of

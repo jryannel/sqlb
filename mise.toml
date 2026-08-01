@@ -58,10 +58,9 @@ dir = "example/tasks"
 run = "go test ./..."
 
 [tasks.test-fx]
-description = "Run the sqlbfx kit's suite and the fx example's. The kit's tests need no Docker — graph validation constructs nothing, and the rest exercise the assembly seams directly. The example needs Docker for all but one of its tests: everything else boots the whole application against a real Postgres because the claims are about a boot — that the migrations apply, that provisioning survives a restart, that the space boundary holds between two callers. It also carries the one assertion the other examples cannot make: with the notes module removed from the list, the server must refuse to start rather than serve unscoped rows (ADR-0030)."
+description = "Run the fx example, including the fxkit glue it assembles itself from. The kit's own tests need no Docker — graph validation constructs nothing, and the rest exercise the assembly seams directly. The example needs Docker for all but one of its tests: everything else boots the whole application against a real Postgres because the claims are about a boot — that the migrations apply, that provisioning survives a restart, that the space boundary holds between two callers. It also carries the one assertion the other examples cannot make: with the notes module removed from the list, the server must refuse to start rather than serve unscoped rows (ADR-0030)."
 run = '''
 set -e
-cd "$MISE_PROJECT_ROOT/sqlbfx" && go test ./...
 cd "$MISE_PROJECT_ROOT/example/fxapp" && go test ./...
 '''
 
@@ -108,23 +107,21 @@ go tool cover -func=coverage.out | tail -20
 '''
 
 [tasks.vet]
-description = "go vet across all five modules"
+description = "go vet across all four modules"
 run = '''
 set -e
 go vet ./...
 cd "$MISE_PROJECT_ROOT/pgtest" && go vet ./...
-cd "$MISE_PROJECT_ROOT/sqlbfx" && go vet ./...
 cd "$MISE_PROJECT_ROOT/example/tasks" && go vet ./...
 cd "$MISE_PROJECT_ROOT/example/fxapp" && go vet ./...
 '''
 
 [tasks.lint]
-description = "golangci-lint across all five modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
+description = "golangci-lint across all four modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
 run = '''
 set -e
 golangci-lint run
 cd "$MISE_PROJECT_ROOT/pgtest" && golangci-lint run
-cd "$MISE_PROJECT_ROOT/sqlbfx" && golangci-lint run
 cd "$MISE_PROJECT_ROOT/example/tasks" && golangci-lint run
 cd "$MISE_PROJECT_ROOT/example/fxapp" && golangci-lint run
 '''
@@ -216,7 +213,7 @@ run = '''
 # Every module, because pgtest and the two examples have a go.mod each and an
 # untidied one there fails in CI exactly as confusingly as an untidied one here.
 status=0
-for mod in . pgtest sqlbfx example/tasks example/fxapp; do
+for mod in . pgtest example/tasks example/fxapp; do
   cd "$MISE_PROJECT_ROOT/$mod"
   cp go.mod go.mod.bak
   [ -f go.sum ] && cp go.sum go.sum.bak

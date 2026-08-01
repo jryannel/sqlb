@@ -11,10 +11,10 @@ package notes
 import (
 	"go.uber.org/fx"
 
-	"github.com/jryannel/sqlb/sqlbfx"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 )
 
 var Module = fx.Module("notes",
-	sqlbfx.ProvideHooks(provideHooks),
-	sqlbfx.ProvideOperations(provideOperations),
+	fxkit.ProvideHooks(provideHooks),
+	fxkit.ProvideOperations(provideOperations),
 )
