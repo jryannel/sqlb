@@ -352,6 +352,15 @@ const (
 	defaultMaxPage  = 200
 	defaultFilters  = 24
 	defaultSorts    = 4
+	// A list is one condition against MaxFilters however long it is, and a
+	// value is a lever on how much work a scan does. Without these two, the
+	// filter budget above is bypassed by writing ?id=in.1,2,3,… — one
+	// parameter, one condition, and a bind parameter per member until pgx's
+	// 65535 runs out. Constants rather than Limits fields because they are
+	// package constants in sqlb too, and the claim this file makes is that the
+	// exit refuses what the API refused (#69).
+	maxListValues  = 100
+	maxValueLength = 256
 )
 
 func (l Limits) resolved() Limits {
@@ -410,9 +419,18 @@ func ParseList(values url.Values, cols []Column, lim Limits) (ListRequest, error
 		if len(searchable) == 0 {
 			return out, badRequest("query.search", "no column here is searchable", nil)
 		}
+		if len(term) > maxValueLength {
+			return out, badRequest("query.search",
+				fmt.Sprintf("search term is %d bytes, the limit is %d", len(term), maxValueLength), nil)
+		}
+		// Escaped, like every other pattern operand. Search was the one path
+		// that left % and _ live, so ?search=50%25 produced the operand %50%%
+		// — a caller-controlled scan-cost lever, and a silent behaviour change
+		// from the API, where a search for a literal "50%" matched literally.
+		pattern := "%" + escapeLike(term) + "%"
 		or := make([]Condition, 0, len(searchable))
 		for _, name := range searchable {
-			or = append(or, Condition{Column: name, Op: OpILike, Value: "%" + term + "%"})
+			or = append(or, Condition{Column: name, Op: OpILike, Value: pattern})
 		}
 		out.Query.Where = append(out.Query.Where, Condition{Or: or})
 	}
@@ -485,6 +503,9 @@ func parseCondition(col Column, raw string) (Condition, error) {
 		// Not an operator, so the whole string is the value — which is what
 		// makes ?status=draft mean equality, and what keeps a value containing
 		// a dot working.
+		if err := withinLength(col, raw); err != nil {
+			return Condition{}, err
+		}
 		v, err := col.Parse(raw)
 		if err != nil {
 			return Condition{}, badRequest("query."+col.Name, err.Error(), nil)
@@ -500,6 +521,9 @@ func parseCondition(col Column, raw string) (Condition, error) {
 		if !ok {
 			return Condition{}, badRequest("query."+col.Name, "between takes two values separated by a comma", nil)
 		}
+		if err := withinLength(col, lo, hi); err != nil {
+			return Condition{}, err
+		}
 		loV, err := col.Parse(lo)
 		if err != nil {
 			return Condition{}, badRequest("query."+col.Name, err.Error(), nil)
@@ -511,6 +535,13 @@ func parseCondition(col Column, raw string) (Condition, error) {
 		return Condition{Column: col.Name, Op: spec.sql, Value: loV, Value2: hiV}, nil
 	case -1:
 		parts := strings.Split(value, ",")
+		if len(parts) > maxListValues {
+			return Condition{}, badRequest("query."+col.Name,
+				fmt.Sprintf("operator %q was given %d values, the limit is %d", name, len(parts), maxListValues), nil)
+		}
+		if err := withinLength(col, parts...); err != nil {
+			return Condition{}, err
+		}
 		vals := make([]any, 0, len(parts))
 		for _, part := range parts {
 			v, err := col.Parse(part)
@@ -521,6 +552,9 @@ func parseCondition(col Column, raw string) (Condition, error) {
 		}
 		return Condition{Column: col.Name, Op: spec.sql, Values: vals}, nil
 	default:
+		if err := withinLength(col, value); err != nil {
+			return Condition{}, err
+		}
 		if spec.pattern != "" {
 			// A pattern operator is text, and the value is escaped so that a %
 			// or an _ in it matches itself rather than becoming a wildcard.
@@ -533,6 +567,20 @@ func parseCondition(col Column, raw string) (Condition, error) {
 		}
 		return Condition{Column: col.Name, Op: spec.sql, Value: v}, nil
 	}
+}
+
+// withinLength bounds each operand, so a filter value cannot be used to make a
+// scan arbitrarily expensive. The pattern operators pass their operand through
+// to LIKE, which is what makes a long one worth refusing rather than merely
+// odd.
+func withinLength(col Column, values ...string) error {
+	for _, v := range values {
+		if len(v) > maxValueLength {
+			return badRequest("query."+col.Name,
+				fmt.Sprintf("value is %d bytes, the limit is %d", len(v), maxValueLength), nil)
+		}
+	}
+	return nil
 }
 
 // escapeLike neutralises the pattern metacharacters in a user's search term.
@@ -590,10 +638,16 @@ func badRequest(location, message string, allowed []string) *Problem {
 }
 
 // WriteProblem writes an error response. Anything that is not already a
-// Problem is a 500 whose detail is not the caller's business.
+// Problem, and is not an integrity violation the database named, is a 500 whose
+// detail is not the caller's business.
 func WriteProblem(w http.ResponseWriter, err error) {
 	var p *Problem
-	if !errors.As(err, &p) {
+	switch {
+	case errors.As(err, &p):
+	default:
+		p = constraintProblem(err)
+	}
+	if p == nil {
 		p = &Problem{
 			Status: http.StatusInternalServerError,
 			Title:  http.StatusText(http.StatusInternalServerError),
@@ -603,6 +657,44 @@ func WriteProblem(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)
 	_ = json.NewEncoder(w).Encode(p)
+}
+
+// constraintProblem answers a refused write in the terms of the request that
+// caused it, or nil when the error is not one.
+//
+// Before the eject, a duplicate unique value answered 409 and an FK, check or
+// not-null violation answered 422, classified off SQLSTATE class 23. Without
+// this the same request answered 500 here, so a client-side retry loop keyed on
+// 409 broke quietly on the day of the eject (#70). The mapping is small and
+// dependency-free, and this file already imports pgx, so carrying it costs less
+// than documenting its absence.
+//
+// A unique or exclusion violation is 409: the request is well formed and would
+// be valid against a different state of the database. The others are 422 — the
+// entity itself is wrong, and no amount of waiting makes a row referencing a
+// product that does not exist into a row that does.
+//
+// The constraint's name is deliberately not in the body: put in a response it
+// becomes a way to enumerate a schema's indexes by provoking them.
+func constraintProblem(err error) *Problem {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || len(pgErr.Code) != 5 || pgErr.Code[:2] != "23" {
+		return nil
+	}
+	switch pgErr.Code {
+	case "23505", "23P01": // unique_violation, exclusion_violation
+		return &Problem{
+			Status: http.StatusConflict,
+			Title:  http.StatusText(http.StatusConflict),
+			Detail: "this conflicts with a row that already exists",
+		}
+	default: // foreign_key, check, not_null
+		return &Problem{
+			Status: http.StatusUnprocessableEntity,
+			Title:  http.StatusText(http.StatusUnprocessableEntity),
+			Detail: "this breaks a rule the database enforces",
+		}
+	}
 }
 
 // WriteJSON writes a success response.

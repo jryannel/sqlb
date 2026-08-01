@@ -88,6 +88,16 @@ current — and drop that gate on the day you stop.
   entirely.
 - **The error shape.** RFC 9457 problem documents, with the ` + "`allowed`" + ` list on
   each detail, so a client's error handling does not change.
+- **The constraint mapping.** A duplicate unique value is still a ` + "`409`" + `, and a
+  foreign-key, check or not-null violation still a ` + "`422`" + `, classified off
+  SQLSTATE class 23 exactly as before — so a retry loop keyed on ` + "`409`" + ` keeps
+  working. The ` + "`detail`" + ` text is generic where the API named the resource; the
+  status, which is what clients branch on, is identical.
+- **The request budgets.** ` + "`MaxFilters`" + ` and ` + "`MaxSortTerms`" + ` come from the
+  schema; the list cap (100 values in one ` + "`in`/`nin`" + `) and the value-length cap
+  (256 bytes) are constants at the top of ` + "`support.go`" + `, edit them there.
+  ` + "`?search`" + ` escapes ` + "`%`" + ` and ` + "`_`" + ` in the term, so a search for a
+  literal percent sign still matches literally.
 - **The obligation.** A table that declared ` + "`Scoped`" + ` or ` + "`SoftDelete`" + ` refuses to
   register without a ` + "`Confine`" + ` hook, and a scoped table with a create endpoint
   refuses without an ` + "`Assign`" + ` hook. Startup errors, exactly as before.
