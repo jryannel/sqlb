@@ -72,7 +72,10 @@ capabilities over structs you already have, including stock
 from static SQL to a generated resource, in four stages you can stop after.
 
 **Already have a database.** [Adopting a database](../migrations/adopting.md)
-reads it back into a schema file.
+reads it back into a schema file, and
+[Refactoring a database](../migrations/refactoring-a-database.md) is what
+happens to it afterwards — adding, renaming and dropping, and which of those
+break a client rather than a table.
 
 ## Requirements
 

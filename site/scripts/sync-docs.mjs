@@ -130,7 +130,11 @@ const SOURCES = [
   {
     dir: "docs/migrations",
     route: "migrations",
-    sequence: ["index", "rollout", "adopting"],
+    // refactoring-a-database.md sits here rather than under /project/ because
+    // it is the narrative half of this section: index documents the API, and it
+    // documents what an actual schema change costs. It goes last because it
+    // assumes the other three.
+    sequence: ["index", "rollout", "adopting", "refactoring-a-database"],
     order(slug) {
       return this.sequence.indexOf(slug);
     },
