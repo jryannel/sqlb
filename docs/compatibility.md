@@ -8,8 +8,8 @@ document exists: an unreleased `main` reads as unknown risk, whereas a tag with
 a stated blast radius is something a reader can decide against.
 
 Semantic versioning applies from `v1.0.0`. Until then a minor bump may break a
-surface listed under **Will move**, and each break is described in the release
-notes with the mechanical edit that fixes it.
+surface listed under **Will move**, and each break is described in [the release
+notes](releases.md) with the mechanical edit that fixes it.
 
 What has to be true before that version — and why the gating item is evidence
 rather than features — is [the road to 1.0](release-1.0.md).

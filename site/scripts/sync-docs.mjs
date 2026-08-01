@@ -168,21 +168,25 @@ const SOURCES = [
     // accident — what belongs on the site is a decision each time.
     //
     // Read in this order: what it is for, how it is built, what it promises,
-    // how to leave, what it has to do before that promise becomes permanent,
-    // how it sits beside sqlc, how to move one endpoint across, and what an
-    // outside reader made of it. The refactoring page follows with-sqlc.md
-    // directly because it is the second half of that argument: one says which
-    // queries belong on which side, the other says what moving one costs. The
-    // review is a dated snapshot and says so in its own first paragraph, which
-    // is what makes it publishable rather than misleading.
+    // how to leave, what it has shipped, what it has to do before that promise
+    // becomes permanent, how it sits beside sqlc, how to move one endpoint
+    // across, and what an outside reader made of it. The refactoring page
+    // follows with-sqlc.md directly because it is the second half of that
+    // argument: one says which queries belong on which side, the other says
+    // what moving one costs. The review is a dated snapshot and says so in its
+    // own first paragraph, which is what makes it publishable rather than
+    // misleading.
     //
     // The exit sits directly after the compatibility promise on purpose: the
-    // two answer the same reader's question, one page apart.
+    // two answer the same reader's question, one page apart. The releases
+    // follow, because compatibility.md promises that each break is described in
+    // the release notes and that page is where they are.
     files: [
       "vision.md",
       "architecture.md",
       "compatibility.md",
       "eject.md",
+      "releases.md",
       "release-1.0.md",
       "comparisons.md",
       "with-sqlc.md",
