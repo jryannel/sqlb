@@ -284,19 +284,37 @@ func TestSelfReferentialForeignKeyKeepsItsColumn(t *testing.T) {
 	if tbl == nil {
 		t.Fatal("employees was not imported at all")
 	}
-	var found bool
+	var found *schema.FieldDesc
 	for _, f := range tbl.Fields() {
 		if f.Desc().Name == "manager_id" {
-			found = true
+			found = f.Desc()
 		}
 	}
-	if !found {
-		t.Error("manager_id was dropped; only its foreign key is unrepresentable")
+	if found == nil {
+		t.Fatal("manager_id was dropped; the column is an ordinary typed column")
 	}
-	// And the report says so accurately: the old message claimed the target
-	// table "is not in the schema being read", which is the table being read.
-	if !strings.Contains(rep.String(), "self-referential") {
-		t.Errorf("report should name the self-reference:\n%s", rep)
+
+	// And the foreign key comes with it. A self-reference *is* declarable, and
+	// only one way: Ref inside the table's own definition is a Go
+	// initialisation cycle, so the declaration is forced to write
+	// ExternalRef("manager", "employees.id").Enforced() — and an import that
+	// reported the constraint as undeclarable made that declaration read as
+	// permanent drift, plus a second waiver for the implicit index ExternalRef
+	// wants (issue #82). Both sides produce the same field now.
+	if found.Ref == nil {
+		t.Fatalf("the self-referential foreign key was dropped: %+v", found)
+	}
+	if !found.Ref.External {
+		t.Errorf("a self-reference must import as an ExternalRef, since that is the only " +
+			"spelling a declaration can use")
+	}
+	target, col, enforced := found.Ref.EnforcedTarget()
+	if !enforced || target != "employees" || col != "id" {
+		t.Errorf("EnforcedTarget() = %q,%q,%v; want employees,id,true", target, col, enforced)
+	}
+	// Nothing left to report: the whole column round-trips.
+	if strings.Contains(rep.String(), "self-referential") {
+		t.Errorf("a declarable self-reference should not be reported as a gap:\n%s", rep)
 	}
 }
 
@@ -334,7 +352,13 @@ func TestUndeclarableNamesAreReportedRatherThanFatal(t *testing.T) {
 	}
 }
 
-func TestBuildReportsAForeignKeyCycle(t *testing.T) {
+// A foreign-key cycle is broken rather than refused. It used to drop every table
+// on the cycle, with advice — "make one side an ExternalRef" — that was right
+// for a declaration and impossible to follow from here, so a drift gate diffing
+// a declaration that *had* broken the cycle reported the table as absent from
+// the database (issue #80). The only workaround was to exclude one of the
+// tables, which meant the gate could never cover it.
+func TestBuildBreaksAForeignKeyCycleWithAnExternalRef(t *testing.T) {
 	// A reference names the target table's own value, so a cycle is a Go
 	// initialisation cycle: there is no ordering that fixes it.
 	cat := &catalog{
@@ -354,12 +378,48 @@ func TestBuildReportsAForeignKeyCycle(t *testing.T) {
 				RefTable: "a", RefCols: []string{"id"}},
 		},
 	}
-	_, rep, err := build(cat, Options{})
+	r, rep, err := build(cat, Options{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+
+	// Both tables are here. Dropping them was the bug.
+	for _, name := range []string{"a", "b"} {
+		if r.Get(name) == nil {
+			t.Fatalf("%s was dropped because it sits on a cycle:\n%s", name, rep)
+		}
+	}
+
+	// Every foreign key survives, one side of the cycle as an ExternalRef —
+	// the same spelling the declaration is forced to use.
+	var external int
+	for _, name := range []string{"a", "b"} {
+		for _, f := range r.Get(name).Fields() {
+			ref := f.Desc().Ref
+			if ref == nil {
+				continue
+			}
+			if ref.External {
+				external++
+				if _, _, ok := ref.EnforcedTarget(); !ok {
+					t.Errorf("%s.%s imported as an unenforced ExternalRef, so the live "+
+						"foreign key would be proposed for deletion", name, f.Desc().Name)
+				}
+			}
+		}
+	}
+	if external != 1 {
+		t.Errorf("want exactly one side of the cycle broken, got %d ExternalRefs", external)
+	}
+
+	// And it is said out loud — as a note, not a gap: nothing was lost, so
+	// Report.Err must stay nil or a clean round trip would fail.
 	if !strings.Contains(rep.String(), "cycle") {
-		t.Fatalf("a foreign key cycle must be reported:\n%s", rep)
+		t.Errorf("breaking a cycle must be noted:\n%s", rep)
+	}
+	if err := rep.Err(); err != nil {
+		t.Errorf("a broken cycle loses nothing, so it must not read as an unrepresentable "+
+			"construct: %v", err)
 	}
 }
 
@@ -440,36 +500,44 @@ func TestColumnType(t *testing.T) {
 		formatted string
 		want      schema.Type
 		size      int
+		scale     int
 		ok        bool
 	}{
-		{"text", schema.TypeText, 0, true},
-		{"character varying(200)", schema.TypeVarchar, 200, true},
-		{"character varying", schema.TypeText, 0, true},
-		{"integer", schema.TypeInt, 0, true},
-		{"bigint", schema.TypeBigInt, 0, true},
-		{"double precision", schema.TypeFloat, 0, true},
-		{"numeric", schema.TypeNumeric, 0, true},
-		{"boolean", schema.TypeBool, 0, true},
-		{"uuid", schema.TypeUUID, 0, true},
-		{"timestamp with time zone", schema.TypeTimestamp, 0, true},
-		{"date", schema.TypeDate, 0, true},
-		{"time without time zone", schema.TypeTime, 0, true},
-		{"jsonb", schema.TypeJSON, 0, true},
-		{"bytea", schema.TypeBytes, 0, true},
+		{"text", schema.TypeText, 0, 0, true},
+		{"character varying(200)", schema.TypeVarchar, 200, 0, true},
+		{"character varying", schema.TypeText, 0, 0, true},
+		{"integer", schema.TypeInt, 0, 0, true},
+		{"bigint", schema.TypeBigInt, 0, 0, true},
+		{"double precision", schema.TypeFloat, 0, 0, true},
+		{"numeric", schema.TypeNumeric, 0, 0, true},
+		{"boolean", schema.TypeBool, 0, 0, true},
+		{"uuid", schema.TypeUUID, 0, 0, true},
+		{"timestamp with time zone", schema.TypeTimestamp, 0, 0, true},
+		{"date", schema.TypeDate, 0, 0, true},
+		{"time without time zone", schema.TypeTime, 0, 0, true},
+		{"jsonb", schema.TypeJSON, 0, 0, true},
+		{"bytea", schema.TypeBytes, 0, 0, true},
+		// A numeric's precision and scale are part of the type, and since #81
+		// the DSL can declare them, so they import rather than being refused.
+		// Postgres formats a precision declared alone as "numeric(5,0)"; the
+		// bare "numeric(5)" spelling is accepted for the same reading.
+		{"numeric(10,2)", schema.TypeNumeric, 10, 2, true},
+		{"numeric(5,0)", schema.TypeNumeric, 5, 0, true},
+		{"numeric(5)", schema.TypeNumeric, 5, 0, true},
 		// Types with no equivalent are refused rather than approximated: a
 		// column imported as the wrong type produces a migration proposing to
 		// change the real one.
-		{"numeric(10,2)", schema.TypeNumeric, 0, false},
-		{"smallint", schema.TypeInt, 0, false},
-		{"real", schema.TypeFloat, 0, false},
-		{"money", "", 0, false},
-		{"timestamp without time zone", "", 0, false},
-		{"json", "", 0, false},
+		{"numeric(bad,2)", "", 0, 0, false},
+		{"smallint", schema.TypeInt, 0, 0, false},
+		{"real", schema.TypeFloat, 0, 0, false},
+		{"money", "", 0, 0, false},
+		{"timestamp without time zone", "", 0, 0, false},
+		{"json", "", 0, 0, false},
 	} {
-		got, size, ok := columnType(tc.formatted)
-		if ok != tc.ok || (ok && (got != tc.want || size != tc.size)) {
-			t.Errorf("columnType(%q) = %q,%d,%v; want %q,%d,%v",
-				tc.formatted, got, size, ok, tc.want, tc.size, tc.ok)
+		got, size, scale, ok := columnType(tc.formatted)
+		if ok != tc.ok || (ok && (got != tc.want || size != tc.size || scale != tc.scale)) {
+			t.Errorf("columnType(%q) = %q,%d,%d,%v; want %q,%d,%d,%v",
+				tc.formatted, got, size, scale, ok, tc.want, tc.size, tc.scale, tc.ok)
 		}
 	}
 }
@@ -572,7 +640,7 @@ func TestSplitArrayType(t *testing.T) {
 	if !array {
 		t.Fatal("text[][] did not read as an array")
 	}
-	if _, _, ok := columnType(elem); ok {
+	if _, _, _, ok := columnType(elem); ok {
 		t.Errorf("columnType(%q) accepted a nested array spelling", elem)
 	}
 }

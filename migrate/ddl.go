@@ -69,6 +69,15 @@ func scalarSQLType(d *schema.FieldDesc) (string, error) {
 	case schema.TypeFloat:
 		return "double precision", nil
 	case schema.TypeNumeric:
+		// A numeric with a precision is a different type from an unbounded
+		// one, the way a varchar with a length is, so it is part of the type
+		// name rather than a constraint on it (issue #81).
+		switch {
+		case d.Size > 0 && d.Scale != 0:
+			return fmt.Sprintf("numeric(%d,%d)", d.Size, d.Scale), nil
+		case d.Size > 0:
+			return fmt.Sprintf("numeric(%d,0)", d.Size), nil
+		}
 		return "numeric", nil
 	case schema.TypeBool:
 		return "boolean", nil
@@ -127,6 +136,22 @@ func widens(from, to *schema.FieldDesc) bool {
 			// Zero means unbounded, so it accepts anything.
 			return to.Size == 0 || to.Size >= from.Size
 		}
+	case schema.TypeNumeric:
+		// Same rule as varchar, one dimension at a time: an unbounded numeric
+		// accepts anything, and a bounded one accepts a bounded one whose
+		// integer part and fractional part both fit. Narrowing either is a
+		// migration a person writes, because Postgres rounds the scale and
+		// errors on the precision.
+		if to.Type != schema.TypeNumeric {
+			return false
+		}
+		if to.Size == 0 {
+			return true
+		}
+		if from.Size == 0 {
+			return false
+		}
+		return to.Size-to.Scale >= from.Size-from.Scale && to.Scale >= from.Scale
 	case schema.TypeEnum:
 		// An enum is already text; only the CHECK constraint changes.
 		return to.Type == schema.TypeText

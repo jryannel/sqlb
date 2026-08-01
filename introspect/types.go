@@ -33,68 +33,86 @@ func splitArrayType(formatted string) (elem string, array bool) {
 }
 
 // columnType maps a formatted type onto a logical one, and returns the type's
-// parenthesised argument where it has one — a varchar's length, or a vector's
-// dimension. Both are the same thing to Postgres and to this function; what
-// each means is decided by the constructor that receives it.
-func columnType(formatted string) (t schema.Type, typeArg int, ok bool) {
+// parenthesised arguments where it has them — a varchar's length, a vector's
+// dimension, or a numeric's precision and scale. They are the same thing to
+// Postgres and to this function; what each means is decided by the constructor
+// that receives it.
+func columnType(formatted string) (t schema.Type, typeArg, scale int, ok bool) {
 	base, arg := splitTypeArg(formatted)
 	switch base {
 	case "text":
-		return schema.TypeText, 0, true
+		return schema.TypeText, 0, 0, true
 	case "character varying":
 		// A varchar with no length is indistinguishable from text in
 		// Postgres, and the DDL layer renders both as text, so importing it
 		// as text keeps the round trip closed.
 		if arg == "" {
-			return schema.TypeText, 0, true
+			return schema.TypeText, 0, 0, true
 		}
 		n, err := strconv.Atoi(arg)
 		if err != nil {
-			return "", 0, false
+			return "", 0, 0, false
 		}
-		return schema.TypeVarchar, n, true
+		return schema.TypeVarchar, n, 0, true
 	case "integer", "smallint":
 		// smallint widens to integer, which is the safe direction: the DSL
 		// cannot express it, and a migration from this schema would widen the
 		// column rather than narrow it.
-		return schema.TypeInt, 0, base == "integer"
+		return schema.TypeInt, 0, 0, base == "integer"
 	case "bigint":
-		return schema.TypeBigInt, 0, true
+		return schema.TypeBigInt, 0, 0, true
 	case "double precision", "real":
-		return schema.TypeFloat, 0, base == "double precision"
+		return schema.TypeFloat, 0, 0, base == "double precision"
 	case "numeric":
 		// A numeric with a precision is a different type from an unbounded
-		// one and the DSL has no way to say so.
-		return schema.TypeNumeric, 0, arg == ""
+		// one, and since #81 the DSL can say so: Numeric(name, p, s). Postgres
+		// formats it as "numeric(5,2)", and as "numeric(5,0)" for a precision
+		// declared alone.
+		if arg == "" {
+			return schema.TypeNumeric, 0, 0, true
+		}
+		precText, scaleText, hasScale := strings.Cut(arg, ",")
+		prec, err := strconv.Atoi(strings.TrimSpace(precText))
+		if err != nil || prec <= 0 {
+			return "", 0, 0, false
+		}
+		if !hasScale {
+			return schema.TypeNumeric, prec, 0, true
+		}
+		sc, err := strconv.Atoi(strings.TrimSpace(scaleText))
+		if err != nil {
+			return "", 0, 0, false
+		}
+		return schema.TypeNumeric, prec, sc, true
 	case "boolean":
-		return schema.TypeBool, 0, true
+		return schema.TypeBool, 0, 0, true
 	case "uuid":
-		return schema.TypeUUID, 0, true
+		return schema.TypeUUID, 0, 0, true
 	case "timestamp with time zone":
-		return schema.TypeTimestamp, 0, true
+		return schema.TypeTimestamp, 0, 0, true
 	case "date":
-		return schema.TypeDate, 0, true
+		return schema.TypeDate, 0, 0, true
 	case "time without time zone":
-		return schema.TypeTime, 0, true
+		return schema.TypeTime, 0, 0, true
 	case "jsonb":
-		return schema.TypeJSON, 0, true
+		return schema.TypeJSON, 0, 0, true
 	case "bytea":
-		return schema.TypeBytes, 0, true
+		return schema.TypeBytes, 0, 0, true
 	case "vector":
 		// A vector with no dimension is a legal Postgres column and not one the
 		// DSL can declare: the dimension is part of the type there, so
 		// importing it as any particular width would propose a migration that
 		// narrows the real column to a size nobody chose.
 		if arg == "" {
-			return "", 0, false
+			return "", 0, 0, false
 		}
 		n, err := strconv.Atoi(arg)
 		if err != nil || n <= 0 {
-			return "", 0, false
+			return "", 0, 0, false
 		}
-		return schema.TypeVector, n, true
+		return schema.TypeVector, n, 0, true
 	}
-	return "", 0, false
+	return "", 0, 0, false
 }
 
 // splitTypeArg splits "character varying(200)" into its name and its argument.

@@ -43,6 +43,7 @@ This page covers the column vocabulary and the table-level constructs.
 | `Int(name)` | `int` | `int32` |
 | `BigInt(name)` | `bigint` | `int64` |
 | `Float(name)` / `Numeric(name)` | `float` / `numeric` | `float64` |
+| `Numeric(name, p, s)` | `numeric(p, s)` | `float64` |
 | `Bool(name)` | `bool` | `bool` |
 | `UUID(name)` | `uuid` | `string` |
 | `Timestamp(name)` | `timestamptz` | `time.Time` |

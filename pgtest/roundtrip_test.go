@@ -36,6 +36,11 @@ func declare(r *schema.Registry) {
 			Filterable(),
 		schema.Int("views").Default(schema.Value(0)).Sortable(),
 		schema.Numeric("rating").Nullable(),
+		// A precision-bounded numeric, which is a *different type* from the
+		// unbounded one above: an adopting schema that could not say so either
+		// held a permanent add-column waiver or left the field out of the
+		// model, the REST surface and every generated client (issue #81).
+		schema.Numeric("contracted_hours", 5, 2).Nullable(),
 		schema.Float("score").Nullable(),
 		schema.Bool("pinned").Default(schema.Value(false)),
 		schema.JSON("meta").Nullable(),

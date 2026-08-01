@@ -525,6 +525,12 @@ func fieldConstructor(d *schema.FieldDesc) (string, error) {
 	case schema.TypeFloat:
 		return "schema.Float(" + name + ")", nil
 	case schema.TypeNumeric:
+		// The precision is part of the type, so a bootstrap that dropped it
+		// would render a schema whose first diff proposes rewriting the column
+		// it was rendered from (issue #81).
+		if d.Size > 0 {
+			return fmt.Sprintf("schema.Numeric(%s, %d, %d)", name, d.Size, d.Scale), nil
+		}
 		return "schema.Numeric(" + name + ")", nil
 	case schema.TypeBool:
 		return "schema.Bool(" + name + ")", nil
