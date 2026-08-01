@@ -263,7 +263,7 @@ func removeScratch(dir string, stderr io.Writer) {
 		return
 	}
 	if stderr != nil {
-		fmt.Fprintf(stderr, "sqlb: could not remove the scratch directory %s: %v\n", dir, err)
+		_, _ = fmt.Fprintf(stderr, "sqlb: could not remove the scratch directory %s: %v\n", dir, err)
 	}
 }
 

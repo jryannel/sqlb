@@ -197,7 +197,11 @@ func (d *DB) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
 	if err != nil {
 		return errRow{err}
 	}
-	return rows.(*pgfake.Rows)
+	row, ok := rows.(*pgfake.Rows)
+	if !ok {
+		return errRow{fmt.Errorf("sqlbtest: unexpected rows type %T", rows)}
+	}
+	return row
 }
 
 // Exec answers a write, reporting a command tag whose row count is the number of
