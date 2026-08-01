@@ -89,7 +89,7 @@ func TestResourceRefusesAnUnboundComputedColumn(t *testing.T) {
 // rendering NULL and answering false forever.
 func TestResourceAcceptsAComputedColumnWithAHook(t *testing.T) {
 	reg := sqlb.NewRegistry()
-	sqlb.OnIn[Starred](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[Starred]) error {
+	sqlb.On[Starred](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[Starred]) error {
 		q.Bind("viewer", "member-1")
 		return nil
 	})

@@ -137,13 +137,13 @@ func TestConstraintResponseDoesNotNameTheConstraint(t *testing.T) {
 // the caller lacks a role has already decided the answer; replacing it with a
 // generic 500 turns every deliberate refusal into an apparent outage.
 func TestAnErrorCarryingItsOwnStatusIsNotSanitised(t *testing.T) {
-	defer sqlb.On[Post]().Reset()
-	sqlb.On[Post]().BeforeCreate(func(context.Context, *Post) error {
+	reg := sqlb.NewRegistry()
+	sqlb.On[Post](reg).BeforeCreate(func(context.Context, *Post) error {
 		return huma.Error403Forbidden("posting needs the author role")
 	})
 
 	db := newFakeDB(t, reply{cols: postCols()})
-	api := mount(t, db.db, postOptions())
+	api := mount(t, sqlb.New(db.db).WithHooks(reg), postOptions())
 
 	resp := api.Post("/posts", map[string]any{
 		"org_id": "acme", "title": "Hello", "body": "text",

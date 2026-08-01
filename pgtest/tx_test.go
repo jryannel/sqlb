@@ -139,7 +139,7 @@ func TestHookReadsUncommittedRowsThroughTxFrom(t *testing.T) {
 
 	scoped := sqlb.NewRegistry()
 	var seenByHook int64 = -1
-	sqlb.OnIn[Account](scoped).BeforeCreate(func(ctx context.Context, _ *Account) error {
+	sqlb.On[Account](scoped).BeforeCreate(func(ctx context.Context, _ *Account) error {
 		tx, ok := sqlb.TxFrom(ctx)
 		if !ok {
 			return errors.New("accounts must be created inside a transaction")
@@ -271,7 +271,7 @@ func TestHookErrorRollsBackTheUnitOfWork(t *testing.T) {
 
 	scoped := sqlb.NewRegistry()
 	refuse := errors.New("balance must be positive")
-	sqlb.OnIn[Account](scoped).BeforeCreate(func(_ context.Context, a *Account) error {
+	sqlb.On[Account](scoped).BeforeCreate(func(_ context.Context, a *Account) error {
 		if a.Balance <= 0 {
 			return refuse
 		}

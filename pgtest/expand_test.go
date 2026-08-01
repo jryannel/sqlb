@@ -519,7 +519,8 @@ func TestExpandDoesNotCrossATenantBoundary(t *testing.T) {
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
-	db := sqlb.New(raw)
+	reg := sqlb.NewRegistry()
+	db := sqlb.New(raw).WithHooks(reg)
 
 	mine, _ := seedBlog(t, raw)
 
@@ -547,11 +548,10 @@ func TestExpandDoesNotCrossATenantBoundary(t *testing.T) {
 		t.Fatalf("inserting the cross-tenant post: %v", err)
 	}
 
-	// The scope, registered on both models exactly as an application would.
-	posts := sqlb.On[blog.Post]()
-	authors := sqlb.On[blog.Author]()
-	defer posts.Reset()
-	defer authors.Reset()
+	// The scope, registered on both models exactly as an application would —
+	// into the registry the handle above carries.
+	posts := sqlb.On[blog.Post](reg)
+	authors := sqlb.On[blog.Author](reg)
 	posts.BeforeQuery(func(_ context.Context, q *sqlb.Builder[blog.Post]) error {
 		q.Where(sqlb.F("org_id").Eq(mine))
 		return nil

@@ -24,11 +24,12 @@ func orgFrom(ctx context.Context) (string, bool) {
 // generated REST handlers issue. Tenant scoping stops being something each call
 // site has to remember.
 //
-// Registration happens once at startup, from init or main. Reset exists for
-// tests; see the registry recipe below for the version that needs no teardown.
+// Registration happens once at startup, into a registry the handle then
+// carries. There is no process-wide registry to fall back on (ADR-0047), which
+// is what makes the rules in force a property of how the handle was built.
 func Example_hooksScopeEveryRead() {
-	hooks := sqlb.On[recipes.Post]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[recipes.Post](reg)
 
 	hooks.BeforeQuery(func(ctx context.Context, q *sqlb.Builder[recipes.Post]) error {
 		org, ok := orgFrom(ctx)
@@ -42,7 +43,7 @@ func Example_hooksScopeEveryRead() {
 		return nil
 	})
 
-	db := recordingDB()
+	db := recordingDB().WithHooks(reg)
 	ctx := context.WithValue(context.Background(), orgKey{}, "acme")
 
 	// The caller filters on status and knows nothing about tenants.
@@ -70,14 +71,14 @@ func Example_hooksScopeEveryRead() {
 // accumulate its predicates. That is what makes a base query safe to keep
 // around.
 func Example_hooksDoNotAccumulate() {
-	hooks := sqlb.On[recipes.Post]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[recipes.Post](reg)
 	hooks.BeforeQuery(func(_ context.Context, q *sqlb.Builder[recipes.Post]) error {
 		q.Where(sqlb.F("org_id").Eq("acme"))
 		return nil
 	})
 
-	db := recordingDB()
+	db := recordingDB().WithHooks(reg)
 	ctx := context.Background()
 	q := sqlb.Query[recipes.Post]().Where(sqlb.F("status").Eq("published"))
 
@@ -97,8 +98,8 @@ func Example_hooksDoNotAccumulate() {
 // rather than in a handler means it also holds for the rows a generated REST
 // handler creates.
 func Example_hooksNormaliseOnWrite() {
-	hooks := sqlb.On[recipes.Post]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[recipes.Post](reg)
 
 	hooks.BeforeCreate(func(ctx context.Context, p *recipes.Post) error {
 		p.Title = strings.TrimSpace(p.Title)
@@ -113,13 +114,13 @@ func Example_hooksNormaliseOnWrite() {
 
 	ctx := context.WithValue(context.Background(), orgKey{}, "acme")
 	post := recipes.Post{Title: "  Hello  "}
-	if _, err := sqlb.InsertRows(&post).One(ctx, recordingDB()); err != nil {
+	if _, err := sqlb.InsertRows(&post).One(ctx, recordingDB().WithHooks(reg)); err != nil {
 		panic(err)
 	}
 	fmt.Printf("%q in %q\n", post.Title, post.OrgID)
 
 	empty := recipes.Post{Title: "   "}
-	_, err := sqlb.InsertRows(&empty).One(ctx, recordingDB())
+	_, err := sqlb.InsertRows(&empty).One(ctx, recordingDB().WithHooks(reg))
 	fmt.Println("refused:", err)
 	// Output:
 	// "Hello" in "acme"
@@ -130,8 +131,8 @@ func Example_hooksNormaliseOnWrite() {
 // they can force a column or narrow what is affected. Forcing updated_at here
 // means no call site can forget it — including one written next year.
 func Example_hooksAmendAStatement() {
-	hooks := sqlb.On[recipes.Post]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[recipes.Post](reg)
 
 	hooks.BeforeUpdate(func(ctx context.Context, u *sqlb.Update[recipes.Post]) error {
 		org, ok := orgFrom(ctx)
@@ -146,7 +147,7 @@ func Example_hooksAmendAStatement() {
 	_, err := sqlb.UpdateRows[recipes.Post]().
 		Set("status", "published").
 		Where(sqlb.F("id").Eq("p1")).
-		Exec(ctx, recordingDB())
+		Exec(ctx, recordingDB().WithHooks(reg))
 	if err != nil {
 		panic(err)
 	}
@@ -155,12 +156,12 @@ func Example_hooksAmendAStatement() {
 	// ("id" = $2) AND ("org_id" = $3)
 }
 
-// A registry of its own is the alternative to Reset, and the better one outside
-// a test too: two tenants worth of differing domain rules can coexist in one
-// process, and neither is a process global.
+// Two registries, and therefore two sets of domain rules, coexisting in one
+// process. A handle carries exactly the rules it was given, so the strict one
+// and the unrestricted one are the same pool seen through different rules.
 func Example_hooksInTheirOwnRegistry() {
 	strict := sqlb.NewRegistry()
-	sqlb.OnIn[recipes.Post](strict).BeforeQuery(func(_ context.Context, q *sqlb.Builder[recipes.Post]) error {
+	sqlb.On[recipes.Post](strict).BeforeQuery(func(_ context.Context, q *sqlb.Builder[recipes.Post]) error {
 		q.Where(sqlb.F("status").Eq("published"))
 		return nil
 	})
@@ -187,8 +188,8 @@ func Example_hooksInTheirOwnRegistry() {
 // them, because they are not committed yet — and TxFrom is how the hook gets
 // hold of it.
 func Example_hooksReadInsideTheTransaction() {
-	hooks := sqlb.On[recipes.Post]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[recipes.Post](reg)
 
 	hooks.BeforeCreate(func(ctx context.Context, p *recipes.Post) error {
 		tx, ok := sqlb.TxFrom(ctx)
@@ -203,7 +204,7 @@ func Example_hooksReadInsideTheTransaction() {
 		return nil
 	})
 
-	db := recordingDB()
+	db := recordingDB().WithHooks(reg)
 	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
 		post := recipes.Post{Title: "Hello"}
 		_, err := sqlb.InsertRows(&post).One(ctx, tx)

@@ -306,7 +306,7 @@ func TestAnActionOnAScopedModelObligesTheReadHook(t *testing.T) {
 	// the envelope fetched under that predicate. A PATCH needs its own
 	// BeforeUpdate because its id comes from the request; this does not.
 	reg := sqlb.NewRegistry()
-	sqlb.OnIn[Scoped](reg).BeforeQuery(func(context.Context, *sqlb.Builder[Scoped]) error { return nil })
+	sqlb.On[Scoped](reg).BeforeQuery(func(context.Context, *sqlb.Builder[Scoped]) error { return nil })
 	hooked := sqlb.New(newFakeDB(t).db).WithHooks(reg)
 
 	_, api2 := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))

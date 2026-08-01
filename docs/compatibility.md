@@ -74,14 +74,24 @@ or deployed clients, not just call sites.
 
 Named in advance, so the break is a documented plan rather than a surprise.
 
-- ~~**Hook registration.**~~ Landed after `v0.1.0`, and it broke nothing:
-  `sqlb.On[T]()` is now a wrapper over a process-default `Registry`, and
-  `OnIn[T](r)` reaches a scoped one
-  ([ADR-0020](adr/0020-transaction-scoped-handle.md)). Registrations written
-  against `v0.1.0` compile and behave identically. The one behavioural subtlety
-  worth knowing: which registry a statement uses is decided by the *dynamic
-  type* of the executor passed to it, so passing a raw `*sql.DB` where a scoped
-  `*sqlb.DB` was meant silently uses the default.
+- ~~**Hook registration.**~~ Moved twice, and the second time it broke on
+  purpose. After `v0.1.0` it became `sqlb.On[T]()` over a process-default
+  `Registry` with `OnIn[T](r)` for a scoped one
+  ([ADR-0020](adr/0020-transaction-scoped-handle.md)). The subtlety this entry
+  used to warn about — which registry a statement uses is decided by the
+  *dynamic type* of the executor, so passing a raw pool where a scoped
+  `*sqlb.DB` was meant silently used the default — turned out to be the whole
+  problem rather than a footnote to it, and it switched a real adopter's tenant
+  boundary off without a compile error or a failing request.
+
+  So the default registry is **gone** ([ADR-0047](adr/0047-no-default-hook-registry.md)).
+  `On[T](r)` takes the registry and `OnIn` is deleted; `rest.PublishChanges[T](r, p)`
+  takes it too and `PublishChangesIn` is deleted; `sqlb.New` gives each handle an
+  empty registry of its own, which `DB.WithHooks` is how you fill. Every call
+  site that did not name a registry is now a compile error, deliberately: the
+  failure this prevents is silent, so its migration must not be. The mechanical
+  edits are `On[T]()` → `On[T](reg)`, `OnIn[T](reg)` → `On[T](reg)`,
+  `PublishChangesIn` → `PublishChanges`, and a `WithHooks(reg)` on the handle.
 - **Terminal call signatures**, when Go 1.27 arrives. `sqlb.Collect[R](ctx, db,
   b)`, `filter.Apply(b, q)` and the `db` threaded through every terminal call
   all gain method forms, because a method on a concrete type cannot introduce a

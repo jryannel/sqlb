@@ -14,6 +14,66 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.7.0
+
+2026-08-01 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.7.0)
+
+One break, and it is the one this library most needed to make before anyone
+depended on it: **there is no default hook registry**
+([ADR-0047](adr/0047-no-default-hook-registry.md)).
+
+Hooks are the rules that confine what a query may see, so they were also the
+one surface where ambient state could decide a tenant boundary. `On[T]()`
+registered into a package-level default, `New(exec)` handed every handle that
+same default, and `OnIn[T](r)` — the form that says where the rules land —
+carried the longer name. [compatibility.md](compatibility.md) had listed the
+hazard under *Will move* for two releases, in the words it turned out to
+deserve: which registry a statement uses is decided by the dynamic type of the
+executor passed to it.
+
+What made it a release rather than a note is that it cost an adopter a tenant
+boundary. Moving an application onto a per-application registry left one module
+still calling `On[T]()`, so that module's rules were no longer on the handle it
+queried through — and it still compiled, still mounted, and still answered,
+with every tenant's rows in the response. Both spellings were valid, and the
+wrong one was shorter.
+
+So the default is gone. `sqlb.New` gives each handle an empty registry of its
+own, `On[T](r)` is the only registration form, `rest.PublishChanges[T](r, p)`
+takes the registry too, and an `Executor` that is not a `*sqlb.DB` resolves to
+a registry nothing can register into — a statement against a bare pool is
+unconfined, and says so.
+
+**The mechanical edit**, and every one of them is a compile error rather than a
+behaviour change, which is the point: the failure this prevents is silent, so
+its migration must not be.
+
+```
+On[T]()               →  On[T](reg)
+OnIn[T](reg)          →  On[T](reg)
+PublishChangesIn[T]   →  PublishChanges[T]
+sqlb.New(pool)        →  sqlb.New(pool).WithHooks(reg)
+```
+
+There is no shim, because a shim is the ambient registry under a new name.
+
+What goes with the default is its bookkeeping. `Hooks.Reset` survives with its
+reason rewritten — a test gets isolation from `NewRegistry`, which cannot be
+forgotten in a teardown — and the `sync.Once` guards, `t.Cleanup(Reset)` pairs
+and "has anything registered yet?" checks that existed to manage a registry
+nobody asked for are deleted. The examples had all left already, which is the
+tell: `example/tasks` built its own registry and said why, and the fx kit never
+used the default at all.
+
+**What this does not fix**, named in the record rather than discovered later: a
+registry nothing attaches. `On[T](reg)` compiles whether or not any handle
+carries `reg`, so hooks can still be registered where nothing runs them. That
+is strictly narrower — the registry and the handle are usually adjacent
+expressions rather than action at a distance — and the case that matters is
+still caught at the mount, because a model declaring `Scoped` is refused when
+the handle's registry has no hook for it
+([ADR-0030](adr/0030-declared-scope-is-required.md)).
+
 ## v0.6.0
 
 2026-08-01 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.6.0)

@@ -56,7 +56,7 @@ func notesServer(t *testing.T) (*httptest.Server, *rest.Broker) {
 	// A registry scoped to this test rather than the process default, so a
 	// second test in this package does not inherit the publisher.
 	scoped := sqlb.NewRegistry()
-	if err := rest.PublishChangesIn[Note](scoped, broker); err != nil {
+	if err := rest.PublishChanges[Note](scoped, broker); err != nil {
 		t.Fatalf("registering the publisher: %v", err)
 	}
 	db := sqlb.New(pool).WithHooks(scoped)

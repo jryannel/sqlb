@@ -188,7 +188,7 @@ does not select it never has to care.
 matching position, and the value arrives with the query:
 
 ```go
-sqlb.On[Project]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Project]) error {
+sqlb.On[Project](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Project]) error {
     q.Bind("viewer", memberFrom(ctx))
     return nil
 })

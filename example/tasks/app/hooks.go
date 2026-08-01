@@ -45,11 +45,12 @@ import (
 
 // Register installs the hooks into a registry and returns it.
 //
-// A scoped registry rather than the process-wide On[T]() default: two servers
-// in one test binary would otherwise share hook registrations, and the second
-// one's Register would stack a duplicate set of predicates onto the first.
-// Handing the registry to the handle with WithHooks keeps each server's rules
-// its own.
+// A registry is the only way to register — there is no process-wide default
+// (ADR-0047) — and this example is part of why. Two servers in one test binary
+// sharing registrations meant the second one's Register stacked a duplicate
+// set of predicates onto the first, so naming a registry was already the right
+// answer here before it became the only one. Handing it to the handle with
+// WithHooks keeps each server's rules its own.
 func Register(log *slog.Logger) *sqlb.Registry {
 	reg := sqlb.NewRegistry()
 
@@ -69,7 +70,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// the row *is* the tenant. Without this, GET /workspaces would list every
 	// tenant in the installation, which is the kind of hole that a schema-level
 	// convention silently leaves behind when one table does not follow it.
-	sqlb.OnIn[tasks.Workspace](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.Workspace]) error {
+	sqlb.On[tasks.Workspace](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.Workspace]) error {
 		workspace, err := workspaceOf(ctx)
 		if err != nil {
 			return err
@@ -89,7 +90,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// version of the alternative — fetching the member ids first and passing
 	// them to In() — which is the same query split in two with a race in the
 	// middle.
-	sqlb.OnIn[tasks.User](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.User]) error {
+	sqlb.On[tasks.User](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.User]) error {
 		workspace, err := workspaceOf(ctx)
 		if err != nil {
 			return err
@@ -113,7 +114,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// the token. They are ReadOnly in the schema, so they are absent from the
 	// generated request bodies — the hook is not overriding a value the caller
 	// sent, it is supplying the only value there is.
-	sqlb.OnIn[tasks.List](reg).BeforeCreate(func(ctx context.Context, l *tasks.List) error {
+	sqlb.On[tasks.List](reg).BeforeCreate(func(ctx context.Context, l *tasks.List) error {
 		c, err := claimsOrError(ctx)
 		if err != nil {
 			return err
@@ -122,7 +123,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 		return nil
 	})
 
-	sqlb.OnIn[tasks.Task](reg).BeforeCreate(func(ctx context.Context, t *tasks.Task) error {
+	sqlb.On[tasks.Task](reg).BeforeCreate(func(ctx context.Context, t *tasks.Task) error {
 		c, err := claimsOrError(ctx)
 		if err != nil {
 			return err
@@ -137,7 +138,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// that is only possible because rest wraps a generated write in a
 	// transaction — so the context a hook receives carries one, and TxFrom finds
 	// it. Before that change this had to be a hand-written endpoint.
-	comments := sqlb.OnIn[tasks.Comment](reg)
+	comments := sqlb.On[tasks.Comment](reg)
 
 	comments.BeforeCreate(func(ctx context.Context, cm *tasks.Comment) error {
 		c, err := claimsOrError(ctx)
@@ -208,7 +209,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 		})
 	})
 
-	sqlb.OnIn[tasks.Membership](reg).BeforeCreate(func(ctx context.Context, m *tasks.Membership) error {
+	sqlb.On[tasks.Membership](reg).BeforeCreate(func(ctx context.Context, m *tasks.Membership) error {
 		c, err := claimsOrError(ctx)
 		if err != nil {
 			return err
@@ -241,7 +242,7 @@ const (
 // this schema keeps deliberately so that the boundary can be one function
 // instead of four near-copies.
 func scopeReads[T any](reg *sqlb.Registry, soft bool) {
-	sqlb.OnIn[T](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[T]) error {
+	sqlb.On[T](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[T]) error {
 		workspace, err := workspaceOf(ctx)
 		if err != nil {
 			return err
@@ -268,7 +269,7 @@ func scopeReads[T any](reg *sqlb.Registry, soft bool) {
 // no WHERE is refused rather than executed, so a handler that forgets its own
 // predicate is stopped by this one rather than rewriting the table.
 func scopeWrites[T any](reg *sqlb.Registry) {
-	hooks := sqlb.OnIn[T](reg)
+	hooks := sqlb.On[T](reg)
 
 	hooks.BeforeUpdate(func(ctx context.Context, u *sqlb.Update[T]) error {
 		workspace, err := workspaceOf(ctx)

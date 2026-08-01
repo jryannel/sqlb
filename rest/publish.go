@@ -58,19 +58,24 @@ import (
 // collection", which is what a delete requires of it regardless: the row is
 // gone and the list it was in has changed.
 //
+// # Which registry
+//
+// r is the registry the announcing hooks are registered into, and it must be
+// the one the handle doing the writing resolves against — the registry passed
+// to [sqlb.DB.WithHooks]. Publishing into a registry no handle carries
+// registers hooks nothing will ever run, which looks exactly like a working
+// invalidation feed that never emits.
+//
+// This used to default to a process-wide registry, with the registry-taking
+// form under a longer name. Removing that default was [ADR-0047].
+//
 // [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
-func PublishChanges[T any](p Publisher) error {
-	return publishChanges(sqlb.On[T](), p)
-}
-
-// PublishChangesIn is PublishChanges against a specific hook registry, for a
-// handle built with [sqlb.DB.WithHooks] — a test that wants isolation, or a
-// second handle whose domain rules are not the process-wide ones.
-func PublishChangesIn[T any](r *sqlb.Registry, p Publisher) error {
+// [ADR-0047]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0047-no-default-hook-registry.md
+func PublishChanges[T any](r *sqlb.Registry, p Publisher) error {
 	if r == nil {
-		return errors.New("rest: PublishChangesIn needs a registry")
+		return errors.New("rest: PublishChanges needs a registry")
 	}
-	return publishChanges(sqlb.OnIn[T](r), p)
+	return publishChanges(sqlb.On[T](r), p)
 }
 
 func publishChanges[T any](h *sqlb.Hooks[T], p Publisher) error {

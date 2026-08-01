@@ -26,17 +26,22 @@ import (
 // generated call mounts every resource the schema exposes, with filtering,
 // sorting, search, pagination and OpenAPI all included. A real program adds its
 // own middleware by wrapping srv.Handler.
-func newServer(t *testing.T, db sqlb.Executor) http.Handler {
+func newServer(t *testing.T, exec sqlb.Executor, reg *sqlb.Registry) http.Handler {
 	t.Helper()
 
 	// posts declares SoftDelete, so the resource does not mount until something
-	// filters the column (ADR-0030). A test that registered its own hook keeps
+	// filters the column (ADR-0030). A test that built its own registry passes
 	// it; the rest get the example's, which is what a real program would have
 	// done in main before mounting anything.
-	if !sqlb.On[blog.Post]().Registered().BeforeQuery {
-		blog.RegisterHooks()
-		t.Cleanup(func() { sqlb.On[blog.Post]().Reset() })
+	//
+	// The registry has to reach the handle, not a process global — so the
+	// handle is built here. This used to be a "has anything registered yet?"
+	// check with a Cleanup that unregistered again, which is the bookkeeping an
+	// ambient registry costs and a per-handle one does not (ADR-0047).
+	if reg == nil {
+		reg = blog.RegisterHooks()
 	}
+	db := sqlb.New(exec).WithHooks(reg)
 
 	srv := rest.NewServer(rest.Config{Title: "Blog", Version: "1.0.0"})
 	if err := blog.Register(srv.API, db); err != nil {
@@ -52,15 +57,15 @@ func newServer(t *testing.T, db sqlb.Executor) http.Handler {
 func TestGeneratedServerListsPosts(t *testing.T) {
 	// The tenant scope is a startup registration, and it reaches the generated
 	// handlers without any of them knowing about it.
-	hooks := sqlb.On[blog.Post]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[blog.Post](reg)
 	hooks.BeforeQuery(func(_ context.Context, q *sqlb.Builder[blog.Post]) error {
 		q.Where(sqlb.F("org_id").Eq("acme"), sqlb.F("deleted_at").IsNull())
 		return nil
 	})
 
 	db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, reg)
 
 	resp := do(t, server, http.MethodGet, "/posts?status=eq.draft&sort=-published_at&per_page=5", nil)
 	if resp.Code != http.StatusOK {
@@ -102,7 +107,7 @@ func TestGeneratedServerListsPosts(t *testing.T) {
 
 func TestGeneratedServerRejectionIsActionable(t *testing.T) {
 	db := newStubDB(t, postColumns(), nil)
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, nil)
 
 	resp := do(t, server, http.MethodGet, "/posts?sort=body", nil)
 	if resp.Code != http.StatusBadRequest {
@@ -136,7 +141,7 @@ func TestGeneratedServerRejectionIsActionable(t *testing.T) {
 // a handler — there is no route at all.
 func TestUnexposedOperationsHaveNoRoute(t *testing.T) {
 	db := newStubDB(t, nil, nil)
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, nil)
 
 	if code := do(t, server, http.MethodDelete, "/orgs/o1", nil).Code; code != http.StatusMethodNotAllowed && code != http.StatusNotFound {
 		t.Errorf("DELETE /orgs/{id} = %d, want the route to be absent", code)
@@ -148,7 +153,7 @@ func TestUnexposedOperationsHaveNoRoute(t *testing.T) {
 
 func TestGeneratedServerPatchesOnlyTheNamedColumns(t *testing.T) {
 	db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Renamed")})
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, nil)
 
 	resp := do(t, server, http.MethodPatch, "/posts/p1", strings.NewReader(`{"title":"Renamed"}`))
 	if resp.Code != http.StatusOK {
@@ -162,7 +167,7 @@ func TestGeneratedServerPatchesOnlyTheNamedColumns(t *testing.T) {
 // The nullable case that a plain pointer cannot express: clearing a column.
 func TestGeneratedServerCanClearANullableColumn(t *testing.T) {
 	db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, nil)
 
 	resp := do(t, server, http.MethodPatch, "/posts/p1", strings.NewReader(`{"published_at":null}`))
 	if resp.Code != http.StatusOK {
@@ -175,7 +180,7 @@ func TestGeneratedServerCanClearANullableColumn(t *testing.T) {
 
 func TestGeneratedServerRefusesAReadOnlyColumn(t *testing.T) {
 	db := newStubDB(t, postColumns(), nil)
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, nil)
 
 	// view_count is read-only, so it is not a field of the patch body at all
 	// and the request is refused before any handler reaches the database.
@@ -195,7 +200,7 @@ func TestGeneratedServerRefusesAReadOnlyColumn(t *testing.T) {
 // the server doing the same.
 func TestGeneratedServerRefusesAValueOutsideAnEnum(t *testing.T) {
 	db := newStubDB(t, postColumns(), nil)
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, nil)
 
 	resp := do(t, server, http.MethodPatch, "/posts/p1", strings.NewReader(`{"status":"bogus"}`))
 	if resp.Code != http.StatusUnprocessableEntity {
@@ -211,7 +216,7 @@ func TestGeneratedServerRefusesAValueOutsideAnEnum(t *testing.T) {
 
 	// A declared value still passes, so the guard is proven both ways.
 	db2 := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
-	server2 := newServer(t, db2.db)
+	server2 := newServer(t, db2.db, nil)
 	resp = do(t, server2, http.MethodPatch, "/posts/p1", strings.NewReader(`{"status":"published"}`))
 	if resp.Code != http.StatusOK {
 		t.Errorf("a declared enum value should be accepted, got %d: %s", resp.Code, resp.Body)
@@ -224,11 +229,8 @@ func TestGeneratedServerRefusesAValueOutsideAnEnum(t *testing.T) {
 // schema.SoftDelete adds the column and stops.
 func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 	t.Run("RegisterHooks hides the deleted rows from a generated read", func(t *testing.T) {
-		defer sqlb.On[blog.Post]().Reset()
-		blog.RegisterHooks()
-
 		db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
-		server := newServer(t, db.db)
+		server := newServer(t, db.db, nil)
 
 		if code := do(t, server, http.MethodGet, "/posts", nil).Code; code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", code)
@@ -244,8 +246,6 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 	// more: the declaration is an obligation now, so the failure moved from the
 	// response to the mount, and the assertion follows it.
 	t.Run("without it the resource does not mount", func(t *testing.T) {
-		defer sqlb.On[blog.Post]().Reset()
-
 		db := newStubDB(t, postColumns(), nil)
 		srv := rest.NewServer(rest.Config{Title: "Blog", Version: "1.0.0"})
 
@@ -261,11 +261,8 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 	})
 
 	t.Run("DELETE /posts/{id} stamps the column instead of removing the row", func(t *testing.T) {
-		defer sqlb.On[blog.Post]().Reset()
-		blog.RegisterHooks()
-
 		db := newStubDB(t, postColumns(), [][]any{postValues("p1", "Hello")})
-		server := newServer(t, db.db)
+		server := newServer(t, db.db, nil)
 
 		if code := do(t, server, http.MethodDelete, "/posts/p1", nil).Code; code != http.StatusNoContent {
 			t.Fatalf("status = %d, want 204", code)
@@ -280,13 +277,10 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 	})
 
 	t.Run("deleting an already-deleted post is a 404", func(t *testing.T) {
-		defer sqlb.On[blog.Post]().Reset()
-		blog.RegisterHooks()
-
 		// No rows come back, which is what the deleted_at predicate produces
 		// for a post that was already stamped.
 		db := newStubDB(t, postColumns(), nil)
-		server := newServer(t, db.db)
+		server := newServer(t, db.db, nil)
 
 		if code := do(t, server, http.MethodDelete, "/posts/p1", nil).Code; code != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", code)
@@ -296,7 +290,7 @@ func TestSoftDeleteIsTheHookPlusTheHandWrittenEndpoint(t *testing.T) {
 
 func TestOpenAPIDocumentIsServed(t *testing.T) {
 	db := newStubDB(t, nil, nil)
-	server := newServer(t, db.db)
+	server := newServer(t, db.db, nil)
 
 	resp := do(t, server, http.MethodGet, "/openapi.json", nil)
 	if resp.Code != http.StatusOK {

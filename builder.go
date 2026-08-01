@@ -193,7 +193,7 @@ func (b *Builder[T]) WithComputed(names ...string) *Builder[T] {
 // this row starred *by the caller* — so the value cannot be in the schema and
 // has to arrive with the query:
 //
-//	sqlb.On[Project]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Project]) error {
+//	sqlb.On[Project](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Project]) error {
 //	    q.Bind("viewer", memberFrom(ctx))
 //	    return nil
 //	})

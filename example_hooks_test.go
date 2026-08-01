@@ -19,9 +19,9 @@ import (
 var exampleLog []string
 
 // exampleDB returns a handle over the recording executor and clears the log.
-func exampleDB() *sqlb.DB {
+func exampleDB(reg *sqlb.Registry) *sqlb.DB {
 	exampleLog = nil
-	return sqlb.New(exampleExec{})
+	return sqlb.New(exampleExec{}).WithHooks(reg)
 }
 
 // whereClause returns just the WHERE clause of the last statement, so an example
@@ -43,8 +43,8 @@ func whereClause() string {
 // generated REST handlers issue. Multi-tenancy and soft deletes stop being
 // something each call site has to remember.
 func ExampleHooks_BeforeQuery() {
-	hooks := sqlb.On[Article]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Article](reg)
 
 	hooks.BeforeQuery(func(_ context.Context, q *sqlb.Builder[Article]) error {
 		// In a real application the tenant comes from the request context.
@@ -52,7 +52,7 @@ func ExampleHooks_BeforeQuery() {
 		return nil
 	})
 
-	db := exampleDB()
+	db := exampleDB(reg)
 	ctx := context.Background()
 
 	// The caller filters on status and knows nothing about tenants.
@@ -76,8 +76,8 @@ func ExampleHooks_BeforeQuery() {
 // caller unwrapped. This is how "no tenant in this context" becomes impossible
 // to forget rather than merely documented.
 func ExampleHooks_BeforeQuery_reject() {
-	hooks := sqlb.On[Article]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Article](reg)
 
 	errNoTenant := errors.New("no tenant in context")
 	hooks.BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Article]) error {
@@ -89,7 +89,7 @@ func ExampleHooks_BeforeQuery_reject() {
 		return nil
 	})
 
-	db := exampleDB()
+	db := exampleDB(reg)
 
 	_, err := sqlb.Query[Article]().All(context.Background(), db)
 	fmt.Println("unscoped:", err)
@@ -114,8 +114,8 @@ type orgKey struct{}
 // wrong for anything the outside world can observe: the transaction may still
 // abort after the hook has announced a write that then never happened.
 func ExampleAfterCommit() {
-	hooks := sqlb.On[Article]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Article](reg)
 
 	hooks.AfterCreate(func(ctx context.Context, a *Article) error {
 		// Runs inside the transaction. Returning an error here rolls the insert
@@ -127,7 +127,7 @@ func ExampleAfterCommit() {
 		})
 	})
 
-	db := exampleDB()
+	db := exampleDB(reg)
 	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
 		a := Article{Title: "Hello", Status: "draft", OrgID: "acme"}
 		_, err := sqlb.InsertRows(&a).One(ctx, tx)
@@ -146,8 +146,8 @@ func ExampleAfterCommit() {
 // A rollback discards the callbacks by never reaching them, which is the whole
 // point: no event is published for a write that did not land.
 func ExampleAfterCommit_rollback() {
-	hooks := sqlb.On[Article]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Article](reg)
 
 	hooks.AfterCreate(func(ctx context.Context, a *Article) error {
 		return sqlb.AfterCommit(ctx, func(context.Context) error {
@@ -156,7 +156,7 @@ func ExampleAfterCommit_rollback() {
 		})
 	})
 
-	db := exampleDB()
+	db := exampleDB(reg)
 	errPaymentDeclined := errors.New("payment declined")
 	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
 		a := Article{Title: "Hello", Status: "draft", OrgID: "acme"}

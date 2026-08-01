@@ -112,7 +112,7 @@ nothing and the row would come straight back on the next list.
 
 ```go
 func RegisterHooks() {
-	sqlb.On[Post]().BeforeQuery(func(_ context.Context, q *sqlb.Builder[Post]) error {
+	sqlb.On[Post](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[Post]) error {
 		q.Where(sqlb.F("deleted_at").IsNull())
 		return nil
 	})

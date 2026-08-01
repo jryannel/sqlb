@@ -26,7 +26,7 @@ func (Note) TableName() string { return "notes" }
 // without a database (issue #77).
 func TestAScopingHookIsTestableWithoutADatabase(t *testing.T) {
 	hooks := sqlb.NewRegistry()
-	sqlb.OnIn[Note](hooks).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Note]) error {
+	sqlb.On[Note](hooks).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Note]) error {
 		q.Where(sqlb.F("space_id").Eq(ctx.Value(spaceKey{})))
 		return nil
 	})

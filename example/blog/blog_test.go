@@ -22,20 +22,14 @@ func TestSchemaIsValid(t *testing.T) {
 
 // TestListHandler is the payoff the whole design is aimed at: the entire
 // HTTP-to-SQL layer for a dynamic, filterable, sortable, searchable, paginated
-// list endpoint, with tenant scoping and soft deletes applied automatically.
+// list endpoint.
+//
+// It does not cover hooks, and it used to look as though it did — it registered
+// a BeforeQuery scoping posts by org and hiding soft-deleted rows, and asserted
+// nothing about either, because it could not: see the note beside the handler
+// call below. server_test.go exercises the hooks, through a handle that carries
+// them.
 func TestListHandler(t *testing.T) {
-	// Registered once at startup. Every read of Post is scoped by these,
-	// including the ones the generated REST handlers issue.
-	hooks := sqlb.On[blog.Post]()
-	defer hooks.Reset()
-	hooks.BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.Post]) error {
-		q.Where(
-			sqlb.F("org_id").Eq(orgFrom(ctx)),
-			sqlb.F("deleted_at").IsNull(),
-		)
-		return nil
-	})
-
 	// The handler. This is the whole thing.
 	//
 	// Expandable is left empty on purpose. filter.Apply would perform the join
@@ -171,12 +165,10 @@ func TestDashboardAggregate(t *testing.T) {
 	_ = StatusCount{}
 }
 
+// orgKey is how a real request carries its tenant. Nothing in this file reads
+// it back: the hook that would is registered in server_test.go, against a
+// handle that can run it.
 type orgKey struct{}
-
-func orgFrom(ctx context.Context) string {
-	org, _ := ctx.Value(orgKey{}).(string)
-	return org
-}
 
 func values(query string) map[string][]string {
 	req := httptest.NewRequest("GET", "/?"+query, nil)

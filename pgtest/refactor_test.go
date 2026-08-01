@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/blog"
 	"github.com/jryannel/sqlb/example/withsqlc"
 	"github.com/jryannel/sqlb/example/withsqlc/sqlcgen"
@@ -189,22 +188,24 @@ func TestEveryStageReturnsTheSameRows(t *testing.T) {
 	f := refactorFixture(t)
 	orgID := f.orgOf(t, "Ada writes")
 
-	// Stage 4 registers a hook on the shared model, so it is put back
-	// afterwards — every other test in this package queries blog.Post too.
+	// Stage 4's hook lives in a registry its own handle carries, so it reaches
+	// stage 4's requests and nothing else in this package. It used to land in a
+	// process-wide registry that every other test querying blog.Post then
+	// inherited, which is why this needed putting back afterwards (ADR-0047).
 	server, err := withsqlc.ServerStage4(f.pool)
 	if err != nil {
 		t.Fatalf("ServerStage4: %v", err)
 	}
-	defer sqlb.On[blog.Post]().Reset()
 
-	// The org goes on the context for every stage, not just stage 4's requests.
-	// Once that hook is registered it constrains *every* read of blog.Post, so
-	// stage 3 — which still passes the tenant as an argument and applies the
-	// predicate by hand — is scoped by the hook as well, and fails outright on a
-	// context no middleware scoped. That is the hook keeping its promise rather
-	// than an awkwardness of the test: after stage 4, "I forgot to scope this
-	// query" stops being expressible. The doubled org_id predicate is the same
-	// value twice and changes no rows.
+	// The org goes on the context for every stage, not just stage 4's requests:
+	// stage 4 reads it in its hook, and the earlier stages take it as the
+	// argument they were written to take.
+	//
+	// Stage 4's hook constrains every read through the handle that carries it,
+	// which is stage 4's alone. Stage 3 queries the pool directly and is scoped
+	// by the predicate it applies by hand. Both arrive at the same rows, which
+	// is what this test compares — the difference is that stage 4 cannot forget
+	// and stage 3 can.
 	ctx := withsqlc.WithOrg(context.Background(), orgID)
 
 	for _, sc := range refactorScenarios {

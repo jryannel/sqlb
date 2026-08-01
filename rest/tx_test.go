@@ -79,7 +79,7 @@ func TestAfterCommitIsReachableFromAGeneratedWrite(t *testing.T) {
 
 	scoped := sqlb.NewRegistry()
 	published := 0
-	sqlb.OnIn[Post](scoped).AfterCreate(func(ctx context.Context, _ *Post) error {
+	sqlb.On[Post](scoped).AfterCreate(func(ctx context.Context, _ *Post) error {
 		return sqlb.AfterCommit(ctx, func(context.Context) error {
 			published++
 			return nil
@@ -102,7 +102,7 @@ func TestAfterCommitFailureStillReports201(t *testing.T) {
 	db := newFakeDB(t, reply{cols: postCols(), rows: rowsOf(postRow("p1", "Hello"))})
 
 	scoped := sqlb.NewRegistry()
-	sqlb.OnIn[Post](scoped).AfterCreate(func(ctx context.Context, _ *Post) error {
+	sqlb.On[Post](scoped).AfterCreate(func(ctx context.Context, _ *Post) error {
 		return sqlb.AfterCommit(ctx, func(context.Context) error {
 			return errors.New("broker unreachable")
 		})
@@ -124,7 +124,7 @@ func TestHookRefusalRollsBackTheGeneratedWrite(t *testing.T) {
 
 	scoped := sqlb.NewRegistry()
 	fired := false
-	sqlb.OnIn[Post](scoped).AfterCreate(func(ctx context.Context, _ *Post) error {
+	sqlb.On[Post](scoped).AfterCreate(func(ctx context.Context, _ *Post) error {
 		if err := sqlb.AfterCommit(ctx, func(context.Context) error {
 			fired = true
 			return nil

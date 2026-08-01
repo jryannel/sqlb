@@ -14,7 +14,8 @@ import (
 // including reads issued by the generated REST handlers, which is how tenant
 // scoping stops being something each call site has to remember:
 //
-//	sqlb.On[Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) error {
+//	reg := sqlb.NewRegistry()
+//	sqlb.On[Post](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) error {
 //	    org, ok := auth.OrgFrom(ctx)
 //	    if !ok {
 //	        return auth.ErrNoTenant
@@ -22,10 +23,16 @@ import (
 //	    q.Where(sqlb.F("org_id").Eq(org))
 //	    return nil
 //	})
+//	db := sqlb.New(pool).WithHooks(reg)
 //
-// Hooks are registered once at startup, typically from an init function or
-// main, and run in registration order. A hook returning an error aborts the
-// operation and the error reaches the caller unwrapped.
+// Hooks are registered once at startup and run in registration order. A hook
+// returning an error aborts the operation and the error reaches the caller
+// unwrapped.
+//
+// Registration names the registry it writes to, and the handle names the
+// registry it reads from. Neither reaches process-wide state, which is what
+// makes the set of rules in force a property of how the application was
+// assembled rather than of what happened to run an init function first.
 type Hooks[T any] struct {
 	mu           sync.RWMutex
 	beforeQuery  []func(context.Context, *Builder[T]) error
@@ -39,11 +46,18 @@ type Hooks[T any] struct {
 
 // Registry holds the hook sets for a set of models, keyed by type.
 //
-// Most programs never name one: On[T]() reaches a process default, and
-// registering at startup is the intended use. A registry becomes worth holding
-// when two of them need to differ — a test that wants isolation without Reset,
-// or a handle whose domain rules are not the process-wide ones. Attach it with
-// DB.WithHooks.
+// Every program names one. There is deliberately no process-wide default:
+// hooks are the rules confining what a query may see, and a set of rules that
+// arrives by ambient state is one nothing in the program is responsible for.
+// Build a registry, register into it, and attach it with DB.WithHooks.
+//
+// This package used to have a default, and removing it was [ADR-0047]. The
+// failure it existed to permit — registering hooks before building a handle,
+// so every handle picks them up — is also the failure it caused: two handles
+// in one process shared rules neither had asked for, and a module that stopped
+// registering left the previous module's scoping silently in force.
+//
+// [ADR-0047]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0047-no-default-hook-registry.md
 type Registry struct {
 	m sync.Map // reflect.Type -> *Hooks[T]
 }
@@ -51,19 +65,28 @@ type Registry struct {
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry { return &Registry{} }
 
-// defaultRegistry is what On[T]() reaches, and what New gives a handle unless
-// WithHooks says otherwise. It exists so that hooks registered before any
-// handle was built still apply to every handle.
-var defaultRegistry = NewRegistry()
+// noHooks is the registry a bare Executor resolves against — one that never
+// has anything registered in it.
+//
+// It is not a default in the sense the removed one was: nothing can register
+// into it, because nothing names it. It exists so that resolving hooks for an
+// Executor that is not a *DB (a raw pool, a bare pgx.Tx) has an answer, and
+// the answer is "no rules apply here" rather than "whatever the process
+// accumulated".
+//
+// A statement issued against a bare pool is therefore unconfined, and that is
+// visible at the call site: the alternative is a handle, and a handle carries
+// its rules. Models whose scope is an obligation are protected at the other
+// end — rest.Resource refuses to mount one no hook confines (ADR-0030).
+var noHooks = NewRegistry()
 
-// On returns the hook set for model T in the process-default registry,
-// creating it on first use.
-func On[T any]() *Hooks[T] {
-	return OnIn[T](defaultRegistry)
-}
-
-// OnIn returns the hook set for model T in r, creating it on first use.
-func OnIn[T any](r *Registry) *Hooks[T] {
+// On returns the hook set for model T in r, creating it on first use.
+//
+// It takes the registry rather than reaching a default because the short,
+// obvious spelling should be the safe one: a registration that does not say
+// where it lands is a registration whose effect depends on what else the
+// process did.
+func On[T any](r *Registry) *Hooks[T] {
 	t := reflect.TypeOf((*T)(nil)).Elem()
 	if v, found := r.m.Load(t); found {
 		h, ok := v.(*Hooks[T])
@@ -204,10 +227,15 @@ func RegisteredFor[T any](exec Executor) RegisteredHooks {
 	return hooksFor[T](exec).Registered()
 }
 
-// Reset removes every registered hook for T. It exists for tests against the
-// process-default registry, which otherwise leak registrations between cases.
-// A test that can afford to name its own registry — NewRegistry, then
-// DB.WithHooks — gets the same isolation without the teardown.
+// Reset removes every registered hook for T.
+//
+// It existed for tests against the process-default registry, which leaked
+// registrations between cases. That registry is gone, and with it the reason:
+// a test gets isolation by naming its own registry, which costs one line and
+// cannot be forgotten in a teardown. Kept because clearing one model's rules
+// from a registry that outlives a case is still occasionally what a test
+// wants — but if you are reaching for it, a fresh NewRegistry is probably the
+// answer.
 func (h *Hooks[T]) Reset() {
 	h.mu.Lock()
 	defer h.mu.Unlock()

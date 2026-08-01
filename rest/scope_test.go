@@ -84,7 +84,7 @@ func TestResourceRefusesAScopedModelWithNoHooks(t *testing.T) {
 // mountable, and nothing about the hooks' contents is inspected.
 func TestResourceAcceptsAScopedModelWithHooks(t *testing.T) {
 	reg := sqlb.NewRegistry()
-	sqlb.OnIn[Scoped](reg).
+	sqlb.On[Scoped](reg).
 		BeforeQuery(func(context.Context, *sqlb.Builder[Scoped]) error { return nil }).
 		BeforeCreate(func(context.Context, *Scoped) error { return nil }).
 		BeforeUpdate(func(context.Context, *sqlb.Update[Scoped]) error { return nil }).
@@ -101,7 +101,7 @@ func TestResourceAcceptsAScopedModelWithHooks(t *testing.T) {
 // people towards registering empty hooks to get past the check.
 func TestScopeObligationsFollowTheExposedOperations(t *testing.T) {
 	reg := sqlb.NewRegistry()
-	sqlb.OnIn[Scoped](reg).
+	sqlb.On[Scoped](reg).
 		BeforeQuery(func(context.Context, *sqlb.Builder[Scoped]) error { return nil })
 	db := sqlb.New(newFakeDB(t).db).WithHooks(reg)
 
@@ -138,25 +138,23 @@ func TestUndeclaredModelsMountWithoutHooks(t *testing.T) {
 	}
 }
 
-// The registry the handle carries is the one that is asked, not the process
-// default — otherwise a program that scopes its registry would be told its
-// hooks are missing while they run on every query.
+// The registry the handle carries is the one that is asked. Two handles over
+// the same database, differing only in their registry, must get different
+// answers — otherwise a program that scopes one handle would be told its hooks
+// are missing while they run on every query.
 func TestScopeCheckReadsTheHandlesRegistry(t *testing.T) {
-	sqlb.On[Scoped]().Reset()
-	t.Cleanup(func() { sqlb.On[Scoped]().Reset() })
-
-	sqlb.On[Scoped]().BeforeQuery(func(context.Context, *sqlb.Builder[Scoped]) error { return nil })
+	confined := sqlb.NewRegistry()
+	sqlb.On[Scoped](confined).BeforeQuery(func(context.Context, *sqlb.Builder[Scoped]) error { return nil })
 
 	opts := scopedOptions()
 	opts.Ops = rest.OpList
 
-	// The process default has the hook, and the empty registry attached to the
-	// handle does not. The handle wins.
-	if err := mountScoped(t, sqlb.New(newFakeDB(t).db), opts); err != nil {
-		t.Fatalf("mounting against the process-default registry: %v", err)
+	if err := mountScoped(t, sqlb.New(newFakeDB(t).db).WithHooks(confined), opts); err != nil {
+		t.Fatalf("mounting against the registry holding the hook: %v", err)
 	}
-	scoped := sqlb.New(newFakeDB(t).db).WithHooks(sqlb.NewRegistry())
-	if err := mountScoped(t, scoped, opts); err == nil {
+	// The same model, the same options, a handle whose registry is empty.
+	bare := sqlb.New(newFakeDB(t).db).WithHooks(sqlb.NewRegistry())
+	if err := mountScoped(t, bare, opts); err == nil {
 		t.Fatal("expected mounting to fail: the handle's own registry is empty")
 	}
 }

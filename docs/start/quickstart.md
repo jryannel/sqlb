@@ -228,7 +228,7 @@ column's capabilities. See [Mounting resources](../rest/README.md).
 Before this is safe to deploy multi-tenant, register the constraint once:
 
 ```go
-sqlb.On[blog.Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.Post]) error {
+sqlb.On[blog.Post](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.Post]) error {
     org, ok := auth.OrgFrom(ctx)
     if !ok {
         return auth.ErrNoTenant

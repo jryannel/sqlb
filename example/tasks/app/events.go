@@ -51,9 +51,9 @@ import (
 // watching, and every model added here is a fan-out every subscriber pays for.
 func publishChanges(reg *sqlb.Registry, broker *rest.Broker) error {
 	for _, wire := range []func(*sqlb.Registry, rest.Publisher) error{
-		rest.PublishChangesIn[tasks.Task],
-		rest.PublishChangesIn[tasks.List],
-		rest.PublishChangesIn[tasks.Comment],
+		rest.PublishChanges[tasks.Task],
+		rest.PublishChanges[tasks.List],
+		rest.PublishChanges[tasks.Comment],
 	} {
 		if err := wire(reg, broker); err != nil {
 			return err

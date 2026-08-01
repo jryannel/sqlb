@@ -571,7 +571,7 @@ func Timestamps() Group {
 // seam that reaches generated REST handlers as well as queries written by hand
 // ([ADR-0008]):
 //
-//	sqlb.On[Post]().BeforeQuery(func(_ context.Context, q *sqlb.Builder[Post]) error {
+//	sqlb.On[Post](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[Post]) error {
 //	    q.Where(sqlb.F("deleted_at").IsNull())
 //	    return nil
 //	})

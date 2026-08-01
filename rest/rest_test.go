@@ -367,15 +367,14 @@ func TestDeleteMissingRowIs404(t *testing.T) {
 }
 
 func TestBeforeQueryHookAppliesToTheRESTSurface(t *testing.T) {
-	sqlb.On[Post]().Reset()
-	t.Cleanup(func() { sqlb.On[Post]().Reset() })
-	sqlb.On[Post]().BeforeQuery(func(_ context.Context, q *sqlb.Builder[Post]) error {
+	reg := sqlb.NewRegistry()
+	sqlb.On[Post](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[Post]) error {
 		q.Where(sqlb.F("org_id").Eq("acme"))
 		return nil
 	})
 
 	db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
-	api := mount(t, db.db, postOptions())
+	api := mount(t, sqlb.New(db.db).WithHooks(reg), postOptions())
 
 	api.Get("/posts")
 	if !strings.Contains(db.lastStatement(), `"org_id" = $1`) {
@@ -414,8 +413,6 @@ func TestSoftDeleteColumnIsInertUntilAHookUsesIt(t *testing.T) {
 	}
 
 	t.Run("list does not filter the deleted rows out", func(t *testing.T) {
-		sqlb.On[Archived]().Reset()
-		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
 
 		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]any{
 			archivedRow("a1", "Gone"),
@@ -447,8 +444,6 @@ func TestSoftDeleteColumnIsInertUntilAHookUsesIt(t *testing.T) {
 	})
 
 	t.Run("delete removes the row rather than stamping the column", func(t *testing.T) {
-		sqlb.On[Archived]().Reset()
-		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
 
 		db := newFakeDB(t, reply{cols: archivedCols(), rows: [][]any{
 			archivedRow("a1", "Gone"),
@@ -468,15 +463,14 @@ func TestSoftDeleteColumnIsInertUntilAHookUsesIt(t *testing.T) {
 	})
 
 	t.Run("a BeforeQuery registration is what filters", func(t *testing.T) {
-		sqlb.On[Archived]().Reset()
-		t.Cleanup(func() { sqlb.On[Archived]().Reset() })
-		sqlb.On[Archived]().BeforeQuery(func(_ context.Context, q *sqlb.Builder[Archived]) error {
+		reg := sqlb.NewRegistry()
+		sqlb.On[Archived](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[Archived]) error {
 			q.Where(sqlb.F("deleted_at").IsNull())
 			return nil
 		})
 
 		db := newFakeDB(t, reply{cols: archivedCols()})
-		api := mountArchived(t, db.db)
+		api := mountArchived(t, sqlb.New(db.db).WithHooks(reg))
 
 		api.Get("/archived")
 		if stmt := db.lastStatement(); !strings.Contains(stmt, `"deleted_at" IS NULL`) {
@@ -561,7 +555,7 @@ func TestResourceRefusesAnEmptyOpSet(t *testing.T) {
 // wrong.
 func TestCreateKeepsWhatAHookPutInAReadOnlyColumn(t *testing.T) {
 	hooks := sqlb.NewRegistry()
-	sqlb.OnIn[Tenanted](hooks).BeforeCreate(func(_ context.Context, row *Tenanted) error {
+	sqlb.On[Tenanted](hooks).BeforeCreate(func(_ context.Context, row *Tenanted) error {
 		row.TenantID = "acme"
 		return nil
 	})

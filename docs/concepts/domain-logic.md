@@ -6,7 +6,7 @@ every path that touches it — your own code and the generated REST handlers
 alike.
 
 ```go
-sqlb.On[Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) error {
+sqlb.On[Post](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) error {
     org, ok := auth.OrgFrom(ctx)
     if !ok {
         return auth.ErrNoTenant

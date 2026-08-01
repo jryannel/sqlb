@@ -41,7 +41,7 @@ func publishing(t *testing.T, db *fakeDB, opts rest.Options) (humatest.TestAPI, 
 	t.Helper()
 	rec := &recorder{}
 	scoped := sqlb.NewRegistry()
-	if err := rest.PublishChangesIn[Post](scoped, rec); err != nil {
+	if err := rest.PublishChanges[Post](scoped, rec); err != nil {
 		t.Fatalf("registering the publisher: %v", err)
 	}
 	return mount(t, sqlb.New(db.db).WithHooks(scoped), opts), rec
@@ -111,10 +111,10 @@ func TestPublishIsSuppressedByARollback(t *testing.T) {
 	// Registered first, so its after-commit callback is queued before the hook
 	// that aborts. If publication were not tied to the commit, this is exactly
 	// the ordering that would leak a phantom event.
-	if err := rest.PublishChangesIn[Post](scoped, rec); err != nil {
+	if err := rest.PublishChanges[Post](scoped, rec); err != nil {
 		t.Fatalf("registering the publisher: %v", err)
 	}
-	sqlb.OnIn[Post](scoped).AfterCreate(func(context.Context, *Post) error {
+	sqlb.On[Post](scoped).AfterCreate(func(context.Context, *Post) error {
 		return errors.New("a validation the database could not express")
 	})
 
@@ -152,7 +152,7 @@ func TestPublishSkipsADeleteThatMatchedNothing(t *testing.T) {
 		db := newFakeDB(t, reply{cols: postCols()})
 		rec := &recorder{}
 		scoped := sqlb.NewRegistry()
-		if err := rest.PublishChangesIn[Post](scoped, rec); err != nil {
+		if err := rest.PublishChanges[Post](scoped, rec); err != nil {
 			t.Fatalf("registering the publisher: %v", err)
 		}
 
@@ -192,11 +192,11 @@ func TestPublishUnderAutocommit(t *testing.T) {
 }
 
 func TestPublishChangesRejectsANilPublisher(t *testing.T) {
-	if err := rest.PublishChangesIn[Post](sqlb.NewRegistry(), nil); err == nil {
-		t.Error("PublishChangesIn accepted a nil Publisher")
+	if err := rest.PublishChanges[Post](sqlb.NewRegistry(), nil); err == nil {
+		t.Error("PublishChanges accepted a nil Publisher")
 	}
-	if err := rest.PublishChangesIn[Post](nil, &recorder{}); err == nil {
-		t.Error("PublishChangesIn accepted a nil registry")
+	if err := rest.PublishChanges[Post](nil, &recorder{}); err == nil {
+		t.Error("PublishChanges accepted a nil registry")
 	}
 }
 
@@ -209,7 +209,7 @@ func TestPublishFromAWriteThatIsNotARequest(t *testing.T) {
 
 	rec := &recorder{}
 	scoped := sqlb.NewRegistry()
-	if err := rest.PublishChangesIn[Post](scoped, rec); err != nil {
+	if err := rest.PublishChanges[Post](scoped, rec); err != nil {
 		t.Fatalf("registering the publisher: %v", err)
 	}
 
@@ -247,12 +247,12 @@ func TestPublishCarriesTheDeclaredScope(t *testing.T) {
 
 	rec := &recorder{}
 	reg := sqlb.NewRegistry()
-	if err := rest.PublishChangesIn[Scoped](reg, rec); err != nil {
+	if err := rest.PublishChanges[Scoped](reg, rec); err != nil {
 		t.Fatalf("registering the publisher: %v", err)
 	}
 	// The obligations the mount check requires of a Scoped model. Their bodies
 	// are irrelevant here — what is under test is the event, not the boundary.
-	sqlb.OnIn[Scoped](reg).
+	sqlb.On[Scoped](reg).
 		BeforeQuery(func(context.Context, *sqlb.Builder[Scoped]) error { return nil }).
 		BeforeCreate(func(context.Context, *Scoped) error { return nil }).
 		BeforeUpdate(func(context.Context, *sqlb.Update[Scoped]) error { return nil }).

@@ -119,7 +119,7 @@ func (d *DB) AfterCommit(fn func(context.Context) error) error {
 // AfterCommit registers fn on the transaction carried by ctx. It is the form to
 // use from a hook, which receives a context rather than a handle:
 //
-//	sqlb.On[Order]().AfterCreate(func(ctx context.Context, o *Order) error {
+//	sqlb.On[Order](reg).AfterCreate(func(ctx context.Context, o *Order) error {
 //	    id := o.ID
 //	    return sqlb.AfterCommit(ctx, func(ctx context.Context) error {
 //	        return events.Publish(ctx, OrderPlaced{ID: id})
@@ -164,9 +164,17 @@ func (s *txState) drain(ctx context.Context) error {
 	return fmt.Errorf("%w: %w", ErrAfterCommit, errors.Join(errs...))
 }
 
-// New returns a handle over exec, using the process-default hook registry — so
-// hooks registered with On[T]() apply to it, and an existing program can adopt
-// the handle without moving its registrations.
+// New returns a handle over exec with an empty hook registry of its own.
+//
+// It acquires rules only from WithHooks, and there is no process-wide default
+// for it to inherit (ADR-0047). Two calls to New produce two handles with
+// nothing between them, so a handle cannot pick up rules some other part of
+// the program registered — which also means registering hooks and then calling
+// New is not enough on its own: name the registry.
+//
+//	reg := sqlb.NewRegistry()
+//	sqlb.On[Post](reg).BeforeQuery(scopeToOrg)
+//	db := sqlb.New(pool).WithHooks(reg)
 //
 // A pgx.Tx is an Executor like any other, and passing one is how sqlb joins a
 // transaction the application opened itself:
@@ -193,14 +201,16 @@ func New(exec Executor) *DB {
 	// tx stays nil: it is the state of a transaction *this* package will
 	// commit, and a borrowed one is not that.
 	if _, borrowed := exec.(pgx.Tx); borrowed {
-		return &DB{exec: exec, hooks: defaultRegistry, inTx: true}
+		return &DB{exec: exec, hooks: NewRegistry(), inTx: true}
 	}
-	return &DB{exec: exec, hooks: defaultRegistry}
+	return &DB{exec: exec, hooks: NewRegistry()}
 }
 
-// WithHooks returns a copy of the handle resolving hooks against r instead of
-// the process default. It is how a test gets isolation without Reset, and how
-// two tenants-worth of differing domain rules can coexist in one process.
+// WithHooks returns a copy of the handle resolving hooks against r.
+//
+// This is how a handle acquires rules at all, since New gives one an empty
+// registry of its own. It is also how two tenants-worth of differing domain
+// rules coexist in one process, and how a test gets isolation.
 func (d *DB) WithHooks(r *Registry) *DB {
 	if r == nil {
 		panic("sqlb: WithHooks called with a nil Registry")
@@ -412,7 +422,7 @@ type txKey struct{}
 // must read through this handle — reading through the process-wide pool would
 // miss them, because they are not committed yet:
 //
-//	sqlb.On[Post]().BeforeCreate(func(ctx context.Context, p *Post) error {
+//	sqlb.On[Post](reg).BeforeCreate(func(ctx context.Context, p *Post) error {
 //	    tx, ok := sqlb.TxFrom(ctx)
 //	    if !ok {
 //	        return errors.New("posts must be created inside a transaction")
@@ -426,18 +436,25 @@ func TxFrom(ctx context.Context) (*DB, bool) {
 }
 
 // hooksFor resolves the hook set for T against whichever registry the executor
-// carries, falling back to the process default. It is the one place that knows
-// hooks can be scoped, so terminal methods keep taking a plain Executor.
+// carries. It is the one place that knows hooks can be scoped, so terminal
+// methods keep taking a plain Executor.
 func hooksFor[T any](exec Executor) *Hooks[T] {
-	return OnIn[T](registryOf(exec))
+	return On[T](registryOf(exec))
 }
 
 // registryOf is hooksFor without the type parameter, for the one caller that
 // does not have one: an expansion reaches its target through a *Model and looks
 // the target's hooks up by reflect.Type.
+//
+// An Executor that is not a *DB — a raw pool, a borrowed pgx.Tx — carries no
+// registry, and resolves to one nothing can register into. Saying "no rules"
+// is the honest answer for a handle-less statement; it used to say "whatever
+// the process registered", which is how a query issued against a bare pool
+// could be confined by rules its call site never mentioned, and how one that
+// expected confinement lost it when those rules moved.
 func registryOf(exec Executor) *Registry {
 	if d, ok := exec.(*DB); ok {
 		return d.hooks
 	}
-	return defaultRegistry
+	return noHooks
 }

@@ -246,7 +246,7 @@ func TestHooksAreScopedToTheHandlesRegistry(t *testing.T) {
 	h := txHarness(t)
 
 	scoped := sqlb.NewRegistry()
-	sqlb.OnIn[User](scoped).BeforeQuery(func(_ context.Context, q *sqlb.Builder[User]) error {
+	sqlb.On[User](scoped).BeforeQuery(func(_ context.Context, q *sqlb.Builder[User]) error {
 		q.Where(sqlb.F("org_id").Eq("org-scoped"))
 		return nil
 	})
@@ -275,7 +275,7 @@ func TestWithHooksSurvivesIntoTheTransaction(t *testing.T) {
 	h := txHarness(t)
 
 	scoped := sqlb.NewRegistry()
-	sqlb.OnIn[User](scoped).BeforeQuery(func(_ context.Context, q *sqlb.Builder[User]) error {
+	sqlb.On[User](scoped).BeforeQuery(func(_ context.Context, q *sqlb.Builder[User]) error {
 		q.Where(sqlb.F("org_id").Eq("org-scoped"))
 		return nil
 	})
@@ -304,7 +304,7 @@ func TestTxFromLetsAHookJoinTheUnitOfWork(t *testing.T) {
 
 	scoped := sqlb.NewRegistry()
 	var sawTx, ranAtAll bool
-	sqlb.OnIn[User](scoped).BeforeCreate(func(ctx context.Context, _ *User) error {
+	sqlb.On[User](scoped).BeforeCreate(func(ctx context.Context, _ *User) error {
 		ranAtAll = true
 		tx, ok := sqlb.TxFrom(ctx)
 		if !ok {
@@ -454,7 +454,7 @@ func TestAfterCommitFromAHook(t *testing.T) {
 
 	scoped := sqlb.NewRegistry()
 	published := 0
-	sqlb.OnIn[User](scoped).AfterCreate(func(ctx context.Context, _ *User) error {
+	sqlb.On[User](scoped).AfterCreate(func(ctx context.Context, _ *User) error {
 		return sqlb.AfterCommit(ctx, func(context.Context) error {
 			published++
 			return nil

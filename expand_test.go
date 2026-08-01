@@ -438,10 +438,9 @@ func TestExpandCollectionIsNotAppliedUnlessAsked(t *testing.T) {
 // Written as an assertion about the compiled SQL rather than about rows,
 // because the point is exactly what reaches the join.
 func TestExpandRunsTheTargetsQueryHooks(t *testing.T) {
-	parent := sqlb.On[expTask]()
-	target := sqlb.On[expList]()
-	defer parent.Reset()
-	defer target.Reset()
+	reg := sqlb.NewRegistry()
+	parent := sqlb.On[expTask](reg)
+	target := sqlb.On[expList](reg)
 
 	parent.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expTask]) error {
 		q.Where(sqlb.F("id").Neq("hidden-task"))
@@ -455,7 +454,7 @@ func TestExpandRunsTheTargetsQueryHooks(t *testing.T) {
 	h := newHarness(t, []string{"id", "list_id", "title", "__expand_list"}, nil)
 	defer h.close()
 
-	if _, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.db); err != nil {
+	if _, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.handle(reg)); err != nil {
 		t.Fatalf("All: %v", err)
 	}
 	stmt := h.lastQuery()
@@ -487,8 +486,8 @@ func TestExpandRunsTheTargetsQueryHooks(t *testing.T) {
 // scope lands in its WHERE — and that placement is what makes has_more count
 // only the children the caller may actually fetch.
 func TestExpandCollectionRunsTheTargetsQueryHooks(t *testing.T) {
-	target := sqlb.On[expTask]()
-	defer target.Reset()
+	reg := sqlb.NewRegistry()
+	target := sqlb.On[expTask](reg)
 
 	target.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expTask]) error {
 		q.Where(sqlb.F("title").Neq("secret"))
@@ -498,7 +497,7 @@ func TestExpandCollectionRunsTheTargetsQueryHooks(t *testing.T) {
 	h := newHarness(t, []string{"id", "name", "__expand_tasks"}, nil)
 	defer h.close()
 
-	if _, err := sqlb.Query[expList]().Expand("tasks").All(context.Background(), h.db); err != nil {
+	if _, err := sqlb.Query[expList]().Expand("tasks").All(context.Background(), h.handle(reg)); err != nil {
 		t.Fatalf("All: %v", err)
 	}
 	stmt := h.lastQuery()
@@ -511,8 +510,8 @@ func TestExpandCollectionRunsTheTargetsQueryHooks(t *testing.T) {
 // Dropping it would be the original leak arriving by a different route, and
 // silently — which is worse than the leak, because nothing would say so.
 func TestExpandRefusesAnUnqualifiableHook(t *testing.T) {
-	target := sqlb.On[expList]()
-	defer target.Reset()
+	reg := sqlb.NewRegistry()
+	target := sqlb.On[expList](reg)
 
 	target.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expList]) error {
 		q.Where(sqlb.RawPred("name <> ?", "hidden"))
@@ -522,7 +521,7 @@ func TestExpandRefusesAnUnqualifiableHook(t *testing.T) {
 	h := newHarness(t, []string{"id", "list_id", "title", "__expand_list"}, nil)
 	defer h.close()
 
-	_, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.db)
+	_, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.handle(reg))
 	if err == nil {
 		t.Fatal("an unrequalifiable scope predicate was accepted; it would have " +
 			"filtered the parent table instead of the target")
@@ -568,8 +567,8 @@ func (expDoc) TableName() string { return "docs" }
 // naming a column the schema plainly declares — and only when the hooked model
 // was expanded, so every direct-read test passed (#76).
 func TestExpandRefusesAHookOnAComputedColumnOfTheTarget(t *testing.T) {
-	target := sqlb.On[expOwner]()
-	defer target.Reset()
+	reg := sqlb.NewRegistry()
+	target := sqlb.On[expOwner](reg)
 
 	target.BeforeQuery(func(_ context.Context, q *sqlb.Builder[expOwner]) error {
 		q.Where(sqlb.F("over_quota").Eq(false))
@@ -579,7 +578,7 @@ func TestExpandRefusesAHookOnAComputedColumnOfTheTarget(t *testing.T) {
 	h := newHarness(t, []string{"id", "owner_id", "__expand_owner"}, nil)
 	defer h.close()
 
-	_, err := sqlb.Query[expDoc]().Expand("owner").All(context.Background(), h.db)
+	_, err := sqlb.Query[expDoc]().Expand("owner").All(context.Background(), h.handle(reg))
 	if err == nil {
 		t.Fatal("a hook predicate on a computed column was carried across the join; " +
 			"it compiles to a column that does not exist and fails as a bare 42703")
@@ -594,7 +593,7 @@ func TestExpandRefusesAHookOnAComputedColumnOfTheTarget(t *testing.T) {
 	// hooked model directly still applies the predicate, computed and all.
 	direct := newHarness(t, []string{"id", "name", "quota", "used", "over_quota"}, nil)
 	defer direct.close()
-	if _, err := sqlb.Query[expOwner]().All(context.Background(), direct.db); err != nil {
+	if _, err := sqlb.Query[expOwner]().All(context.Background(), direct.handle(reg)); err != nil {
 		t.Fatalf("a direct read of the hooked model should still work: %v", err)
 	}
 	if !contains(direct.lastQuery(), "used > quota") {

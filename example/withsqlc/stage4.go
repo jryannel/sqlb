@@ -47,8 +47,13 @@ var ErrNoOrg = errors.New("no tenant on the context")
 // belongs on the same hook, left out there only because that example has no
 // authentication to read a tenant from. This is that hook with the missing half
 // supplied.
-func RegisterStage4Hooks() {
-	sqlb.On[blog.Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.Post]) error {
+//
+// It returns the registry it registered into, and the handle carries it
+// (ADR-0047). With no ambient registry to write to, "the hook is installed"
+// and "the handle runs it" become one statement instead of two that can drift.
+func RegisterStage4Hooks() *sqlb.Registry {
+	reg := sqlb.NewRegistry()
+	sqlb.On[blog.Post](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.Post]) error {
 		org, ok := ctx.Value(orgContextKey{}).(string)
 		if !ok || org == "" {
 			return ErrNoOrg
@@ -56,6 +61,7 @@ func RegisterStage4Hooks() {
 		q.Where(blog.PostCols.OrgID.Eq(org), blog.PostCols.DeletedAt.IsNull())
 		return nil
 	})
+	return reg
 }
 
 // ServerStage4 is the whole of stage 4: there is no ListPosts function, because
@@ -77,13 +83,16 @@ func RegisterStage4Hooks() {
 // that takes stage 4 accepts a web framework it did not choose. That is the
 // trade ADR-0007 argues, and the reason each stage here is a stopping point
 // rather than a step on the way to a mandatory destination.
-func ServerStage4(db sqlb.Executor) (http.Handler, error) {
+func ServerStage4(exec sqlb.Executor) (http.Handler, error) {
 	// posts declares SoftDelete, so rest refuses to mount the resource until a
-	// hook filters the column (ADR-0030). The guard keeps a second call from
-	// stacking a second copy of the same predicate.
-	if !sqlb.On[blog.Post]().Registered().BeforeQuery {
-		RegisterStage4Hooks()
-	}
+	// hook filters the column (ADR-0030). The handle is what carries that hook,
+	// so it is built here rather than taken.
+	//
+	// The double-registration guard this used to need is gone with the ambient
+	// registry it guarded: each call registers into a registry of its own, so
+	// calling twice produces two servers with one predicate each instead of one
+	// predicate applied twice.
+	db := sqlb.New(exec).WithHooks(RegisterStage4Hooks())
 
 	srv := rest.NewServer(rest.Config{Title: "Blog", Version: "1.0.0"})
 	if err := blog.Register(srv.API, db); err != nil {

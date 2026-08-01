@@ -26,7 +26,7 @@ func provideHooks(dir *Directory) fxkit.HookSet {
 			// installation — the hole a "every table has a space_id"
 			// convention silently leaves behind at the one table that does
 			// not.
-			sqlb.OnIn[store.Space](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[store.Space]) error {
+			sqlb.On[store.Space](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[store.Space]) error {
 				id, err := dir.Current(ctx)
 				if err != nil {
 					return err

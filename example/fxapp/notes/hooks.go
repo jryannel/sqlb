@@ -21,7 +21,7 @@ func provideHooks(dir *spaces.Directory) fxkit.HookSet {
 	return fxkit.HookSet{
 		Module: "notes",
 		Register: func(reg *sqlb.Registry) error {
-			hooks := sqlb.OnIn[store.Note](reg)
+			hooks := sqlb.On[store.Note](reg)
 
 			// Reads: every SELECT, whether it came from GET /notes, from
 			// ?expand=notes on a space, or from the aggregate in insights.go.

@@ -550,8 +550,8 @@ func TestBeforeQueryHook(t *testing.T) {
 		Title string `db:"title"`
 	}
 
-	hooks := sqlb.On[Post]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Post](reg)
 	hooks.BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) error {
 		q.Where(sqlb.F("org_id").Eq("acme"))
 		return nil
@@ -560,7 +560,7 @@ func TestBeforeQueryHook(t *testing.T) {
 	h := newHarness(t, []string{"id", "org_id", "title"}, [][]any{{"p1", "acme", "Hello"}})
 	defer h.close()
 
-	posts, err := sqlb.Query[Post]().Where(sqlb.F("title").Eq("Hello")).All(context.Background(), h.db)
+	posts, err := sqlb.Query[Post]().Where(sqlb.F("title").Eq("Hello")).All(context.Background(), h.handle(reg))
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
@@ -580,8 +580,8 @@ func TestHooksDoNotAccumulate(t *testing.T) {
 		ID    string `db:"id" sqlb:"pk"`
 		OrgID string `db:"org_id"`
 	}
-	hooks := sqlb.On[Doc]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Doc](reg)
 	hooks.BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Doc]) error {
 		q.Where(sqlb.F("org_id").Eq("acme"))
 		return nil
@@ -591,11 +591,11 @@ func TestHooksDoNotAccumulate(t *testing.T) {
 	defer h.close()
 
 	q := sqlb.Query[Doc]()
-	if _, err := q.All(context.Background(), h.db); err != nil {
+	if _, err := q.All(context.Background(), h.handle(reg)); err != nil {
 		t.Fatalf("first All: %v", err)
 	}
 	first := h.lastQuery()
-	if _, err := q.All(context.Background(), h.db); err != nil {
+	if _, err := q.All(context.Background(), h.handle(reg)); err != nil {
 		t.Fatalf("second All: %v", err)
 	}
 	if second := h.lastQuery(); second != first {
@@ -615,8 +615,8 @@ func TestMutationHooksDoNotAccumulate(t *testing.T) {
 		Title     string `db:"title"`
 		UpdatedAt string `db:"updated_at"`
 	}
-	hooks := sqlb.On[Doc]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Doc](reg)
 	hooks.BeforeUpdate(func(ctx context.Context, u *sqlb.Update[Doc]) error {
 		u.Set("updated_at", "now")
 		u.Where(sqlb.F("org_id").Eq("acme"))
@@ -632,11 +632,11 @@ func TestMutationHooksDoNotAccumulate(t *testing.T) {
 	ctx := context.Background()
 
 	u := sqlb.UpdateRows[Doc]().Set("title", "Hello").Where(sqlb.F("id").Eq("d1"))
-	if _, err := u.Exec(ctx, h.db); err != nil {
+	if _, err := u.Exec(ctx, h.handle(reg)); err != nil {
 		t.Fatalf("first update: %v", err)
 	}
 	first := h.lastQuery()
-	if _, err := u.Exec(ctx, h.db); err != nil {
+	if _, err := u.Exec(ctx, h.handle(reg)); err != nil {
 		t.Fatalf("second update: %v", err)
 	}
 	if second := h.lastQuery(); second != first {
@@ -644,11 +644,11 @@ func TestMutationHooksDoNotAccumulate(t *testing.T) {
 	}
 
 	d := sqlb.DeleteRows[Doc]().Where(sqlb.F("id").Eq("d1"))
-	if _, err := d.Exec(ctx, h.db); err != nil {
+	if _, err := d.Exec(ctx, h.handle(reg)); err != nil {
 		t.Fatalf("first delete: %v", err)
 	}
 	firstDel := h.lastQuery()
-	if _, err := d.Exec(ctx, h.db); err != nil {
+	if _, err := d.Exec(ctx, h.handle(reg)); err != nil {
 		t.Fatalf("second delete: %v", err)
 	}
 	if second := h.lastQuery(); second != firstDel {
@@ -663,14 +663,14 @@ func TestHookErrorAborts(t *testing.T) {
 		ID string `db:"id" sqlb:"pk"`
 	}
 	sentinel := errors.New("no tenant in context")
-	hooks := sqlb.On[Secret]()
-	defer hooks.Reset()
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Secret](reg)
 	hooks.BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Secret]) error { return sentinel })
 
 	h := newHarness(t, []string{"id"}, nil)
 	defer h.close()
 
-	if _, err := sqlb.Query[Secret]().All(context.Background(), h.db); !errors.Is(err, sentinel) {
+	if _, err := sqlb.Query[Secret]().All(context.Background(), h.handle(reg)); !errors.Is(err, sentinel) {
 		t.Errorf("error = %v, want the hook's error", err)
 	}
 	if h.lastQuery() != "" {
@@ -838,6 +838,16 @@ func newHarness(t *testing.T, cols []string, rows [][]any) *harness {
 	h := &harness{t: t, cols: cols, rows: rows}
 	h.db = &fakeDB{h: h}
 	return h
+}
+
+// handle wraps the harness as a sqlb handle carrying reg.
+//
+// This is how a test that registers hooks makes them apply: hooks resolve
+// against the registry the handle carries, and a bare Executor carries none
+// (ADR-0047). Passing h.db straight to a terminal method is still right for
+// the tests that assert on SQL with no hooks in play.
+func (h *harness) handle(reg *sqlb.Registry) *sqlb.DB {
+	return sqlb.New(h.db).WithHooks(reg)
 }
 
 // close is kept for the call sites that defer it. There is no pool to release

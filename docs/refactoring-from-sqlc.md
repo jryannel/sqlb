@@ -165,7 +165,7 @@ hand-wrote is one of them.
 The part worth more than the deleted handler is the hook:
 
 ```go
-sqlb.On[blog.Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.Post]) error {
+sqlb.On[blog.Post](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[blog.Post]) error {
 	org, ok := ctx.Value(orgContextKey{}).(string)
 	if !ok || org == "" {
 		return ErrNoOrg

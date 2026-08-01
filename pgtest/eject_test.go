@@ -49,7 +49,7 @@ func ejectedServers(t *testing.T) (sqlbSrv, ejectedSrv http.Handler, pool *pgxpo
 	// The generated half. posts declares a soft delete, so the resource does
 	// not mount until a hook confines it (ADR-0030).
 	hooks := sqlb.NewRegistry()
-	sqlb.OnIn[blog.Post](hooks).BeforeQuery(func(_ context.Context, q *sqlb.Builder[blog.Post]) error {
+	sqlb.On[blog.Post](hooks).BeforeQuery(func(_ context.Context, q *sqlb.Builder[blog.Post]) error {
 		q.Where(sqlb.F("deleted_at").IsNull())
 		return nil
 	})

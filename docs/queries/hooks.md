@@ -13,7 +13,7 @@ It receives the query itself, so **one registration constrains every read of the
 model** — including the reads the generated REST handlers issue.
 
 ```go
-sqlb.On[Post]().BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) error {
+sqlb.On[Post](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Post]) error {
     org, ok := auth.OrgFrom(ctx)
     if !ok {
         return auth.ErrNoTenant
@@ -153,7 +153,7 @@ the transaction can still abort after the hook has already told the world it
 succeeded.
 
 ```go
-sqlb.On[Order]().AfterCreate(func(ctx context.Context, o *Order) error {
+sqlb.On[Order](reg).AfterCreate(func(ctx context.Context, o *Order) error {
     id := o.ID
     return sqlb.AfterCommit(ctx, func(ctx context.Context) error {
         return events.Publish(ctx, OrderPlaced{ID: id})
@@ -203,7 +203,7 @@ through the transaction handle. Reading through the pool would miss them,
 because they are not committed yet:
 
 ```go
-sqlb.On[Post]().BeforeCreate(func(ctx context.Context, p *Post) error {
+sqlb.On[Post](reg).BeforeCreate(func(ctx context.Context, p *Post) error {
     tx, ok := sqlb.TxFrom(ctx)
     if !ok {
         return errors.New("posts must be created inside a transaction")
@@ -250,12 +250,23 @@ handler. `ForUpdate`, `ForShare` and `SkipLocked` are on
 
 ## Scoping and tests
 
-`On[T]()` reaches a process-wide registry, which is what you want at startup. A
-test needs isolation, and has two options: `Reset()` in a defer, or
-`sqlb.NewRegistry()` plus `db.WithHooks(r)`, which needs no teardown. The second
-is also how two tenants' worth of differing domain rules coexist in one process.
+`On[T](r)` registers into the registry you hand it, and `db.WithHooks(r)` is
+how a handle acquires it. There is no process-wide registry to fall back on
+([ADR-0047](../adr/0047-no-default-hook-registry.md)) — a handle built by
+`sqlb.New` starts with an empty one of its own, so the rules in force are a
+property of how the handle was assembled rather than of what ran first.
 
-A scoped registry earns its keep outside tests too. `example/tasks` builds two
+A test therefore gets isolation for free: build a registry, attach it, and
+there is nothing to tear down. Two tenants' worth of differing domain rules
+coexist in one process the same way.
+
+One consequence worth knowing: an `Executor` that is not a `*sqlb.DB` — a raw
+pool, a borrowed `pgx.Tx` — carries no registry, so a statement issued against
+one runs unconfined. That is why models whose rows must not be read unscoped
+declare `Scoped`, which refuses the mount rather than trusting the call site
+([ADR-0030](../adr/0030-declared-scope-is-required.md)).
+
+A second registry earns its keep beyond isolation. `example/tasks` builds two
 handles over one pool: one resolving against its hooks, and one against an empty
 registry, used by exactly the two endpoints that have to read a user *before*
 there is a tenant to scope the read to. Two values, one of which never leaves
