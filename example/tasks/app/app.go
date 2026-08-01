@@ -22,6 +22,7 @@ import (
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/tasks"
 	"github.com/jryannel/sqlb/example/tasks/auth"
+	"github.com/jryannel/sqlb/rest"
 )
 
 // Config is what New needs.
@@ -51,6 +52,20 @@ type Server struct {
 	API huma.API
 	// Signer is exposed so that a test can mint a token without logging in.
 	Signer *auth.Signer
+
+	// broker is the change feed's in-process source. It is not exported: the
+	// only supported ways to reach it are subscribing over HTTP and writing
+	// through the handlers, and an exported Publish would be a way for
+	// application code to announce a change it did not make.
+	broker *rest.Broker
+}
+
+// Close releases what the server holds. It disconnects every subscriber to the
+// change feed; it does not close the connection pool, which the caller owns.
+func (s *Server) Close() {
+	if s.broker != nil {
+		s.broker.Close()
+	}
 }
 
 // New assembles the server.
@@ -85,7 +100,17 @@ func New(cfg Config) (*Server, error) {
 	// set of callers that may pass it is the whole point. Two values, one of
 	// which never leaves this file's neighbours, is harder to misuse.
 	sys := sqlb.New(cfg.DB).WithHooks(sqlb.NewRegistry())
-	hooked := sys.WithHooks(Register(cfg.Log))
+
+	// The registry is bound rather than inlined because two things register on
+	// it: the workspace boundary, and the change feed's publisher. Both are
+	// hooks on the same models, and both have to reach writes that never go
+	// through a handler.
+	reg := Register(cfg.Log)
+	broker := rest.NewBroker(rest.BrokerOptions{})
+	if err := publishChanges(reg, broker); err != nil {
+		return nil, fmt.Errorf("app: wiring the change feed: %w", err)
+	}
+	hooked := sys.WithHooks(reg)
 
 	router := chi.NewRouter()
 	router.Use(
@@ -131,7 +156,11 @@ func New(cfg Config) (*Server, error) {
 	registerAuthRoutes(api, &authAPI{sys: sys, hooks: hooked.Hooks(), signer: signer})
 	registerSoftDeleteRoutes(api, hooked)
 
-	return &Server{Handler: router, API: api, Signer: signer}, nil
+	if err := registerEvents(api, broker); err != nil {
+		return nil, fmt.Errorf("app: mounting the change feed: %w", err)
+	}
+
+	return &Server{Handler: router, API: api, Signer: signer, broker: broker}, nil
 }
 
 // openAPIConfig declares bearer authentication once, for the document as a

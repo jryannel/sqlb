@@ -175,5 +175,6 @@ quietest wrong answer in the system. See
 - [Pagination](pagination.md) — offset, cursors, and `total`
 - [Expanding relations](expand.md) — `?expand`, both directions
 - [Actions](actions.md) — a domain verb with a generated envelope
+- [Change events](events.md) — an SSE stream of invalidations, and what it does not promise
 - [Rejections](errors.md) — what a refusal says and why
 - [API compatibility](compatibility.md) — what a schema edit does to the contract
