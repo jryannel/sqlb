@@ -19,9 +19,10 @@ going, see the [vision](vision.md).
          ├──────────────▶ sqlb.json         the manifest
          ├──────────────▶ client.gen.ts     TypeScript client   (ADR-0028)
          ├──────────────▶ client.gen.dart   Dart client         (ADR-0031)
-         └──────────────▶ cli/              cobra command tree  (ADR-0029)
+         ├──────────────▶ cli/client/       Go client, stdlib only (ADR-0029)
+         └──────────────▶ cli/              cobra tree over it     (ADR-0029)
 
-  The last three are generated from the *schema*, not from openapi.json. The
+  The last four are generated from the *schema*, not from openapi.json. The
   OpenAPI document cannot say what they need to say — `?status=eq.published`
   documents as `array<string>`, which is exactly the guarantee being sold —
   so the emitters read the same declaration everything else does.

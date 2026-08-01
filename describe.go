@@ -118,6 +118,44 @@ func (d *Description[T]) Sortable(columns ...string) *Description[T] {
 	return d.each("Sortable", columns, func(c *ColumnInfo) { c.Sortable = true })
 }
 
+// SortNullsFirst makes the columns sort NULLs before real values, in either
+// direction, and marks them sortable.
+//
+// SortNullsLast is the same the other way. Both exist because Postgres's
+// default placement is not one placement but two — NULLS LAST ascending, NULLS
+// FIRST descending — so a column whose NULLs mean something ("not published
+// yet") reverses its intent when the direction flips. Declaring it here is the
+// hand-written half of what `Sortable(schema.NullsLast)` says in a schema.
+func (d *Description[T]) SortNullsFirst(columns ...string) *Description[T] {
+	return d.each("SortNullsFirst", columns, func(c *ColumnInfo) {
+		c.Sortable, c.SortNulls = true, NullsFirst
+	})
+}
+
+// SortNullsLast makes the columns sort NULLs after real values, in either
+// direction, and marks them sortable. See [Description.SortNullsFirst].
+func (d *Description[T]) SortNullsLast(columns ...string) *Description[T] {
+	return d.each("SortNullsLast", columns, func(c *ColumnInfo) {
+		c.Sortable, c.SortNulls = true, NullsLast
+	})
+}
+
+// SQLType names the columns' Postgres type — "date", "timestamptz", "time" —
+// for the cases where the Go type does not determine it.
+//
+//	d.SQLType("date", "due_on", "invoiced_on")
+//
+// A generated model carries this in its struct tag and needs no call. A
+// hand-written one does, because those three types are all time.Time in Go and
+// an expanded row serialises each of them differently: without it, expanding a
+// relation whose target has a date column answers 500 (#84).
+//
+// The name is the schema package's logical type, which is also the Postgres
+// one for every type where the two differ only in spelling.
+func (d *Description[T]) SQLType(name string, columns ...string) *Description[T] {
+	return d.each("SQLType", columns, func(c *ColumnInfo) { c.PGType = name })
+}
+
 // Searchable includes the columns in the ?search fan-out. It implies
 // Filterable, matching the `search` tag.
 //

@@ -45,7 +45,7 @@ func cliActionCommand1(b *bytes.Buffer, r cliResource, a schema.Action) {
 	fields := a.Body
 
 	fmt.Fprintf(b, "\n// %s is POST %s.\n", cliActionCommand(r, a), path)
-	fmt.Fprintf(b, "func %s(c *Client) *cobra.Command {\n", cliActionCommand(r, a))
+	fmt.Fprintf(b, "func %s(c *client.Client) *cobra.Command {\n", cliActionCommand(r, a))
 
 	if len(fields) > 0 {
 		fmt.Fprintln(b, "\tvar (")
@@ -88,10 +88,10 @@ func cliActionCommand1(b *bytes.Buffer, r cliResource, a schema.Action) {
 	// answers with the row, the same as create and update do.
 	switch {
 	case a.IsCollection():
-		fmt.Fprintf(b, "\t\t\treturn c.run(cmd, Request{Method: http.MethodPost, Path: %q%s}, false)\n", path, body)
+		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: %q%s}, false)\n", path, body)
 	default:
 		_, after, _ := strings.Cut(a.Path, "{id}")
-		fmt.Fprintf(b, "\t\t\treturn c.run(cmd, Request{Method: http.MethodPost, Path: itemPath(%q, args[0]) + %q%s}, false)\n",
+		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: client.ItemPath(%q, args[0]) + %q%s}, false)\n",
 			r.path, after, body)
 	}
 	fmt.Fprintln(b, "\t\t},\n\t}")

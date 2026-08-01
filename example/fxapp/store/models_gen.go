@@ -19,15 +19,15 @@ const (
 
 // Note a note, belonging to exactly one space.
 type Note struct {
-	ID        string     `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	SpaceID   string     `db:"space_id" json:"space_id" sqlb:"filter,expand,readonly,scope"`
+	ID        string     `db:"id" json:"id" sqlb:"type:uuid,pk,default,filter,readonly"`
+	SpaceID   string     `db:"space_id" json:"space_id" sqlb:"type:uuid,filter,expand,readonly,scope"`
 	Space     *Space     `db:"-" json:"space,omitempty" sqlb:"expands=space_id"` // filled in by ?expand=space
-	Title     string     `db:"title" json:"title" sqlb:"filter,sort,search"`
-	Body      string     `db:"body" json:"body" sqlb:"filter,search"`
-	Status    NoteStatus `db:"status" json:"status" sqlb:"default,filter,sort"`
-	Pinned    bool       `db:"pinned" json:"pinned" sqlb:"default,filter,sort"`
-	CreatedAt time.Time  `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt time.Time  `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	Title     string     `db:"title" json:"title" sqlb:"type:text,filter,sort,search"`
+	Body      string     `db:"body" json:"body" sqlb:"type:text,filter,search"`
+	Status    NoteStatus `db:"status" json:"status" sqlb:"type:enum,default,filter,sort"`
+	Pinned    bool       `db:"pinned" json:"pinned" sqlb:"type:bool,default,filter,sort"`
+	CreatedAt time.Time  `db:"created_at" json:"created_at" sqlb:"type:timestamptz,default,sort,readonly"`
+	UpdatedAt time.Time  `db:"updated_at" json:"updated_at" sqlb:"type:timestamptz,default,sort,readonly"`
 }
 
 // TableName is the table Note maps to.
@@ -35,11 +35,11 @@ func (Note) TableName() string { return "notes" }
 
 // Space a tenant. Every note belongs to exactly one.
 type Space struct {
-	ID        string                 `db:"id" json:"id" sqlb:"pk,default,filter,readonly,scope"`
-	Name      string                 `db:"name" json:"name" sqlb:"filter,sort,search"`
-	Slug      string                 `db:"slug" json:"slug" sqlb:"filter"`
-	CreatedAt time.Time              `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt time.Time              `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	ID        string                 `db:"id" json:"id" sqlb:"type:uuid,pk,default,filter,readonly,scope"`
+	Name      string                 `db:"name" json:"name" sqlb:"type:text,filter,sort,search"`
+	Slug      string                 `db:"slug" json:"slug" sqlb:"type:text,filter"`
+	CreatedAt time.Time              `db:"created_at" json:"created_at" sqlb:"type:timestamptz,default,sort,readonly"`
+	UpdatedAt time.Time              `db:"updated_at" json:"updated_at" sqlb:"type:timestamptz,default,sort,readonly"`
 	Notes     *sqlb.Collection[Note] `db:"-" json:"notes,omitempty" sqlb:"expands=space_id,order=-created_at,limit=10"` // filled in by ?expand=notes
 }
 

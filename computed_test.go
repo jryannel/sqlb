@@ -39,6 +39,7 @@ func (CompProject) ComputedColumns() []sqlb.Computed {
 // all three render through the same function.
 func TestComputedRendersInProjectionFilterAndOrder(t *testing.T) {
 	sql, _, err := sqlb.Query[CompProject]().
+		WithComputed("is_overdue", "total_tasks", "is_starred").
 		Bind("viewer", "member-1").
 		Where(sqlb.F("is_overdue").Eq(true)).
 		OrderBy(sqlb.OrderBy(sqlb.F("is_overdue"))).
@@ -68,6 +69,7 @@ func TestComputedRendersInProjectionFilterAndOrder(t *testing.T) {
 // the property Near proved worth having, generalised.
 func TestComputedBindsOnce(t *testing.T) {
 	sql, args, err := sqlb.Query[CompProject]().
+		WithComputed("is_starred").
 		Bind("viewer", "member-1").
 		Where(sqlb.F("is_starred").Eq(true)).
 		SQL()
@@ -84,8 +86,13 @@ func TestComputedBindsOnce(t *testing.T) {
 
 // An unbound expression would render `member_id = NULL` and be false for every
 // row forever, which looks exactly like a working feature. It fails instead.
+//
+// The query has to ask for the column first: since #92 a computed column is not
+// in the default projection, so a query that never mentions is_starred never
+// needs the viewer — which is the whole point of that change, and is asserted
+// just below.
 func TestComputedWithoutItsBindFails(t *testing.T) {
-	_, _, err := sqlb.Query[CompProject]().SQL()
+	_, _, err := sqlb.Query[CompProject]().WithComputed("is_starred").SQL()
 	if err == nil {
 		t.Fatal("want an error when the viewer bind is missing")
 	}
@@ -132,5 +139,101 @@ func TestComputedSurvivesCount(t *testing.T) {
 	}
 	if !strings.Contains(sql, "EXISTS (SELECT 1 FROM stars") {
 		t.Errorf("expected the expression inline:\n%s", sql)
+	}
+}
+
+// The default projection leaves computed columns out, which is what makes an
+// unrelated query of a shared model cheap and possible.
+//
+// Both halves of #92 are here: the existence check by id must not fail for want
+// of a bind it has no business supplying, and it must not attach a correlated
+// subquery per derived column to a query that asked for none.
+func TestTheDefaultProjectionLeavesComputedColumnsOut(t *testing.T) {
+	sql, args, err := sqlb.Query[CompProject]().
+		Where(sqlb.F("id").Eq(int64(7))).
+		SQL()
+	if err != nil {
+		t.Fatalf("a query that names no computed column failed: %v", err)
+	}
+	for _, absent := range []string{"is_starred", "is_overdue", "total_tasks", "SELECT count(*)", "EXISTS"} {
+		if strings.Contains(sql, absent) {
+			t.Errorf("the default projection carries %q, which nothing asked for:\n%s", absent, sql)
+		}
+	}
+	if len(args) != 1 {
+		t.Errorf("args = %v, want only the predicate's value", args)
+	}
+}
+
+// Opting in is per column, not all-or-nothing: a screen wanting one aggregate
+// should not pay for the per-viewer subquery beside it.
+func TestWithComputedTakesOnlyWhatIsNamed(t *testing.T) {
+	sql, _, err := sqlb.Query[CompProject]().WithComputed("is_overdue").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, `AS "is_overdue"`) {
+		t.Errorf("the named column is missing:\n%s", sql)
+	}
+	for _, absent := range []string{"is_starred", "total_tasks"} {
+		if strings.Contains(sql, absent) {
+			t.Errorf("an unnamed computed column came along: %q\n%s", absent, sql)
+		}
+	}
+}
+
+// A name that is not a computed column is a mistake worth refusing. A silent
+// no-op would leave the caller believing a value is on its way when the field
+// is about to arrive as the zero value — which is the failure mode this whole
+// issue is about, one level up.
+func TestWithComputedRefusesNamesThatAreNotComputed(t *testing.T) {
+	tests := []struct {
+		name, column, want string
+	}{
+		{"unknown", "is_overdu", "not a column of"},
+		{"stored", "name", "stores that column rather than computing it"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := sqlb.Query[CompProject]().WithComputed(tc.column).SQL()
+			if err == nil {
+				t.Fatalf("WithComputed(%q) was accepted", tc.column)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error does not say what is wrong (%q missing): %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// Filtering on a computed column still works without projecting it: the
+// expression is rendered where it is used, and the opt-in governs the
+// projection rather than the vocabulary. The bind is still required, because
+// the WHERE renders the same expression.
+func TestAComputedColumnCanBeFilteredWithoutBeingProjected(t *testing.T) {
+	sql, _, err := sqlb.Query[CompProject]().
+		Where(sqlb.F("is_overdue").Eq(true)).
+		SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE (due_date < current_date") {
+		t.Errorf("the predicate did not render:\n%s", sql)
+	}
+	if strings.Contains(sql, `AS "is_overdue"`) {
+		t.Errorf("filtering on a computed column projected it:\n%s", sql)
+	}
+}
+
+// Clone has to copy the opt-in, or a base query shared between screens loses
+// the columns one of them asked for.
+func TestCloneCarriesTheComputedOptIn(t *testing.T) {
+	base := sqlb.Query[CompProject]().WithComputed("is_overdue")
+	sql, _, err := base.Clone().SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, `AS "is_overdue"`) {
+		t.Errorf("the clone lost the opt-in:\n%s", sql)
 	}
 }

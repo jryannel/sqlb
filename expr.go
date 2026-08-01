@@ -628,15 +628,29 @@ func anySlice[T any](vs []T) []any {
 type Order struct {
 	expr  Expr
 	desc  bool
-	nulls nullsOrder
+	nulls NullsOrder
 }
 
-type nullsOrder uint8
+// NullsOrder is where NULLs sit relative to real values within one ORDER BY
+// term.
+//
+// The zero value is Postgres's own default, and the thing worth knowing about
+// that default is that it is not a single placement: NULLS LAST for ascending,
+// NULLS FIRST for descending. So a column whose NULLs carry a meaning — a NULL
+// `published_at` meaning "not published" — cannot rely on it. The placement
+// that is right for the column flips underneath it the moment the direction
+// flips, which is what makes the ordering a property worth declaring rather
+// than leaving to the query (#88).
+//
+// Exported because it is what a [ColumnInfo] declares and what the REST sort
+// grammar reads back; [Order.NullsFirst] and [Order.NullsLast] remain the way
+// a hand-written query says the same thing.
+type NullsOrder uint8
 
 const (
-	nullsDefault nullsOrder = iota
-	nullsFirst
-	nullsLast
+	NullsDefault NullsOrder = iota
+	NullsFirst
+	NullsLast
 )
 
 // Asc orders by the column ascending.
@@ -646,10 +660,10 @@ func (f Field) Asc() Order { return Order{expr: f.Column()} }
 func (f Field) Desc() Order { return Order{expr: f.Column(), desc: true} }
 
 // NullsFirst places NULLs before other values.
-func (o Order) NullsFirst() Order { o.nulls = nullsFirst; return o }
+func (o Order) NullsFirst() Order { o.nulls = NullsFirst; return o }
 
 // NullsLast places NULLs after other values.
-func (o Order) NullsLast() Order { o.nulls = nullsLast; return o }
+func (o Order) NullsLast() Order { o.nulls = NullsLast; return o }
 
 // OrderBy orders by an arbitrary expression, ascending.
 func OrderBy(e Expr) Order { return Order{expr: e} }
@@ -723,3 +737,65 @@ func Max(f Field) Selection { return agg("max", f) }
 func Coalesce(exprs ...Expr) Selection {
 	return Selection{expr: Call{Name: "coalesce", Args: exprs}}
 }
+
+// ConflictRef is a column reference inside ON CONFLICT DO UPDATE, qualified to
+// one side of the conflict.
+//
+// Both sides are in scope there — the row Postgres tried to insert, and the row
+// already stored — and `count = count + 1` reads naturally while meaning
+// nothing definite. So the qualifier is required rather than defaulted, and a
+// bare [Field] in a conflict assignment is refused (#90). See [Excluded] and
+// [Current].
+type ConflictRef struct {
+	name     string
+	excluded bool
+}
+
+func (ConflictRef) exprNode() {}
+
+// Name returns the column the reference names.
+func (r ConflictRef) Name() string { return r.name }
+
+// IsExcluded reports whether the reference is to the proposed row rather than
+// the stored one.
+func (r ConflictRef) IsExcluded() bool { return r.excluded }
+
+// Excluded references the *proposed* row's value for a column inside an
+// ON CONFLICT DO UPDATE assignment — Postgres's EXCLUDED.
+//
+//	ins.OnConflictUpdate([]string{"key"}).
+//	    OnConflictSet("payload", sqlb.Excluded("payload"))
+func Excluded(name string) ConflictRef { return ConflictRef{name: name, excluded: true} }
+
+// Current references the *stored* row's value for a column inside an
+// ON CONFLICT DO UPDATE assignment — the one already in the table.
+//
+//	ins.OnConflictUpdate([]string{"key"}).
+//	    OnConflictSet("hits", sqlb.Add(sqlb.Current("hits"), sqlb.Val(1)))
+func Current(name string) ConflictRef { return ConflictRef{name: name} }
+
+// Now is the database's clock, `now()`.
+//
+// It exists so that a value which should come from Postgres does not have to
+// come from the application instead. An upsert whose updated_at was computed in
+// Go put one column on a different clock from every other timestamp on the row,
+// which under clock skew is a disagreement nothing reports (#90).
+func Now() Expr { return Call{Name: "now"} }
+
+// Val is a bind parameter as an expression, for the places that take an [Expr]
+// rather than a value.
+//
+// It is a bind like every other value in this package: it never reaches the SQL
+// text.
+func Val(v any) Expr { return Param{Value: v} }
+
+// Add renders `a + b`. Sub renders `a - b`.
+//
+// They exist for the accumulate-on-conflict case, which is the one arithmetic
+// an upsert needs and cannot express by naming a column:
+//
+//	sqlb.Add(sqlb.Current("hits"), sqlb.Val(1))
+func Add(a, b Expr) Expr { return Binary{Op: "+", Left: a, Right: b} }
+
+// Sub renders `a - b`. See [Add].
+func Sub(a, b Expr) Expr { return Binary{Op: "-", Left: a, Right: b} }

@@ -34,7 +34,10 @@ func reportSQL(t *testing.T, query string) (string, []any) {
 	if err != nil {
 		t.Fatalf("bad test query %q: %v", query, err)
 	}
-	q, err := filter.Parse(values, filter.Options{Model: sqlb.ModelOf[Report]()})
+	q, err := filter.Parse(values, filter.Options{
+		Model:    sqlb.ModelOf[Report](),
+		Computed: []string{"is_overdue", "is_mine"},
+	})
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", query, err)
 	}
@@ -81,7 +84,10 @@ func TestUndeclaredCapabilityOnAComputedColumnIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = filter.Parse(values, filter.Options{Model: sqlb.ModelOf[Report]()})
+	_, err = filter.Parse(values, filter.Options{
+		Model:    sqlb.ModelOf[Report](),
+		Computed: []string{"is_overdue", "is_mine"},
+	})
 	if err == nil {
 		t.Fatal("sorting on a column that is not Sortable should be refused")
 	}

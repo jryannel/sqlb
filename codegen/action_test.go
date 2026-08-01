@@ -239,7 +239,7 @@ func TestActionsReachTheCLI(t *testing.T) {
 	}
 	// A verb with no body sends none, rather than posting `{}` at an operation
 	// that does not declare one.
-	archive := src[strings.Index(src, "newTasksArchiveCommand(c *Client)"):]
+	archive := src[strings.Index(src, "newTasksArchiveCommand(c *client.Client)"):]
 	if i := strings.Index(archive, "Body: body"); i >= 0 && i < strings.Index(archive, "return cmd") {
 		t.Errorf("the bodyless verb sends a body:\n%s", archive[:600])
 	}

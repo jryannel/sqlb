@@ -29,14 +29,49 @@ import (
 // application built, and the TypeScript client makes by taking a request
 // function.
 //
-// One file rather than the client/queries split the TypeScript emitter uses.
-// The two halves there differ in what they depend on; both halves here would
-// need cobra, and splitting invariant runtime from per-table commands would
-// make the import set depend on which operations a schema happens to expose —
-// a gofmt pass catches a parse error, not an unused import, so that failure
-// would surface at the consumer's build rather than here.
+// Two packages, not one file. The client — Request, Transport, Client, Do, Run
+// and the problem document — imports the standard library and nothing else, and
+// the cobra command tree is a second package that imports it.
+//
+// This file used to argue for one file, on the grounds that both halves would
+// need cobra. That was true of the split it was considering (invariant runtime
+// versus per-table commands) and false of the one that matters: nothing about
+// Client, Do or Request ever needed cobra, so a Go program that wanted the
+// typed client — a sync job, a server-to-server caller, an admin tool with a
+// command tree of its own — was taking a command-line framework to make one
+// HTTP request (#97). It is the split the TypeScript emitter already makes, and
+// for the same reason: a consumer that does not want the framework should not
+// pay for it.
+//
+// The old argument's real point survives, and is answered rather than ignored:
+// an import set that depends on which operations a schema exposes is a failure
+// that surfaces at the consumer's build, because gofmt parses an unused import
+// happily. So the CLI's imports are derived from the rendered body rather than
+// written down — see usedImports.
 
-// renderGoCLI emits the command tree and the runtime it sits on.
+// renderGoClient emits the transport-only client: the request encoder, the
+// transport seam, the cursor walk and the typed problem document.
+//
+// Returns nil when the schema exposes nothing, for the reason renderGoCLI does.
+func renderGoClient(opts Options) ([]byte, error) {
+	resources, err := cliResources(opts.Registry, opts.cliName())
+	if err != nil {
+		return nil, err
+	}
+	if len(resources) == 0 {
+		return nil, nil
+	}
+	// The runtime is emitted whole whatever the schema contains, so its import
+	// set is invariant and can be written down.
+	b := header(opts.clientPackage(), []string{
+		"bytes", "context", "encoding/json", "errors", "fmt", "io",
+		"net/http", "net/url", "os", "strconv", "strings", "time",
+	})
+	b.WriteString(clientRuntime)
+	return gofmt(opts.clientFile(), b.Bytes())
+}
+
+// renderGoCLI emits the cobra command tree over the generated client.
 //
 // Returns nil when the schema exposes nothing, so a package with no REST
 // surface does not acquire a dependency on cobra.
@@ -48,24 +83,56 @@ func renderGoCLI(opts Options) ([]byte, error) {
 	if len(resources) == 0 {
 		return nil, nil
 	}
-
-	// Every import below is used by the runtime, which is emitted whole
-	// whatever the schema contains. Deriving the set from the resources would
-	// make a schema that exposes only creates emit an unused "net/url" — which
-	// gofmt parses happily and the consumer's compiler does not.
-	b := header(opts.cliPackage(), []string{
-		"bytes", "context", "encoding/json", "errors", "fmt", "io",
-		"net/http", "net/url", "os", "strconv", "strings", "time",
-		"github.com/spf13/cobra", "github.com/spf13/pflag",
-	})
-
-	b.WriteString(cliRuntime)
-	cliRoot(b, opts, resources)
-	for _, r := range resources {
-		cliResourceSection(b, r)
+	importPath, err := opts.clientImportPath()
+	if err != nil {
+		return nil, err
 	}
 
+	// Rendered first, imports second. Which of these the tree touches depends
+	// on the operations the schema exposes — a schema with no list command
+	// mentions no url.Values — and an import written down for a body that does
+	// not use it compiles here and fails at the consumer.
+	var body bytes.Buffer
+	body.WriteString(cliCobra)
+	cliRoot(&body, opts, resources)
+	for _, r := range resources {
+		cliResourceSection(&body, r)
+	}
+
+	b := header(opts.cliPackage(), usedImports(body.String(), []string{
+		"bytes", "context", "encoding/json", "errors", "fmt", "io",
+		"net/http", "net/url", "os", "strconv", "strings", "time",
+		"github.com/spf13/cobra", "github.com/spf13/pflag", importPath,
+	}))
+	b.Write(body.Bytes())
+
 	return gofmt(opts.cliFile(), b.Bytes())
+}
+
+// usedImports keeps the candidates the body actually refers to, by the
+// qualifier each one contributes.
+//
+// It exists so that splitting the emission cannot produce an unused import. The
+// alternative — deriving the set from the schema — means re-deriving it
+// whenever a command emits a new call, and getting that wrong is silent here
+// and fatal at the consumer's build.
+func usedImports(body string, candidates []string) []string {
+	var out []string
+	for _, path := range candidates {
+		if strings.Contains(body, importQualifier(path)+".") {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// importQualifier is the name a package is referred to by, which for every
+// import here is the last element of its path.
+func importQualifier(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // cliResource is one exposed table, resolved once so the emitters below read
@@ -143,8 +210,8 @@ func cliRoot(b *bytes.Buffer, opts Options, resources []cliResource) {
 	fmt.Fprintf(b, "//\n//\tfunc main() {\n")
 	fmt.Fprintf(b, "//\t    if err := %s.New(nil).Execute(); err != nil {\n", opts.cliPackage())
 	fmt.Fprintf(b, "//\t        os.Exit(1)\n//\t    }\n//\t}\n")
-	fmt.Fprintln(b, "func New(c *Client) *cobra.Command {")
-	fmt.Fprintln(b, "\tif c == nil {\n\t\tc = &Client{}\n\t}")
+	fmt.Fprintln(b, "func New(c *client.Client) *cobra.Command {")
+	fmt.Fprintln(b, "\tif c == nil {\n\t\tc = &client.Client{}\n\t}")
 	fmt.Fprintln(b, "\troot := &cobra.Command{")
 	fmt.Fprintf(b, "\t\tUse:   %q,\n", name)
 	fmt.Fprintf(b, "\t\tShort: %q,\n", "Command-line client for the "+name+" API")
@@ -205,7 +272,7 @@ func cliResourceSection(b *bytes.Buffer, r cliResource) {
 		short = "Work with " + r.command
 	}
 	fmt.Fprintf(b, "\n// new%sCommand groups the operations %s exposes.\n", r.goPlural, r.path)
-	fmt.Fprintf(b, "func new%sCommand(c *Client) *cobra.Command {\n", r.goPlural)
+	fmt.Fprintf(b, "func new%sCommand(c *client.Client) *cobra.Command {\n", r.goPlural)
 	fmt.Fprintln(b, "\tcmd := &cobra.Command{")
 	fmt.Fprintf(b, "\t\tUse:   %q,\n", r.command)
 	fmt.Fprintf(b, "\t\tShort: %q,\n", strings.TrimSuffix(short, "."))
@@ -255,7 +322,7 @@ func (r cliResource) canUpdate() bool {
 
 func cliListCommand(b *bytes.Buffer, r cliResource) {
 	fmt.Fprintf(b, "\n// new%sListCommand is GET %s.\n", r.goPlural, r.path)
-	fmt.Fprintf(b, "func new%sListCommand(c *Client) *cobra.Command {\n", r.goPlural)
+	fmt.Fprintf(b, "func new%sListCommand(c *client.Client) *cobra.Command {\n", r.goPlural)
 
 	fmt.Fprintln(b, "\tvar (")
 	for _, d := range r.filterable {
@@ -317,7 +384,7 @@ func cliListCommand(b *bytes.Buffer, r cliResource) {
 		fmt.Fprintln(b, "\t\t\t\treturn errors.New(\"--all walks the result set with cursors, so it cannot be combined with --page or --cursor\")")
 		fmt.Fprintln(b, "\t\t\t}")
 	}
-	fmt.Fprintf(b, "\t\t\treturn c.run(cmd, Request{Method: http.MethodGet, Path: %q, Query: q}, %s)\n",
+	fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: %q, Query: q}, %s)\n",
 		r.path, cliAllArg(r))
 	fmt.Fprintln(b, "\t\t},\n\t}")
 
@@ -476,7 +543,7 @@ func cliAllArg(r cliResource) string {
 
 func cliGetCommand(b *bytes.Buffer, r cliResource) {
 	fmt.Fprintf(b, "\n// new%sGetCommand is GET %s/{id}.\n", r.goPlural, r.path)
-	fmt.Fprintf(b, "func new%sGetCommand(c *Client) *cobra.Command {\n", r.goPlural)
+	fmt.Fprintf(b, "func new%sGetCommand(c *client.Client) *cobra.Command {\n", r.goPlural)
 	if len(r.relations) > 0 {
 		fmt.Fprintln(b, "\tvar expand []string")
 	}
@@ -492,7 +559,7 @@ func cliGetCommand(b *bytes.Buffer, r cliResource) {
 	if len(r.relations) > 0 {
 		fmt.Fprintln(b, "\t\t\tif len(expand) > 0 {\n\t\t\t\tq.Set(\"expand\", strings.Join(expand, \",\"))\n\t\t\t}")
 	}
-	fmt.Fprintf(b, "\t\t\treturn c.run(cmd, Request{Method: http.MethodGet, Path: itemPath(%q, args[0]), Query: q}, false)\n", r.path)
+	fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath(%q, args[0]), Query: q}, false)\n", r.path)
 	fmt.Fprintln(b, "\t\t},\n\t}")
 	if len(r.relations) > 0 {
 		fmt.Fprintf(b, "\tcmd.Flags().StringSliceVar(&expand, \"expand\", nil,\n\t\t%s)\n",
@@ -504,7 +571,7 @@ func cliGetCommand(b *bytes.Buffer, r cliResource) {
 
 func cliDeleteCommand(b *bytes.Buffer, r cliResource) {
 	fmt.Fprintf(b, "\n// new%sDeleteCommand is DELETE %s/{id}.\n", r.goPlural, r.path)
-	fmt.Fprintf(b, "func new%sDeleteCommand(c *Client) *cobra.Command {\n", r.goPlural)
+	fmt.Fprintf(b, "func new%sDeleteCommand(c *client.Client) *cobra.Command {\n", r.goPlural)
 	fmt.Fprintln(b, "\treturn &cobra.Command{")
 	fmt.Fprintln(b, "\t\tUse:   \"delete <id>\",")
 	fmt.Fprintf(b, "\t\tShort: %q,\n", "Delete one "+Singular(r.command)+" by primary key")
@@ -513,7 +580,7 @@ func cliDeleteCommand(b *bytes.Buffer, r cliResource) {
 	fmt.Fprintf(b, "\t\tExample: %s,\n", goRawString("  "+r.line("delete "+cliIDPlaceholder(r))))
 	fmt.Fprintln(b, "\t\tArgs:  cobra.ExactArgs(1),")
 	fmt.Fprintln(b, "\t\tRunE: func(cmd *cobra.Command, args []string) error {")
-	fmt.Fprintf(b, "\t\t\treturn c.run(cmd, Request{Method: http.MethodDelete, Path: itemPath(%q, args[0])}, false)\n", r.path)
+	fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodDelete, Path: client.ItemPath(%q, args[0])}, false)\n", r.path)
 	fmt.Fprintln(b, "\t\t},\n\t}\n}")
 }
 
@@ -530,7 +597,7 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 
 	fmt.Fprintf(b, "\n// new%s%sCommand is %s %s%s.\n", r.goPlural, verb,
 		strings.TrimPrefix(method, "http.Method"), r.path, cliItemSuffix(kind))
-	fmt.Fprintf(b, "func new%s%sCommand(c *Client) *cobra.Command {\n", r.goPlural, verb)
+	fmt.Fprintf(b, "func new%s%sCommand(c *client.Client) *cobra.Command {\n", r.goPlural, verb)
 
 	fmt.Fprintln(b, "\tvar (")
 	for _, f := range fields {
@@ -574,9 +641,9 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 		fmt.Fprintln(b, "\t\t\tif len(body) == 0 {")
 		fmt.Fprintln(b, "\t\t\t\treturn errors.New(\"nothing to update: pass at least one field flag\")")
 		fmt.Fprintln(b, "\t\t\t}")
-		fmt.Fprintf(b, "\t\t\treturn c.run(cmd, Request{Method: %s, Path: itemPath(%q, args[0]), Body: body}, false)\n", method, r.path)
+		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: %s, Path: client.ItemPath(%q, args[0]), Body: body}, false)\n", method, r.path)
 	} else {
-		fmt.Fprintf(b, "\t\t\treturn c.run(cmd, Request{Method: %s, Path: %q, Body: body}, false)\n", method, r.path)
+		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: %s, Path: %q, Body: body}, false)\n", method, r.path)
 	}
 	fmt.Fprintln(b, "\t\t},\n\t}")
 

@@ -160,6 +160,26 @@ type Options struct {
 	// same thing as one this resource wants to serve.
 	Expandable []string
 
+	// Computed lists the computed columns this resource selects. Each must be a
+	// column the model computes, and it is checked at startup for the reason
+	// Expandable is.
+	//
+	// Leaving it empty offers none, which is the right default for the same
+	// reason it is right for Expandable: a computed column is a cost, and one
+	// the schema happens to declare is not the same thing as one this resource
+	// wants to serve. A model is shared — the same Project is read by a list
+	// screen that wants four aggregates and by an existence check that wants
+	// none — so projecting every declared column charged every reader for the
+	// most expensive one, and a column carrying a Needs bind failed the
+	// cheapest readers outright (#92).
+	//
+	// A column not listed is not reachable from this resource: not in the
+	// response, not filterable, not sortable, not nameable in ?select. The
+	// obligation follows the selection — a resource that selects a column
+	// declaring Needs still refuses to mount without a hook to supply the bind,
+	// and one that does not select it no longer has to care.
+	Computed []string
+
 	// DisableSearch rejects ?search even when columns are searchable.
 	DisableSearch bool
 

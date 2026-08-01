@@ -12,19 +12,20 @@ import (
 // after that differ in exactly one way. The zero value is the baseline blog
 // contract; each field turns on one edit.
 type opts struct {
-	titleName         string    // rename target for title; "" keeps "title"
-	titleNullable     bool      // NOT NULL -> nullable on title (reader break)
-	statusUnfilter    bool      // drop Filterable from status (un-expose, no DDL)
-	dropViewCount     bool      // drop a column (destructive migration)
-	publishedNotNull  bool      // nullable -> NOT NULL on published_at (writer break)
-	addSubtitle       bool      // add a nullable filterable column (additive)
-	addRequiredSlug   bool      // add a NOT NULL no-default column (writer break)
-	widenViewCount    bool      // bigint stays; flip to int to test narrowing
-	titleReadOnly     bool      // writable -> ReadOnly on title (leaves both bodies)
-	titleImmutable    bool      // writable -> Immutable on title (leaves the patch body)
-	viewCountWritable bool      // ReadOnly -> writable on view_count
-	statusValues      []string  // enum values; nil keeps the baseline three
-	ops               schema.Op // 0 keeps the baseline op set
+	titleName          string    // rename target for title; "" keeps "title"
+	titleNullable      bool      // NOT NULL -> nullable on title (reader break)
+	statusUnfilter     bool      // drop Filterable from status (un-expose, no DDL)
+	dropViewCount      bool      // drop a column (destructive migration)
+	publishedNotNull   bool      // nullable -> NOT NULL on published_at (writer break)
+	addSubtitle        bool      // add a nullable filterable column (additive)
+	addRequiredSlug    bool      // add a NOT NULL no-default column (writer break)
+	widenViewCount     bool      // bigint stays; flip to int to test narrowing
+	titleReadOnly      bool      // writable -> ReadOnly on title (leaves both bodies)
+	titleImmutable     bool      // writable -> Immutable on title (leaves the patch body)
+	viewCountWritable  bool      // ReadOnly -> writable on view_count
+	publishedNullsLast bool      // declare NULLS LAST on published_at (#88)
+	statusValues       []string  // enum values; nil keeps the baseline three
+	ops                schema.Op // 0 keeps the baseline op set
 }
 
 const baseOps = schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList
@@ -62,6 +63,9 @@ func blog(o opts) *schema.Registry {
 	}
 
 	published := schema.Timestamp("published_at").Filterable().Sortable()
+	if o.publishedNullsLast {
+		published = schema.Timestamp("published_at").Filterable().Sortable(schema.NullsLast)
+	}
 	if !o.publishedNotNull {
 		published = published.Nullable()
 	}
@@ -308,4 +312,33 @@ func pickOps(o, dflt schema.Op) schema.Op {
 		return dflt
 	}
 	return o
+}
+
+// A null placement change removes no parameter and rejects no request: every
+// ?sort= that worked still works, and answers in a different order. That is the
+// shape the capability diff is blind to by construction — it compares whether
+// the sort key exists, and the key exists on both sides (#88).
+func TestNullPlacementChangeIsABreakTheCapabilityDiffCannotSee(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{publishedNullsLast: true}))
+	assertBreaking(t, breaks, restcompat.FacetSort, "published_at")
+	if !mentions(breaks, "null placement changed") {
+		t.Errorf("want the placement change named:\n%s", render(breaks))
+	}
+	// The two consequences a caller acts on: the order, and the cursors.
+	if !mentions(breaks, "different order") || !mentions(breaks, "cursors") {
+		t.Errorf("the break does not say what it costs a deployed client:\n%s", render(breaks))
+	}
+	if n := len(restcompat.Breaking(breaks)); n != 1 {
+		t.Errorf("want exactly one breaking change, got %d:\n%s", n, render(breaks))
+	}
+}
+
+// The placement is not a capability, so declaring one must not read as adding
+// or removing a sort key. A column that was sortable before and after is not
+// newly sortable.
+func TestNullPlacementChangeIsNotReportedAsACapabilityDelta(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{publishedNullsLast: true}))
+	if mentions(breaks, "sort key added") || mentions(breaks, "sort key removed") {
+		t.Errorf("a placement change was reported as a capability change:\n%s", render(breaks))
+	}
 }

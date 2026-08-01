@@ -53,6 +53,16 @@ type FieldDesc struct {
 	Searchable bool // included in the ?search fan-out
 	Expandable bool // relation may be pulled in via ?expand (references only)
 
+	// SortNulls is where NULLs sit whenever ?sort names this column, in either
+	// direction. Empty leaves Postgres's default, which is NULLS LAST for
+	// ascending and NULLS FIRST for descending — not one placement but two, so
+	// a column whose NULLs mean something cannot rely on it (#88).
+	//
+	// It is the same Nulls the index orders use, and deliberately so: a
+	// resource sorted `published_at DESC NULLS LAST` wants the index declared
+	// the same way, and one vocabulary makes the pair legible as a pair.
+	SortNulls Nulls
+
 	// Write protection, enforced by the REST layer. Go code going through the
 	// query engine directly is trusted and bypasses these.
 	ReadOnly  bool // never settable through REST
@@ -329,12 +339,21 @@ func Vector(name string, dim int) *Field {
 //
 // # What it will not accept
 //
-// Searchable, ever: ?search fans out over text columns with ILIKE, and there is
-// no coherent reading of that over an expression. Sortable over a volatile
-// expression — one reading now() or random() — because a keyset pages on the
-// sort column and an unstable one lets page 1 and page 50 disagree about a row.
+// Sortable over a volatile expression — one reading now() or random() —
+// because a keyset pages on the sort column and an unstable one lets page 1 and
+// page 50 disagree about a row.
 // A default, a primary key, a unique constraint, a reference or an index, all
 // of which are statements about storage. Validate reports each of them.
+//
+// Searchable used to be on this list and is not any more. The reason given was
+// that "?search fans out over text columns with ILIKE and an expression has no
+// reading there" — which is a claim about *type*, and the rule that Searchable
+// requires a text column already makes it, for stored and computed columns
+// alike. What the blanket refusal actually cost was the only way to search
+// across a relation, since a chat named by its participants has no name column
+// of its own to fan out over (#93). The cost objection — a correlated subquery
+// per candidate row — is answered where cost belongs: a resource searches an
+// expression only if it selected it (#92).
 func Computed(name string, t Type, e ComputedExpr) *Field {
 	f := newField(name, t)
 	f.d.Expr = e.sql
@@ -348,16 +367,19 @@ func Computed(name string, t Type, e ComputedExpr) *Field {
 // ComputedExpr is how a computed column is produced. Build one with FromSQL.
 //
 // It is a type rather than a bare string so that the declaration reads as a
-// choice — today FromSQL is the only one, and ADR-0041 stages a Go-side form as
-// a separate decision rather than an argument that changes meaning.
+// choice. FromSQL is the only one, and now the only one there will be: ADR-0041
+// staged a Go-side FromGo as a separate decision and then cut it, on the trigger
+// that record set for itself — the first two applications expressed every
+// derived value in SQL (#17). The type stays because a constructor is still the
+// right shape for the argument, and because reopening it is additive.
 type ComputedExpr struct{ sql string }
 
 // FromSQL computes a column from a SQL expression over the row's own columns.
 //
 // The expression is raw SQL and nothing parses it: `sqlb generate` refuses the
-// declarations below that are wrong on their face — a Searchable computed
-// column, a volatile Sortable one, a bind count that disagrees with Needs — but
-// a typo inside the SQL reaches Postgres. That is the cost [ADR-0024]'s bar
+// declarations that are wrong on their face — a volatile Sortable one, a bind
+// count that disagrees with Needs, a Searchable one whose type is not text —
+// but a typo inside the SQL reaches Postgres. That is the cost [ADR-0024]'s bar
 // admits here because there is finally a consumer for the annotation, and
 // [sqlb.Builder.Explain] against a real database is what catches it early.
 //
@@ -666,8 +688,41 @@ func (f *Field) Filterable() *Field {
 }
 
 // Sortable allows the column to appear in ?sort.
-func (f *Field) Sortable() *Field {
+//
+// An optional [Nulls] fixes where NULLs sit whenever this column is sorted on,
+// in either direction:
+//
+//	Timestamp("published_at").Sortable(schema.NullsLast)
+//
+// Without it the placement is Postgres's default, which follows the direction —
+// NULLS LAST ascending, NULLS FIRST descending. That default is right for a
+// column whose NULLs are incidental and wrong for one whose NULLs mean
+// something: a NULL `published_at` means "not published", which belongs at the
+// bottom of the feed and not at the top of it, and `?sort=-published_at` puts
+// it at the top (#88).
+//
+// It is declared here rather than spelled per request because it is a property
+// of what the column *means*, not of what a particular caller wants — which is
+// also why the generated clients need no new syntax to get it right.
+func (f *Field) Sortable(nulls ...Nulls) *Field {
 	f.d.Sortable = true
+	switch len(nulls) {
+	case 0:
+	case 1:
+		switch nulls[0] {
+		case NullsDefault, NullsFirst, NullsLast:
+			f.d.SortNulls = nulls[0]
+		default:
+			panic(fmt.Sprintf("sqlb/schema: Sortable(%q): unknown null placement %q, expected schema.NullsFirst or schema.NullsLast",
+				f.d.Name, string(nulls[0])))
+		}
+	default:
+		// Panic for the reason Numeric does: a schema is Go, this runs at init,
+		// and a wrong declaration should not compile into a process that then
+		// serves ORDER BY from it.
+		panic(fmt.Sprintf("sqlb/schema: Sortable(%q) takes at most one null placement, got %d",
+			f.d.Name, len(nulls)))
+	}
 	return f
 }
 
@@ -876,7 +931,17 @@ func (d *FieldDesc) Capabilities() string {
 	add(d.PrimaryKey, "pk")
 	add(d.Default != nil, "default")
 	add(d.Filterable, "filter")
-	add(d.Sortable, "sort")
+	// The null placement rides on the capability that carries it rather than
+	// becoming a capability of its own: it has no meaning without `sort`, and a
+	// separate token could be written without one.
+	switch {
+	case d.Sortable && d.SortNulls == NullsFirst:
+		add(true, "sort:nullsfirst")
+	case d.Sortable && d.SortNulls == NullsLast:
+		add(true, "sort:nullslast")
+	default:
+		add(d.Sortable, "sort")
+	}
 	add(d.Searchable, "search")
 	add(d.Expandable, "expand")
 	add(d.ReadOnly, "readonly")

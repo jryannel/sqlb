@@ -6,11 +6,11 @@ import "time"
 
 // InternalWidget is a row of internal_widgets.
 type InternalWidget struct {
-	ID        string    `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
-	Name      string    `db:"name" json:"name" sqlb:"filter,sort,search"`
-	Status    string    `db:"status" json:"status" sqlb:"default,filter"`
-	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"default,sort,readonly"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at" sqlb:"default,sort,readonly"`
+	ID        string    `db:"id" json:"id" sqlb:"type:uuid,pk,default,filter,readonly"`
+	Name      string    `db:"name" json:"name" sqlb:"type:varchar,filter,sort,search"`
+	Status    string    `db:"status" json:"status" sqlb:"type:varchar,default,filter"`
+	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"type:timestamptz,default,sort,readonly"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at" sqlb:"type:timestamptz,default,sort,readonly"`
 }
 
 // TableName is the table InternalWidget maps to.

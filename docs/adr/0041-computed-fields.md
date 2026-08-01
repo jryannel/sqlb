@@ -1,8 +1,9 @@
 # ADR-0041: A computed field is an expression in the row, and the parameterised ones oblige a hook
 
-- **Status:** Working — tiers 1 to 3 are built, `FromGo` is not. Additive, so it
-  landed rather than waiting for 1.1: a schema that declares no computed column
-  compiles to the same SQL it did before
+- **Status:** Working — tiers 1 to 3 are built. **Tier 4, `FromGo`, is cut**:
+  this record's own trigger for cutting it fired on 2026-08-01, and the section
+  below records on what. Additive, so it landed rather than waiting for 1.1: a
+  schema that declares no computed column compiles to the same SQL it did before
 - **Confidence:** High that the slot is needed — §13.3 of the adoption review
   ranked it first of six. High that `ColumnInfo` is where it goes: the trace said
   one interception point and the implementation found exactly one,
@@ -10,9 +11,10 @@
   [#17](https://github.com/jryannel/sqlb/issues/17) as written does not cover it.
   Medium overall, because nothing outside this repository has used it yet.
   Medium on the correlated-subquery tier being worth `Filterable()` at all. Low on
-  `FromGo`, which is the tier most likely to be cut and which was not built
+  `FromGo`, which was the tier most likely to be cut and has now been cut — the
+  one prediction in this list that has since been settled by evidence
 - **Decided:** 2026-07-30
-- **Last reviewed:** 2026-07-31
+- **Last reviewed:** 2026-08-01 — `FromGo` cut
 
 ## Context
 
@@ -98,7 +100,7 @@ schema.Computed("is_starred", schema.TypeBool,
     Needs("viewer").Filterable()                        // 3 · parameterised
 
 schema.Computed("next_due_date", schema.TypeDate,
-    schema.FromGo(nextDue))                             // 4 · projection only
+    schema.FromGo(nextDue))                             // 4 · cut, see below
 ```
 
 - **Row-local `FromSQL`** may be `Filterable()` and `Sortable()`. It is an
@@ -111,8 +113,10 @@ schema.Computed("next_due_date", schema.TypeDate,
   the declaration writes no value, and `rest.Resource` refuses to mount until a
   `BeforeQuery` hook supplies the bind. Same idiom as `Scoped`, same failure mode
   closed at startup rather than in production.
-- **`FromGo`** is projection-only, obliges a hook the same way, and is never
-  filterable or sortable.
+- **`FromGo`** was to be projection-only, obliging a hook the same way and never
+  filterable or sortable. It was never built and is now cut; the tier survives in
+  this list because a taxonomy that quietly loses a row stops being a record of
+  what was considered.
 
 Three declaration-time errors, each closing a failure that is otherwise silent:
 
@@ -167,15 +171,57 @@ consolidated become a startup failure nobody can read.
 - **Tier 2 is never filtered in practice.** If applications project counters and
   filter on stored ones, the correlated-subquery form collapses to projection-only
   and the `Filterable()` opt-in is dead weight to remove.
-- **`FromGo` is not reached for.** It is the tier with the least mechanism behind
-  it and the most obligation attached; if the first two applications express
-  everything in SQL, cut it and keep the record honest about why.
+- ~~**`FromGo` is not reached for.** It is the tier with the least mechanism
+  behind it and the most obligation attached; if the first two applications
+  express everything in SQL, cut it and keep the record honest about why.~~
+  **This fired on 2026-08-01** — see *`FromGo` is cut* below.
 - **The stratification does not hold on a second codebase.** One application's six
   fields decided four tiers. A second that needs a fifth means the taxonomy is
   wrong rather than incomplete.
 - **`Needs` starts carrying request state generally.** If it becomes the way
   applications smuggle context into queries, it has outgrown this record and needs
   its own.
+
+## `FromGo` is cut
+
+The trigger above set a condition and the condition is met, so the tier goes
+rather than sitting in the tracker as work nobody asked for.
+
+**The evidence, which is two applications expressing everything in SQL:**
+
+- `example/computed` works the six values this record was written against. Three
+  are stored counters and need no tier at all; the other three — `is_overdue`,
+  `progress`, `is_starred` — are `schema.Computed`, and every one of them is
+  `FromSQL`. `next_due_date`, the value the proposal wrote `FromGo` for, is not
+  among them: it came from the evaluated application and no example carries it;
+- the multi-app adoption declared five, described in
+  [#92](https://github.com/jryannel/sqlb/issues/92) as *"one per ADR-0041 tier:
+  three aggregates over another table, one row-local predicate, and one that
+  depends on who is asking"*. Tiers 1 to 3 again, and it reports them working
+  against a real database — including a cancelled task counting as open, which
+  is exactly the domain rule `FromGo` existed to catch;
+- there is no `FromGo` in the tree, and `codegen/schemasrc.go` — which renders a
+  schema back out of an introspected database — only knows how to emit
+  `FromSQL`. A tier the round trip cannot express is a tier nothing can adopt.
+
+**And the space it would occupy has since narrowed.**
+[#93](https://github.com/jryannel/sqlb/issues/93) lifted the refusal of a
+`Searchable` computed column, so a text expression over a related table is now
+declarable — which is the shape a "render some related values into one field"
+case would otherwise have reached for Go to do.
+[#92](https://github.com/jryannel/sqlb/issues/92) made computed columns opt-in
+per reader, which removed the cost argument for keeping derived work out of SQL.
+
+**What this does not claim.** No application tried `FromGo` and found it
+wanting; the finding is that none reached for it, which is weaker evidence and
+is the evidence the trigger asked for. `next_due_date` over a recurrence rule —
+the original motivating example — is still the case with the best claim to
+needing Go, and it came from a codebase that has not adopted sqlb.
+
+**Reopening is cheap and stays cheap.** Nothing was built, so nothing is being
+removed; the cost-of-change note below still applies in the additive direction.
+A second application reaching for it is the evidence this cut lacks, and
+[#17](https://github.com/jryannel/sqlb/issues/17) is where it was tracked.
 
 ## Cost of change
 
@@ -245,3 +291,13 @@ reversible, a filter grammar is not.
   default: a correlated subquery is projection-only unless the declaration says
   otherwise, and `Lint` reports the cost once per filterable computed column
   rather than letting the index rules fire on a column that cannot be indexed.
+
+- 2026-08-01 — `FromGo` cut, and the record's own trigger is the reason. The
+  condition it set was "if the first two applications express everything in SQL";
+  they did, and *`FromGo` is cut* above names them. Two changes on the same day
+  narrowed the space it would have occupied rather than widening it:
+  [#93](https://github.com/jryannel/sqlb/issues/93) made a text expression over a
+  related table declarable, and [#92](https://github.com/jryannel/sqlb/issues/92)
+  made a computed column opt-in per reader, which removed the cost argument for
+  keeping derived work out of SQL. The taxonomy keeps four rows because a record
+  that quietly drops the option it rejected is not a record of the decision.

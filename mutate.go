@@ -37,6 +37,14 @@ type Insert[T any] struct {
 type conflictClause struct {
 	target   []string
 	doUpdate []string
+	sets     []conflictSet
+}
+
+// conflictSet is one `column = expression` assignment in DO UPDATE, kept in
+// declaration order so the rendered statement is stable.
+type conflictSet struct {
+	column string
+	value  Expr
 }
 
 // InsertRows starts an INSERT for one or more rows. The rows are pointers so
@@ -111,9 +119,46 @@ func (i *Insert[T]) OnConflictDoNothing(target ...string) *Insert[T] {
 }
 
 // OnConflictUpdate upserts: a conflict on target updates the named columns
-// from the proposed row. With no update columns it behaves as do-nothing.
+// from the proposed row. With no update columns it behaves as do-nothing,
+// unless [Insert.OnConflictSet] adds an assignment.
+//
+// Each named column is shorthand for `col = EXCLUDED.col`. For anything else —
+// the database clock, an accumulation, a value kept when the proposed one is
+// null — see OnConflictSet.
 func (i *Insert[T]) OnConflictUpdate(target []string, update ...string) *Insert[T] {
 	i.conflict = &conflictClause{target: target, doUpdate: update}
+	return i
+}
+
+// OnConflictSet assigns an expression to a column in DO UPDATE, for the
+// upserts that cannot be spelled by naming a column.
+//
+//	ins.OnConflictUpdate([]string{"key"}, "payload").
+//	    OnConflictSet("updated_at", sqlb.Now()).
+//	    OnConflictSet("hits", sqlb.Add(sqlb.Current("hits"), sqlb.Val(1))).
+//	    OnConflictSet("note", sqlb.Coalesce(sqlb.Excluded("note"), sqlb.Current("note")).Expr())
+//
+// Assignments render after the bare columns, in the order declared, and their
+// bind parameters are numbered in the same sequence as the VALUES list — so a
+// parameterised assignment is an ordinary `$n`, not a separate numbering that
+// happens to line up.
+//
+// A column reference inside the expression must say which side of the conflict
+// it means, with [Excluded] or [Current]. Both rows are in scope in DO UPDATE,
+// so a bare [Field] is ambiguous, and it is refused rather than resolved to
+// whichever side the compiler would have picked (#90). [Raw] is exempt for the
+// reason it is always exempt: its contents are not parsed by this package.
+//
+// Calling it without OnConflictUpdate or OnConflictDoNothing is an error — an
+// assignment with no conflict clause has nowhere to go.
+func (i *Insert[T]) OnConflictSet(column string, value Expr) *Insert[T] {
+	if i.conflict == nil {
+		if i.err == nil {
+			i.err = fmt.Errorf("sqlb: OnConflictSet(%q) needs a conflict clause; call OnConflictUpdate or OnConflictDoNothing first", column)
+		}
+		return i
+	}
+	i.conflict.sets = append(i.conflict.sets, conflictSet{column: column, value: value})
 	return i
 }
 
@@ -191,7 +236,7 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 			}
 			c.write(")")
 		}
-		if len(i.conflict.doUpdate) == 0 {
+		if len(i.conflict.doUpdate) == 0 && len(i.conflict.sets) == 0 {
 			c.write(" DO NOTHING")
 		} else {
 			c.write(" DO UPDATE SET ")
@@ -206,6 +251,25 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 				c.write(" = EXCLUDED.")
 				c.ident(name)
 			}
+			// Qualified to the target table for the duration of the assignments,
+			// so Current renders `"posts"."hits"` rather than a bare `"hits"`.
+			// Postgres resolves the bare form to the stored row too, but only
+			// because nothing else is in scope under that name — writing it out
+			// is what makes the statement say which row it meant.
+			restore := c.qualifyTo(i.model.Table)
+			for n, set := range i.conflict.sets {
+				if n > 0 || len(i.conflict.doUpdate) > 0 {
+					c.write(", ")
+				}
+				if err := i.checkConflictSet(set); err != nil {
+					restore()
+					return "", nil, err
+				}
+				c.ident(set.column)
+				c.write(" = ")
+				c.expr(set.value)
+			}
+			restore()
 		}
 	}
 
@@ -650,4 +714,100 @@ func toSet(items []string) map[string]bool {
 		out[s] = true
 	}
 	return out
+}
+
+// checkConflictSet validates one DO UPDATE assignment before it is rendered.
+//
+// Two things, and both are the same principle the bare-column form already
+// follows: a name that is not a column should be an error from this package
+// naming the column, not a 42703 from Postgres at request time.
+//
+// The second is the ambiguity. Inside DO UPDATE both the proposed row and the
+// stored one are in scope, so a bare column reference has two readings and SQL
+// picks the stored one silently. `count = count + 1` is the shape that makes it
+// concrete: it reads like an accumulation and it is one, but a reader cannot
+// tell from the Go whether the author meant the stored count or the proposed
+// one. Refusing is the only answer that does not quietly choose (#90).
+func (i *Insert[T]) checkConflictSet(set conflictSet) error {
+	col := i.model.Column(set.column)
+	if col == nil {
+		return fmt.Errorf("sqlb: OnConflictSet(%q): not a column of %s (have: %s)",
+			set.column, i.model.Table, strings.Join(i.model.ColumnNames(), ", "))
+	}
+	if col.Computed() {
+		return fmt.Errorf("sqlb: OnConflictSet(%q): %s computes that column rather than storing it; there is nothing to assign to",
+			set.column, i.model.Table)
+	}
+	if set.value == nil {
+		return fmt.Errorf("sqlb: OnConflictSet(%q): no expression; pass sqlb.Val(nil) to assign NULL", set.column)
+	}
+	return i.checkConflictExpr(set.column, set.value)
+}
+
+// checkConflictExpr walks an assignment for column references that do not say
+// which side of the conflict they mean, and for names no column answers to.
+//
+// Raw is not walked, for the reason Raw is never walked: its contents are SQL
+// text this package has not parsed, which is what it is for.
+func (i *Insert[T]) checkConflictExpr(assigned string, e Expr) error {
+	switch n := e.(type) {
+	case nil, Param, sharedParam, Raw:
+		return nil
+
+	case ConflictRef:
+		if i.model.Column(n.name) == nil {
+			side := "Current"
+			if n.excluded {
+				side = "Excluded"
+			}
+			return fmt.Errorf("sqlb: OnConflictSet(%q): %s(%q) is not a column of %s (have: %s)",
+				assigned, side, n.name, i.model.Table, strings.Join(i.model.ColumnNames(), ", "))
+		}
+		return nil
+
+	case Column:
+		return ambiguousConflictRef(assigned, n.Name)
+	case Field:
+		return ambiguousConflictRef(assigned, n.Name())
+
+	case List:
+		for _, item := range n.Items {
+			if err := i.checkConflictExpr(assigned, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case Binary:
+		if err := i.checkConflictExpr(assigned, n.Left); err != nil {
+			return err
+		}
+		return i.checkConflictExpr(assigned, n.Right)
+	case Unary:
+		return i.checkConflictExpr(assigned, n.Operand)
+	case Cast:
+		return i.checkConflictExpr(assigned, n.Inner)
+	case Call:
+		for _, arg := range n.Args {
+			if err := i.checkConflictExpr(assigned, arg); err != nil {
+				return err
+			}
+		}
+		return nil
+	case BetweenExpr:
+		for _, part := range []Expr{n.Operand, n.Lo, n.Hi} {
+			if err := i.checkConflictExpr(assigned, part); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+func ambiguousConflictRef(assigned, name string) error {
+	return fmt.Errorf(
+		"sqlb: OnConflictSet(%q): the reference to %q does not say which row it means; "+
+			"inside DO UPDATE both are in scope — write sqlb.Excluded(%q) for the row being "+
+			"inserted or sqlb.Current(%q) for the one already stored",
+		assigned, name, name, name)
 }

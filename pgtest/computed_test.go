@@ -123,12 +123,19 @@ func computedDB(t *testing.T) *pgxpool.Pool {
 
 // The whole read path, against a database: the DDL has no derived columns in
 // it, and the query returns their values anyway.
+// compValues are the derived columns these tests read. Since #92 a computed
+// column is opt-in per reader, so a test that asserts one has to ask for it —
+// which is the point: an unrelated query of the same model pays for none of
+// this and needs no viewer.
+var compValues = []string{"progress", "star_count", "is_starred"}
+
 func TestComputedColumnsRunAgainstPostgres(t *testing.T) {
 	ctx := context.Background()
 	raw := computedDB(t)
 	seedComputedRows(t, raw)
 
 	rows, err := sqlb.Query[CompProject]().
+		WithComputed(compValues...).
 		Bind("viewer", int64(7)).
 		OrderBy(sqlb.F("name").Asc()).
 		All(ctx, sqlb.New(raw))
@@ -171,7 +178,10 @@ func TestComputedFilterAndSortRunAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, err := filter.Parse(values, filter.Options{Model: sqlb.ModelOf[CompProject]()})
+	q, err := filter.Parse(values, filter.Options{
+		Model:    sqlb.ModelOf[CompProject](),
+		Computed: compValues,
+	})
 	if err != nil {
 		t.Fatalf("parsing: %v", err)
 	}
@@ -202,7 +212,10 @@ func TestComputedBindRunsAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, err := filter.Parse(values, filter.Options{Model: sqlb.ModelOf[CompProject]()})
+	q, err := filter.Parse(values, filter.Options{
+		Model:    sqlb.ModelOf[CompProject](),
+		Computed: compValues,
+	})
 	if err != nil {
 		t.Fatalf("parsing: %v", err)
 	}

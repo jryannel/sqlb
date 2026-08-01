@@ -338,6 +338,19 @@ func (c *compiler) expr(e Expr) {
 	case Field:
 		c.column(n.Column())
 
+	case ConflictRef:
+		// EXCLUDED is a keyword rather than a table, so it is written bare —
+		// quoting it would produce "EXCLUDED", which Postgres would look for as
+		// a case-sensitive relation and not find. The stored side is the real
+		// table and is quoted like any other.
+		if n.excluded {
+			c.write("EXCLUDED.")
+		} else if c.base != "" {
+			c.table(c.base)
+			c.write(".")
+		}
+		c.ident(n.name)
+
 	case Param:
 		c.bind(n.Value)
 
@@ -487,9 +500,9 @@ func (c *compiler) orders(orders []Order) {
 			c.write(" ASC")
 		}
 		switch o.nulls {
-		case nullsFirst:
+		case NullsFirst:
 			c.write(" NULLS FIRST")
-		case nullsLast:
+		case NullsLast:
 			c.write(" NULLS LAST")
 		}
 	}

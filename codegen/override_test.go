@@ -45,6 +45,10 @@ func generateWith(t *testing.T, opts codegen.Options) map[string]string {
 		opts.Package = "gen"
 	}
 	opts.Dir = t.TempDir()
+	if opts.ClientImportPath == "" {
+		// Absolute Dir, so nothing can derive it. See Options.ClientImportPath.
+		opts.ClientImportPath = "example.com/app/cli/client"
+	}
 
 	files, err := codegen.Generate(opts)
 	if err != nil {
@@ -331,7 +335,10 @@ func TestNoOverridesChangesNothing(t *testing.T) {
 	if !contains(plain["models_gen.go"], "ID string") {
 		t.Errorf("the default mapping moved:\n%s", plain["models_gen.go"])
 	}
-	if contains(plain["models_gen.go"], "uuid") {
+	// The import, not the word: since #84 the struct tag carries the logical
+	// type, so every uuid column now says "uuid" in its tag and a bare
+	// substring check passes for the wrong reason.
+	if contains(plain["models_gen.go"], `"github.com/google/uuid"`) {
 		t.Error("an unconfigured project should not acquire a uuid import")
 	}
 }

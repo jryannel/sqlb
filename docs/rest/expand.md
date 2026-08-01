@@ -106,6 +106,26 @@ relations do not expand in turn, and there is no `?expand=list.workspace`. One
 level is a join per relation and a bounded statement; nesting is where a depth
 limit and a cost model have to be argued for, and neither has been.
 
+## An embedded row is the same shape as a direct one
+
+An expanded row is built by Postgres, with `json_build_object`, rather than
+marshalled by Go — which is what keeps `Hidden` honest across the join, and
+which is also the one place the two paths could drift apart. They must not: a
+client holding a generated type for the target decodes it the same way wherever
+it arrived from.
+
+Date columns are where that took work. Postgres serialises a `date` as
+`"2026-07-01"`, and the Go field for it is a `time.Time`, which parses strictly
+as RFC 3339 — so an expansion over a date column used to fail the decode
+outright ([#84](https://github.com/jryannel/sqlb/issues/84)). The value is cast
+to UTC midnight on the way out, so it arrives in the same RFC 3339 form a direct
+read produces and both generated clients already document receiving.
+
+The cast is spelled `::timestamp AT TIME ZONE 'UTC'` rather than `::timestamptz`
+on purpose: `::timestamptz` resolves through the session's `TimeZone`, so under
+`Europe/Berlin` the date `2026-07-01` would come back as `2026-06-30T22:00:00Z`
+and the column would lose a day.
+
 ## Hooks follow the join
 
 A `BeforeQuery` hook registered on the target model **does** run for an

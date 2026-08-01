@@ -33,7 +33,7 @@ func TestGeneratedModelCarriesTheExpression(t *testing.T) {
 	models := generate(t, computedFixture())["models_gen.go"]
 
 	for _, want := range []string{
-		`IsOverdue bool ` + "`" + `db:"is_overdue" json:"is_overdue" sqlb:"filter,readonly"` + "`",
+		`IsOverdue bool ` + "`" + `db:"is_overdue" json:"is_overdue" sqlb:"type:bool,filter,readonly"` + "`",
 		"func (Project) ComputedColumns() []sqlb.Computed {",
 		`{Name: "is_overdue", Expr: "due_date < current_date AND open_tasks > 0"},`,
 		`Needs: []string{"viewer"}`,
@@ -80,5 +80,17 @@ func TestComputedEmitsNoDDL(t *testing.T) {
 	}
 	if !strings.Contains(ddl.String(), "open_tasks") {
 		t.Errorf("the stored columns should still be created:\n%s", ddl.String())
+	}
+}
+
+// A generated resource opts into the columns its table declares, so its
+// responses are unchanged by #92's opt-in. That is the half of the change that
+// must *not* be visible: what the opt-in alters is everything else reading the
+// model — a hand-written query no longer inherits a list screen's correlated
+// subqueries or its per-request binds.
+func TestAGeneratedMountOptsIntoItsComputedColumns(t *testing.T) {
+	rest := generate(t, computedFixture())["rest_gen.go"]
+	if want := `Computed: []string{"is_overdue", "is_starred"}`; !contains(rest, want) {
+		t.Errorf("generated mount is missing %q:\n%s", want, rest)
 	}
 }

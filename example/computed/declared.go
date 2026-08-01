@@ -107,13 +107,31 @@ func (DeclaredProject) ComputedColumns() []sqlb.Computed {
 	}
 }
 
+// DeclaredValues names the derived columns this screen wants. Computed columns
+// are opt-in per reader: the model declares three, and a reader that wants none
+// of them — Exists, below — pays for none and needs no viewer (#92).
+var DeclaredValues = []string{"is_overdue", "progress", "is_starred"}
+
 // DeclaredView is the read. Compare it with View: there is no projection to
 // assemble, no RawSel to parenthesise by hand, and the per-viewer bind is
 // supplied once rather than written at each site that mentions it.
 //
-// In a REST application this Bind lives in a BeforeQuery hook, so no handler
-// and no caller passes the viewer around — which is also what makes the
-// mount-time check able to insist on it.
+// In a REST application the Bind lives in a BeforeQuery hook and WithComputed
+// is rest.Options.Computed, so no handler and no caller passes the viewer
+// around — which is also what makes the mount-time check able to insist on it,
+// and to insist only of the resources that render the column.
 func DeclaredView(viewer int64) *sqlb.Builder[DeclaredProject] {
-	return sqlb.Query[DeclaredProject]().Bind("viewer", viewer)
+	return sqlb.Query[DeclaredProject]().
+		WithComputed(DeclaredValues...).
+		Bind("viewer", viewer)
+}
+
+// Exists is the query that made the opt-in necessary. It asks whether a row is
+// there; it has no viewer, and there is no sense in which it should need one.
+//
+// While computed columns were projected by default this could not be written
+// against the same model: the projection carried is_starred, is_starred needed
+// the "viewer" bind, and the query failed before it reached the database.
+func Exists(id int64) *sqlb.Builder[DeclaredProject] {
+	return sqlb.Query[DeclaredProject]().Where(sqlb.F("id").Eq(id))
 }

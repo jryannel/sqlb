@@ -24,7 +24,12 @@ type binding[T any] struct {
 	// must follow the struct, not the column.
 	jsonName map[string]string
 
-	// selectable is the default projection: every non-hidden column.
+	// selectable is the default projection: every non-hidden column, minus the
+	// computed ones this resource did not opt into. It drives the response
+	// body's keys as well as the SELECT list, so a computed column the mount
+	// does not select is absent from the JSON rather than present holding its
+	// zero value — which for a bool would have been indistinguishable from a
+	// real false (#92).
 	selectable []*sqlb.ColumnInfo
 
 	// writable is what a request body may set. Read-only columns are excluded
@@ -90,7 +95,7 @@ func bind[T any](opts Options) (*binding[T], error) {
 		opts:       opts,
 		model:      m,
 		jsonName:   make(map[string]string, len(m.Columns)),
-		selectable: m.Selectable(),
+		selectable: selectableFor(m, opts.Computed),
 	}
 
 	rt := reflect.TypeFor[T]()
@@ -119,6 +124,25 @@ func bind[T any](opts Options) (*binding[T], error) {
 				m.Type, col.Field, b.jsonName[col.Name])
 		}
 	}
+	// Computed names a column the model computes. An unknown one, or a stored
+	// one, is a mounting error for the reason Expandable's is: at request time
+	// it would parse cleanly and quietly serve a resource missing the value
+	// somebody declared it should carry.
+	for _, name := range opts.Computed {
+		col := m.Column(name)
+		switch {
+		case col == nil:
+			return nil, fmt.Errorf(
+				"rest: %s declares Computed %q, but %s has no such column (have: %s)",
+				opts.name(), name, m.Type, strings.Join(m.ColumnNames(), ", "))
+		case !col.Computed():
+			return nil, fmt.Errorf(
+				"rest: %s declares Computed %q, but %s stores that column rather than computing it; "+
+					"a stored column is already in the response and does not need declaring",
+				opts.name(), name, m.Type)
+		}
+	}
+
 	// Expandable names a relation, not a column, and an unknown one has to fail
 	// here: at request time the parameter parses cleanly against Options and the
 	// response would come back 200 with the relation missing.
@@ -340,6 +364,27 @@ func (b *binding[T]) relationsFor(names []string) []*sqlb.RelationInfo {
 		if rel := b.model.Relation(name); rel != nil {
 			out = append(out, rel)
 		}
+	}
+	return out
+}
+
+// selectableFor is the resource's projection: every non-hidden column, minus
+// the computed ones it did not ask for.
+//
+// Model.Selectable cannot answer this on its own — it is model-wide, and the
+// same model may be mounted twice with different computed sets, which is the
+// case that made a shared model expensive to read (#92).
+func selectableFor(m *sqlb.Model, computed []string) []*sqlb.ColumnInfo {
+	wanted := make(map[string]bool, len(computed))
+	for _, name := range computed {
+		wanted[name] = true
+	}
+	out := make([]*sqlb.ColumnInfo, 0, len(m.Columns))
+	for _, col := range m.Selectable() {
+		if col.Computed() && !wanted[col.Name] {
+			continue
+		}
+		out = append(out, col)
 	}
 	return out
 }

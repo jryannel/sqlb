@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -97,6 +98,35 @@ type Options struct {
 	CLIName    string
 	CLIFile    string
 
+	// ClientDir emits the transport-only Go client — Request, Transport,
+	// Client, Do, Run and the typed problem document — into a directory
+	// relative to Dir. The emitted package imports the standard library and
+	// nothing else.
+	//
+	// It is a separate package from the CLI because it is a separate artefact.
+	// A sync job, a server-to-server caller, or an admin tool that already has
+	// a command tree of its own wants the typed encoder and not a command-line
+	// framework, and while the two shared a package it could not have one
+	// without the other (#97).
+	//
+	// Setting CLIDir and leaving this empty emits the client into a "client"
+	// subdirectory of CLIDir, because the command tree has to import it from
+	// somewhere. Setting this and leaving CLIDir empty emits the client alone,
+	// which is the server-to-server case.
+	ClientDir     string
+	ClientPackage string
+	ClientFile    string
+
+	// ClientImportPath is the path the generated CLI imports the generated
+	// client under. Empty derives it: the module path out of the nearest
+	// go.mod, joined with Dir and the client's directory.
+	//
+	// Deriving it is right for a repository generating into itself, which is
+	// every project using sqlb generate. It cannot be right for a caller whose
+	// Dir is an absolute path, or who generates into a module it is not inside
+	// — so the derivation is a default rather than the mechanism.
+	ClientImportPath string
+
 	// DartDir emits a typed Dart client, into a directory relative to Dir —
 	// "mobile/lib/api" in a repository whose Flutter app lives beside its
 	// server. Empty means no client is emitted, which is the right default for
@@ -133,7 +163,101 @@ func (o Options) tsQueriesFile() string { return orDefault(o.TSQueriesFile, "que
 
 func (o Options) dartFile() string { return orDefault(o.DartFile, "client.gen.dart") }
 
-func (o Options) cliFile() string { return orDefault(o.CLIFile, "cli_gen.go") }
+func (o Options) cliFile() string    { return orDefault(o.CLIFile, "cli_gen.go") }
+func (o Options) clientFile() string { return orDefault(o.ClientFile, "client_gen.go") }
+
+// clientDir is where the client package lands: ClientDir when set, and a
+// "client" subdirectory of the CLI otherwise, so that setting CLIDir alone
+// still produces something the command tree can import.
+func (o Options) clientDir() string {
+	if o.ClientDir != "" {
+		return o.ClientDir
+	}
+	if o.CLIDir != "" {
+		return filepath.Join(o.CLIDir, "client")
+	}
+	return ""
+}
+
+// clientPackage is the package clause of the emitted client, defaulting to the
+// last element of its directory, as cliPackage does.
+func (o Options) clientPackage() string {
+	if o.ClientPackage != "" {
+		return o.ClientPackage
+	}
+	return filepath.Base(o.clientDir())
+}
+
+// clientImportPath is the path the CLI imports the client package under.
+//
+// It needs the module path, which is the one thing about a generated import
+// that cannot be derived from the schema. Reading go.mod is what keeps it off
+// the Options struct for the common case; Module is the override for a caller
+// generating outside a module root.
+func (o Options) clientImportPath() (string, error) {
+	if o.ClientImportPath != "" {
+		return o.ClientImportPath, nil
+	}
+	if filepath.IsAbs(o.Dir) {
+		return "", fmt.Errorf(
+			"codegen: Options.Dir %q is absolute, so the generated CLI's import of the generated client "+
+				"cannot be derived from the module path; set Options.ClientImportPath", o.Dir)
+	}
+	mod, err := moduleFromGoMod()
+	if err != nil {
+		return "", fmt.Errorf(
+			"codegen: the generated CLI imports the generated client, which needs the module path: %w; "+
+				"set Options.ClientImportPath", err)
+	}
+	return path.Join(mod, filepath.ToSlash(o.Dir), filepath.ToSlash(o.clientDir())), nil
+}
+
+// moduleFromGoMod reads the module path out of the nearest go.mod, walking up
+// from the working directory.
+//
+// Walking rather than reading "./go.mod" because a caller writing its own
+// generator runs it from wherever it likes, and the module root is the one
+// place the answer is. No dependency on golang.org/x/mod for one line of it.
+func moduleFromGoMod() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		name := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(name); err == nil {
+			return readModulePath(name)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no go.mod found above %s", mustGetwd())
+		}
+		dir = parent
+	}
+}
+
+func mustGetwd() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "the working directory"
+	}
+	return dir
+}
+
+func readModulePath(name string) (string, error) {
+	src, err := os.ReadFile(name)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(src), "\n") {
+		if rest, found := strings.CutPrefix(strings.TrimSpace(line), "module"); found {
+			if mod := strings.TrimSpace(rest); mod != "" {
+				return mod, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("%s declares no module path", name)
+}
 func (o Options) cliName() string { return orDefault(o.CLIName, o.Package) }
 
 // cliPackage is the package clause of the emitted CLI. It defaults to the last
@@ -178,6 +302,11 @@ func (o Options) validate() error {
 	// fine as a path and does not compile as a package. Caught here, naming the
 	// option to set, rather than by go/format, which parses without checking
 	// that a package name is one.
+	if dir := o.clientDir(); dir != "" && !isGoIdent(o.clientPackage()) {
+		return fmt.Errorf(
+			"codegen: the generated client lands in %q, giving the package name %q, which is not a Go identifier; set Options.ClientPackage",
+			dir, o.clientPackage())
+	}
 	if o.CLIDir != "" && !isGoIdent(o.cliPackage()) {
 		return fmt.Errorf(
 			"codegen: Options.CLIDir %q gives the package name %q, which is not a Go identifier; set Options.CLIPackage",
@@ -326,6 +455,19 @@ func render(opts Options) (map[string][]byte, error) {
 				return nil, err
 			}
 			files[filepath.Join(opts.DartDir, name)] = src
+		}
+	}
+	// The client first, because the CLI imports it and a reader of the file
+	// list should see the thing being imported before the thing importing it.
+	if dir := opts.clientDir(); dir != "" {
+		if name := opts.clientFile(); name != "-" {
+			src, err := renderGoClient(opts)
+			if err != nil {
+				return nil, err
+			}
+			if src != nil {
+				files[filepath.Join(dir, name)] = src
+			}
 		}
 	}
 	if opts.CLIDir != "" {

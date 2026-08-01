@@ -138,7 +138,51 @@ which is what lets the row scan into the field.
 
 **A subquery is projection-only unless you say otherwise.** Writing
 `Filterable()` on one is the acknowledgement that a subquery in a `WHERE` runs
-once per candidate row.
+once per candidate row. `Searchable()` says the same thing about `?search`, and
+is allowed on a computed column whose declared type is text — which is the only
+way to search across a relation:
+
+```go
+schema.Computed("participant_names", schema.TypeText,
+    schema.FromSQL("(SELECT string_agg(m.display_name, ' ') FROM members m "+
+        "WHERE m.id = ANY(chats.participant_ids))")).
+    Searchable(),
+```
+
+A chat is named in the UI by whoever is in it — a direct message has no `name`
+at all — so fanning out over the chat's own columns finds nothing for exactly
+the rows a search is for, and answers 200 while doing it
+([#93](https://github.com/jryannel/sqlb/issues/93)).
+
+**Reading one is opt-in, because the model is shared.** A computed column is
+declared on the model and usually wanted by one screen, so nothing projects it
+unless it asks:
+
+```go
+sqlb.Query[Project]().WithComputed("total_tasks", "is_starred")   // a query
+rest.Options{Computed: []string{"total_tasks", "is_starred"}}     // a resource
+```
+
+A generated resource opts into every computed column its table declares, so
+generated endpoints are unaffected — the opt-in exists for everything *else*
+reading the same model. Without it, three aggregates declared for a list screen
+attached a correlated subquery each to every read of the model, including this:
+
+```go
+sqlb.Query[Project]().Where(sqlb.F("id").Eq(id)).One(ctx, db)
+```
+
+which is asking whether a row exists. Worse, a column declaring `Needs` made
+that query *fail* — it wanted a `viewer` bind the caller had no business
+supplying ([#92](https://github.com/jryannel/sqlb/issues/92)).
+
+For a resource the opt-in is a boundary rather than a projection setting: a
+computed column a resource does not select is not filterable, sortable or
+nameable in `?select` there either. A filter on a correlated subquery costs what
+the projection would have, so being merely unprojected would not have made it
+cheap. The obligation follows the same line — a resource that selects a `Needs`
+column still refuses to mount without a hook to supply the bind, and one that
+does not select it never has to care.
 
 **`Needs` supplies what the request knows.** Each `?` takes the bind named at the
 matching position, and the value arrives with the query:

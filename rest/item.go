@@ -159,7 +159,7 @@ func (b *binding[T]) expansions(ctx context.Context, names []string) ([]string, 
 	}
 	q, err := filter.Parse(
 		url.Values{"expand": {strings.Join(names, ",")}},
-		filter.Options{Model: b.model, Expandable: b.opts.Expandable},
+		filter.Options{Model: b.model, Expandable: b.opts.Expandable, Computed: b.opts.Computed},
 	)
 	if err != nil {
 		return nil, asHumaError(ctx, err, b.opts.name())

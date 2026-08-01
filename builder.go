@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Builder is a SELECT statement under construction against model T.
@@ -38,11 +39,15 @@ type Builder[T any] struct {
 	// binds are the values a computed column's Needs names, one shared slot per
 	// key so that a viewer named in the projection, the WHERE and the ORDER BY
 	// is sent to the database once. See Bind.
-	binds  map[string]*sharedValue
-	limit  *int
-	offset *int
-	lock   string
-	err    error
+	binds map[string]*sharedValue
+	// computed names the derived columns this query is willing to pay for.
+	// Empty means none: a computed column is opt-in, because it is declared on
+	// the model and wanted by one caller (#92). See WithComputed.
+	computed map[string]bool
+	limit    *int
+	offset   *int
+	lock     string
+	err      error
 }
 
 type joinClause struct {
@@ -105,6 +110,12 @@ func (b *Builder[T]) Clone() *Builder[T] {
 			c.expandScope[k] = append([]Pred(nil), v...)
 		}
 	}
+	if b.computed != nil {
+		c.computed = make(map[string]bool, len(b.computed))
+		for k := range b.computed {
+			c.computed[k] = true
+		}
+	}
 	if b.binds != nil {
 		// The map is copied and the slots are not: rebinding a key on the copy
 		// must not reach the original, while a value already bound is the same
@@ -128,6 +139,51 @@ func (b *Builder[T]) Clone() *Builder[T] {
 // UseDialect overrides the dialect for this query.
 func (b *Builder[T]) UseDialect(d Dialect) *Builder[T] {
 	b.dialect = d
+	return b
+}
+
+// WithComputed adds the named computed columns to the projection.
+//
+// Computed columns are opt-in. They are declared on the model, which is shared,
+// and wanted by one caller — so projecting them by default charged every read
+// of the model for a list screen's aggregates, and a column carrying a Needs
+// bind made unrelated reads fail outright:
+//
+//	sqlb.Query[Project]().Where(sqlb.F("id").Eq(id)).One(ctx, db)
+//	// used to answer: computed column "is_starred" needs the "viewer" bind
+//
+// That query is asking whether a row exists. It has no viewer and should not
+// need one, and before this it had no way to say so (#92).
+//
+//	sqlb.Query[Project]().
+//	    WithComputed("total_tasks", "is_starred").
+//	    Bind("viewer", actor.ID)
+//
+// Naming a column the model does not have, or one it stores rather than
+// computes, fails the query — a silent no-op would leave the caller believing
+// they had asked for a value that is about to arrive as the zero value.
+//
+// Selecting a computed column explicitly with [Builder.Select] works too and
+// does not need this; WithComputed is for keeping the default projection and
+// adding to it. For a REST resource the equivalent is rest.Options.Computed.
+func (b *Builder[T]) WithComputed(names ...string) *Builder[T] {
+	for _, name := range names {
+		col := b.model.Column(name)
+		switch {
+		case col == nil:
+			b.fail("sqlb: WithComputed(%q): not a column of %s (have: %s)",
+				name, b.model.Table, strings.Join(b.model.ColumnNames(), ", "))
+			return b
+		case !col.Computed():
+			b.fail("sqlb: WithComputed(%q): %s stores that column rather than computing it; "+
+				"it is already in the projection", name, b.model.Table)
+			return b
+		}
+		if b.computed == nil {
+			b.computed = make(map[string]bool, len(names))
+		}
+		b.computed[name] = true
+	}
 	return b
 }
 
@@ -426,10 +482,21 @@ func (b *Builder[T]) compile(c *compiler) {
 
 func (b *Builder[T]) compileProjection(c *compiler) {
 	if len(b.sel) == 0 {
-		for i, col := range b.model.Columns {
-			if i > 0 {
+		first := true
+		for _, col := range b.model.Columns {
+			// A computed column is declared on the model and wanted by one
+			// caller, so the default projection leaves it out: otherwise a
+			// correlated subquery declared for a list screen is attached to
+			// every read of the model, including an existence check by id, and
+			// one carrying a Needs bind makes those reads fail outright (#92).
+			// WithComputed is how a caller asks for it.
+			if col.Computed() && !b.computed[col.Name] {
+				continue
+			}
+			if !first {
 				c.write(", ")
 			}
+			first = false
 			c.column(Column{Table: b.alias, Name: col.Name})
 			// An expression has no name of its own, and the scan matches result
 			// columns to fields by name. Aliasing it back to the column it was

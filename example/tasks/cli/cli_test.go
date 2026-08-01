@@ -19,6 +19,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/jryannel/sqlb/example/tasks/cli/client"
 )
 
 // run executes one command line against a stub server and returns stdout.
@@ -28,7 +30,7 @@ func run(t *testing.T, handler http.HandlerFunc, args ...string) (string, error)
 	t.Cleanup(server.Close)
 
 	var out bytes.Buffer
-	root := New(&Client{BaseURL: server.URL})
+	root := New(&client.Client{BaseURL: server.URL})
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs(args)
@@ -307,7 +309,7 @@ func TestTokenIsSentAsABearerHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	root := New(&Client{BaseURL: server.URL, Token: "secret-token"})
+	root := New(&client.Client{BaseURL: server.URL, Token: "secret-token"})
 	root.SetOut(&bytes.Buffer{})
 	root.SetArgs([]string{"tasks", "list"})
 	if err := root.Execute(); err != nil {
@@ -327,10 +329,10 @@ func TestTokenIsSentAsABearerHeader(t *testing.T) {
 // undo a Client configured in Go, which is what registering a flag default
 // does if the default is not the field's own value.
 func TestTransportReplacesTheBuiltInOne(t *testing.T) {
-	var seen Request
-	c := &Client{
+	var seen client.Request
+	c := &client.Client{
 		BaseURL: "https://example.invalid",
-		Transport: func(_ context.Context, req Request) (json.RawMessage, error) {
+		Transport: func(_ context.Context, req client.Request) (json.RawMessage, error) {
 			seen = req
 			return json.RawMessage(`{"items":[]}`), nil
 		},

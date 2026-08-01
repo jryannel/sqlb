@@ -13,6 +13,7 @@
 ?views=between.10,20          ranges
 ?or=(status.eq.draft,age.lt.18)   explicit disjunction, nestable
 ?sort=-created_at,title       "-" for descending; created_at.desc also works
+                              (where NULLs go is declared on the column)
 ?select=id,title              projection (the primary key is always kept)
 ?search=ada                   fan-out over searchable columns
 ?page=2&per_page=50           offset pagination, capped by the schema
@@ -46,10 +47,12 @@ The ordering operators, `in` and `between` are refused: Postgres will order
 arrays, but that is not an ordering an API should offer, and a list of arrays
 has no spelling in this grammar.
 
-The `n`-prefixed forms follow `nin`'s convention, and they exist because the
-query string has nowhere to put a `not`: parameters conjoin, so negation has to
-live in the operator. The JSON tree can spell either, and the two compile to the
-same statement.
+The `n`-prefixed forms follow `nin`'s convention, and they exist because a
+*per-column* parameter has nowhere to put a `not`: those parameters conjoin, so
+negation has to live in the operator. The JSON tree can spell either, and the
+two compile to the same statement. The group parameters are the exception that
+proves the rule — `?or=(…)` is a single node carried by one parameter — and
+whether `?not=(…)` should join them is [issue #98](https://github.com/jryannel/sqlb/issues/98).
 
 **A negation is not a complement.** `nhas` is `NOT (…)`, evaluated by SQL's
 three-valued logic, so a row whose column is NULL matches neither `has` nor
@@ -157,6 +160,12 @@ WHERE ("title" ILIKE $1) OR ("body" ILIKE $2)
 -- args: %50\%% %50\%%
 ```
 
+A `Searchable` computed column joins the fan-out as an expression, which is how
+a search reaches past the row: a chat named in the UI by whoever is in it has no
+`name` of its own, so a computed text column rendering the participants' names
+is what makes it findable. The resource pays for that subquery only if it
+selected the column — see `rest.Options.Computed`.
+
 Which columns join that fan-out is a privacy decision as much as an API one — an
 address column that is filterable but not searchable answers "find my own
 record" and refuses to answer "who here uses example.com". See
@@ -191,6 +200,44 @@ and still promise the key is there.
 
 If you want a custom projection, apply `Where`, `Order` and the limits from the
 `Query` fields yourself rather than calling `Apply`.
+
+## Sorting, and where NULLs go
+
+`?sort=` takes a comma-separated list, `-` for descending, and `created_at.desc`
+as the PostgREST-familiar alternative spelling. Only columns declared `Sortable`
+are accepted; anything else is a 400 listing the ones that are.
+
+Where NULLs sit is **declared on the column, not asked for by the request**:
+
+```go
+schema.Timestamp("published_at").Nullable().Sortable(schema.NullsLast)
+```
+
+The reason it is not a request parameter is that Postgres's default is not one
+placement but two — `NULLS LAST` ascending, `NULLS FIRST` descending — so it
+flips underneath a column the moment the direction flips. For a column whose
+NULLs are incidental that is fine. For one whose NULLs *mean* something it is
+not: a NULL `published_at` means "not published", and those rows belong at the
+bottom of the feed in either direction. Left to the default, `?sort=-published_at`
+lifts every unpublished draft to the top.
+
+So the placement is a property of what the column means rather than of what a
+caller wants, and declaring it once is what makes every request get it right —
+including the ones a generated TypeScript or Dart client builds, which need no
+new syntax for it. A hand-written query says the same thing with
+`sqlb.F("published_at").Desc().NullsLast()`; `Description.SortNullsLast` is the
+spelling for a hand-written model.
+
+Two consequences worth knowing:
+
+- **it applies in both directions.** `Sortable(schema.NullsLast)` means NULLs
+  sort last ascending *and* descending. A placement that only bit on one
+  direction would be a rule with an invisible exception;
+- **it is part of the ordering a cursor was issued for.** Adding or changing a
+  placement invalidates outstanding cursors, which are then refused with the
+  ordinary "drop the cursor when the sort changes" error rather than silently
+  paging under an ordering they were not built for. `sqlb impact` reports the
+  change as breaking for exactly this reason.
 
 ## Limits
 

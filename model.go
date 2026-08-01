@@ -44,6 +44,26 @@ type ColumnInfo struct {
 	Immutable  bool
 	Hidden     bool
 
+	// SortNulls is where NULLs sit whenever this column is sorted on, in either
+	// direction. The zero value leaves Postgres's own default, which follows
+	// the direction rather than being one placement. It is declared on the
+	// column because it is a property of what the column means (#88), so a
+	// request does not — and cannot — ask for it.
+	SortNulls NullsOrder
+
+	// PGType is the schema's logical type for the column — "date",
+	// "timestamptz", "text" — carried through the struct tag that codegen
+	// writes. It is empty for a hand-written model that has not said
+	// otherwise, so every reader of it must treat "unknown" as a real answer
+	// rather than a default.
+	//
+	// It exists because Type is not enough: timestamptz, date and time are one
+	// Go type and three different things to Postgres, and an expanded row
+	// serialises each of them differently. Reading the Go type alone made an
+	// expansion over a date column answer 500 (#84). Describe.SQLType is the
+	// hand-written half.
+	PGType string
+
 	// Obligations, from the same tag. Nothing on the request path reads
 	// either: they are the schema's statement that this model's rows are
 	// confined by something, and they are checked once, where a resource is
@@ -251,13 +271,17 @@ func setComputed(m *Model, col *ColumnInfo, expr string, needs []string) error {
 				"each `?` takes the bind at the matching position, and `??` is a literal question mark",
 			m.Type, col.Name, n, len(needs), strings.Join(needs, ", "))
 	}
-	if col.Searchable {
-		// ?search fans out over text columns with ILIKE (ADR-0037). There is no
-		// reading of that over an expression which is not either a lie about
-		// what was searched or a table scan nobody asked for.
-		return fmt.Errorf("sqlb: model %s computes %q and marks it searchable; a computed column cannot be part of the ?search fan-out",
-			m.Type, col.Name)
-	}
+	// Searchable is allowed. ?search fans out over text columns with ILIKE
+	// (ADR-0037), and a computed column declared as text has exactly that
+	// reading — it was refused here because most computed columns are not text,
+	// which is a claim about type that the schema's own "Searchable requires a
+	// text column" rule already makes.
+	//
+	// What the refusal cost was the only way to search across a relation: a
+	// chat named in the UI by its participants has no name column of its own,
+	// so fanning out over its own columns finds nothing and does it with a 200
+	// (#93). The remaining objection was cost, and it is answered where cost
+	// belongs — a resource searches an expression only if it selected it (#92).
 	// Nothing writes an expression. Marking it here rather than asking every
 	// caller to check Computed() is what keeps the create and update bodies,
 	// the insert column list and the REST write paths correct without knowing
@@ -409,7 +433,13 @@ func collectColumns(m *Model, t reflect.Type, prefix []int) error {
 
 func applyCapabilities(c *ColumnInfo, tag string) {
 	for _, part := range strings.Split(tag, ",") {
-		switch strings.TrimSpace(part) {
+		// A capability may carry an argument after a colon. Only `sort` does
+		// today; splitting here rather than in that one case keeps an unknown
+		// `name:arg` falling through to the same silent ignore an unknown bare
+		// name already gets, instead of being read as a column capability
+		// nobody declared.
+		name, arg, _ := strings.Cut(strings.TrimSpace(part), ":")
+		switch name {
 		case "":
 		case "pk":
 			c.PrimaryKey = true
@@ -419,6 +449,14 @@ func applyCapabilities(c *ColumnInfo, tag string) {
 			c.Filterable = true
 		case "sort":
 			c.Sortable = true
+			switch arg {
+			case "nullsfirst":
+				c.SortNulls = NullsFirst
+			case "nullslast":
+				c.SortNulls = NullsLast
+			}
+		case "type":
+			c.PGType = arg
 		case "search":
 			c.Searchable = true
 			c.Filterable = true

@@ -41,7 +41,10 @@ func TestDeclaredValuesReachTheFilterGrammar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, err := filter.Parse(values, filter.Options{Model: sqlb.ModelOf[computed.DeclaredProject]()})
+	q, err := filter.Parse(values, filter.Options{
+		Model:    sqlb.ModelOf[computed.DeclaredProject](),
+		Computed: computed.DeclaredValues,
+	})
 	if err != nil {
 		t.Fatalf("parsing a request naming the derived columns: %v", err)
 	}
@@ -106,5 +109,54 @@ func TestDeclaredSchemaEmitsNoDDLForTheExpressions(t *testing.T) {
 		if !strings.Contains(ddl.String(), want) {
 			t.Errorf("%s is missing from the DDL:\n%s", want, ddl.String())
 		}
+	}
+}
+
+// The query that made the opt-in necessary, and the measurement of what it now
+// costs: nothing.
+//
+// Before #92 this could not be written against a model declaring a Needs
+// column. The projection carried is_starred, is_starred wanted the "viewer"
+// bind, and an existence check by id failed before it reached the database —
+// for a value it had not asked for and had no way to decline.
+func TestAnExistenceCheckPaysForNoDerivedValue(t *testing.T) {
+	sql, args, err := computed.Exists(42).SQL()
+	if err != nil {
+		t.Fatalf("an existence check on a model with computed columns failed: %v", err)
+	}
+	for _, absent := range []string{"is_starred", "is_overdue", "progress", "EXISTS", "NULLIF"} {
+		if strings.Contains(sql, absent) {
+			t.Errorf("the existence check carries %q, which it never asked for:\n%s", absent, sql)
+		}
+	}
+	if len(args) != 1 || args[0] != int64(42) {
+		t.Errorf("args = %v, want only the id", args)
+	}
+}
+
+// And the resource-level half: a request to an endpoint that does not select a
+// computed column cannot reach it by name either. Unreachable rather than
+// merely unprojected, because a filter on a correlated subquery costs what the
+// projection would have.
+func TestAResourceThatDoesNotSelectAColumnCannotBeAskedForIt(t *testing.T) {
+	values, err := url.ParseQuery("is_overdue=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same model, mounted without the derived values.
+	_, err = filter.Parse(values, filter.Options{
+		Model: sqlb.ModelOf[computed.DeclaredProject](),
+	})
+	if err == nil {
+		t.Fatal("a resource that does not select is_overdue accepted a filter on it")
+	}
+	if !strings.Contains(err.Error(), "is_overdue") {
+		t.Errorf("the rejection does not name the parameter: %v", err)
+	}
+	// And it is not advertised as one of the columns that would have worked —
+	// naming it there would point a caller at a column every request for it is
+	// about to be refused for.
+	if _, allowed, found := strings.Cut(err.Error(), "allowed"); found && strings.Contains(allowed, "is_overdue") {
+		t.Errorf("the unreachable column is listed among the allowed ones: %v", err)
 	}
 }

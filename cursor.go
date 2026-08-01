@@ -68,9 +68,18 @@ var ErrBadCursor = errors.New("sqlb: invalid cursor")
 // emitted for it and is decoded into time.Time, not into a string that Postgres
 // would then have to cast. The consequence worth knowing is that a cursor's
 // value for a column is exactly the JSON the response showed for it.
+// Nulls is the column's *declared* null placement, not the placement the term
+// resolves to. The distinction is what keeps old cursors valid: a column
+// without a declaration encodes 0 and the field is omitted, so a cursor issued
+// before this field existed still matches. A column that gains or changes a
+// declaration stops matching, which is the intended refusal — the placement is
+// part of the ordering a cursor was issued for, and interpreting a boundary
+// under a different one is the silent mispaging keyset paging exists to
+// prevent (#88).
 type cursorTerm struct {
 	Column string          `json:"c"`
 	Desc   bool            `json:"d,omitempty"`
+	Nulls  NullsOrder      `json:"n,omitempty"`
 	Value  json.RawMessage `json:"v"`
 }
 
@@ -179,7 +188,7 @@ func (b *Builder[T]) CursorFor(row T) (Cursor, error) {
 		if err != nil {
 			return "", fmt.Errorf("sqlb: cannot encode %s into a cursor: %w", t.col.Name, err)
 		}
-		payload.Terms[i] = cursorTerm{Column: t.col.Name, Desc: t.desc, Value: raw}
+		payload.Terms[i] = cursorTerm{Column: t.col.Name, Desc: t.desc, Nulls: t.nulls, Value: raw}
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {
@@ -205,6 +214,11 @@ type keysetTerm struct {
 	// Postgres defaults to NULLS LAST for ASC and NULLS FIRST for DESC, so the
 	// default is not a single placement — it follows the direction.
 	nullsAfter bool
+	// nulls is what the term *declared*, before that resolution. The predicate
+	// wants the resolved answer; the cursor wants the declaration, because a
+	// declaration is what can change between the request that issued a cursor
+	// and the request that presents it.
+	nulls NullsOrder
 }
 
 // keysetTerms resolves the ORDER BY into the terms a cursor can be built from,
@@ -255,6 +269,7 @@ func (b *Builder[T]) keysetTerms() ([]keysetTerm, error) {
 			expr:       o.expr,
 			desc:       o.desc,
 			nullsAfter: o.nullsAfterValues(),
+			nulls:      o.nulls,
 		})
 	}
 	return out, nil
@@ -264,9 +279,9 @@ func (b *Builder[T]) keysetTerms() ([]keysetTerm, error) {
 // term, resolving the default against the direction the way Postgres does.
 func (o Order) nullsAfterValues() bool {
 	switch o.nulls {
-	case nullsFirst:
+	case NullsFirst:
 		return false
-	case nullsLast:
+	case NullsLast:
 		return true
 	default:
 		return !o.desc
@@ -296,7 +311,7 @@ func decodeCursor(c Cursor, terms []keysetTerm) ([]any, error) {
 	values := make([]any, len(terms))
 	for i, t := range terms {
 		got := payload.Terms[i]
-		if got.Column != t.col.Name || got.Desc != t.desc {
+		if got.Column != t.col.Name || got.Desc != t.desc || got.Nulls != t.nulls {
 			return nil, orderingMismatch(payload, terms)
 		}
 		v, err := decodeValue(got.Value, t.col)
@@ -345,7 +360,7 @@ func describePayload(p cursorPayload) string {
 	}
 	parts := make([]string, len(p.Terms))
 	for i, t := range p.Terms {
-		parts[i] = t.Column + " " + direction(t.Desc)
+		parts[i] = t.Column + " " + direction(t.Desc) + nullsPhrase(t.Nulls)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -353,9 +368,25 @@ func describePayload(p cursorPayload) string {
 func describeTerms(terms []keysetTerm) string {
 	parts := make([]string, len(terms))
 	for i, t := range terms {
-		parts[i] = t.col.Name + " " + direction(t.desc)
+		parts[i] = t.col.Name + " " + direction(t.desc) + nullsPhrase(t.nulls)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// nullsPhrase names an explicit null placement and says nothing about the
+// default one. Without it, a cursor refused because the column's declared
+// placement changed would read "it was issued for an ordering of published_at
+// desc, and this request orders by published_at desc" — a mismatch error naming
+// two identical orderings, which is worse than no error at all.
+func nullsPhrase(n NullsOrder) string {
+	switch n {
+	case NullsFirst:
+		return " nulls first"
+	case NullsLast:
+		return " nulls last"
+	default:
+		return ""
+	}
 }
 
 func direction(desc bool) string {

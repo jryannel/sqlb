@@ -79,13 +79,14 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			MaxSortTerms:    opts.MaxSortTerms,
 			MaxOffset:       opts.MaxOffset,
 			Expandable:      opts.Expandable,
+			Computed:        opts.Computed,
 			DisableSearch:   opts.DisableSearch,
 		})
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
 
-		query := filter.Apply(sqlb.Query[T](), q)
+		query := filter.Apply(sqlb.Query[T]().WithComputed(opts.Computed...), q)
 
 		// One row beyond the page tells the client whether to ask again,
 		// without the count query that would otherwise be the only way to know.
