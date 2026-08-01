@@ -66,25 +66,27 @@ func metersDB(t *testing.T) *sqlb.DB {
 	return sqlb.New(db)
 }
 
-// TestUpsertCannotExpressAnIncrement is the census's first standout finding,
-// under a test: upserts are the second most common construct in the corpus, and
-// the one form sqlb cannot write is the one a counter needs.
+// TestUpsertIncrementNeedsAnExpression was the census's first standout finding
+// and is now its demonstration — which is what the assertion below said should
+// happen if the expression form ever landed. It did, in #90.
 //
-// OnConflictUpdate copies EXCLUDED.<col> and only that. For a counter, the
-// second write of 3 over an existing 5 should leave 8; it leaves 3, silently
-// and without error. Nothing in the API hints at the difference, because for
-// every non-arithmetic upsert — a profile, a cache entry, a settings row —
-// copying EXCLUDED is exactly right.
+// The default is unchanged and still the right one: OnConflictUpdate copies
+// EXCLUDED.<col>, so a second write of 3 over an existing 5 leaves 3. For every
+// non-arithmetic upsert — a profile, a cache entry, a settings row — that is
+// exactly right, which is why it stays the default and why the arithmetic form
+// is something a declaration asks for.
 //
-// Two workarounds exist and neither is the missing feature. SetExpr increments
-// a row that is already there, so read-then-branch works at the cost of a round
-// trip and a race the database was meant to settle. Raw SQL expresses it in one
-// statement at the cost of leaving the builder, the model, and the hooks.
+// What has changed is what a counter has to do about it. OnConflictSet now
+// expresses the increment in one statement, inside the builder, with the model
+// and the hooks and RETURNING intact:
 //
-// Deliberately not: a proposal for the spelling. The census argues the gap is
-// "narrow and shaped exactly like the metering table that hits it"; this fixes
-// the shape of the evidence, not the design.
-func TestUpsertCannotExpressAnIncrement(t *testing.T) {
+//	OnConflictSet("count", sqlb.Add(sqlb.Current("count"), sqlb.Excluded("count")))
+//
+// SetExpr is kept below because it is still a different thing rather than a
+// worse one: it increments a row that is already there, and says nothing about
+// the row that is not. The raw-SQL workaround this test used to carry is gone,
+// because leaving the builder is no longer the price of an atomic counter.
+func TestUpsertIncrementNeedsAnExpression(t *testing.T) {
 	ctx := context.Background()
 	db := metersDB(t)
 
@@ -101,8 +103,8 @@ func TestUpsertCannotExpressAnIncrement(t *testing.T) {
 		t.Fatalf("second write: %v", err)
 	}
 	if got.Count != 3 {
-		t.Fatalf("count = %d after upserting 3 over 5; OnConflictUpdate is documented to copy EXCLUDED, so 3 is the contract. "+
-			"If this now reports 8, an expression form was added and this test should become its demonstration.", got.Count)
+		t.Fatalf("count = %d after upserting 3 over 5; OnConflictUpdate copies EXCLUDED, so 3 is the contract "+
+			"and the arithmetic form is opt-in", got.Count)
 	}
 
 	// Workaround one: SetExpr, which does express the arithmetic — but only for
@@ -118,22 +120,31 @@ func TestUpsertCannotExpressAnIncrement(t *testing.T) {
 		t.Errorf("count = %d after SetExpr(+5) over 3, want 8", updated.Count)
 	}
 
-	// Workaround two: the whole statement in Raw, which is what a producer that
-	// cannot assume the row exists is left with. It leaves the builder entirely
-	// — no model, no hooks, no RETURNING into a struct.
-	if _, err := db.Exec(ctx, `
-		INSERT INTO meters (tenant, kind, count) VALUES ($1, $2, $3)
-		ON CONFLICT (tenant, kind) DO UPDATE SET count = meters.count + EXCLUDED.count
-	`, "acme", "api_call", 4); err != nil {
-		t.Fatalf("raw arithmetic upsert: %v", err)
-	}
-	final, err := sqlb.Query[Meter]().
-		Where(sqlb.F("tenant").Eq("acme"), sqlb.F("kind").Eq("api_call")).One(ctx, db)
+	// And the thing the census said was missing: one statement, atomic, and it
+	// does not leave the builder. 4 over the 8 SetExpr just wrote is 12.
+	incremented, err := sqlb.InsertRows(&Meter{Tenant: "acme", Kind: "api_call", Count: 4}).
+		OnConflictUpdate([]string{"tenant", "kind"}).
+		OnConflictSet("count", sqlb.Add(sqlb.Current("count"), sqlb.Excluded("count"))).
+		One(ctx, db)
 	if err != nil {
-		t.Fatalf("re-read: %v", err)
+		t.Fatalf("arithmetic upsert: %v", err)
 	}
-	if final.Count != 12 {
-		t.Errorf("count = %d after the raw increment of 4 over 8, want 12", final.Count)
+	if incremented.Count != 12 {
+		t.Errorf("count = %d after incrementing by 4 over 8, want 12", incremented.Count)
+	}
+
+	// The row it lands on when there is none: the insert's own value, not an
+	// increment of a row that was never there. Current reads the stored row, and
+	// on the insert branch there is nothing to read, so the branch never runs.
+	fresh, err := sqlb.InsertRows(&Meter{Tenant: "acme", Kind: "webhook", Count: 4}).
+		OnConflictUpdate([]string{"tenant", "kind"}).
+		OnConflictSet("count", sqlb.Add(sqlb.Current("count"), sqlb.Excluded("count"))).
+		One(ctx, db)
+	if err != nil {
+		t.Fatalf("arithmetic upsert on a fresh key: %v", err)
+	}
+	if fresh.Count != 4 {
+		t.Errorf("count = %d on a key that did not exist, want the inserted 4", fresh.Count)
 	}
 }
 

@@ -23,17 +23,23 @@ import (
 // and get the same day back. Both halves matter — the decode is what used to
 // 500, and the day is what a ::timestamptz cast would have silently shifted.
 
+// The json tags are load-bearing rather than decoration: an expanded row is
+// built by Postgres as a JSON object keyed by *column* name, and scanExpansion
+// unmarshals it into this struct. Without a tag, encoding/json matches
+// case-insensitively on the field name — "DueOn" against "due_on" — and does
+// not ignore the underscore, so the field would silently stay nil and this test
+// would report the bug it exists to catch.
 type DateProject struct {
-	ID    int64      `db:"id" sqlb:"type:bigint,pk,default"`
-	Name  string     `db:"name" sqlb:"type:text"`
-	DueOn *time.Time `db:"due_on" sqlb:"type:date"`
+	ID    int64      `db:"id" json:"id" sqlb:"type:bigint,pk,default"`
+	Name  string     `db:"name" json:"name" sqlb:"type:text"`
+	DueOn *time.Time `db:"due_on" json:"due_on" sqlb:"type:date"`
 }
 
 func (DateProject) TableName() string { return "dateprojects" }
 
 type DateEntry struct {
-	ID        int64        `db:"id" sqlb:"type:bigint,pk,default"`
-	ProjectID int64        `db:"project_id" sqlb:"type:bigint,filter,expand"`
+	ID        int64        `db:"id" json:"id" sqlb:"type:bigint,pk,default"`
+	ProjectID int64        `db:"project_id" json:"project_id" sqlb:"type:bigint,filter,expand"`
 	Project   *DateProject `db:"-" json:"project,omitempty" sqlb:"expands=project_id"`
 }
 

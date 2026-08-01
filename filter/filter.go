@@ -1420,14 +1420,6 @@ func operatorNames() []string {
 	return out
 }
 
-func columnNames(cols []*sqlb.ColumnInfo) []string {
-	out := make([]string, len(cols))
-	for i, c := range cols {
-		out[i] = c.Name
-	}
-	return out
-}
-
 func firstValue(values url.Values, keys ...string) string {
 	for _, k := range keys {
 		if v := values.Get(k); v != "" {
