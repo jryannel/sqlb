@@ -68,6 +68,8 @@ to move.
 optional. [Using your own structs](structs-first.md) layers the same
 capabilities over structs you already have, including stock
 [sqlc](../with-sqlc.md) output, without editing them.
+[Refactoring a sqlc endpoint](../refactoring-from-sqlc.md) walks one all the way
+from static SQL to a generated resource, in four stages you can stop after.
 
 **Already have a database.** [Adopting a database](../migrations/adopting.md)
 reads it back into a schema file.

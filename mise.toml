@@ -236,8 +236,12 @@ run = '''
 # checking that it *does* fire for `rest`. Three earlier guards in this repo
 # reported success while verifying nothing.
 
-# rest is an adapter onto huma, and the generated example mounts it.
-huma_ok='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog'
+# rest is an adapter onto huma, and the generated examples mount it. withsqlc
+# is on this list only because its stage 4 does — the point that example makes
+# is that taking the REST layer is the step where a project accepts a web
+# framework it did not choose, so the example that says so has to pay it too.
+# Stages 1 through 3 of that package take nothing beyond pgx.
+huma_ok='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog github.com/jryannel/sqlb/example/withsqlc'
 
 # third_party lists the non-stdlib, non-sqlb packages one package imports,
 # transitively. A stdlib path has no dot in its first element, which is what

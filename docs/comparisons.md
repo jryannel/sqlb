@@ -45,7 +45,10 @@ starts.
 coexistence story, and `example/withsqlc` tests it against real sqlc output:
 sqlc owns the static queries, sqlb owns the dynamic list endpoint, and
 `DB.Tx()` lets both share one transaction. If you already use sqlc, that is the
-cheapest way to try this.
+cheapest way to try this, and
+[Refactoring a sqlc endpoint](refactoring-from-sqlc.md) is the step-by-step
+version of moving the first one — including what it costs, which at the first
+step is more code rather than less.
 
 ## ent
 
