@@ -63,6 +63,12 @@ for them:
 ?or=(labels.nhas.urgent,labels.isnull)
 ```
 
+Why it works this way, and why the obvious repair — making the group `not`
+null-inclusive while the leaf complements stay three-valued — is the one option
+that cannot work, is
+[ADR-0046](https://github.com/jryannel/sqlb/blob/main/docs/adr/0046-a-negation-is-sqls.md).
+Read it before proposing a change here.
+
 `contains` is refused too, and that one is deliberate rather than incidental.
 It is the case-insensitive substring operator for text, and giving it a second
 meaning on array columns would put an ambiguity into the one vocabulary whose
