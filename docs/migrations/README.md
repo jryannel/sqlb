@@ -156,6 +156,9 @@ for a decade. Three places are version sensitive:
   rewrites them
 - [Adopting a database](adopting.md) — where the "current" side of a diff comes
   from, and importing a schema you already have
+- [Refactoring a database](refactoring-a-database.md) — a schema that changed
+  five times, worked through: what is free, what destroys data, and the rename
+  that is a clean migration and a broken client at once
 - [Declaring tables](../schema/README.md) — the declarations these diffs are
   computed from
 - [ADR-0014](../adr/0014-migrations-and-import.md) — why renames are declared,

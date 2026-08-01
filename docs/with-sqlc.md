@@ -35,6 +35,12 @@ So the question is never *which one*. It is *which queries go where*.
 A useful split for a typical application: sqlb owns the CRUD and list surface,
 sqlc owns the dashboard and the reports.
 
+Which leaves the question this page does not answer — what moving one of those
+queries actually costs, and whether you have to move all of it.
+[Refactoring a sqlc endpoint](refactoring-from-sqlc.md) is the worked version:
+four stages over one list endpoint, with a stopping point after each, and a test
+that requires all four to return the same rows.
+
 ## Who owns the schema
 
 **sqlb does**, and there is one declaration rather than two.

@@ -7,6 +7,8 @@ package sqlcgen
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const authorLeaderboard = `-- name: AuthorLeaderboard :many
@@ -87,6 +89,85 @@ func (q *Queries) GetAuthor(ctx context.Context, id string) (Author, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listPosts = `-- name: ListPosts :many
+SELECT id, org_id, author_id, title, body, status, view_count, published_at, created_at, updated_at, deleted_at FROM posts
+WHERE org_id = $1
+  AND deleted_at IS NULL
+  AND ($2::text IS NULL OR status = $2::text)
+  AND ($3::bigint IS NULL OR view_count >= $3::bigint)
+  AND ($4::text IS NULL OR title ILIKE '%' || $4::text || '%')
+ORDER BY published_at DESC
+LIMIT $5
+`
+
+type ListPostsParams struct {
+	OrgID     string
+	Status    pgtype.Text
+	MinViews  pgtype.Int8
+	Search    pgtype.Text
+	PageLimit int32
+}
+
+// The exception, and the one query here that is NOT what sqlc is good at.
+//
+// This is stage 1 of docs/refactoring-from-sqlc.md: a filterable list endpoint
+// written the only way static SQL can express one. Every optional filter
+// becomes an arm that is always sent and usually means nothing, which is the
+// documented sqlc workaround rather than a strawman — see comparisons.md.
+//
+// It is here to be replaced, not to be imitated. stage1.go calls it, stage2.go
+// through stage4.go do the same job, and refactor_test.go holds all four to the
+// same answers.
+//
+// What the shape costs, beyond reading badly:
+//
+//   - Three predicates reach Postgres on every request, each guarded by a NULL
+//     check the planner has to see through. Stage 2 sends only what was asked.
+//   - The sort is baked in. `ORDER BY published_at DESC` cannot become
+//     `ORDER BY view_count ASC` without a second copy of the whole query, so a
+//     column the UI can sort by is a query, and n columns times two directions
+//     is 2n of them.
+//   - Nothing here says which columns a *client* may filter on. That decision
+//     lives in whatever handler assembles these parameters, so it is reviewable
+//     only by reading that handler — where ADR-0006 puts it in the schema.
+func (q *Queries) ListPosts(ctx context.Context, arg ListPostsParams) ([]Post, error) {
+	rows, err := q.db.Query(ctx, listPosts,
+		arg.OrgID,
+		arg.Status,
+		arg.MinViews,
+		arg.Search,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Post
+	for rows.Next() {
+		var i Post
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.AuthorID,
+			&i.Title,
+			&i.Body,
+			&i.Status,
+			&i.ViewCount,
+			&i.PublishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const postViewsByStatus = `-- name: PostViewsByStatus :many

@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "resources": [
+    {
+      "path": "/customers",
+      "ops": [
+        "create",
+        "read",
+        "update",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "email_address",
+          "type": "text",
+          "filterable": true,
+          "renamed_from": "email"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/support_agents",
+      "ops": [
+        "read",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "email",
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "has_default": true,
+          "filterable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/tickets",
+      "ops": [
+        "create",
+        "read",
+        "update",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "customer_id",
+          "rel": "customer",
+          "type": "uuid",
+          "filterable": true,
+          "expandable": true
+        },
+        {
+          "name": "subject",
+          "type": "text",
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "filterable": true
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "enum": [
+            "open",
+            "pending",
+            "closed"
+          ],
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "priority",
+          "type": "enum",
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ],
+          "has_default": true,
+          "filterable": true,
+          "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    }
+  ]
+}

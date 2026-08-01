@@ -130,7 +130,11 @@ const SOURCES = [
   {
     dir: "docs/migrations",
     route: "migrations",
-    sequence: ["index", "rollout", "adopting"],
+    // refactoring-a-database.md sits here rather than under /project/ because
+    // it is the narrative half of this section: index documents the API, and it
+    // documents what an actual schema change costs. It goes last because it
+    // assumes the other three.
+    sequence: ["index", "rollout", "adopting", "refactoring-a-database"],
     order(slug) {
       return this.sequence.indexOf(slug);
     },
@@ -165,7 +169,10 @@ const SOURCES = [
     //
     // Read in this order: what it is for, how it is built, what it promises,
     // how to leave, what it has to do before that promise becomes permanent,
-    // how it sits beside sqlc, and what an outside reader made of it. The
+    // how it sits beside sqlc, how to move one endpoint across, and what an
+    // outside reader made of it. The refactoring page follows with-sqlc.md
+    // directly because it is the second half of that argument: one says which
+    // queries belong on which side, the other says what moving one costs. The
     // review is a dated snapshot and says so in its own first paragraph, which
     // is what makes it publishable rather than misleading.
     //
@@ -179,6 +186,7 @@ const SOURCES = [
       "release-1.0.md",
       "comparisons.md",
       "with-sqlc.md",
+      "refactoring-from-sqlc.md",
       "review-adoption-readiness.md",
     ],
     order(slug) {

@@ -121,7 +121,9 @@ migration, which diffs against nothing.
 
 The schema DSL and code generation are both optional: `sqlb.Describe[T]()`
 layers the same capabilities over structs you already have, including stock
-[sqlc](docs/with-sqlc.md) output, without editing them.
+[sqlc](docs/with-sqlc.md) output, without editing them. Moving one endpoint
+across is [worked in four stages](docs/refactoring-from-sqlc.md), each a place
+to stop, with a test that requires all four to return the same rows.
 
 And the way out is generated too. `sqlb eject` writes a package that depends on
 pgx and the standard library — your schema as DDL, your statements as SQL you
@@ -168,6 +170,8 @@ server over the manifest.
 | [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
 | [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx: hooks arriving through a value group, and a resource that refuses to mount without them |
 | [`example/computed`](example/computed/) | Four ways to get a derived value out of Postgres — generated columns, trigger counters, projected expressions, views — and where sqlb's ceiling is today ([ADR-0041](docs/adr/0041-computed-fields.md)) |
+| [`example/evolve`](example/evolve/) | A schema that changed five times: what is free, what destroys data, and the rename that is a clean migration and a broken client at once ([the walkthrough](docs/migrations/refactoring-a-database.md)) |
+| [`example/withsqlc`](example/withsqlc/) | sqlb and sqlc over one schema, plus one list endpoint in [four stages](docs/refactoring-from-sqlc.md) from static SQL to a generated resource |
 
 ## Development
 
