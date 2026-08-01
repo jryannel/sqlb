@@ -339,3 +339,203 @@ func TestNullableJSONIsStillFilterable(t *testing.T) {
 		t.Errorf("containment matched %d row(s), want just the one with a document", len(docs))
 	}
 }
+
+// The containment operators as an expression, rather than as the thing a query
+// string parses into.
+//
+// Everything above reaches `@>` through filter's `hasdoc`, which means the
+// builder's own spelling — sqlb.F("metadata").ContainsJSON(doc) — had no test
+// against a server anywhere, and its negation had none at all. That matters
+// more than the duplication suggests: containment is the operator whose
+// behaviour is least like the one its name implies, and a caller writing it by
+// hand is the caller least likely to have a filter test standing behind them.
+//
+// Shaped after TestArrayOperatorsAgainstPostgres: rows seeded to overlap
+// deliberately, and a table of predicates whose matched IDs are the assertion.
+// Postgres answers every case; nothing here is read off the rendered SQL.
+
+// JSONContainRow gives the containment cases a table with stable integer keys,
+// which the UUID-keyed model above cannot: the assertion is which rows matched,
+// so the IDs have to be ones the test wrote. `extra` is the nullable column,
+// and it is what makes the three-valued case reachable.
+type JSONContainRow struct {
+	ID    int64            `db:"id" sqlb:"pk"`
+	Doc   json.RawMessage  `db:"doc"`
+	Extra *json.RawMessage `db:"extra"`
+}
+
+func (JSONContainRow) TableName() string { return "json_contain_rows" }
+
+func jsonContainTable(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	raw := freshDB(t)
+	mustExec(t, raw, `
+		CREATE TABLE json_contain_rows (
+			id    bigint PRIMARY KEY,
+			doc   jsonb NOT NULL,
+			extra jsonb
+		)`)
+	return raw
+}
+
+// containedIDs runs a predicate and returns the IDs it matched, in order.
+func containedIDs(t *testing.T, db *sqlb.DB, pred sqlb.Pred) []int64 {
+	t.Helper()
+	found, err := sqlb.Query[JSONContainRow]().Where(pred).OrderBy(sqlb.F("id").Asc()).All(context.Background(), db)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	var out []int64
+	for _, r := range found {
+		out = append(out, r.ID)
+	}
+	return out
+}
+
+func TestJSONContainmentOperatorsAgainstPostgres(t *testing.T) {
+	ctx := context.Background()
+	raw := jsonContainTable(t)
+
+	// The rows are chosen so that no single one of them can satisfy two cases
+	// by accident: an exact match, a superset of it, a row sharing the key but
+	// not the value, a nested document, an array document, and the empty
+	// object — which is the row that separates "contains nothing" from
+	// "contains everything".
+	//
+	// Seeded through raw SQL with an explicit cast rather than through
+	// InsertRows, for the same reason the inserts above do it: what is under
+	// test is the operator, and binding a json.RawMessage as a parameter is a
+	// separate question that would fail here wearing this test's name.
+	for _, row := range []struct {
+		id  int64
+		doc string
+	}{
+		{1, `{"lang":"de"}`},
+		{2, `{"lang":"de","tier":"pro","tags":["urgent"]}`},
+		{3, `{"lang":"fr"}`},
+		{4, `{"owner":{"team":"core","region":"eu"}}`},
+		{5, `["a","b"]`},
+		{6, `{}`},
+	} {
+		if _, err := raw.Exec(ctx,
+			`INSERT INTO json_contain_rows (id, doc) VALUES ($1, $2::jsonb)`, row.id, row.doc,
+		); err != nil {
+			t.Fatalf("seeding row %d: %v", row.id, err)
+		}
+	}
+	db := sqlb.New(raw)
+
+	tests := []struct {
+		name string
+		pred sqlb.Pred
+		want []int64
+	}{
+		// Containment is subset, not equality. Row 2 carries two keys the
+		// filter never named and still matches — the property the whole
+		// operator exists for, and the one an `=` would silently pass every
+		// other assertion in this file without.
+		{"subset, not equality", sqlb.F("doc").ContainsJSON(`{"lang":"de"}`), []int64{1, 2}},
+		{"every named key must match", sqlb.F("doc").ContainsJSON(`{"lang":"de","tier":"pro"}`), []int64{2}},
+		{"a key the exact row lacks", sqlb.F("doc").ContainsJSON(`{"tier":"pro"}`), []int64{2}},
+		{"same key, other value", sqlb.F("doc").ContainsJSON(`{"lang":"fr"}`), []int64{3}},
+		{"no row has it", sqlb.F("doc").ContainsJSON(`{"lang":"it"}`), nil},
+
+		// Nesting recurses: the inner object is matched by containment too, so
+		// naming one of its keys is enough.
+		{"nested, partially named", sqlb.F("doc").ContainsJSON(`{"owner":{"team":"core"}}`), []int64{4}},
+		{"nested, fully named", sqlb.F("doc").ContainsJSON(`{"owner":{"team":"core","region":"eu"}}`), []int64{4}},
+		{"nested, wrong inner value", sqlb.F("doc").ContainsJSON(`{"owner":{"team":"infra"}}`), nil},
+		// A nested object is not flattened: the key has to be where the
+		// document puts it.
+		{"nested key at the top level", sqlb.F("doc").ContainsJSON(`{"team":"core"}`), nil},
+
+		// Array documents are subsets by element, in either position: the
+		// column holding an array (row 5) and an array nested under a key
+		// (row 2).
+		{"array document, one element", sqlb.F("doc").ContainsJSON(`["a"]`), []int64{5}},
+		{"array document, both elements", sqlb.F("doc").ContainsJSON(`["a","b"]`), []int64{5}},
+		{"array document, an absent element", sqlb.F("doc").ContainsJSON(`["a","c"]`), nil},
+		{"array under a key", sqlb.F("doc").ContainsJSON(`{"tags":["urgent"]}`), []int64{2}},
+		// The asymmetry worth knowing: a top-level array contains a bare
+		// scalar, but an object nested under a key does not get the same
+		// treatment — `{"tags":"urgent"}` is a value comparison and fails.
+		{"a scalar against an array document", sqlb.F("doc").ContainsJSON(`"a"`), []int64{5}},
+		{"a scalar against an array under a key", sqlb.F("doc").ContainsJSON(`{"tags":"urgent"}`), nil},
+
+		// The empty-document constants, confirmed against Postgres rather than
+		// reasoned about: every object contains the empty object, and the
+		// array document does not — which makes `{}` the one filter whose
+		// answer distinguishes the shapes in the column.
+		{"the empty object", sqlb.F("doc").ContainsJSON(`{}`), []int64{1, 2, 3, 4, 6}},
+		{"the empty array", sqlb.F("doc").ContainsJSON(`[]`), []int64{5}},
+
+		// The column is NOT NULL here, so negation is an exact complement.
+		// Every case below is the row set its positive above left behind.
+		{"negated subset", sqlb.F("doc").NotContainsJSON(`{"lang":"de"}`), []int64{3, 4, 5, 6}},
+		// Not "the key is absent": row 1 holds the key and is excluded, row 3
+		// holds the key with another value and is kept.
+		{"negation is not absence", sqlb.F("doc").NotContainsJSON(`{"lang":"de","tier":"pro"}`), []int64{1, 3, 4, 5, 6}},
+		{"negating a match nothing has", sqlb.F("doc").NotContainsJSON(`{"lang":"it"}`), []int64{1, 2, 3, 4, 5, 6}},
+		{"negated empty object", sqlb.F("doc").NotContainsJSON(`{}`), []int64{5}},
+		{"negated nested", sqlb.F("doc").NotContainsJSON(`{"owner":{"team":"core"}}`), []int64{1, 2, 3, 5, 6}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containedIDs(t, db, tt.pred); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("matched %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// NotContainsJSON is `NOT (...)`, not a complement: a NULL document satisfies
+// neither direction, because the comparison under the NOT is NULL and negating
+// NULL is NULL. Same answer the negated array operators give on a NULL array,
+// and the same trap — the row a caller expected to "not contain the document"
+// is simply absent from the result.
+//
+// Proven against Postgres rather than asserted from the rendered SQL, because
+// the claim is entirely about how Postgres evaluates three-valued logic.
+func TestNegatedJSONContainmentIsThreeValued(t *testing.T) {
+	ctx := context.Background()
+	raw := jsonContainTable(t)
+
+	// `extra` is the nullable document column. Row 2 leaves it NULL. `doc` is
+	// NOT NULL, so both rows have to write something there; it is not what is
+	// being asked about.
+	if _, err := raw.Exec(ctx, `
+		INSERT INTO json_contain_rows (id, doc, extra)
+		VALUES (1, '{}'::jsonb, '{"lang":"de"}'::jsonb), (2, '{}'::jsonb, NULL)`,
+	); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+	db := sqlb.New(raw)
+
+	tests := []struct {
+		name string
+		pred sqlb.Pred
+		want []int64
+	}{
+		{"containment skips the NULL row", sqlb.F("extra").ContainsJSON(`{"lang":"de"}`), []int64{1}},
+		// The row that matters: 2 is returned by neither direction.
+		{"negation also skips the NULL row", sqlb.F("extra").NotContainsJSON(`{"lang":"de"}`), nil},
+		{"negating a document nothing holds", sqlb.F("extra").NotContainsJSON(`{"lang":"fr"}`), []int64{1}},
+		// Even the empty object, which every non-NULL document contains, does
+		// not reach the NULL row in either direction.
+		{"the empty object skips the NULL row", sqlb.F("extra").ContainsJSON(`{}`), []int64{1}},
+		{"negated empty object matches nothing", sqlb.F("extra").NotContainsJSON(`{}`), nil},
+		// Reaching the NULL rows is a separate condition, spelled as one.
+		{
+			"isnull beside it reaches the row",
+			sqlb.Or(sqlb.F("extra").NotContainsJSON(`{"lang":"de"}`), sqlb.F("extra").IsNull()),
+			[]int64{2},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containedIDs(t, db, tt.pred); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("matched %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
