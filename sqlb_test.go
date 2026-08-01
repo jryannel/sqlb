@@ -122,6 +122,61 @@ func TestSelectSQL(t *testing.T) {
 			args: []any{"a", "b"},
 		},
 		{
+			// `IN (NULL)` is never true, so binding the nil made the set
+			// quietly narrower than the caller wrote.
+			name: "a nil member of OneOf widens the set with IS NULL",
+			q: func() *sqlb.Builder[User] {
+				var missing *string
+				return sqlb.Query[User]().Select(sqlb.F("id")).
+					Where(sqlb.F("name").OneOf("a", missing))
+			},
+			sql:  `SELECT "id" FROM "users" WHERE ("name" IN ($1)) OR ("name" IS NULL)`,
+			args: []any{"a"},
+		},
+		{
+			name: "a OneOf of nothing but nils is just IS NULL",
+			q: func() *sqlb.Builder[User] {
+				var missing *string
+				return sqlb.Query[User]().Select(sqlb.F("id")).
+					Where(sqlb.F("name").OneOf(missing, nil))
+			},
+			sql: `SELECT "id" FROM "users" WHERE "name" IS NULL`,
+		},
+		{
+			// The widened form is a disjunction, so it has to keep its
+			// parentheses when something else is ANDed alongside it.
+			name: "a widened OneOf stays parenthesised under AND",
+			q: func() *sqlb.Builder[User] {
+				var missing *string
+				return sqlb.Query[User]().Select(sqlb.F("id")).
+					Where(sqlb.F("name").OneOf("a", missing), sqlb.F("age").Eq(18))
+			},
+			sql:  `SELECT "id" FROM "users" WHERE (("name" IN ($1)) OR ("name" IS NULL)) AND ("age" = $2)`,
+			args: []any{"a", 18},
+		},
+		{
+			// A set with no nil in it must not grow an OR.
+			name: "OneOf without a nil member is unchanged",
+			q: func() *sqlb.Builder[User] {
+				return sqlb.Query[User]().Select(sqlb.F("id")).
+					Where(sqlb.F("name").OneOf("a", "b"))
+			},
+			sql:  `SELECT "id" FROM "users" WHERE "name" IN ($1, $2)`,
+			args: []any{"a", "b"},
+		},
+		{
+			// The documented asymmetry: NotOneOf still binds the nil, pending
+			// the null-aware negation work.
+			name: "a nil member of NotOneOf still binds",
+			q: func() *sqlb.Builder[User] {
+				var missing *string
+				return sqlb.Query[User]().Select(sqlb.F("id")).
+					Where(sqlb.F("name").NotOneOf("a", missing))
+			},
+			sql:  `SELECT "id" FROM "users" WHERE "name" NOT IN ($1, $2)`,
+			args: []any{"a", (*string)(nil)},
+		},
+		{
 			name: "between renders without parenthesising its bounds",
 			q: func() *sqlb.Builder[User] {
 				return sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("age").Between(18, 65))

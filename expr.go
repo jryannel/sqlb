@@ -265,18 +265,49 @@ func (f Field) NotNull() Pred {
 
 // OneOf matches rows whose column equals any of the values. An empty value set
 // yields a predicate that matches nothing, which is what `in ()` means.
+//
+// A nil member widens the predicate with IS NULL rather than binding NULL into
+// the list, because `IN (NULL)` is never true: without this, a set assembled
+// from nullable values would silently be narrower than the caller wrote. It is
+// the same translation [Field.Eq] makes for a nil comparand, and it reads the
+// nil the same way — see isNil, which counts a nil pointer and not a nil slice.
+// A set whose every member is nil is therefore just IS NULL.
+//
+// [Field.NotOneOf] deliberately does not mirror this; its doc comment says why.
 func (f Field) OneOf(values ...any) Pred {
 	if len(values) == 0 {
 		return pred(Raw{SQL: "false"})
 	}
-	items := make([]Expr, len(values))
-	for i, v := range values {
-		items[i] = Param{Value: v}
+	items := make([]Expr, 0, len(values))
+	nullable := false
+	for _, v := range values {
+		if isNil(v) {
+			nullable = true
+			continue
+		}
+		items = append(items, Param{Value: v})
 	}
-	return pred(Binary{Op: "IN", Left: f.Column(), Right: List{Items: items}})
+	if len(items) == 0 {
+		return f.IsNull()
+	}
+	in := pred(Binary{Op: "IN", Left: f.Column(), Right: List{Items: items}})
+	if !nullable {
+		return in
+	}
+	return Or(in, f.IsNull())
 }
 
 // NotOneOf is the negation of OneOf. An empty value set excludes nothing.
+//
+// Unlike [Field.OneOf], a nil member is not translated: it binds NULL into the
+// list, where three-valued logic makes the whole `NOT IN` unknown and the row
+// is excluded. That is a real asymmetry and it is left standing on purpose,
+// because the alternative reading — that a nil member means "and also keep the
+// NULL rows" — changes which rows come back rather than fixing a case that
+// silently matched none, and it is one of the questions the null-aware negation
+// work settles (IsDistinctFrom and a NULL-inclusive NotOneOf, docs/release-1.0.md).
+// Deciding it here would be guessing twice. Spell the intent today with
+// Or(f.NotOneOf(vals...), f.IsNull()).
 func (f Field) NotOneOf(values ...any) Pred {
 	if len(values) == 0 {
 		return pred(Raw{SQL: "true"})
