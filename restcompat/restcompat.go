@@ -306,6 +306,12 @@ func diffField(path string, o, n *fieldView, add func(Break)) {
 	capDelta(path, FacetExpand, n.relName, o.expandable, n.expandable,
 		"expand relation removed", "expand relation added", add)
 
+	// Writability. ReadOnly and Immutable were captured in the snapshot and
+	// never compared, so three writer-side contract breaks passed the gate
+	// silently (#68) — the reader side of this function was thorough and the
+	// writer side was absent.
+	diffWritable(path, o, n, add)
+
 	// Nullability — the reader/writer asymmetry, reported on both sides.
 	if o.nullable != n.nullable {
 		diffNullable(path, o, n, add)
@@ -314,6 +320,38 @@ func diffField(path string, o, n *fieldView, add func(Break)) {
 	// Type.
 	if o.typ != n.typ || o.array != n.array || o.size != n.size || !sameEnum(o, n) {
 		diffType(path, o, n, add)
+	}
+}
+
+// diffWritable reports what a change to ReadOnly or Immutable does to the two
+// generated request bodies.
+//
+// The consequences are asymmetric, which is why this is not a capDelta pair:
+// leaving a body is always a break for a client that sends the field, but
+// *entering* the create body breaks only when the field arrives required — a
+// NOT NULL column with no default, which every existing create omits.
+func diffWritable(path string, o, n *fieldView, add func(Break)) {
+	switch {
+	case o.settableAtCreate() && !n.settableAtCreate():
+		add(Break{LevelBreaking, path, FacetCreate, n.name,
+			"now read-only; it leaves the create body and a request sending it now 422s"})
+	case !o.settableAtCreate() && n.settableAtCreate():
+		if n.requiredAtCreate() {
+			add(Break{LevelBreaking, path, FacetCreate, n.name,
+				"no longer read-only and has no default, so it is now required; a create that omits it now fails validation"})
+		} else {
+			add(Break{LevelAdditive, path, FacetCreate, n.name,
+				"no longer read-only; the create body accepts it"})
+		}
+	}
+
+	switch {
+	case o.settableAtPatch() && !n.settableAtPatch():
+		add(Break{LevelBreaking, path, FacetPatch, n.name,
+			"no longer writable after create; it leaves the patch body and a PATCH naming it now 422s"})
+	case !o.settableAtPatch() && n.settableAtPatch():
+		add(Break{LevelAdditive, path, FacetPatch, n.name,
+			"now writable after create; the patch body accepts it"})
 	}
 }
 
@@ -581,6 +619,11 @@ type fieldView struct {
 
 func (f *fieldView) inResponse() bool       { return !f.hidden }
 func (f *fieldView) settableAtCreate() bool { return !f.readOnly }
+
+// settableAtPatch is the create rule plus Immutable, which is exactly what
+// Immutable means: writable once, at create, and never again.
+func (f *fieldView) settableAtPatch() bool { return !f.readOnly && !f.immutable }
+
 func (f *fieldView) requiredAtCreate() bool {
 	return f.settableAtCreate() && !f.nullable && !f.hasDefault
 }

@@ -12,16 +12,19 @@ import (
 // after that differ in exactly one way. The zero value is the baseline blog
 // contract; each field turns on one edit.
 type opts struct {
-	titleName        string    // rename target for title; "" keeps "title"
-	titleNullable    bool      // NOT NULL -> nullable on title (reader break)
-	statusUnfilter   bool      // drop Filterable from status (un-expose, no DDL)
-	dropViewCount    bool      // drop a column (destructive migration)
-	publishedNotNull bool      // nullable -> NOT NULL on published_at (writer break)
-	addSubtitle      bool      // add a nullable filterable column (additive)
-	addRequiredSlug  bool      // add a NOT NULL no-default column (writer break)
-	widenViewCount   bool      // bigint stays; flip to int to test narrowing
-	statusValues     []string  // enum values; nil keeps the baseline three
-	ops              schema.Op // 0 keeps the baseline op set
+	titleName         string    // rename target for title; "" keeps "title"
+	titleNullable     bool      // NOT NULL -> nullable on title (reader break)
+	statusUnfilter    bool      // drop Filterable from status (un-expose, no DDL)
+	dropViewCount     bool      // drop a column (destructive migration)
+	publishedNotNull  bool      // nullable -> NOT NULL on published_at (writer break)
+	addSubtitle       bool      // add a nullable filterable column (additive)
+	addRequiredSlug   bool      // add a NOT NULL no-default column (writer break)
+	widenViewCount    bool      // bigint stays; flip to int to test narrowing
+	titleReadOnly     bool      // writable -> ReadOnly on title (leaves both bodies)
+	titleImmutable    bool      // writable -> Immutable on title (leaves the patch body)
+	viewCountWritable bool      // ReadOnly -> writable on view_count
+	statusValues      []string  // enum values; nil keeps the baseline three
+	ops               schema.Op // 0 keeps the baseline op set
 }
 
 const baseOps = schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList
@@ -39,6 +42,12 @@ func blog(o opts) *schema.Registry {
 	}
 	if o.titleNullable {
 		title = title.Nullable()
+	}
+	if o.titleReadOnly {
+		title = title.ReadOnly()
+	}
+	if o.titleImmutable {
+		title = title.Immutable()
 	}
 
 	status := schema.Enum("status", pickVals(o.statusValues, "draft", "review", "published")...).
@@ -66,8 +75,14 @@ func blog(o opts) *schema.Registry {
 		published,
 	}
 	if !o.dropViewCount {
-		fields = append(fields,
-			viewType("view_count").Default(schema.Value(0)).Filterable().Sortable().ReadOnly())
+		views := viewType("view_count").Filterable().Sortable()
+		if !o.viewCountWritable {
+			views = views.Default(schema.Value(0)).ReadOnly()
+		}
+		// When writable it also loses its default, so it arrives *required* —
+		// the half of "no longer read-only" that breaks a client rather than
+		// the half that does not.
+		fields = append(fields, views)
 	}
 	if o.addSubtitle {
 		fields = append(fields, schema.Text("subtitle").Nullable().Filterable())
@@ -154,6 +169,47 @@ func TestNotNullToNullableBreaksReaders(t *testing.T) {
 func TestNewRequiredFieldBreaksCreate(t *testing.T) {
 	breaks := restcompat.Diff(blog(opts{}), blog(opts{addRequiredSlug: true}))
 	assertBreaking(t, breaks, restcompat.FacetCreate, "slug")
+}
+
+// The writer side of the contract, which the snapshot captured and the diff
+// never read: three breaks that let `sqlb impact -error` pass CI on a breaking
+// deploy (#68). The reader side of diffField was thorough throughout, and no
+// existing test touched a body-only capability, which is what let it ship.
+
+// writable -> ReadOnly: the column leaves both generated bodies, so a client
+// that sends it now 422s with "unknown field".
+func TestBecomingReadOnlyBreaksBothBodies(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{titleReadOnly: true}))
+	assertLevel(t, breaks, restcompat.LevelBreaking, restcompat.FacetCreate, "title")
+	assertLevel(t, breaks, restcompat.LevelBreaking, restcompat.FacetPatch, "title")
+	if !mentions(breaks, "422") {
+		t.Errorf("the summary should name the client-visible consequence:\n%s", render(breaks))
+	}
+}
+
+// writable -> Immutable: it leaves the PATCH body only. Create is unaffected,
+// which is the whole distinction between Immutable and ReadOnly.
+func TestBecomingImmutableBreaksThePatchBodyOnly(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{titleImmutable: true}))
+	assertLevel(t, breaks, restcompat.LevelBreaking, restcompat.FacetPatch, "title")
+	for _, b := range breaks {
+		if b.Facet == restcompat.FacetCreate {
+			t.Errorf("Immutable must not touch the create body:\n%s", render(breaks))
+		}
+	}
+}
+
+// ReadOnly -> writable on a NOT NULL, no-default column: it becomes *required*
+// at create, so a client that omitted it — which is every client, since it could
+// not send it before — now fails validation.
+func TestLeavingReadOnlyWithoutADefaultBreaksCreate(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{viewCountWritable: true}))
+	assertLevel(t, breaks, restcompat.LevelBreaking, restcompat.FacetCreate, "view_count")
+	if !mentions(breaks, "required") {
+		t.Errorf("the summary should say why it breaks:\n%s", render(breaks))
+	}
+	// And the patch body gained it, which breaks nobody.
+	assertLevel(t, breaks, restcompat.LevelAdditive, restcompat.FacetPatch, "view_count")
 }
 
 // Widening an integer is not claimed neutral: a narrow generated client can
