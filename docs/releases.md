@@ -14,6 +14,137 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.6.0
+
+2026-08-01 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.6.0)
+
+The release an issue tracker wrote. Twenty issues were filed against the request
+path on 31 July from an external review and an adoption port; this closes the
+last of them, plus six more raised the day after by an adoption that got far
+enough to find sharper ones. The theme is not a feature — it is that most of
+what a real consumer hit was a default that was right for the schema and wrong
+for the reader.
+
+Three breaks, and the first is the one to read.
+
+**A computed column is opt-in.** It is declared on the model, and the model is
+shared, so projecting every declared one charged every reader for the most
+expensive one — three correlated subqueries attached to an existence check by
+id — and a column declaring `Needs` made that check *fail*, demanding a `viewer`
+bind from a query with no business supplying one. Nothing projects a computed
+column now unless it asks:
+
+```go
+sqlb.Query[Project]().WithComputed("total_tasks", "is_starred")
+rest.Options{Computed: []string{"total_tasks", "is_starred"}}
+```
+
+The mechanical edit is `WithComputed` on a hand-written query and `Computed` on
+a hand-written mount. A *generated* resource opts into its table's own computed
+columns, so generated endpoints answer exactly as they did; what changes is
+everything else reading the same model, which is where the bug was. For a
+resource it is a boundary rather than a projection setting — a column the
+resource does not select is not filterable, sortable or nameable in `?select`
+there either, because a filter on a correlated subquery costs what the
+projection would have. The obligation moved with it: `rest.Resource` used to
+refuse any mount whose *model* declared a `Needs` column, and now asks only of
+the resources that render one.
+
+**The generated Go client is its own package.** A program that wanted the typed
+client took [spf13/cobra](https://github.com/spf13/cobra) and a whole command
+tree with it, so a sync job made one HTTP request at the cost of a command-line
+framework. `cli/client/client_gen.go` now carries `Client`, `Request`,
+`Transport`, `Do` and `Run` against the standard library and nothing else, and
+`cli/cli_gen.go` is the cobra tree importing it. Regenerate, then the edit is in
+the four-line main: `&cli.Client{…}` becomes `&client.Client{…}` from the new
+package. `ClientDir` emits the client with no command tree at all, which is the
+server-to-server case; `CLIDir` emits both and defaults the client into a
+`client/` subdirectory, so a project that set only `CLIDir` keeps working.
+
+**A nil member of `OneOf` widens the set.** `IN (NULL)` is never true, so a set
+assembled from nullable values came back quietly narrower than the caller wrote;
+the nil member now contributes `IS NULL` instead. A set with no nil in it
+renders byte-identical, and generated endpoints never reach it — this is
+hand-written Go. `NotOneOf` is deliberately unchanged, and now says why on
+itself.
+
+One thing that is not a source break and will still stop a build: every
+generated struct tag gained the column's logical type, so `sqlb generate` has to
+run before `sqlb check` passes. That tag is what fixed the expansion bug below.
+
+Worth stating rather than leaving to be noticed: none of the three was listed
+under *Will move*. [compatibility.md](compatibility.md) says a minor bump may
+break a surface listed there and that each break is described here with its
+mechanical edit — half of that promise is kept above and half is not, because
+all three came out of consumer reports rather than a plan. The document now
+records them where the announcement should have been, which is the correction
+available after the fact.
+
+What landed, beyond the breaks:
+
+- **A change feed, as a transport.** `rest.Events` mounts an SSE stream through
+  huma's sse package, so it lands in the OpenAPI document typed rather than as
+  untyped text; `rest.Broker` is the in-process source behind a `rest.Source`
+  seam the outbox implements later. A subscriber receives `{table, key, op}` and
+  refetches, because a payload built outside the subscriber's context would skip
+  the resource's `BeforeQuery` scope and hand one tenant's rows to another.
+  Correct on one replica and quietly wrong on two, which is the first thing its
+  doc comment says. [ADR-0045](adr/0045-the-stream-is-a-seam.md).
+- **The filter tree gained `not`, and containment gained its negation.** `nhas`,
+  `nhasany`, `nhasall` and `nhasdoc` exist because the URL grammar conjoins by
+  design and has nowhere to put a `not` — shipping only the tree would have left
+  the two frontends compiling different vocabularies, which is the one thing
+  [ADR-0003](adr/0003-one-ast-two-producers.md) claims they do not. A negation
+  is not a complement: each compiles to `NOT (…)`, so a NULL column matches
+  neither `has` nor `nhas`, exactly as `nin` already behaved.
+- **`ON CONFLICT DO UPDATE` assigns an expression.** An upsert could only copy
+  the proposed row, so `updated_at = now()` had to come from the application
+  clock and a counter could not be written at all. `OnConflictSet` takes any
+  expression, and a column reference inside one has to say which row it means —
+  `Excluded` or `Current` — because `count = count + 1` reads like an
+  accumulation whichever side SQL silently picks.
+- **Where NULLs sort is declared on the column.** Postgres's default is not one
+  placement but two, `NULLS LAST` ascending and `NULLS FIRST` descending, so a
+  feed ordered by a column that is NULL until a row is published lifted every
+  draft to the top. `Sortable(schema.NullsLast)` fixes it once, in both
+  directions, for every caller including the generated clients — which need no
+  new syntax for it. The cursor carries the declared placement, so cursors
+  issued before this release still decode and one issued under a since-changed
+  declaration is refused rather than mispaged.
+- **An expanded row is the same shape as a direct one.** Expanding a relation
+  whose target had a `date` column answered 500: `json_build_object` serialises
+  a date as `"2026-07-01"` and the Go field is a `time.Time`, which parses
+  strictly as RFC 3339. Cast to UTC midnight now — `::timestamp AT TIME ZONE
+  'UTC'`, not `::timestamptz`, which resolves through the session zone and loses
+  a day east of UTC.
+- **`?search` can reach past the row.** A `Searchable` computed column of text
+  type is now legal, so a chat named in the UI by its participants — a direct
+  message has no name of its own — is findable by a participant's name. The
+  refusal that blocked it gave a reason about type that the "Searchable requires
+  a text column" rule already made; what it actually cost was the only way to
+  search across a relation. The cost objection is answered by the opt-in above.
+- **An adoption's declarations.** `numeric(p, s)`, index column ordering, a
+  foreign-key cycle broken with an `ExternalRef` instead of dropped, and a
+  self-referential FK that no longer reads as permanent drift — the four things
+  that made a drift gate against a live database un-buildable.
+- **The request path's bounds.** `?page=`/`?offset=` are capped and no longer
+  overflow; a repeated single-valued parameter is refused rather than silently
+  dropped; `POST` and `PATCH` reject unknown query parameters like every other
+  operation; a multi-row insert decides default-omission per row rather than per
+  statement.
+- **`sqlbfx`**, an fx module over the same handles, and a principal seam so a
+  core-style app takes `Handles()` only.
+
+What it cost. `FromGo` is **cut** rather than pending:
+[ADR-0041](adr/0041-computed-fields.md) wrote the condition — "if the first two
+applications express everything in SQL" — and both did, so the record says so
+and closes [#17](https://github.com/jryannel/sqlb/issues/17) with the evidence
+rather than leaving a fourth tier in the tracker. The change feed is correct on
+one replica and loses a publication if the process dies between `COMMIT` and the
+fan-out; both are stated where a reader meets them rather than in a footnote.
+And a `time` column has the same expansion defect a `date` column had, unfixed
+on purpose: nothing round-trips one, so casting it would have been a guess.
+
 ## v0.5.0
 
 2026-07-31 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.5.0)
