@@ -64,7 +64,8 @@ final page = await listPosts(
   `isNull` on one that is required; and the value type is the column's own, so
   an enum compares against its own members and not against any string.
 - **An array column takes `ArrayCond`** — `has` for one element, `hasAny` and
-  `hasAll` for a list, `eq` for the whole array. It carries no `contains`, which
+  `hasAll` for a list, `notHas`/`notHasAny`/`notHasAll` for their negations, and
+  `eq` for the whole array. It carries no `contains`, which
   belongs to text, and none of the ordering operators; the element type is the
   column's own, so `has` on an enum array compares against its members. Reading
   one back gives a `List<String>`, and a nullable one distinguishes null from

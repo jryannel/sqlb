@@ -910,7 +910,18 @@ func cliOperators(d *schema.FieldDesc) []string {
 	// CLI: --help states what the resource accepts without a request having to
 	// be sent to find out (ADR-0029).
 	if d.Array {
-		ops := []string{"eq", "ne", "has", "hasany", "hasall"}
+		ops := []string{"eq", "ne", "has", "hasany", "hasall", "nhas", "nhasany", "nhasall"}
+		if d.Nullable {
+			ops = append(ops, "isnull", "notnull")
+		}
+		return ops
+	}
+	// A document column takes containment and nothing else. Without this branch
+	// it fell through to the scalar list below and --help offered `gt` and
+	// `like` on a jsonb column, which the server refuses — the same mistake the
+	// array branch above exists to avoid.
+	if d.Type == schema.TypeJSON {
+		ops := []string{"hasdoc", "nhasdoc"}
 		if d.Nullable {
 			ops = append(ops, "isnull", "notnull")
 		}

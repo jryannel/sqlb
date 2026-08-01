@@ -42,6 +42,11 @@ operator name.
 | `has` | `$1 = ANY(col)` | one **element** | **array columns only** |
 | `hasany` | `col && $1` | comma list | **array columns only** |
 | `hasall` | `col @> $1` | comma list | **array columns only** |
+| `nhas` | `NOT ($1 = ANY(col))` | one **element** | **array columns only** |
+| `nhasany` | `NOT (col && $1)` | comma list | **array columns only** |
+| `nhasall` | `NOT (col @> $1)` | comma list | **array columns only** |
+| `hasdoc` | `col @> $1::jsonb` | a JSON document | **jsonb columns only** |
+| `nhasdoc` | `NOT (col @> $1::jsonb)` | a JSON document | **jsonb columns only** |
 
 "Text column" means the Go field is a string kind, pointer or not. A pattern
 operator on any other column is rejected with
@@ -54,12 +59,26 @@ disjoint set from a scalar one:
 
 | | |
 |---|---|
-| Accepts | `has`, `hasany`, `hasall`, `eq`, `ne`/`neq`, `isnull`, `notnull` |
+| Accepts | `has`, `hasany`, `hasall`, `nhas`, `nhasany`, `nhasall`, `eq`, `ne`/`neq`, `isnull`, `notnull` |
 | Refuses | `gt`, `gte`, `lt`, `lte`, `between`, `in`, `nin`, and every pattern operator |
 
 `has` binds one **element**, so `?labels=has.urgent` is coerced to the element's
 Go type and compared as a scalar. `hasany`, `hasall`, `eq` and `ne` take the
 same comma-separated, quotable list `in` does, and bind it as a whole array.
+
+The `n`-prefixed forms are the negations, taking the same operands as the
+operators they negate. They follow `nin`'s spelling, and they exist because a
+query string cannot nest a `not`: repeated parameters conjoin, so negation has
+to live in the operator. A JSON filter tree can spell either form.
+
+A negation is **not** a complement. Each compiles to `NOT (…)`, evaluated by
+SQL's three-valued logic, so a row whose column is NULL matches neither `has`
+nor `nhas` — as with `nin`. Reaching those rows is a second condition:
+`?or=(labels.nhas.urgent,labels.isnull)`.
+
+An empty list keeps the meaning its positive has: `nhasany` of nothing excludes
+nothing, and `nhasall` of nothing excludes every row, since every array contains
+the empty one.
 
 `contains` is **not** array containment. It is the text substring operator, and
 overloading it by column type would put an ambiguity into the one vocabulary
@@ -68,7 +87,8 @@ rejected with the operators that would have worked:
 
 ```
 operator "contains" does not apply to the array column labels
-  (allowed: eq, has, hasall, hasany, isnull, ne, neq, notnull)
+  (allowed: eq, has, hasall, hasany, isnull, ne, neq, nhas, nhasall, nhasany,
+   notnull)
 ```
 
 `isnull` keeps meaning something here, because a NULL column and an empty array
@@ -131,6 +151,39 @@ conjoin with each other and with the plain conditions.
 
 Nesting deeper than **3** levels is rejected.
 
+There is **no `not(…)`** in the query string. Negation here is spelled by the
+operator — `ne`, `nin`, `notnull`, and the `n`-prefixed containment forms — which
+is why those operators exist. A request needing to negate a whole group sends a
+JSON filter tree instead.
+
+### The JSON filter tree
+
+`?filter=` carries a filter as JSON, which is the only form that can nest a
+negation. A node is a group (`and`, `or`, `not`) or a leaf condition:
+
+```json
+{"op":"not","children":[
+  {"op":"or","children":[
+    {"op":"eq","field":"status","value":"draft"},
+    {"op":"isnull","field":"published_at"}
+  ]}
+]}
+```
+
+`and` and `or` take one or more children; **`not` takes exactly one**. Several
+conditions are negated by wrapping them in an `and` or `or` group first, which
+keeps the tree from having to be read for a convention about whether
+`not` over a list means `NOT (a AND b)` or `NOT a AND NOT b`.
+
+The operator vocabulary is the one above, so the spellings are `ne`, `nin` and
+`isnull`. A tree and the equivalent query string compile to the identical
+statement. The tree is bounded at **4** levels of nesting and **64** nodes, and
+its conditions charge the same `MaxFilters` budget the query string does — a
+request cannot exceed it by splitting conditions across the two forms.
+
+The same filter may also be sent on its own, in a `POST` body, via
+`filter.ParseFilterTree`.
+
 ## Reserved parameters
 
 These never name a column:
@@ -146,6 +199,7 @@ These never name a column:
 | `cursor` | Keyset paging |
 | `count` | `count=exact` adds `total`, at the cost of a second query |
 | `or`, `and` | Explicit groups |
+| `filter` | A JSON filter tree, the one form that can nest a `not` |
 
 Any other parameter that does not name a filterable column is rejected as an
 unknown parameter rather than ignored.

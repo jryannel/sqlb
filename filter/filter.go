@@ -541,6 +541,20 @@ var operators = map[string]opKind{
 	// same ambiguity. `hasdoc` joins the `has` family instead, which is what
 	// containment is already spelled as here.
 	"hasdoc": opDoc,
+
+	// The negations of the four. The JSON tree can spell these with a `not`
+	// group, but the URL grammar conjoins by design and has nowhere to put one,
+	// so without these an array or document column is filterable in one
+	// direction only — and ADR-0003's claim that the two frontends compile to
+	// the same predicate would hold for every column kind but these.
+	//
+	// The `n` prefix is `nin`'s, chosen over `not`-prefixing so the rule is
+	// derivable from one example and any later `has*` operator gets its
+	// negation for free. Each is three-valued, not complementary: a NULL column
+	// satisfies neither the operator nor its negation, the same way `nin`
+	// already behaves.
+	"nhas": opElem, "nhasany": opSet, "nhasall": opSet,
+	"nhasdoc": opDoc,
 }
 
 func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb.Pred, bool) {
@@ -623,7 +637,7 @@ func (p *parser) gateColumnKind(col *sqlb.ColumnInfo, op string, kind opKind, sh
 // match against a serialisation whose key order and whitespace are Postgres's
 // to choose — both would answer, which is worse than refusing.
 func documentOperatorNames() []string {
-	return []string{"hasdoc", "isnull", "notnull"}
+	return []string{"hasdoc", "isnull", "nhasdoc", "notnull"}
 }
 
 // urlOperands turns one URL operand string into the coerced operands applyOp
@@ -747,6 +761,9 @@ func (p *parser) applyOp(col *sqlb.ColumnInfo, f sqlb.Field, op string, kind opK
 
 	case opElem:
 		// `has` binds the element — `$1 = ANY(col)` — not an array constant.
+		if op == "nhas" {
+			return f.NotHas(operands[0]), true
+		}
 		return f.Has(operands[0]), true
 
 	case opDoc:
@@ -759,11 +776,19 @@ func (p *parser) applyOp(col *sqlb.ColumnInfo, f sqlb.Field, op string, kind opK
 			p.errf(param, raw, "operator %q needs a JSON document", op)
 			return sqlb.Pred{}, false
 		}
+		if op == "nhasdoc" {
+			return f.NotContainsJSON(doc), true
+		}
 		return f.ContainsJSON(doc), true
 
 	case opSet:
-		if op == "hasany" {
+		switch op {
+		case "hasany":
 			return f.HasAny(operands...), true
+		case "nhasany":
+			return f.NotHasAny(operands...), true
+		case "nhasall":
+			return f.NotHasAll(operands...), true
 		}
 		return f.HasAll(operands...), true
 
@@ -876,7 +901,10 @@ func arrayElem(col *sqlb.ColumnInfo) (reflect.Type, bool) {
 }
 
 func arrayOperatorNames() []string {
-	return []string{"eq", "has", "hasall", "hasany", "isnull", "ne", "neq", "notnull"}
+	return []string{
+		"eq", "has", "hasall", "hasany", "isnull", "ne", "neq",
+		"nhas", "nhasall", "nhasany", "notnull",
+	}
 }
 
 // parseGroup parses `(cond,cond,...)` where each condition is

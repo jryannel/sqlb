@@ -19,10 +19,25 @@ package filter
 //	  {"op":"isnull","field":"deleted_at"}
 //	]}
 //
-// A node is a group (op is "and"/"or", with children) or a leaf condition (op
-// is a comparison, with a field and — unless the operator is nullary — a value).
-// The operator vocabulary is the URL grammar's, so `ne`/`nin`/`isnull` are the
-// spellings, not `neq`/`not_in`/`is_empty`.
+// A node is a group (op is "and"/"or"/"not", with children) or a leaf condition
+// (op is a comparison, with a field and — unless the operator is nullary — a
+// value). The operator vocabulary is the URL grammar's, so `ne`/`nin`/`isnull`
+// are the spellings, not `neq`/`not_in`/`is_empty`.
+//
+// `not` is the one group that is unary: it takes exactly one child, and a
+// caller negating several conditions spells the grouping itself.
+//
+//	{"op":"not","children":[
+//	  {"op":"or","children":[
+//	    {"op":"eq","field":"status","value":"draft"},
+//	    {"op":"isnull","field":"published_at"}
+//	  ]}
+//	]}
+//
+// Requiring the inner group is the point. `not` over a child list would have to
+// pick between NOT(a AND b) and (NOT a AND NOT b), and those differ on exactly
+// the rows a filter is written to separate. Refusing the second child means the
+// tree never has to be read for a convention.
 
 import (
 	"bytes"
@@ -53,7 +68,7 @@ type Node struct {
 	Value    any    `json:"value,omitempty"`
 }
 
-func (n *Node) isGroup() bool { return n.Op == "and" || n.Op == "or" }
+func (n *Node) isGroup() bool { return n.Op == "and" || n.Op == "or" || n.Op == "not" }
 
 // ParseFilterTree decodes a standalone JSON filter tree and compiles it into a
 // single predicate, gated by opts.Model exactly as the URL frontend is. Use it
@@ -147,6 +162,13 @@ func (p *parser) validateTree(n *Node, depth int, nodes *int) {
 		if len(n.Children) == 0 {
 			p.errf("filter", n.Op, "group %q must have at least one child", n.Op)
 		}
+		// `not` is unary. A second child is refused rather than read as an
+		// implicit conjunction, because the two readings a bare list invites
+		// disagree about the rows the filter was written to separate.
+		if n.Op == "not" && len(n.Children) > 1 {
+			p.errf("filter", n.Op, "group %q takes exactly one child, got %d; "+
+				"wrap several conditions in an \"and\" or \"or\" group", n.Op, len(n.Children))
+		}
 		if depth >= MaxTreeDepth && len(n.Children) > 0 {
 			p.errf("filter", n.Op, "filter groups nested deeper than %d levels", MaxTreeDepth)
 			return
@@ -165,9 +187,15 @@ func (p *parser) validateTree(n *Node, depth int, nodes *int) {
 }
 
 // jsonNode compiles a validated tree into a predicate. A group recurses and
-// combines with And/Or; a leaf goes through jsonLeaf. A group whose children all
-// fail contributes nothing rather than an empty predicate, matching how the URL
-// frontend drops a group that parsed to no conditions.
+// combines with And/Or/Not; a leaf goes through jsonLeaf. A group whose children
+// all fail contributes nothing rather than an empty predicate, matching how the
+// URL frontend drops a group that parsed to no conditions.
+//
+// That drop is why `not` returns nothing when its child fails rather than
+// negating the zero predicate: sqlb.Not leaves a zero Pred zero, so the two
+// agree, but going through the same empty check keeps a failed negation from
+// silently becoming an absent one. Any child that failed also recorded an
+// error, so the request is a 400 either way and no predicate reaches Postgres.
 func (p *parser) jsonNode(n *Node) (sqlb.Pred, bool) {
 	if !n.isGroup() {
 		return p.jsonLeaf(n)
@@ -181,8 +209,12 @@ func (p *parser) jsonNode(n *Node) (sqlb.Pred, bool) {
 	if len(preds) == 0 {
 		return sqlb.Pred{}, false
 	}
-	if n.Op == "or" {
+	switch n.Op {
+	case "or":
 		return sqlb.Or(preds...), true
+	case "not":
+		// validateTree has already refused a second child.
+		return sqlb.Not(preds[0]), true
 	}
 	return sqlb.And(preds...), true
 }

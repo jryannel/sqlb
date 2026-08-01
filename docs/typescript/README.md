@@ -61,10 +61,12 @@ const page = await listPosts(request, {
   by column type. `contains` on a number does not compile; neither does
   `isnull` on a non-nullable column, nor a value outside an enum.
 - **An array column takes `ArrayCond`**: `has` for one element, `hasany` and
-  `hasall` for a list, and a bare array for whole-array equality. It has no
+  `hasall` for a list, their negations `nhas`, `nhasany` and `nhasall`, and a
+  bare array for whole-array equality. It has no
   `contains` — that is the text substring operator, and one name meaning two
   things depending on the column is precisely the ambiguity this client exists
-  to remove. It has no ordering operators either.
+  to remove. It has no ordering operators either. The negations are `NOT (…)`
+  rather than complements, so a null column matches neither `has` nor `nhas`.
 - **`sort` is a union** of the sortable columns and their `-` forms. An array
   column is never in it.
 - **`select` narrows the response type.** `page.items[0].title` is available

@@ -362,6 +362,37 @@ func (f Field) HasAll(values ...any) Pred {
 	return pred(Binary{Op: "@>", Left: f.Column(), Right: Param{Value: Array(values...)}})
 }
 
+// The negated forms of the three. Each is its positive spelled under NOT, which
+// makes them three-valued rather than complementary: a NULL array column
+// satisfies neither Has nor NotHas, exactly as a NULL column satisfies neither
+// OneOf nor NotOneOf. That is SQL's answer and the one `nin` already gives; a
+// caller who wants the NULL rows too asks for them, with an `isnull` beside it.
+//
+// The empty-value cases are the constants their positives return, complemented:
+// NotHasAny of nothing excludes nothing, and NotHasAll of nothing excludes
+// everything, since every array contains the empty one.
+
+// NotHas matches rows whose array column does not contain the element.
+func (f Field) NotHas(v any) Pred { return Not(f.Has(v)) }
+
+// NotHasAny matches rows whose array column overlaps none of the values. An
+// empty value set excludes nothing.
+func (f Field) NotHasAny(values ...any) Pred {
+	if len(values) == 0 {
+		return pred(Raw{SQL: "true"})
+	}
+	return Not(f.HasAny(values...))
+}
+
+// NotHasAll matches rows whose array column is missing at least one of the
+// values. An empty value set excludes every row.
+func (f Field) NotHasAll(values ...any) Pred {
+	if len(values) == 0 {
+		return pred(Raw{SQL: "false"})
+	}
+	return Not(f.HasAll(values...))
+}
+
 // Between matches a closed interval.
 func (f Field) Between(lo, hi any) Pred {
 	return pred(BetweenExpr{Operand: f.Column(), Lo: Param{Value: lo}, Hi: Param{Value: hi}})

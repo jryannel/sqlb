@@ -38,7 +38,9 @@ or deployed clients, not just call sites.
   deployed client or an agent driving the API off `sqlb.json` has requests built
   against it. New operators are additive; existing spellings do not change
   meaning. `has`, `hasany` and `hasall` were added for array columns
-  ([ADR-0033](adr/0033-array-columns.md)) and are frozen from here on; `contains`
+  ([ADR-0033](adr/0033-array-columns.md)) and are frozen from here on, as are
+  their negations `nhas`, `nhasany`, `nhasall` and `nhasdoc`, added later for
+  the frontend-parity reason that record's 2026-08-01 revision gives; `contains`
   was *not* extended to mean array containment, and will not be — one name
   meaning two things depending on the column it is applied to is the ambiguity
   the generated clients exist to remove.

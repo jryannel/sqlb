@@ -107,7 +107,7 @@ Three rules, all reported by `schema.Validate`:
 ```
 
 Elements are the scalar types; not `JSON`, not `Bytes`, and one dimension only.
-Filtering one is [`has` / `hasany` / `hasall`](../rest/filtering.md#array-columns-take-containment-and-nothing-else).
+Filtering one is [`has` / `hasany` / `hasall`, and their `n`-prefixed negations](../rest/filtering.md#array-columns-take-containment-and-nothing-else).
 
 ### Computed columns
 

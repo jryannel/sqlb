@@ -112,10 +112,13 @@ current — and drop that gate on the day you stop.
 - **Relation expansion (` + "`?expand`" + `).** One statement that joined a target and
   built a JSON object for it was the engine, not the surface. Fetch the related
   row from its own endpoint.
-- **The JSON filter tree (` + "`?filter=`" + `).** Arbitrary and/or nesting is gone; the
-  query-parameter operators are not.
-- **Array and document operators** (` + "`has`, `hasany`, `hasall`, `hasdoc`" + `). The
-  columns are still there and still returned; the containment operators are not.
+- **The JSON filter tree (` + "`?filter=`" + `).** Arbitrary and/or/not nesting is gone;
+  the query-parameter operators are not. Negation survives only where an
+  operator spells it — ` + "`ne`, `nin`, `notnull`" + ` — so a filter that leaned on a
+  ` + "`not`" + ` group has to be restated as one of those or moved into the handler.
+- **Array and document operators** (` + "`has`, `hasany`, `hasall`, `hasdoc`" + `, and
+  their negations ` + "`nhas`, `nhasany`, `nhasall`, `nhasdoc`" + `). The columns are
+  still there and still returned; the containment operators are not.
 - **The OpenAPI document**, and with it the generated TypeScript, Dart and CLI
   clients. They were emitted from the schema, and the schema is what you are
   leaving. The wire format they speak is unchanged, so a committed client keeps
@@ -236,13 +239,15 @@ func ejectSchemaNotes(tables []*schema.TableDef) []string {
 			if d.Array && d.Filterable {
 				add(fmt.Sprintf(
 					"`%s.%s` is a filterable array column. The containment operators "+
-						"(`has`, `hasany`, `hasall`) did not come out, so the column is returned "+
+						"(`has`, `hasany`, `hasall` and their negations `nhas`, `nhasany`, "+
+						"`nhasall`) did not come out, so the column is returned "+
 						"and sortable-by-nothing rather than filterable.", t.Name(), d.Name))
 			}
 			if d.Type == schema.TypeJSON && d.Filterable {
 				add(fmt.Sprintf(
-					"`%s.%s` is a filterable jsonb column. `hasdoc` containment did not come out; "+
-						"the column is still returned whole.", t.Name(), d.Name))
+					"`%s.%s` is a filterable jsonb column. `hasdoc` containment and its negation "+
+						"`nhasdoc` did not come out; the column is still returned whole.",
+					t.Name(), d.Name))
 			}
 		}
 		for _, f := range t.Fields() {

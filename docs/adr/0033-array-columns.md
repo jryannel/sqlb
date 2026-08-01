@@ -1,14 +1,15 @@
 # ADR-0033: An array is its element type plus a flag, and the slice stays plain
 
 - **Status:** Working — all three steps are built. `example/tasks` declares a
-  `text[]`, and a real Postgres round-trips the codec, runs the three operators
+  `text[]`, and a real Postgres round-trips the codec, runs the six operators
   and reads an array column back through `introspect` unchanged
 - **Confidence:** High on the shape, which survived implementation with one
   correction. Low on the operator names, which are wire format from the first
-  request with nobody's use behind them yet
+  request with nobody's use behind them yet — and the negations added on
+  2026-08-01 doubled the surface that is expensive to rename
 - **Decided:** 2026-07-29
-- **Last reviewed:** 2026-07-30 (the codec's rationale is superseded by ADR-0040;
-  the decision is not)
+- **Last reviewed:** 2026-08-01 (the negated operators were added; the codec's
+  rationale remains superseded by ADR-0040 and the decision untouched)
 
 ## Context
 
@@ -139,9 +140,9 @@ And a Stable-tier struct change, since `Array` lands on `schema.FieldDesc`.
 ## Cost of change
 
 *Cheap:* the codec, the bind and scan wrapping, the DDL spelling, the
-`introspect` mapping — all internal. *Expensive:* the three operator names, from
-the first request a deployed client sends, and `Array` on Stable-tier
-`FieldDesc`.
+`introspect` mapping — all internal. *Expensive:* the operator names — six since
+2026-08-01 — from the first request a deployed client sends, and `Array` on
+Stable-tier `FieldDesc`.
 
 *Asymmetric in the useful direction twice:* refusing `Sortable`/`Searchable` now
 and allowing later is additive, and so is relaxing the GIN requirement to a lint
@@ -185,3 +186,36 @@ step 1 emits a model with a slice field that step 2 is what makes scannable:
 - 2026-07-30 — Noted that ADR-0040 inverts the constraint that produced the
   codec. The decision is untouched: neither the wire format nor the schema DSL
   knows which library does the decoding.
+- 2026-08-01 — **The three operators became six**, and the vocabulary gained
+  `nhas`, `nhasany` and `nhasall` (with `nhasdoc` beside `hasdoc` for the same
+  reason). This record listed no negation at all, which was not a considered
+  omission — it simply did not come up, and an array column was filterable in
+  one direction only.
+
+  What forced it was the *other* frontend. The JSON filter tree gained a `not`
+  group in the same change, so a tree could already negate anything; but the URL
+  grammar conjoins by design and has nowhere to put a `not`, so without a
+  negated operator the two frontends would have compiled different vocabularies
+  — and [ADR-0003](0003-one-ast-two-producers.md)'s claim is that they compile
+  the same predicate. That claim is what made this a blocker rather than a
+  convenience.
+
+  Three things worth recording:
+  - **The `n` prefix is `nin`'s, not `notnull`'s.** The table already spelled
+    negation two ways, so a rule had to be picked; `nin`'s generalises to any
+    later `has*` operator without a second naming argument. `hasnone` reads
+    better for `nhasany` alone and was rejected for that reason — it does not
+    extend, and `hasnotall` is worse than `nhasall`.
+  - **`not` takes exactly one child.** A child *list* would have to mean either
+    `NOT (a AND b)` or `NOT a AND NOT b`, and those differ on exactly the rows a
+    filter separates. Refusing the second child costs a wrapping group and buys
+    a tree that is never read for a convention.
+  - **A negation is not a complement, and this is the part that will surprise
+    someone.** Each compiles to `NOT (…)`, so a NULL column matches neither
+    direction. That is what `nin` already did, and it is proven against a real
+    Postgres in `pgtest/array_test.go` rather than asserted from rendered SQL —
+    the claim is about three-valued logic, which only Postgres can settle.
+
+  Unchanged: everything the record already decided. The negations are additive,
+  they reuse the operand shapes and the column-kind gate, and no positive
+  operator moved.

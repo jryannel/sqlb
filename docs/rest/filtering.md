@@ -7,7 +7,8 @@
 ?tag=in.a,b,c                 value lists, quotable: in."a,b",c
 ?labels=has.urgent            an array column contains this element
 ?labels=hasany.a,b            overlaps these; hasall.a,b contains all of them
-?metadata=hasdoc.{"lang":"de"}  a jsonb document contains this one
+?labels=nhas.urgent           the n-prefixed forms negate: nhasany, nhasall too
+?metadata=hasdoc.{"lang":"de"}  a jsonb document contains this one; nhasdoc negates
 ?deleted_at=isnull            null tests
 ?views=between.10,20          ranges
 ?or=(status.eq.draft,age.lt.18)   explicit disjunction, nestable
@@ -35,12 +36,29 @@ A column declared `.Array()` accepts a vocabulary of its own:
 | `?labels=has.urgent` | the array contains that one element |
 | `?labels=hasany.a,b` | the array overlaps the list |
 | `?labels=hasall.a,b` | the array contains every member of the list |
+| `?labels=nhas.urgent` | the array does *not* contain that element |
+| `?labels=nhasany.a,b` | the array overlaps none of the list |
+| `?labels=nhasall.a,b` | the array is missing at least one of the list |
 | `?labels=eq.a,b` | the whole array, compared element by element |
 | `?labels=isnull` | the column is NULL — which is *not* the same as empty |
 
 The ordering operators, `in` and `between` are refused: Postgres will order
 arrays, but that is not an ordering an API should offer, and a list of arrays
 has no spelling in this grammar.
+
+The `n`-prefixed forms follow `nin`'s convention, and they exist because the
+query string has nowhere to put a `not`: parameters conjoin, so negation has to
+live in the operator. The JSON tree can spell either, and the two compile to the
+same statement.
+
+**A negation is not a complement.** `nhas` is `NOT (…)`, evaluated by SQL's
+three-valued logic, so a row whose column is NULL matches neither `has` nor
+`nhas` — the same way `nin` already behaves. A caller who wants those rows asks
+for them:
+
+```
+?or=(labels.nhas.urgent,labels.isnull)
+```
 
 `contains` is refused too, and that one is deliberate rather than incidental.
 It is the case-insensitive substring operator for text, and giving it a second
@@ -51,7 +69,8 @@ is what a request spelling it that way meant:
 ```
 GET /tasks?labels=contains.urgent
 400 — operator "contains" does not apply to the array column labels
-      (allowed: eq, has, hasall, hasany, isnull, ne, neq, notnull)
+      (allowed: eq, has, hasall, hasany, isnull, ne, neq, nhas, nhasall,
+       nhasany, notnull)
 ```
 
 An array column cannot be `Sortable` or `Searchable`, and a `Filterable` one has
@@ -69,10 +88,15 @@ gets one operator:
 | Request | Means |
 |---|---|
 | `?metadata=hasdoc.{"lang":"de"}` | the document contains that key and value, whatever else it holds |
+| `?metadata=nhasdoc.{"lang":"de"}` | it does not |
 | `?metadata=isnull` | the column is NULL — not the same as `{}` |
 
 `hasdoc` compiles to Postgres's `@>`, which is subset containment rather than
-equality, and it is the operator a GIN index over the column serves.
+equality, and it is the operator a GIN index over the column serves. `nhasdoc`
+is that under `NOT`, with the same three-valued caveat the array negations
+carry — and one of its own worth stating, since containment is not equality:
+it excludes a document holding every key given and keeps one holding only some
+of them.
 
 It is spelled `hasdoc` rather than `contains` for the reason ADR-0033 gives
 about arrays: `contains` is already the case-insensitive substring operator for
@@ -90,7 +114,7 @@ both would answer, which is worse than refusing:
 ```
 GET /docs?metadata=startswith.x
 400 — operator "startswith" does not apply to the JSON document column metadata
-      (allowed: hasdoc, isnull, notnull)
+      (allowed: hasdoc, isnull, nhasdoc, notnull)
 ```
 
 The same filter can arrive through the JSON tree, where the document is a value

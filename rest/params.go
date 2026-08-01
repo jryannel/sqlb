@@ -221,16 +221,23 @@ func filterDescription(col *sqlb.ColumnInfo) string {
 	// ordering and pattern operators here would document requests the parser
 	// refuses — including `contains`, which stays the text operator (ADR-0033).
 	if isArray(col.Type) {
-		ops := []string{"eq", "ne", "has", "hasany", "hasall"}
+		ops := []string{"eq", "ne", "has", "hasany", "hasall", "nhas", "nhasany", "nhasall"}
 		if col.Nullable {
 			ops = append(ops, "isnull", "notnull")
 		}
-		return fmt.Sprintf(
-			"Filter on `%s`, an array column. `has.value` tests for one element; "+
-				"`hasany.a,b` and `hasall.a,b` take a list, and a bare list is "+
-				"whole-array equality. Repeat the parameter to conjoin "+
-				"conditions. Operators: %s.",
-			col.Name, strings.Join(ops, ", "))
+		desc := "Filter on `%s`, an array column. `has.value` tests for one element; " +
+			"`hasany.a,b` and `hasall.a,b` take a list, and a bare list is " +
+			"whole-array equality. The `n`-prefixed forms negate: `nhas.value` " +
+			"matches rows whose array lacks the element. Repeat the parameter to " +
+			"conjoin conditions. Operators: %s."
+		if col.Nullable {
+			// The one thing a caller cannot guess. Documented only where it can
+			// happen, so a NOT NULL column's description stays short.
+			desc += " A negated operator is `NOT (…)`, not a complement: a row whose " +
+				"`%[1]s` is null matches neither `has` nor `nhas`. Add `%[1]s=isnull` " +
+				"in an `or(…)` group to include those rows."
+		}
+		return fmt.Sprintf(desc, col.Name, strings.Join(ops, ", "))
 	}
 
 	// A document column takes containment and nothing else: it has no
@@ -238,16 +245,20 @@ func filterDescription(col *sqlb.ColumnInfo) string {
 	// the general set here would document a request that parsing rejects,
 	// which is the same mistake as offering `startswith` on an integer.
 	if isJSON(col.Type) {
-		ops := []string{"hasdoc"}
+		ops := []string{"hasdoc", "nhasdoc"}
 		if col.Nullable {
 			ops = append(ops, "isnull", "notnull")
 		}
-		return fmt.Sprintf(
-			"Filter on `%s`, a JSON document. Written `hasdoc.{…}`, which matches rows "+
-				"whose document contains the one given — `hasdoc.{\"lang\":\"de\"}` matches "+
-				"any document carrying that key and value, whatever else it holds. There is no "+
-				"bare-value shorthand, and `contains` stays the text operator. Operators: %s.",
-			col.Name, strings.Join(ops, ", "))
+		desc := "Filter on `%s`, a JSON document. Written `hasdoc.{…}`, which matches rows " +
+			"whose document contains the one given — `hasdoc.{\"lang\":\"de\"}` matches " +
+			"any document carrying that key and value, whatever else it holds. `nhasdoc` " +
+			"negates it, excluding those rows. There is no " +
+			"bare-value shorthand, and `contains` stays the text operator. Operators: %s."
+		if col.Nullable {
+			desc += " A row whose `%[1]s` is null matches neither `hasdoc` nor `nhasdoc`; " +
+				"add `%[1]s=isnull` in an `or(…)` group to include those rows."
+		}
+		return fmt.Sprintf(desc, col.Name, strings.Join(ops, ", "))
 	}
 
 	ops := []string{"eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "between"}

@@ -64,6 +64,24 @@ void main() {
     );
   });
 
+  // The Dart names are notHas/notHasAny/notHasAll — camelCase, as the rest of
+  // this client is — while the wire spelling stays the server's nhas family.
+  // That mapping is what this pins.
+  test('the negated containment operators encode like their positives', () {
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(notHas: 'urgent'))),
+      'labels=nhas.urgent',
+    );
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(notHasAny: ['a', 'b']))),
+      'labels=nhasany.a%2Cb',
+    );
+    expect(
+      listQuery(const TaskWhere(labels: ArrayCond(notHasAll: ['a', 'b']))),
+      'labels=nhasall.a%2Cb',
+    );
+  });
+
   test('eq on an array column compares the whole array', () {
     expect(
       listQuery(const TaskWhere(labels: ArrayCond(eq: ['a', 'b']))),
