@@ -144,6 +144,11 @@ type Options struct {
 	MaxPageSize     int
 	MaxFilters      int
 	MaxSortTerms    int
+	// MaxOffset bounds how deep ?page= and ?offset= may reach into the result
+	// set. Offset paging is the one dimension of a request whose cost grows
+	// with the number the client sent, so it has a ceiling like the others; a
+	// request past it is refused with a message pointing at ?cursor=.
+	MaxOffset int
 
 	// Expandable lists the relation names ?expand may name. Each must be a
 	// relation the model declares — a `expands=` field beside an `expand`

@@ -67,6 +67,9 @@ oracle for what a resource is concealing.
 | `must be at least 1` | `page` below 1 |
 | `must not be negative` | A negative `offset` or `limit` |
 | `not a number` | A non-numeric `page`, `per_page`, `limit` or `offset` |
+| `starts past the offset budget of N rows; use ?cursor= to read deeper` | `MaxOffset`, via `?page=` |
+| `is past the offset budget of N rows; use ?cursor= to read deeper` | `MaxOffset`, via `?offset=` |
+| `sent N times; … takes one value per request` | A repeated single-valued reserved parameter |
 
 Coercion failures carry the type's own message — `expected an integer, got "x"`,
 `expected an RFC 3339 timestamp or a date, got "x"`, or

@@ -137,6 +137,38 @@ func TestSelectSQL(t *testing.T) {
 			sql: `SELECT "id" FROM "users" WHERE "age" IS NULL`,
 		},
 		{
+			// The spelling a hand-written hook actually reaches for: every
+			// nullable column maps to a pointer, so the comparand arrives as a
+			// non-nil interface holding a nil pointer. It used to compile to
+			// `= $1` bound to NULL and match nothing.
+			name: "a nil pointer comparand is the same NULL as an untyped nil",
+			q: func() *sqlb.Builder[User] {
+				var missing *int
+				return sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("age").Eq(missing))
+			},
+			sql: `SELECT "id" FROM "users" WHERE "age" IS NULL`,
+		},
+		{
+			name: "a nil pointer comparand negates to IS NOT NULL",
+			q: func() *sqlb.Builder[User] {
+				var missing *string
+				return sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("name").Neq(missing))
+			},
+			sql: `SELECT "id" FROM "users" WHERE "name" IS NOT NULL`,
+		},
+		{
+			// The other direction: a pointer that *has* a value still binds,
+			// rather than the fix swallowing every pointer.
+			name: "a non-nil pointer comparand still binds",
+			q: func() *sqlb.Builder[User] {
+				age := 18
+				return sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("age").Eq(&age))
+			},
+			sql: `SELECT "id" FROM "users" WHERE "age" = $1`,
+			// DeepEqual follows pointers, so this compares the pointee.
+			args: []any{ptr(18)},
+		},
+		{
 			name: "ordering and pagination",
 			q: func() *sqlb.Builder[User] {
 				return sqlb.Query[User]().Select(sqlb.F("id")).
@@ -810,6 +842,9 @@ func (d *fakeDB) BeginTx(_ context.Context, opts pgx.TxOptions) (pgx.Tx, error) 
 
 // normalise makes bound arguments comparable across integer widths, which the
 // builder does not narrow.
+// ptr is the address of a literal, for the nullable-comparand cases.
+func ptr[T any](v T) *T { return &v }
+
 func normalise(args []any) []any {
 	out := make([]any, len(args))
 	for i, a := range args {

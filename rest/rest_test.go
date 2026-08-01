@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -229,6 +230,35 @@ func TestReadRejectsStrayQueryParameters(t *testing.T) {
 	resp := api.Get("/posts/p1?select=title")
 	if resp.Code != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d, want 422 for an undeclared parameter: %s", resp.Code, resp.Body)
+	}
+}
+
+// Create and update declare no query parameter, so anything in the query string
+// is a mistake and must be named. Every other operation already refused; these
+// two accepted silently, so the same typo answered 400 on a GET and 201/200 on a
+// write.
+func TestWritesRefuseAnUnknownQueryParameter(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		do   func(api humatest.TestAPI) *httptest.ResponseRecorder
+	}{
+		{"create", func(api humatest.TestAPI) *httptest.ResponseRecorder {
+			return api.Post("/posts?exapnd=author", map[string]any{
+				"org_id": "acme", "title": "Hello", "body": "text",
+			})
+		}},
+		{"update", func(api humatest.TestAPI) *httptest.ResponseRecorder {
+			return api.Patch("/posts/p1?sort=title", map[string]any{"title": "Changed"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newFakeDB(t, reply{cols: postCols(), rows: [][]any{postRow("p1", "Hello")}})
+			api := mount(t, db.db, postOptions())
+
+			if resp := tc.do(api); resp.Code < 400 {
+				t.Errorf("status = %d, want a refusal for an undeclared parameter: %s", resp.Code, resp.Body)
+			}
+		})
 	}
 }
 
