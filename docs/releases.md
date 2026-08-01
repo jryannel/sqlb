@@ -50,8 +50,9 @@ declares the bind, a `BeforeQuery` hook supplies it through `Builder.Bind`, and
 unbound expression renders `member_id = NULL`, returns false for every row
 forever, and looks exactly like a feature that works. No DDL in either
 direction, so converting a stored column into a computed one proposes the drop.
-`FromGo` was not built — the record already called it the tier most likely to be
-cut, and nothing in `example/computed` reaches for it.
+`FromGo` is **cut**, not pending — ADR-0041 set the condition "if the first two
+applications express everything in SQL", and both did. Nothing in the tree
+reaches for it and nothing outside it did either.
 
 **A declared action generates the envelope, and the verb stays plain Go.**
 [ADR-0043](adr/0043-declared-actions.md), against the 26 item verbs and ~20

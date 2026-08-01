@@ -312,8 +312,9 @@ Named so that "it is missing" is not mistaken for "it was forgotten".
   [ADR-0041](adr/0041-computed-fields.md). It was deferred as the strongest
   candidate for 1.1 rather than a blocker; it landed early because it is purely
   additive — a schema that declares no computed column compiles to the same SQL.
-  What is *not* built is the record's `FromGo` tier, which it already named as
-  the one most likely to be cut.
+  The record's `FromGo` tier is **cut** rather than pending: ADR-0041 set the
+  condition "if the first two applications express everything in SQL", and both
+  did ([#17](https://github.com/jryannel/sqlb/issues/17)).
 - ~~**`sqlb eject`** ([#19](https://github.com/jryannel/sqlb/issues/19))~~ Built:
   the schema as SQL and the resources as plain `net/http` handlers over pgx, with
   what it does not carry refused by name and a comparison test against the

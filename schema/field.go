@@ -367,8 +367,11 @@ func Computed(name string, t Type, e ComputedExpr) *Field {
 // ComputedExpr is how a computed column is produced. Build one with FromSQL.
 //
 // It is a type rather than a bare string so that the declaration reads as a
-// choice — today FromSQL is the only one, and ADR-0041 stages a Go-side form as
-// a separate decision rather than an argument that changes meaning.
+// choice. FromSQL is the only one, and now the only one there will be: ADR-0041
+// staged a Go-side FromGo as a separate decision and then cut it, on the trigger
+// that record set for itself — the first two applications expressed every
+// derived value in SQL (#17). The type stays because a constructor is still the
+// right shape for the argument, and because reopening it is additive.
 type ComputedExpr struct{ sql string }
 
 // FromSQL computes a column from a SQL expression over the row's own columns.
