@@ -137,6 +137,38 @@ func TestSelectSQL(t *testing.T) {
 			sql: `SELECT "id" FROM "users" WHERE "age" IS NULL`,
 		},
 		{
+			// The spelling a hand-written hook actually reaches for: every
+			// nullable column maps to a pointer, so the comparand arrives as a
+			// non-nil interface holding a nil pointer. It used to compile to
+			// `= $1` bound to NULL and match nothing.
+			name: "a nil pointer comparand is the same NULL as an untyped nil",
+			q: func() *sqlb.Builder[User] {
+				var missing *int
+				return sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("age").Eq(missing))
+			},
+			sql: `SELECT "id" FROM "users" WHERE "age" IS NULL`,
+		},
+		{
+			name: "a nil pointer comparand negates to IS NOT NULL",
+			q: func() *sqlb.Builder[User] {
+				var missing *string
+				return sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("name").Neq(missing))
+			},
+			sql: `SELECT "id" FROM "users" WHERE "name" IS NOT NULL`,
+		},
+		{
+			// The other direction: a pointer that *has* a value still binds,
+			// rather than the fix swallowing every pointer.
+			name: "a non-nil pointer comparand still binds",
+			q: func() *sqlb.Builder[User] {
+				age := 18
+				return sqlb.Query[User]().Select(sqlb.F("id")).Where(sqlb.F("age").Eq(&age))
+			},
+			sql: `SELECT "id" FROM "users" WHERE "age" = $1`,
+			// DeepEqual follows pointers, so this compares the pointee.
+			args: []any{ptr(18)},
+		},
+		{
 			name: "ordering and pagination",
 			q: func() *sqlb.Builder[User] {
 				return sqlb.Query[User]().Select(sqlb.F("id")).
@@ -305,6 +337,49 @@ func TestInsertKeepsExplicitValueOverDefault(t *testing.T) {
 	}
 	if !contains(sql, `"id"`) {
 		t.Errorf("an explicitly set id must be written, got: %s", sql)
+	}
+}
+
+// The default-zero rule is per row, not per statement. A defaulted column no
+// row fills in leaves the statement, as above; but when one row in a batch sets
+// it, the column stays — and the rows that left it zero used to bind an
+// explicit zero, so the same row got the database's default when inserted alone
+// and a zero when inserted beside a neighbour (#73). Postgres accepts the
+// DEFAULT keyword per position in a multi-row VALUES, which is what makes the
+// rule read the way the doc comment always claimed.
+func TestInsertMixedBatchTakesTheDefaultPerRow(t *testing.T) {
+	set := &User{ID: "fixed-id", Email: "ada@example.com"}
+	unset := &User{Email: "bob@example.com"}
+
+	sql, args, err := sqlb.InsertRows(set, unset).SQL()
+	if err != nil {
+		t.Fatalf("SQL() error: %v", err)
+	}
+	// Before RETURNING, which names every column by construction and would
+	// make any assertion over the whole statement pass on anything.
+	written := sql[:indexOf(sql, " RETURNING ")]
+	if !contains(written, `"id"`) {
+		t.Fatalf("the column one row set must be written:\n%s", sql)
+	}
+	values := written[indexOf(written, "VALUES "):]
+	if !contains(values, "(DEFAULT, ") {
+		t.Errorf("the row that left the defaulted column zero should take DEFAULT:\n%s", values)
+	}
+	// The DEFAULT keyword is not a bind, so the second row's id costs no
+	// parameter — six columns over two rows, minus the one taking the default.
+	if len(args) != 11 {
+		t.Errorf("bound %d args, want 11: DEFAULT is a keyword, not a parameter", len(args))
+	}
+
+	// And the solo case is unchanged: nothing to keep the column for, so it
+	// leaves the statement entirely rather than becoming a tuple of DEFAULTs.
+	solo, _, err := sqlb.InsertRows(unset).SQL()
+	if err != nil {
+		t.Fatalf("SQL() error: %v", err)
+	}
+	soloWritten := solo[:indexOf(solo, " RETURNING ")]
+	if contains(soloWritten, `"id"`) || contains(soloWritten, "DEFAULT") {
+		t.Errorf("a single zero-valued row should omit the column, not spell DEFAULT:\n%s", solo)
 	}
 }
 
@@ -810,6 +885,9 @@ func (d *fakeDB) BeginTx(_ context.Context, opts pgx.TxOptions) (pgx.Tx, error) 
 
 // normalise makes bound arguments comparable across integer widths, which the
 // builder does not narrow.
+// ptr is the address of a literal, for the nullable-comparand cases.
+func ptr[T any](v T) *T { return &v }
+
 func normalise(args []any) []any {
 	out := make([]any, len(args))
 	for i, a := range args {

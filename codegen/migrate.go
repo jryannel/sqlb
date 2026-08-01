@@ -197,7 +197,7 @@ func runMigrate(p Project, target *schema.Registry, args []string, stdout, stder
 // tree and hands back its own spelling, so a declared check and an introspected
 // one never match as strings, and the only reliable way to compare them is to
 // put the declared one through the same normalisation (issue #24, and
-// shadow.NormalizeChecks at length). Handing the pool back out instead would
+// shadow.Normalize at length). Handing the pool back out instead would
 // widen this function's contract to "and also, close this" for one caller.
 //
 // An empty migration directory is the baseline case — the first migration of a
@@ -249,7 +249,7 @@ func currentSchema(ctx context.Context, p Project, format migrate.Format, target
 
 	// The replayed tables are in the database at this point, which is what
 	// makes the declared expressions probeable at all.
-	unprobed, err := shadow.NormalizeChecks(ctx, db, target, opts)
+	unprobed, err := shadow.Normalize(ctx, db, target, opts)
 	if err != nil {
 		return nil, err
 	}

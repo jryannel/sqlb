@@ -77,6 +77,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			MaxPageSize:     opts.MaxPageSize,
 			MaxFilters:      opts.MaxFilters,
 			MaxSortTerms:    opts.MaxSortTerms,
+			MaxOffset:       opts.MaxOffset,
 			Expandable:      opts.Expandable,
 			DisableSearch:   opts.DisableSearch,
 		})

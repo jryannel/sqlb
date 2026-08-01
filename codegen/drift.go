@@ -119,7 +119,7 @@ func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) i
 
 	// Both sides have to spell their checks the way Postgres does, or every
 	// check in the schema reads as drift.
-	if unprobed, err := shadow.NormalizeChecks(ctx, pool, declared, shadow.Options{
+	if unprobed, err := shadow.Normalize(ctx, pool, declared, shadow.Options{
 		Schema: p.PostgresSchema,
 	}); err != nil {
 		say(stderr, "sqlb: normalising the declared checks: %v\n", err)

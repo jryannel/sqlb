@@ -18,6 +18,18 @@ import (
 // non-empty one means it does not, and the difference is yours to reconcile.
 type Report struct {
 	Skipped []Skip
+
+	// Notes records a construct that survived, but not in the shape the
+	// database holds it — a decision this package made rather than a gap it
+	// left. A foreign key on an import-breaking cycle is the case: it is
+	// imported as the enforced ExternalRef a declaration would also be forced
+	// to write, which is faithful, but the reader should know which side was
+	// chosen.
+	//
+	// Deliberately not Skipped. Empty and Err are about whether the registry
+	// describes the database, and a note does not change that answer — putting
+	// one there would fail a round-trip that is in fact clean.
+	Notes []string
 }
 
 // Skip is one construct that did not survive the import, where it was, and what
@@ -33,6 +45,10 @@ type Skip struct {
 
 func (r *Report) add(table, object, reason, def string) {
 	r.Skipped = append(r.Skipped, Skip{Table: table, Object: object, Reason: reason, Def: def})
+}
+
+func (r *Report) note(format string, args ...any) {
+	r.Notes = append(r.Notes, fmt.Sprintf(format, args...))
 }
 
 // Empty reports whether everything in the database was represented.
@@ -55,6 +71,9 @@ func (r *Report) Err() error {
 
 func (r *Report) String() string {
 	if r.Empty() {
+		if len(r.Notes) > 0 {
+			return "introspect: everything represented\n" + r.notes()
+		}
 		return "introspect: everything represented"
 	}
 	lines := make([]string, 0, len(r.Skipped))
@@ -70,5 +89,21 @@ func (r *Report) String() string {
 		lines = append(lines, line)
 	}
 	sort.Strings(lines)
-	return strings.Join(lines, "\n")
+	out := strings.Join(lines, "\n")
+	if len(r.Notes) > 0 {
+		out += "\n" + r.notes()
+	}
+	return out
+}
+
+// notes renders the decisions this package made, under a heading that keeps
+// them apart from the gaps above: a gap is something to reconcile, a note is
+// something to know.
+func (r *Report) notes() string {
+	lines := make([]string, 0, len(r.Notes))
+	for _, n := range r.Notes {
+		lines = append(lines, "  "+n)
+	}
+	sort.Strings(lines)
+	return "imported in a different shape:\n" + strings.Join(lines, "\n")
 }

@@ -18,7 +18,10 @@
 // parameter; only identifiers validated against the model are interpolated.
 package sqlb
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 // Expr is a SQL expression node. The set of implementations is closed apart
 // from Raw, which is the escape hatch for expressions the builder cannot model.
@@ -205,7 +208,7 @@ func (f Field) exprNode() {}
 func (f Field) cmp(op string, v any) Pred {
 	// A nil comparand means NULL, and `= NULL` is never true. Translating it to
 	// the IS form is what the caller meant in every case where it happens.
-	if v == nil {
+	if isNil(v) {
 		switch op {
 		case "=":
 			return f.IsNull()
@@ -214,6 +217,26 @@ func (f Field) cmp(op string, v any) Pred {
 		}
 	}
 	return pred(Binary{Op: op, Left: f.Column(), Right: Param{Value: v}})
+}
+
+// isNil reports whether a comparand means SQL NULL. The untyped-nil interface is
+// only half of it: every nullable column maps to a pointer in Go, so
+// `Eq(row.DeletedAt)` with a nil *time.Time is the natural spelling in a
+// hand-written hook and arrives here as a non-nil interface holding a nil
+// pointer. Without the reflective half that compiled to `= $1` bound to NULL and
+// silently matched no rows.
+//
+// Pointers only, deliberately. A nil slice is the other kind that binds NULL,
+// but for an array column a nil slice and an empty one are both spellings of
+// "no elements" that callers and the filter grammar produce interchangeably, so
+// reading one of them as IS NULL would decide an ambiguity this function has no
+// standing to decide.
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
 }
 
 // Comparison operators.

@@ -92,6 +92,14 @@ func ParseFilterTree(data []byte, opts Options) (sqlb.Pred, error) {
 func (p *parser) compileTree(data []byte) (sqlb.Pred, bool) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
+	// Numbers stay as their source text rather than becoming float64. ADR-0003's
+	// claim is that a JSON filter and the equivalent URL filter compile to the
+	// identical predicate, and float64 breaks it above 2^53: the URL token goes
+	// straight to Coerce and binds exactly, while a decoded-then-reformatted
+	// float64 binds a neighbouring integer. Coerce parses the exact text for
+	// every numeric column type, so handing it the original digits is both the
+	// fix and the simpler path.
+	dec.UseNumber()
 	var root Node
 	if err := dec.Decode(&root); err != nil {
 		p.errf(TreeParam, "", "invalid filter JSON: %v", err)
@@ -348,15 +356,21 @@ func (p *parser) jsonScalarValue(n *Node, raw any, t reflect.Type) (any, bool) {
 }
 
 // jsonScalar renders a JSON scalar into the text form Coerce expects. A JSON
-// number decodes as float64, so it is rendered without an exponent — Coerce's
-// integer path needs to see "42", not "4.2e+01". Objects, arrays and null have
-// no scalar rendering and are rejected by the caller.
+// number arrives as json.Number — the decoder is set to UseNumber — so it is
+// handed on as the digits the caller sent, which is what makes the tree and the
+// URL grammar bind the same value for an int64 above 2^53. The float64 case
+// remains for a Node assembled in Go rather than decoded, and renders without an
+// exponent because Coerce's integer path needs to see "42", not "4.2e+01".
+// Objects, arrays and null have no scalar rendering and are rejected by the
+// caller.
 func jsonScalar(v any) (string, bool) {
 	switch t := v.(type) {
 	case string:
 		return t, true
 	case bool:
 		return strconv.FormatBool(t), true
+	case json.Number:
+		return t.String(), true
 	case float64:
 		return strconv.FormatFloat(t, 'f', -1, 64), true
 	default:

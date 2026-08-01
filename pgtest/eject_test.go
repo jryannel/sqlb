@@ -225,6 +225,69 @@ func TestEjectedRefusesTheSameRequests(t *testing.T) {
 	}
 }
 
+// The adversarial trio. TestEjectedRefusesTheSameRequests compares happy-path
+// answers request by request, which is why two budget gaps and a live wildcard
+// shipped in the exit unnoticed (#69): the emitted parser enforced neither the
+// list cap nor the value-length cap, and ?search left % and _ live, so a request
+// the API answered 400 was accepted here — 100 000 bind parameters against pgx's
+// 65535 limit, or a caller-controlled scan-cost lever. Bind discipline was
+// intact in both cases; the eject contract is "same requests, same refusals",
+// and these were the spots where it was not.
+func TestEjectedRefusesTheSameOversizedRequests(t *testing.T) {
+	generated, exit, pool := ejectedServers(t)
+	seedForEject(t, pool)
+
+	longValue := strings.Repeat("x", 300)
+	bigList := make([]string, 200)
+	for i := range bigList {
+		bigList[i] = fmt.Sprintf("v%d", i)
+	}
+
+	for _, tc := range []struct{ name, target string }{
+		{"oversized in list", "/authors?email=in." + strings.Join(bigList, ",")},
+		{"oversized value", "/authors?email=eq." + longValue},
+		{"oversized search term", "/posts?search=" + longValue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantCode, _ := ejGet(t, generated, tc.target)
+			if wantCode != http.StatusBadRequest {
+				t.Fatalf("the generated resource answered %d; this test assumes it refuses", wantCode)
+			}
+			if gotCode, body := ejGet(t, exit, tc.target); gotCode != wantCode {
+				t.Errorf("the exit answered %d, the generated resource %d\n%v", gotCode, wantCode, body)
+			}
+		})
+	}
+}
+
+// And the wildcard. `?search=50%` is a search for a literal percent sign, and
+// the exit used to build the operand `%50%%` from it, matching everything with
+// a 5 followed by a 0 followed by anything. A silent behaviour change between
+// the API and its replacement, on the one pattern path that was not escaped.
+func TestEjectedSearchEscapesItsWildcards(t *testing.T) {
+	generated, exit, pool := ejectedServers(t)
+	seedForEject(t, pool)
+
+	target := "/posts?search=" + url.QueryEscape("%")
+	wantCode, want := ejGet(t, generated, target)
+	if wantCode != http.StatusOK {
+		t.Fatalf("the generated resource answered %d", wantCode)
+	}
+	gotCode, got := ejGet(t, exit, target)
+	if gotCode != wantCode {
+		t.Fatalf("the exit answered %d, the generated resource %d\n%v", gotCode, wantCode, got)
+	}
+
+	// A bare % matches nothing literally, so both must return an empty page.
+	// Before the escape the exit's operand was `%%%`, which matches everything.
+	wantItems, _ := ejNormalise(want).(map[string]any)["items"].([]any)
+	gotItems, _ := ejNormalise(got).(map[string]any)["items"].([]any)
+	if len(gotItems) != len(wantItems) {
+		t.Errorf("the exit matched %d rows for a literal %%, the generated resource %d",
+			len(gotItems), len(wantItems))
+	}
+}
+
 // What did not come out is refused by name. This is the assertion that keeps
 // the exit honest: silence here would mean a client's ?expand quietly returning
 // less than it asked for.
@@ -322,6 +385,55 @@ func TestEjectedWritesAreReadableByTheGeneratedResource(t *testing.T) {
 	}
 	if code, _ := ejGet(t, exit, "/authors/"+id); code != http.StatusNotFound {
 		t.Errorf("the exit still sees the deleted row: %d", code)
+	}
+}
+
+// A write the database refuses answers the same status through both. Before the
+// eject a duplicate unique value was a 409 and a foreign-key violation a 422,
+// classified off SQLSTATE class 23; the exit answered 500 to both, so a
+// client-side retry loop keyed on 409 broke quietly on the day of the eject
+// (#70). Status parity is the property clients branch on, so it is the property
+// asserted.
+func TestEjectedAnswersAConstraintViolationTheSameWay(t *testing.T) {
+	generated, exit, pool := ejectedServers(t)
+	orgID, _ := seedForEject(t, pool)
+
+	post := func(h http.Handler, path, body string) int {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// email is Unique. The first create succeeds through the exit; the second,
+	// through either server, is the same duplicate.
+	dup := fmt.Sprintf(`{"org_id":%q,"email":"dup@example.com","name":"First"}`, orgID)
+	if code := post(exit, "/authors", dup); code != http.StatusCreated {
+		t.Fatalf("seeding the duplicate = %d, want 201", code)
+	}
+
+	// org_id references orgs, so a uuid that names no org is a foreign-key
+	// violation — the 422 half of the mapping.
+	const noSuchOrg = "00000000-0000-0000-0000-000000000000"
+	orphan := fmt.Sprintf(`{"org_id":%q,"email":"orphan@example.com","name":"Orphan"}`, noSuchOrg)
+
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"duplicate unique value", dup, http.StatusConflict},
+		{"foreign key violation", orphan, http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if code := post(generated, "/authors", tc.body); code != tc.want {
+				t.Fatalf("the generated resource answered %d, this test expects %d", code, tc.want)
+			}
+			if code := post(exit, "/authors", tc.body); code != tc.want {
+				t.Errorf("the exit answered %d, the generated resource %d", code, tc.want)
+			}
+		})
 	}
 }
 

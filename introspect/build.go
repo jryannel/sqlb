@@ -96,12 +96,21 @@ func groupByTable(cat *catalog) map[string]*tableParts {
 // dependencyOrder returns table names ordered so that every foreign key's
 // target is built before the table referencing it.
 //
-// A cycle is reported rather than broken. The DSL declares a reference by
-// passing the target table's own value — schema.Ref("org", Org) — so a cycle
-// would be a Go initialisation cycle, which does not compile. There is no
-// ordering that fixes it and no point pretending otherwise: the schema has to
-// be edited, by making one side an ExternalRef or by adding the second
-// reference in a later migration.
+// A cycle is broken rather than refused. The DSL declares a reference by
+// passing the target table's own value — schema.Ref("org", Org) — so a cycle is
+// a Go initialisation cycle and no ordering fixes it. The declaration's answer
+// is to make one side an ExternalRef, and that answer is available to the
+// import too: emitting the back edge's table *first* leaves its target unbuilt,
+// which is exactly the condition under which newField already produces an
+// enforced ExternalRef.
+//
+// It used to report the cycle and drop every table on it. The advice was right
+// for a declaration and impossible to follow from here — a consumer cannot make
+// introspect's side an ExternalRef — so a drift gate diffing a declared table
+// that *had* broken the cycle correctly reported it as absent from the database
+// (issue #80). The workaround was to exclude one of the tables, which meant the
+// gate could never cover it. Import and declaration now agree by construction,
+// and which side was broken is noted on the Report.
 func dependencyOrder(cat *catalog, byTable map[string]*tableParts, rep *Report) ([]string, error) {
 	names := make([]string, 0, len(byTable))
 	for n := range byTable {
@@ -123,37 +132,64 @@ func dependencyOrder(cat *catalog, byTable map[string]*tableParts, rep *Report) 
 
 	var out []string
 	state := map[string]int{} // 0 unvisited, 1 in progress, 2 done
-	var visit func(string, []string) bool
-	visit = func(n string, path []string) bool {
-		switch state[n] {
-		case 2:
-			return true
-		case 1:
-			cycle := append(append([]string{}, path...), n)
-			rep.add(n, "", "foreign keys form a cycle ("+strings.Join(cycle, " → ")+
-				"), which the DSL cannot express: a reference names the target table's "+
-				"own value, so a cycle is a Go initialisation cycle. Break it by making "+
-				"one side an ExternalRef", "")
-			return false
+	var visit func(string, []string)
+	visit = func(n string, path []string) {
+		if state[n] != 0 {
+			return
 		}
 		state[n] = 1
 		for _, d := range deps[n] {
 			if _, known := byTable[d]; !known {
 				continue // a reference out of the schema being read
 			}
-			if !visit(d, append(path, n)) {
-				state[n] = 2
-				return false
+			// d is an ancestor on the path being walked, so n → d closes a
+			// cycle. Breaking the edge here — rather than waiting for d —
+			// emits n first, and a table emitted before its target is one
+			// whose foreign key imports as an enforced ExternalRef.
+			if state[d] == 1 {
+				rep.note("%s.%s: the foreign key to %s closes a cycle (%s), "+
+					"so it is imported as an enforced ExternalRef — the same spelling a "+
+					"declaration is forced to use, since a cycle of Refs is a Go "+
+					"initialisation cycle",
+					n, refColumn(byTable[n], d), d,
+					strings.Join(append(cycleFrom(path, d), n), " → "))
+				continue
 			}
+			visit(d, append(path, n))
 		}
 		state[n] = 2
 		out = append(out, n)
-		return true
 	}
 	for _, n := range names {
 		visit(n, nil)
 	}
 	return out, nil
+}
+
+// cycleFrom trims a walk down to the loop it closed, so the note names the
+// cycle rather than the route taken to reach it.
+func cycleFrom(path []string, start string) []string {
+	for i, n := range path {
+		if n == start {
+			return append([]string{}, path[i:]...)
+		}
+	}
+	return append([]string{}, path...)
+}
+
+// refColumn names the column carrying a table's foreign key to target, for the
+// note above. Empty if it cannot be found, which would make the note read a
+// little worse and nothing else.
+func refColumn(p *tableParts, target string) string {
+	if p == nil {
+		return ""
+	}
+	for _, c := range p.constraints {
+		if c.Type == "f" && c.RefTable == target && len(c.Columns) == 1 {
+			return c.Columns[0]
+		}
+	}
+	return ""
 }
 
 // localName strips a module prefix, reporting whether the table belongs to the
@@ -220,6 +256,7 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 			Name: idx.Name, Columns: idx.Columns, Unique: idx.Unique,
 			Method: indexMethod(idx.Method), Where: idx.Where,
 			Opclasses: opclassesByColumn(idx),
+			Orders:    ordersByColumn(idx),
 			With:      storageParameters(idx.Options),
 		})
 	}
@@ -395,7 +432,7 @@ func buildColumn(table string, col columnRow, cons *constraints,
 	}
 
 	elemType, isArray := splitArrayType(col.Type)
-	t, typeArg, ok := columnType(elemType)
+	t, typeArg, scale, ok := columnType(elemType)
 	if !ok {
 		rep.add(table, col.Name, "column type "+col.Type+" has no equivalent in the DSL; "+
 			"importing it as anything else would propose changing the real column", col.Type)
@@ -410,7 +447,7 @@ func buildColumn(table string, col columnRow, cons *constraints,
 		return nil, false
 	}
 
-	f := newField(col, t, typeArg, isArray, cons, built, rep, table)
+	f := newField(col, t, typeArg, scale, isArray, cons, built, rep, table)
 	if f == nil {
 		return nil, false
 	}
@@ -445,7 +482,7 @@ func buildColumn(table string, col columnRow, cons *constraints,
 
 // newField creates the column in whichever of the DSL's forms it belongs to: a
 // reference, an enum, or a plain typed column.
-func newField(col columnRow, t schema.Type, typeArg int, isArray bool, cons *constraints,
+func newField(col columnRow, t schema.Type, typeArg, scale int, isArray bool, cons *constraints,
 	built map[string]*schema.TableDef, rep *Report, table string) *schema.Field {
 
 	// An array column is never a foreign key — Postgres has no such constraint
@@ -465,16 +502,26 @@ func newField(col columnRow, t schema.Type, typeArg int, isArray bool, cons *con
 		if target := built[fk.RefTable]; target != nil {
 			return refField(col, fk, target, rep, table)
 		}
-		if fk.RefTable == table {
-			rep.add(table, col.Name, "self-referential foreign key, which the DSL cannot "+
-				"declare; the column is imported without it", fk.Def)
-		} else if f := externalRefField(col, fk, t); f != nil {
+		if f := externalRefField(col, fk, t); f != nil {
 			// The target is outside what was read — a table in another schema,
 			// or one this import deliberately left out — but the constraint is
 			// real and the declaration can say so without resolving it
 			// (issue #55). Importing it as a plain column instead is what made
 			// a drift gate propose dropping a live foreign key forever.
+			//
+			// A self-reference lands here too, and deliberately: it *is*
+			// declarable, and only as this. `Ref("supervisor", Member)` inside
+			// Member's own definition is a Go initialisation cycle, so the one
+			// spelling available to a declaration is
+			// `ExternalRef("supervisor", "members.id").Enforced()` — and an
+			// import that reported it as undeclarable made the declared FK read
+			// as permanent drift, with a second waiver for the implicit index
+			// ExternalRef wants and the import did not (issue #82). Both sides
+			// now produce the same field, so they agree by construction.
 			return f
+		} else if fk.RefTable == table {
+			rep.add(table, col.Name, "self-referential foreign key whose target column "+
+				"cannot be declared; the column is imported without it", fk.Def)
 		} else {
 			rep.add(table, col.Name, "foreign key points at "+fk.RefTable+
 				", which is not in the schema being read, and its column or table name "+
@@ -491,7 +538,7 @@ func newField(col columnRow, t schema.Type, typeArg int, isArray bool, cons *con
 		}
 		return f
 	}
-	return plainField(col.Name, t, typeArg)
+	return plainField(col.Name, t, typeArg, scale)
 }
 
 // externalRefField imports a foreign key whose target is not in the schema
@@ -562,8 +609,9 @@ func relationName(column string) string {
 
 // plainField builds the column. typeArg is the type's parenthesised argument
 // where it has one, and which field it lands in depends on the type: a length
-// for a varchar, a dimension for a vector.
-func plainField(name string, t schema.Type, typeArg int) *schema.Field {
+// for a varchar, a dimension for a vector, a precision for a numeric. scale is
+// the numeric's second argument and is zero everywhere else.
+func plainField(name string, t schema.Type, typeArg, scale int) *schema.Field {
 	switch t {
 	case schema.TypeText:
 		return schema.Text(name)
@@ -576,7 +624,12 @@ func plainField(name string, t schema.Type, typeArg int) *schema.Field {
 	case schema.TypeFloat:
 		return schema.Float(name)
 	case schema.TypeNumeric:
-		return schema.Numeric(name)
+		// Unbounded when there is no precision, which is the ordinary case and
+		// the only one the DSL could express before #81.
+		if typeArg == 0 {
+			return schema.Numeric(name)
+		}
+		return schema.Numeric(name, typeArg, scale)
 	case schema.TypeBool:
 		return schema.Bool(name)
 	case schema.TypeUUID:
@@ -619,6 +672,39 @@ func opclassesByColumn(idx indexRow) map[string]string {
 			out = make(map[string]string, 1)
 		}
 		out[idx.Columns[i]] = class
+	}
+	return out
+}
+
+// ordersByColumn decodes pg_index.indoption into the per-column sort orders the
+// schema declares, dropping the ones that are Postgres's default.
+//
+// The bitmask is Postgres's own: bit 0 is DESC, bit 1 is NULLS FIRST. Only a
+// column that departs from the default gets an entry, so an ordinary index
+// imports with a nil map and reads exactly as it did before this existed.
+func ordersByColumn(idx indexRow) map[string]schema.IndexOrder {
+	var out map[string]schema.IndexOrder
+	for i, opt := range idx.Sort {
+		if i >= len(idx.Columns) {
+			break
+		}
+		order := schema.IndexOrder{Desc: opt&1 != 0}
+		switch {
+		case opt&2 != 0:
+			order.Nulls = schema.NullsFirst
+		default:
+			order.Nulls = schema.NullsLast
+		}
+		// Normalised the way the declaration is, so the two compare equal: the
+		// placement that follows from the direction is the default and is not
+		// recorded.
+		if order.Suffix() == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]schema.IndexOrder, 1)
+		}
+		out[idx.Columns[i]] = order
 	}
 	return out
 }

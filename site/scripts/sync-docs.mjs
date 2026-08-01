@@ -84,7 +84,7 @@ const SOURCES = [
   {
     dir: "docs/queries",
     route: "queries",
-    sequence: ["index", "typed-columns", "paging", "mutations", "hooks", "inspecting"],
+    sequence: ["index", "typed-columns", "paging", "mutations", "hooks", "inspecting", "testing"],
     order(slug) {
       return this.sequence.indexOf(slug);
     },

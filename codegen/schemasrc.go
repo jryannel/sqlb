@@ -240,7 +240,7 @@ func renderIndex(t *schema.TableDef, idx schema.Index) string {
 	args := strings.Join(quoted, ", ")
 
 	plain := idx.Where == "" && (idx.Method == "" || idx.Method == "btree") &&
-		len(idx.Opclasses) == 0 && len(idx.With) == 0
+		len(idx.Opclasses) == 0 && len(idx.With) == 0 && len(idx.Orders) == 0
 	if plain && idx.Name == derivedIndexName(t, idx) {
 		if idx.Unique {
 			return fmt.Sprintf("UniqueIndex(%s)", args)
@@ -270,6 +270,13 @@ func renderIndex(t *schema.TableDef, idx schema.Index) string {
 	if len(idx.With) > 0 {
 		fmt.Fprintf(&b, "\t\tWith:      %s,\n", renderStringMap(idx.With))
 	}
+	// And the sort order, for the same reason: an index backing a specific
+	// ORDER BY is unusable in any other order, so a bootstrap that dropped it
+	// would render a schema whose first diff proposes replacing the index it
+	// was rendered from (issue #64).
+	if len(idx.Orders) > 0 {
+		fmt.Fprintf(&b, "\t\tOrders:    %s,\n", renderOrders(idx.Orders))
+	}
 	b.WriteString("\t})")
 	return b.String()
 }
@@ -289,6 +296,32 @@ func renderStringMap(m map[string]string) string {
 		parts = append(parts, fmt.Sprintf("%s: %s", strconv.Quote(k), strconv.Quote(m[k])))
 	}
 	return "map[string]string{" + strings.Join(parts, ", ") + "}"
+}
+
+// renderOrders writes the per-column sort orders, keys sorted for the same
+// reason renderStringMap sorts its own.
+func renderOrders(m map[string]schema.IndexOrder) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		var fields []string
+		if m[k].Desc {
+			fields = append(fields, "Desc: true")
+		}
+		switch m[k].Nulls {
+		case schema.NullsFirst:
+			fields = append(fields, "Nulls: schema.NullsFirst")
+		case schema.NullsLast:
+			fields = append(fields, "Nulls: schema.NullsLast")
+		}
+		parts = append(parts, fmt.Sprintf("%s: {%s}", strconv.Quote(k), strings.Join(fields, ", ")))
+	}
+	return "map[string]schema.IndexOrder{" + strings.Join(parts, ", ") + "}"
 }
 
 // derivedIndexName reproduces what TableDef.Index would have named this index.
@@ -492,6 +525,12 @@ func fieldConstructor(d *schema.FieldDesc) (string, error) {
 	case schema.TypeFloat:
 		return "schema.Float(" + name + ")", nil
 	case schema.TypeNumeric:
+		// The precision is part of the type, so a bootstrap that dropped it
+		// would render a schema whose first diff proposes rewriting the column
+		// it was rendered from (issue #81).
+		if d.Size > 0 {
+			return fmt.Sprintf("schema.Numeric(%s, %d, %d)", name, d.Size, d.Scale), nil
+		}
 		return "schema.Numeric(" + name + ")", nil
 	case schema.TypeBool:
 		return "schema.Bool(" + name + ")", nil

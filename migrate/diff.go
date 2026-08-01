@@ -28,8 +28,13 @@ import (
 // introspected one therefore proposes dropping and re-adding every check they
 // have in common, forever (issue #24).
 //
-// Call shadow.NormalizeChecks on the declared registry first, which puts its
-// expressions through the same normalisation by asking a Postgres. That is a
+// The same is true of a partial index's WHERE, which Postgres stores the same
+// way — a declared `latitude IS NOT NULL` comes back as
+// `(latitude IS NOT NULL)`, and the diff proposes creating an index that is
+// already there with DDL that reads identically (issue #63).
+//
+// Call shadow.Normalize on the declared registry first, which puts both through
+// the same normalisation by asking a Postgres. That is a
 // separate call rather than something Diff does, because doing it here would
 // mean taking a database — and being a pure function over two registries is
 // what the paragraph above is about. `sqlb migrate` makes the call; anything

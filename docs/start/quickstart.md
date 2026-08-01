@@ -149,10 +149,14 @@ more options on this same call.
 ## 3. Query
 
 ```go
-db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
+// The Executor is pgx-native (ADR-0040), so a *pgxpool.Pool is what you pass.
+// A *pgx.Conn and a pgx.Tx satisfy it as they stand, which is what lets a
+// hook run inside a caller's transaction.
+db, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 if err != nil {
     return err
 }
+defer db.Close()
 
 posts, err := sqlb.Query[blog.Post]().
     Where(sqlb.F("status").Eq("published")).

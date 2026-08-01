@@ -100,6 +100,28 @@ func TestBodyPropertyChangesAreClassified(t *testing.T) {
 	}
 }
 
+// A property that changes in two ways at once is two deltas. The comparison was
+// one switch, so it reported the first arm it matched and stopped — and when
+// requiredness relaxes while an enum narrows, the arm it matched first was the
+// additive one, hiding the break entirely (#68).
+func TestTwoChangesToOneBodyPropertyAreBothReported(t *testing.T) {
+	before := complete()
+	before.Body = schema.Body(schema.Enum("channel", "email", "sms", "push"))
+
+	after := complete()
+	after.Body = schema.Body(schema.Enum("channel", "email").Nullable())
+
+	breaks := restcompat.Diff(withActions(before), withActions(after))
+
+	if b := find(t, breaks, "became optional"); b.Level != restcompat.LevelAdditive {
+		t.Errorf("relaxing requiredness: level = %s, want additive", b.Level)
+	}
+	// The half that used to be swallowed: a client sending "sms" now 422s.
+	if b := find(t, breaks, "values changed"); b.Level != restcompat.LevelBreaking {
+		t.Errorf("narrowing the enum: level = %s, want breaking", b.Level)
+	}
+}
+
 // An optional property is a client's business to ignore.
 func TestAddingAnOptionalBodyPropertyIsAdditive(t *testing.T) {
 	wider := complete()

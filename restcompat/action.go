@@ -122,21 +122,31 @@ func diffActionBody(path, action string, o, n ActionSnap, add func(Break)) {
 				continue
 			}
 			add(Break{LevelAdditive, path, FacetAction, field, "optional body property added"})
-		case op.Type != np.Type:
-			add(Break{LevelBreaking, path, FacetAction, field,
-				fmt.Sprintf("body property type changed from %s to %s", op.Type, np.Type)})
-		case !op.required() && np.required():
-			add(Break{LevelBreaking, path, FacetAction, field,
-				"body property became required"})
-		case op.required() && !np.required():
-			add(Break{LevelAdditive, path, FacetAction, field,
-				"body property became optional"})
-		case len(np.Enum) > 0 && !sameStrings(op.Enum, np.Enum):
-			// Narrowing the accepted set rejects a value that used to work;
-			// widening it does not. Reported as one delta either way, because
-			// the enum is a set and the honest summary names both spellings.
-			add(Break{levelForEnum(op.Enum, np.Enum), path, FacetAction, field,
-				fmt.Sprintf("body property values changed from %v to %v", op.Enum, np.Enum)})
+		default:
+			// Sequential, not a switch. A property whose enum narrows *and*
+			// whose requiredness relaxes is two deltas, and a switch reported
+			// only the first arm it matched — the additive half, which is the
+			// one that does not need reporting (#68). The field path beside
+			// this one has always used sequential ifs; this is it agreeing.
+			if op.Type != np.Type {
+				add(Break{LevelBreaking, path, FacetAction, field,
+					fmt.Sprintf("body property type changed from %s to %s", op.Type, np.Type)})
+			}
+			if !op.required() && np.required() {
+				add(Break{LevelBreaking, path, FacetAction, field,
+					"body property became required"})
+			}
+			if op.required() && !np.required() {
+				add(Break{LevelAdditive, path, FacetAction, field,
+					"body property became optional"})
+			}
+			if len(np.Enum) > 0 && !sameStrings(op.Enum, np.Enum) {
+				// Narrowing the accepted set rejects a value that used to work;
+				// widening it does not. Reported as one delta either way, because
+				// the enum is a set and the honest summary names both spellings.
+				add(Break{levelForEnum(op.Enum, np.Enum), path, FacetAction, field,
+					fmt.Sprintf("body property values changed from %v to %v", op.Enum, np.Enum)})
+			}
 		}
 	}
 }

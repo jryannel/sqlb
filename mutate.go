@@ -19,6 +19,11 @@ var ErrUnscoped = errors.New("sqlb: statement would affect every row; add a Wher
 // zero value, so generated identifiers and timestamps come from the database
 // rather than being overwritten with zeroes. The statement always returns the
 // inserted rows, so those values land back in the caller's structs.
+//
+// The rule is per row, including in a multi-row insert: a column no row fills in
+// leaves the statement entirely, and in a mixed batch a row that leaves it zero
+// gets the DEFAULT keyword in its own tuple. A row's semantics therefore do not
+// depend on its batch-mates, which they did until #73.
 type Insert[T any] struct {
 	model    *Model
 	dialect  Dialect
@@ -154,6 +159,18 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 			if err != nil {
 				return "", nil, err
 			}
+			// Per row, not per statement. columns() drops a defaulted column
+			// only when *every* row leaves it zero, so in a mixed batch the
+			// column stays and a zero-valued row used to bind an explicit zero
+			// — the same row taking the database's default when inserted alone
+			// and writing a zero when inserted beside a non-zero neighbour
+			// (#73). Postgres accepts the DEFAULT keyword per position in a
+			// multi-row VALUES, which makes the rule the one the doc comment
+			// already described.
+			if i.takesDefault(col) && fv.IsZero() {
+				c.write("DEFAULT")
+				continue
+			}
 			c.bind(fv.Interface())
 		}
 		c.write(")")
@@ -214,12 +231,22 @@ func (i *Insert[T]) columns() []*ColumnInfo {
 		if i.omit[col.Name] {
 			continue
 		}
-		if col.HasDefault && i.only == nil && i.allZero(col) {
+		if i.takesDefault(col) && i.allZero(col) {
 			continue
 		}
 		out = append(out, col)
 	}
 	return out
+}
+
+// takesDefault reports whether a zero value in this column means "let the
+// database decide" rather than "write a zero".
+//
+// Only when the caller did not name the columns. Only(...) is an explicit list,
+// and a column on it was asked for by name — writing its zero is what the caller
+// said.
+func (i *Insert[T]) takesDefault(col *ColumnInfo) bool {
+	return col.HasDefault && i.only == nil
 }
 
 func (i *Insert[T]) allZero(col *ColumnInfo) bool {

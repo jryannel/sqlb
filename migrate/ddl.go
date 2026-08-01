@@ -69,6 +69,15 @@ func scalarSQLType(d *schema.FieldDesc) (string, error) {
 	case schema.TypeFloat:
 		return "double precision", nil
 	case schema.TypeNumeric:
+		// A numeric with a precision is a different type from an unbounded
+		// one, the way a varchar with a length is, so it is part of the type
+		// name rather than a constraint on it (issue #81).
+		switch {
+		case d.Size > 0 && d.Scale != 0:
+			return fmt.Sprintf("numeric(%d,%d)", d.Size, d.Scale), nil
+		case d.Size > 0:
+			return fmt.Sprintf("numeric(%d,0)", d.Size), nil
+		}
 		return "numeric", nil
 	case schema.TypeBool:
 		return "boolean", nil
@@ -127,6 +136,22 @@ func widens(from, to *schema.FieldDesc) bool {
 			// Zero means unbounded, so it accepts anything.
 			return to.Size == 0 || to.Size >= from.Size
 		}
+	case schema.TypeNumeric:
+		// Same rule as varchar, one dimension at a time: an unbounded numeric
+		// accepts anything, and a bounded one accepts a bounded one whose
+		// integer part and fractional part both fit. Narrowing either is a
+		// migration a person writes, because Postgres rounds the scale and
+		// errors on the precision.
+		if to.Type != schema.TypeNumeric {
+			return false
+		}
+		if to.Size == 0 {
+			return true
+		}
+		if from.Size == 0 {
+			return false
+		}
+		return to.Size-to.Scale >= from.Size-from.Scale && to.Scale >= from.Scale
 	case schema.TypeEnum:
 		// An enum is already text; only the CHECK constraint changes.
 		return to.Type == schema.TypeText
@@ -809,9 +834,20 @@ func indexDef(idx schema.Index) string {
 	for _, c := range idx.Columns {
 		classes = append(classes, c+":"+idx.Opclasses[c])
 	}
-	return fmt.Sprintf("unique=%t method=%q columns=%s classes=%s with=%q where=%q",
+	// The sort order per column, for the same reason as the classes: an index
+	// on the same columns in a different order is a different index, and the
+	// one backing a list's default ordering is unusable in any other (issue
+	// #64). Fingerprinted through Suffix rather than the struct so that two
+	// spellings of the same order — `{Desc: true}` and `{Desc: true, Nulls:
+	// NullsFirst}` — do not propose replacing each other.
+	orders := make([]string, 0, len(idx.Columns))
+	for _, c := range idx.Columns {
+		orders = append(orders, c+":"+idx.Orders[c].Suffix())
+	}
+	return fmt.Sprintf("unique=%t method=%q columns=%s classes=%s orders=%s with=%q where=%q",
 		idx.Unique, idx.Method, strings.Join(idx.Columns, ","),
-		strings.Join(classes, ","), storageParameters(idx.With), idx.Where)
+		strings.Join(classes, ","), strings.Join(orders, ","),
+		storageParameters(idx.With), idx.Where)
 }
 
 // renamedIndex returns the index as it will read once cols have been renamed.
@@ -826,6 +862,23 @@ func renamedIndex(idx schema.Index, cols map[string]string) schema.Index {
 	out.Columns = make([]string, len(idx.Columns))
 	for i, c := range idx.Columns {
 		out.Columns[i] = rename(cols, c)
+	}
+	// The per-column maps are keyed by column name, so a rename that missed
+	// them would silently drop an operator class or a sort order — which is
+	// the same index being replaced by a different one under a clean rename.
+	out.Opclasses = renameKeys(idx.Opclasses, cols)
+	out.Orders = renameKeys(idx.Orders, cols)
+	return out
+}
+
+// renameKeys rebuilds a per-column map under the new column names.
+func renameKeys[V any](m map[string]V, cols map[string]string) map[string]V {
+	if len(m) == 0 {
+		return m
+	}
+	out := make(map[string]V, len(m))
+	for k, v := range m {
+		out[rename(cols, k)] = v
 	}
 	return out
 }
@@ -857,6 +910,10 @@ func createIndex(t *schema.TableDef, idx schema.Index, concurrent bool) string {
 		if class := idx.Opclasses[c]; class != "" {
 			cols[i] += " " + class
 		}
+		// And then the sort order, which follows the class — the order
+		// Postgres itself renders them in, so a declared index and the one
+		// pg_get_indexdef hands back read the same.
+		cols[i] += idx.Orders[c].Suffix()
 	}
 	b.WriteString(" (" + strings.Join(cols, ", ") + ")")
 	if with := storageParameters(idx.With); with != "" {

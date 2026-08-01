@@ -21,15 +21,17 @@ import "fmt"
 // qualifyPreds rewrites every predicate to name alias, or reports the first one
 // it cannot.
 //
-// own is the target's own table name: a hook that qualified explicitly wrote
-// the table, and inside the join that same reference has to become the alias.
-func qualifyPreds(preds []Pred, own, alias string) ([]Pred, error) {
+// target is the expansion target's model. Its table name is what a hook that
+// qualified explicitly wrote, and inside the join that same reference has to
+// become the alias; its derived columns are the references that cannot become
+// anything at all — see qualifyColumn.
+func qualifyPreds(preds []Pred, target *Model, alias string) ([]Pred, error) {
 	out := make([]Pred, 0, len(preds))
 	for _, p := range preds {
 		if p.IsZero() {
 			continue
 		}
-		e, err := qualifyExpr(p.Expr(), own, alias)
+		e, err := qualifyExpr(p.Expr(), target, alias)
 		if err != nil {
 			return nil, err
 		}
@@ -42,16 +44,16 @@ func qualifyPreds(preds []Pred, own, alias string) ([]Pred, error) {
 // alias. It returns a new tree rather than mutating: the predicates belong to
 // the hook's throwaway builder, but Raw's Args slice and List's Items are
 // shared structure and a hook may hold a Pred it registered once.
-func qualifyExpr(e Expr, own, alias string) (Expr, error) {
+func qualifyExpr(e Expr, target *Model, alias string) (Expr, error) {
 	switch n := e.(type) {
 	case nil:
 		return nil, fmt.Errorf("sqlb: nil expression in an expansion scope predicate")
 
 	case Column:
-		return qualifyColumn(n, own, alias)
+		return qualifyColumn(n, target, alias)
 
 	case Field:
-		col, err := qualifyColumn(n.Column(), own, alias)
+		col, err := qualifyColumn(n.Column(), target, alias)
 		if err != nil {
 			return nil, err
 		}
@@ -63,7 +65,7 @@ func qualifyExpr(e Expr, own, alias string) (Expr, error) {
 	case List:
 		items := make([]Expr, len(n.Items))
 		for i, item := range n.Items {
-			q, err := qualifyExpr(item, own, alias)
+			q, err := qualifyExpr(item, target, alias)
 			if err != nil {
 				return nil, err
 			}
@@ -72,33 +74,33 @@ func qualifyExpr(e Expr, own, alias string) (Expr, error) {
 		return List{Items: items}, nil
 
 	case Binary:
-		left, err := qualifyExpr(n.Left, own, alias)
+		left, err := qualifyExpr(n.Left, target, alias)
 		if err != nil {
 			return nil, err
 		}
-		right, err := qualifyExpr(n.Right, own, alias)
+		right, err := qualifyExpr(n.Right, target, alias)
 		if err != nil {
 			return nil, err
 		}
 		return Binary{Op: n.Op, Left: left, Right: right}, nil
 
 	case Unary:
-		operand, err := qualifyExpr(n.Operand, own, alias)
+		operand, err := qualifyExpr(n.Operand, target, alias)
 		if err != nil {
 			return nil, err
 		}
 		return Unary{Op: n.Op, Operand: operand, Postfix: n.Postfix}, nil
 
 	case BetweenExpr:
-		operand, err := qualifyExpr(n.Operand, own, alias)
+		operand, err := qualifyExpr(n.Operand, target, alias)
 		if err != nil {
 			return nil, err
 		}
-		lo, err := qualifyExpr(n.Lo, own, alias)
+		lo, err := qualifyExpr(n.Lo, target, alias)
 		if err != nil {
 			return nil, err
 		}
-		hi, err := qualifyExpr(n.Hi, own, alias)
+		hi, err := qualifyExpr(n.Hi, target, alias)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +109,7 @@ func qualifyExpr(e Expr, own, alias string) (Expr, error) {
 	case Call:
 		args := make([]Expr, len(n.Args))
 		for i, a := range n.Args {
-			q, err := qualifyExpr(a, own, alias)
+			q, err := qualifyExpr(a, target, alias)
 			if err != nil {
 				return nil, err
 			}
@@ -116,7 +118,7 @@ func qualifyExpr(e Expr, own, alias string) (Expr, error) {
 		return Call{Name: n.Name, Args: args, Star: n.Star, Distinct: n.Distinct}, nil
 
 	case Cast:
-		inner, err := qualifyExpr(n.Inner, own, alias)
+		inner, err := qualifyExpr(n.Inner, target, alias)
 		if err != nil {
 			return nil, err
 		}
@@ -147,9 +149,30 @@ func qualifyExpr(e Expr, own, alias string) (Expr, error) {
 // rewritten: it names something the expansion did not join — a table the hook
 // added with Join, most likely — and pointing it at the alias would silently
 // change which rows it constrains.
-func qualifyColumn(col Column, own, alias string) (Expr, error) {
+//
+// A derived column is refused for the opposite reason: there is nothing to
+// point at. A computed column has no storage, so `"__ex_tasks"."is_overdue"` is
+// a column the database does not have, and the request used to fail with a bare
+// Postgres 42703 naming a column the schema plainly declares — at request time,
+// and only when the hooked model was *expanded*, so every direct-read test
+// passed (#76). Substituting the expression is not the alternative it looks
+// like: a computed expression is opaque SQL text whose own column references
+// this package never parsed, which is the same reason Raw is refused above.
+func qualifyColumn(col Column, target *Model, alias string) (Expr, error) {
+	if target.byDerived[col.Name] != nil {
+		switch col.Table {
+		case "", target.Table, alias:
+			return nil, fmt.Errorf(
+				"sqlb: a BeforeQuery hook on the expansion target constrains %q, "+
+					"which %s declares as a computed column; a computed column has no "+
+					"storage to qualify onto the join alias, so the predicate cannot "+
+					"be carried across the expansion — scope on a stored column, or "+
+					"do not expand this relation",
+				col.Name, target.Type.Name())
+		}
+	}
 	switch col.Table {
-	case "", own, alias:
+	case "", target.Table, alias:
 		return Column{Table: alias, Name: col.Name}, nil
 	default:
 		return nil, fmt.Errorf(

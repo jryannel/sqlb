@@ -33,6 +33,7 @@ package introspect
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -160,6 +161,13 @@ type indexRow struct {
 	// Options is the index's storage parameters, as reloptions hands them back:
 	// "m=16", "ef_construction=64".
 	Options []string
+	// Sort is the per-column sort order, in the same order as Columns, decoded
+	// from pg_index.indoption. Postgres packs it as a bitmask per column: bit
+	// 0 is DESC, bit 1 is NULLS FIRST. An index whose ordering cannot be read
+	// back is one the declaration cannot reproduce, so the diff proposes
+	// dropping the live index and cannot tell "missing" from "differently
+	// ordered" (issue #64).
+	Sort []int16
 }
 
 // The catalog queries.
@@ -233,7 +241,8 @@ SELECT c.relname, i.relname, x.indisunique, am.amname,
        COALESCE(k.cols, ''), (0 = ANY (x.indkey::int2[])),
        pg_get_indexdef(x.indexrelid),
        COALESCE(oc.classes, ''),
-       COALESCE(array_to_string(i.reloptions, ','), '')
+       COALESCE(array_to_string(i.reloptions, ','), ''),
+       COALESCE(array_to_string(x.indoption::int2[], ','), '')
 FROM pg_index x
 JOIN pg_class i ON i.oid = x.indexrelid
 JOIN pg_class c ON c.oid = x.indrelid
@@ -305,12 +314,13 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 
 	if err := query(ctx, db, indexQuery, nspname, func(rows pgx.Rows) error {
 		var r indexRow
-		var cols, classes, options string
+		var cols, classes, options, sortOpts string
 		if err := rows.Scan(&r.Table, &r.Name, &r.Unique, &r.Method, &r.Where,
-			&cols, &r.Expression, &r.Def, &classes, &options); err != nil {
+			&cols, &r.Expression, &r.Def, &classes, &options, &sortOpts); err != nil {
 			return err
 		}
 		r.Columns = splitList(cols)
+		r.Sort = parseIndexOptions(sortOpts)
 		// Not splitList: an empty entry means "this column takes the default
 		// class" and has to keep its position, which a filter would lose.
 		if classes != "" {
@@ -324,6 +334,28 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 	}
 
 	return cat, nil
+}
+
+// parseIndexOptions decodes pg_index.indoption, one bitmask per indexed column.
+// Not splitList: a zero entry is the common case — ascending, default null
+// placement — and has to keep its position, which a filter would lose.
+func parseIndexOptions(raw string) []int16 {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]int16, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			// An option this package cannot read is reported as the default
+			// rather than guessed at: the index still imports, and the drift
+			// gate is what surfaces the disagreement.
+			n = 0
+		}
+		out = append(out, int16(n))
+	}
+	return out
 }
 
 func query(ctx context.Context, db sqlb.Executor, sqlText, arg string, scan func(pgx.Rows) error) error {

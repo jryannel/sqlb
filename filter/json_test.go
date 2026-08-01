@@ -60,6 +60,11 @@ func TestJSONMatchesURL(t *testing.T) {
 		{"eq string", `{"op":"eq","field":"status","value":"active"}`, "status=eq.active"},
 		{"eq number, native", `{"op":"eq","field":"views","value":100}`, "views=eq.100"},
 		{"eq number, as string", `{"op":"eq","field":"views","value":"100"}`, "views=eq.100"},
+		// Above 2^53, where a float64 round-trip would bind a neighbouring
+		// integer. The URL token reaches Coerce as digits and always bound
+		// exactly; this is the case that says the tree does too.
+		{"eq int64 past float64", `{"op":"eq","field":"views","value":9007199254740993}`, "views=eq.9007199254740993"},
+		{"in int64 past float64", `{"op":"in","field":"views","value":[9007199254740993]}`, "views=in.9007199254740993"},
 		{"eq bool", `{"op":"eq","field":"draft","value":true}`, "draft=eq.true"},
 		{"ne", `{"op":"ne","field":"status","value":"draft"}`, "status=ne.draft"},
 		{"gte", `{"op":"gte","field":"views","value":10}`, "views=gte.10"},
