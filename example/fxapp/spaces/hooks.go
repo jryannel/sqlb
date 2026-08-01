@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 	"github.com/jryannel/sqlb/example/fxapp/store"
-	"github.com/jryannel/sqlb/sqlbfx"
 )
 
 // provideHooks contributes this module's rule to the registry the kit
@@ -16,8 +16,8 @@ import (
 // registered for the model (ADR-0030). Deleting this file does not produce a
 // server that lists every tenant — it produces a boot that fails naming
 // store.Space.
-func provideHooks(dir *Directory) sqlbfx.HookSet {
-	return sqlbfx.HookSet{
+func provideHooks(dir *Directory) fxkit.HookSet {
+	return fxkit.HookSet{
 		Module: "spaces",
 		Register: func(reg *sqlb.Registry) error {
 			// Scoped by identity rather than by a foreign key: on this table

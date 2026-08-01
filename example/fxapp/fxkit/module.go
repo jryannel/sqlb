@@ -1,4 +1,4 @@
-package sqlbfx
+package fxkit
 
 import (
 	"net/http"
@@ -9,12 +9,12 @@ import (
 // Pool is the pgx pool alone: opened from the application's DBConfig, closed
 // by fx. Take it separately when the platform owns everything else.
 func Pool() fx.Option {
-	return fx.Module("sqlbfx.pool", fx.Provide(newPool))
+	return fx.Module("fxkit.pool", fx.Provide(newPool))
 }
 
 // Migrations is the runner over the migrations group, producing Migrated.
 func Migrations() fx.Option {
-	return fx.Module("sqlbfx.migrations",
+	return fx.Module("fxkit.migrations",
 		fx.Provide(runMigrations),
 		// Force the migrations to run even when nothing depends on Migrated.
 		//
@@ -39,13 +39,13 @@ func Migrations() fx.Option {
 // fact the platform established:
 //
 //	platform.DBModule,                  // provides *pgxpool.Pool, runs its own migrations
-//	fx.Supply(sqlbfx.Migrated{}),       // "and they have run before anything queries"
-//	sqlbfx.Handles(),
+//	fx.Supply(fxkit.Migrated{}),       // "and they have run before anything queries"
+//	fxkit.Handles(),
 //
 // Supplying Migrated is an assertion, and it is the application's to make:
 // the kit cannot know what the platform's runner guarantees.
 func Handles() fx.Option {
-	return fx.Module("sqlbfx.handles",
+	return fx.Module("fxkit.handles",
 		fx.Provide(
 			newUnscoped,
 			newScoped,
@@ -69,7 +69,7 @@ func DB() fx.Option {
 //
 // The application must provide an HTTPConfig.
 func HTTP() fx.Option {
-	return fx.Module("sqlbfx.http",
+	return fx.Module("fxkit.http",
 		fx.Provide(
 			newRouter,
 			newAPI,

@@ -1,4 +1,4 @@
-package sqlbfx
+package fxkit
 
 import (
 	"context"
@@ -78,30 +78,8 @@ func TestGroupTagsMatchTheConstants(t *testing.T) {
 	}
 }
 
-// TestPrincipalRoundTrip covers the seam's contract: stored by any type,
-// found by that type, and both failure modes — nothing stored, wrong type —
-// give the same answer.
-func TestPrincipalRoundTrip(t *testing.T) {
-	type spaceID string
-
-	ctx := context.Background()
-	if _, ok := PrincipalFrom[spaceID](ctx); ok {
-		t.Fatal("an empty context reported a principal")
-	}
-
-	ctx = WithPrincipal(ctx, spaceID("acme"))
-	got, ok := PrincipalFrom[spaceID](ctx)
-	if !ok || got != "acme" {
-		t.Fatalf("PrincipalFrom = %q, %v; want acme, true", got, ok)
-	}
-
-	// A hook asking for a type the middleware did not store must get the
-	// same answer as no principal at all — the two failure modes are one,
-	// deliberately.
-	if _, ok := PrincipalFrom[int](ctx); ok {
-		t.Fatal("a principal of a different type was found")
-	}
-}
+// The principal seam's own tests are the engine's now, in principal_test.go —
+// it moved there because example/tasks wanted it without a container.
 
 // TestScopedHandleReportsTheFailingModule builds the registry from hook sets
 // the way the kit does, and asserts both refusals: a set with no Register

@@ -220,7 +220,7 @@ func TestAccessIsRequired(t *testing.T) {
 // one removes notes.Module — the only contributor of hooks for store.Note —
 // and requires the boot to fail. sqlb refuses to mount a resource whose schema
 // declares a Scoped column with no registration behind it (ADR-0030), the
-// generated Register returns that refusal, sqlbfx's OperationSet carries it
+// generated Register returns that refusal, fxkit's OperationSet carries it
 // out, and fx reports it instead of listening.
 //
 // Without this assertion, "the container makes the ordering structural" would

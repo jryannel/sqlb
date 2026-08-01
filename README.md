@@ -170,7 +170,7 @@ server over the manifest.
 | [`example/recipes`](example/recipes/) | Eighty-odd small examples, one file per aspect — the place to look when you know what you are building and need to know how one piece is spelled |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
 | [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
-| [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx on the [`sqlbfx`](sqlbfx/) kit: hooks arriving through a value group, a pluggable auth module behind the principal seam, and a resource that refuses to mount without its hooks |
+| [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx on the [`fxkit`](example/fxapp/fxkit/) glue — copyable, not importable: hooks arriving through a value group, a pluggable auth module behind the principal seam, and a resource that refuses to mount without its hooks |
 | [`example/computed`](example/computed/) | Four ways to get a derived value out of Postgres — generated columns, trigger counters, projected expressions, views — and where sqlb's ceiling is today ([ADR-0041](docs/adr/0041-computed-fields.md)) |
 | [`example/evolve`](example/evolve/) | A schema that changed five times: what is free, what destroys data, and the rename that is a clean migration and a broken client at once ([the walkthrough](docs/migrations/refactoring-a-database.md)) |
 | [`example/withsqlc`](example/withsqlc/) | sqlb and sqlc over one schema, plus one list endpoint in [four stages](docs/refactoring-from-sqlc.md) from static SQL to a generated resource |

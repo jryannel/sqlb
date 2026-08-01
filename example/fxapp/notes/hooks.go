@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 	"github.com/jryannel/sqlb/example/fxapp/spaces"
 	"github.com/jryannel/sqlb/example/fxapp/store"
-	"github.com/jryannel/sqlb/sqlbfx"
 )
 
 // provideHooks is the space boundary for notes.
@@ -17,8 +17,8 @@ import (
 // the other space's rows at all. That is also why the generated handlers need
 // to know nothing about spaces: they call sqlb.Query[T], and so does the
 // hand-written endpoint next door.
-func provideHooks(dir *spaces.Directory) sqlbfx.HookSet {
-	return sqlbfx.HookSet{
+func provideHooks(dir *spaces.Directory) fxkit.HookSet {
+	return fxkit.HookSet{
 		Module: "notes",
 		Register: func(reg *sqlb.Registry) error {
 			hooks := sqlb.OnIn[store.Note](reg)

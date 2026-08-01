@@ -1,4 +1,4 @@
-package sqlbfx
+package fxkit
 
 import (
 	"context"
@@ -56,7 +56,7 @@ func (c HTTPConfig) shutdownTimeout() time.Duration {
 type routerParams struct {
 	fx.In
 
-	Sets []MiddlewareSet `group:"sqlbfx.middleware"`
+	Sets []MiddlewareSet `group:"fxkit.middleware"`
 	Log  *slog.Logger    `optional:"true"`
 }
 
@@ -84,7 +84,7 @@ func newRouter(p routerParams) chi.Router {
 		router.Use(set.Wrap)
 		names = append(names, set.Module)
 	}
-	logger(p.Log).Info("sqlbfx: middleware installed", "order", names)
+	logger(p.Log).Info("fxkit: middleware installed", "order", names)
 
 	// Liveness, on the router rather than through huma: it is not part of the
 	// API this document describes, and it must answer while the API is
@@ -102,7 +102,7 @@ type apiParams struct {
 
 	Cfg    HTTPConfig
 	Router chi.Router
-	Sets   []OperationSet `group:"sqlbfx.operations"`
+	Sets   []OperationSet `group:"fxkit.operations"`
 	Log    *slog.Logger   `optional:"true"`
 }
 
@@ -126,12 +126,12 @@ func newAPI(p apiParams) (huma.API, error) {
 	log := logger(p.Log)
 	for _, set := range ordered {
 		if set.Register == nil {
-			return nil, fmt.Errorf("sqlbfx: the %q operation set has no Register function", set.Module)
+			return nil, fmt.Errorf("fxkit: the %q operation set has no Register function", set.Module)
 		}
 		if err := set.Register(api); err != nil {
-			return nil, fmt.Errorf("sqlbfx: registering %s operations: %w", set.Module, err)
+			return nil, fmt.Errorf("fxkit: registering %s operations: %w", set.Module, err)
 		}
-		log.Info("sqlbfx: operations registered", "module", set.Module)
+		log.Info("fxkit: operations registered", "module", set.Module)
 	}
 	return api, nil
 }
@@ -168,14 +168,14 @@ func newServer(p serverParams) *http.Server {
 		OnStart: func(context.Context) error {
 			ln, err := net.Listen("tcp", p.Cfg.addr())
 			if err != nil {
-				return fmt.Errorf("sqlbfx: listening on %s: %w", p.Cfg.addr(), err)
+				return fmt.Errorf("fxkit: listening on %s: %w", p.Cfg.addr(), err)
 			}
 			srv.Addr = ln.Addr().String()
-			log.Info("sqlbfx: listening", "addr", srv.Addr)
+			log.Info("fxkit: listening", "addr", srv.Addr)
 
 			go func() {
 				if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					log.Error("sqlbfx: serving", "error", err)
+					log.Error("fxkit: serving", "error", err)
 				}
 			}()
 			return nil

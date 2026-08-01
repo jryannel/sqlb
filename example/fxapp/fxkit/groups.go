@@ -1,4 +1,4 @@
-package sqlbfx
+package fxkit
 
 import (
 	"io/fs"
@@ -10,14 +10,17 @@ import (
 	"github.com/jryannel/sqlb"
 )
 
-// The value-group names, namespaced so a library cannot collide with an
-// application's own groups. Modules normally never spell these: the Provide*
-// helpers below carry them.
+// The value-group names, prefixed so they cannot collide with a group some
+// other layer of the application claims — a platform package that already
+// consumes group:"migrations" is the case this is written against, and it is
+// the reason the bare names are not used even though this kit is now the
+// application's own. Modules normally never spell these: the Provide* helpers
+// below carry them, which is also what keeps the strings typed in one place.
 const (
-	GroupHooks      = "sqlbfx.hooks"
-	GroupMigrations = "sqlbfx.migrations"
-	GroupMiddleware = "sqlbfx.middleware"
-	GroupOperations = "sqlbfx.operations"
+	GroupHooks      = "fxkit.hooks"
+	GroupMigrations = "fxkit.migrations"
+	GroupMiddleware = "fxkit.middleware"
+	GroupOperations = "fxkit.operations"
 )
 
 // HookSet is the value-group element a module contributes to register its

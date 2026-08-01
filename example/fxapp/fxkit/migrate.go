@@ -1,4 +1,4 @@
-package sqlbfx
+package fxkit
 
 import (
 	"context"
@@ -36,7 +36,7 @@ type migrateParams struct {
 
 	Pool *pgxpool.Pool
 	Cfg  DBConfig
-	Sets []MigrationSet `group:"sqlbfx.migrations"`
+	Sets []MigrationSet `group:"fxkit.migrations"`
 	Log  *slog.Logger   `optional:"true"`
 }
 
@@ -53,14 +53,14 @@ func runMigrations(p migrateParams) (Migrated, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.Cfg.connectTimeout())
 	defer cancel()
 	if err := p.Pool.Ping(ctx); err != nil {
-		return Migrated{}, fmt.Errorf("sqlbfx: connecting to the database: %w", err)
+		return Migrated{}, fmt.Errorf("fxkit: connecting to the database: %w", err)
 	}
 
 	if len(p.Sets) == 0 {
 		// Not an error: a module list with no table-owning module in it is a
 		// legitimate composition, and saying so is more useful than either
 		// failing or staying quiet.
-		log.Info("sqlbfx: no migrations registered")
+		log.Info("fxkit: no migrations registered")
 		return Migrated{}, nil
 	}
 
@@ -88,11 +88,11 @@ func runMigrations(p migrateParams) (Migrated, error) {
 
 func applySet(db *sql.DB, set MigrationSet, log *slog.Logger) error {
 	if set.Module == "" {
-		return fmt.Errorf("sqlbfx: a MigrationSet has no Module name")
+		return fmt.Errorf("fxkit: a MigrationSet has no Module name")
 	}
 	sub, err := fs.Sub(set.FS, set.Dir)
 	if err != nil {
-		return fmt.Errorf("sqlbfx: %s: fs.Sub(%q): %w", set.Module, set.Dir, err)
+		return fmt.Errorf("fxkit: %s: fs.Sub(%q): %w", set.Module, set.Dir, err)
 	}
 
 	// goose keeps the tracking table name and the base FS in package-level
@@ -103,12 +103,12 @@ func applySet(db *sql.DB, set MigrationSet, log *slog.Logger) error {
 	goose.SetTableName(table)
 	goose.SetBaseFS(sub)
 	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("sqlbfx: %s: %w", set.Module, err)
+		return fmt.Errorf("fxkit: %s: %w", set.Module, err)
 	}
 
-	log.Info("sqlbfx: applying migrations", "module", set.Module, "tracking_table", table)
+	log.Info("fxkit: applying migrations", "module", set.Module, "tracking_table", table)
 	if err := goose.UpContext(context.Background(), db, "."); err != nil {
-		return fmt.Errorf("sqlbfx: %s: applying migrations: %w", set.Module, err)
+		return fmt.Errorf("fxkit: %s: applying migrations: %w", set.Module, err)
 	}
 	return nil
 }

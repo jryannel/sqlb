@@ -10,7 +10,7 @@ package spaces
 import (
 	"go.uber.org/fx"
 
-	"github.com/jryannel/sqlb/sqlbfx"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 )
 
 var Module = fx.Module("spaces",
@@ -19,9 +19,9 @@ var Module = fx.Module("spaces",
 		// which space a request speaks for is the question the scope is the
 		// answer to. Asking it through the scoped handle would be circular,
 		// and fx would say so — a cycle is a boot failure here, not a
-		// deadlock at 3am. sqlbfx.Unscoped is a type rather than a name tag,
+		// deadlock at 3am. fxkit.Unscoped is a type rather than a name tag,
 		// so the constructor's signature says which handle it takes.
 		NewDirectory,
 	),
-	sqlbfx.ProvideHooks(provideHooks),
+	fxkit.ProvideHooks(provideHooks),
 )

@@ -13,13 +13,13 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 	"github.com/jryannel/sqlb/example/fxapp/migrations"
-	"github.com/jryannel/sqlb/sqlbfx"
 )
 
 var Module = fx.Module("store",
-	sqlbfx.ProvideMigrations(provideMigrations),
-	sqlbfx.ProvideOperations(provideOperations),
+	fxkit.ProvideMigrations(provideMigrations),
+	fxkit.ProvideOperations(provideOperations),
 )
 
 // provideMigrations registers this schema's history with the kit's runner.
@@ -31,8 +31,8 @@ var Module = fx.Module("store",
 // Independent histories need independent tables — which is what ADR-0015's
 // module prefixes are for, and what a platform that forbids cross-module
 // foreign keys is buying.
-func provideMigrations() sqlbfx.MigrationSet {
-	return sqlbfx.MigrationSet{
+func provideMigrations() fxkit.MigrationSet {
+	return fxkit.MigrationSet{
 		Module: "notes",
 		FS:     migrations.FS(),
 		Dir:    ".",
@@ -44,7 +44,7 @@ func provideMigrations() sqlbfx.MigrationSet {
 // Two things about this three-line function are the example's argument.
 //
 // The handle it takes is the scoped one — the plain *sqlb.DB, not
-// sqlbfx.Unscoped — so every generated handler queries through the hooks
+// fxkit.Unscoped — so every generated handler queries through the hooks
 // the feature modules registered. Nothing in rest_gen.go mentions a space, and
 // nothing has to.
 //
@@ -52,10 +52,10 @@ func provideMigrations() sqlbfx.MigrationSet {
 // resource whose schema declares a Scoped column when no hook backs it
 // (ADR-0030), so a module list that dropped `notes.Module` produces a boot
 // failure naming store.Note. That refusal is only worth anything if it reaches
-// fx, which is why sqlbfx.OperationSet.Register has an error in its signature
+// fx, which is why fxkit.OperationSet.Register has an error in its signature
 // at all.
-func provideOperations(db *sqlb.DB) sqlbfx.OperationSet {
-	return sqlbfx.OperationSet{
+func provideOperations(db *sqlb.DB) fxkit.OperationSet {
+	return fxkit.OperationSet{
 		Module:   "store",
 		Register: func(api huma.API) error { return Register(api, db) },
 	}

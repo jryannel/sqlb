@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
+
+	"github.com/jryannel/sqlb"
 )
 
 // The context is the only channel between HTTP middleware and a sqlb hook.
@@ -14,8 +16,12 @@ import (
 // aware of it. The price is that whatever the hook needs must be in the
 // context, put there by whoever knows: here, the middleware that verified the
 // token.
-
-type claimsKey struct{}
+//
+// The carrying is sqlb's, through the principal seam; the meaning is this
+// package's. That split is the whole point of the seam being in the engine: a
+// private context key is the same six lines in every application, while Claims,
+// the fail-closed Require below and the role ranking are decisions this
+// application made and another would make differently.
 
 // ErrNoClaims is what a hook returns when it is asked to scope a query and the
 // context carries no identity.
@@ -28,14 +34,21 @@ type claimsKey struct{}
 var ErrNoClaims = errors.New("auth: request carries no authenticated identity")
 
 // WithClaims returns a context carrying the verified claims.
+//
+// Only the middleware in this package should call it, and only after the token
+// has been verified: sqlb.WithPrincipal carries whatever it is given, so an
+// unverified value stored here is trusted by every hook downstream.
 func WithClaims(ctx context.Context, c Claims) context.Context {
-	return context.WithValue(ctx, claimsKey{}, c)
+	return sqlb.WithPrincipal(ctx, c)
 }
 
 // FromContext returns the claims the middleware verified, if any.
+//
+// Claims is the type the seam is keyed by, which is why it is a named struct
+// rather than a map: it is what makes this application's principal unmistakable
+// for anyone else's in the same context.
 func FromContext(ctx context.Context) (Claims, bool) {
-	c, ok := ctx.Value(claimsKey{}).(Claims)
-	return c, ok
+	return sqlb.PrincipalFrom[Claims](ctx)
 }
 
 // Require returns the claims, or ErrNoClaims. It is what hooks call.

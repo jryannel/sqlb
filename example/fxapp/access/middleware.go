@@ -6,7 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jryannel/sqlb/sqlbfx"
+	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 )
 
 // public paths answer without a key: the liveness probe and the API document.
@@ -25,7 +26,7 @@ var public = map[string]bool{
 }
 
 // Space is the principal this module stores: the verified slug, as a named
-// type so that sqlbfx.PrincipalFrom[Space] cannot collide with any other
+// type so that sqlb.PrincipalFrom[Space] cannot collide with any other
 // module's principal. The middleware is the only writer; the hooks read it
 // back through SpaceFrom and never learn how it was verified — which is what
 // makes this module swappable for a JWT one without touching a hook
@@ -36,7 +37,7 @@ type Space string
 // tests, which need to build a context the hooks accept without going over
 // HTTP.
 func WithSpace(ctx context.Context, slug string) context.Context {
-	return sqlbfx.WithPrincipal(ctx, Space(slug))
+	return sqlb.WithPrincipal(ctx, Space(slug))
 }
 
 // SpaceFrom reports the verified space slug on the context.
@@ -45,17 +46,17 @@ func WithSpace(ctx context.Context, slug string) context.Context {
 // context and a builder, and nothing else. That is why the middleware's whole
 // output is one context value.
 func SpaceFrom(ctx context.Context) (string, bool) {
-	slug, ok := sqlbfx.PrincipalFrom[Space](ctx)
+	slug, ok := sqlb.PrincipalFrom[Space](ctx)
 	return string(slug), ok && slug != ""
 }
 
-// Middleware is this module's contribution to the sqlbfx middleware group.
+// Middleware is this module's contribution to the fxkit middleware group.
 //
 // Exported, and taken by fx as the method expression Config.Middleware, so
 // that a test can build the same value the container does rather than a
 // near-copy of it.
-func (c Config) Middleware() sqlbfx.MiddlewareSet {
-	return sqlbfx.MiddlewareSet{
+func (c Config) Middleware() fxkit.MiddlewareSet {
+	return fxkit.MiddlewareSet{
 		Module: "access",
 		// Before anything that reads the space from the context, and after
 		// chi's RequestID and Recoverer, which the kit installs itself.

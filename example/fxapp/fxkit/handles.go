@@ -1,4 +1,4 @@
-package sqlbfx
+package fxkit
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ import (
 // allowed to pass it is exactly the thing being controlled. A type is also
 // grep-able the same way the example's `name:"unscoped"` tag was, and cannot
 // be misspelled in a string only fx.ValidateApp would catch. Grep for
-// sqlbfx.Unscoped to see every consumer.
+// fxkit.Unscoped to see every consumer.
 type Unscoped struct {
 	*sqlb.DB
 }
@@ -45,7 +45,7 @@ type scopedParams struct {
 	fx.In
 
 	Unscoped Unscoped
-	Sets     []HookSet    `group:"sqlbfx.hooks"`
+	Sets     []HookSet    `group:"fxkit.hooks"`
 	Log      *slog.Logger `optional:"true"`
 }
 
@@ -67,14 +67,14 @@ func newScoped(p scopedParams) (*sqlb.DB, error) {
 	names := make([]string, 0, len(ordered))
 	for _, set := range ordered {
 		if set.Register == nil {
-			return nil, fmt.Errorf("sqlbfx: the %q hook set has no Register function", set.Module)
+			return nil, fmt.Errorf("fxkit: the %q hook set has no Register function", set.Module)
 		}
 		if err := set.Register(reg); err != nil {
-			return nil, fmt.Errorf("sqlbfx: registering %s hooks: %w", set.Module, err)
+			return nil, fmt.Errorf("fxkit: registering %s hooks: %w", set.Module, err)
 		}
 		names = append(names, set.Module)
 	}
 
-	logger(p.Log).Info("sqlbfx: hooks registered", "modules", names)
+	logger(p.Log).Info("fxkit: hooks registered", "modules", names)
 	return p.Unscoped.WithHooks(reg), nil
 }

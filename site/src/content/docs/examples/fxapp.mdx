@@ -42,7 +42,7 @@ func NewScoped(unscoped *sqlb.DB, sets []HookSet, log *slog.Logger) (*sqlb.DB, e
     reg := sqlb.NewRegistry()
     for _, set := range sets {
         if err := set.Register(reg); err != nil {
-            return nil, fmt.Errorf("sqlbkit: registering %s hooks: %w", set.Module, err)
+            return nil, fmt.Errorf("fxkit: registering %s hooks: %w", set.Module, err)
         }
     }
     return unscoped.WithHooks(reg), nil
@@ -71,7 +71,7 @@ boots the reduced module list and requires the failure, because a guard nobody
 has watched refuse is a claim rather than a check
 ([ADR-0016](/sqlb/adr/0016-guards-proven-both-ways/)).
 
-**That ordering is better expressed as a type than as a list.** `dbbase.Migrated`
+**That ordering is better expressed as a type than as a list.** `fxkit.Migrated`
 is an empty struct meaning "every registered migration set has been applied".
 The sqlb handle takes one, so every query in the process is downstream of the
 migrations by construction — no module list can be written in an order that
@@ -80,25 +80,36 @@ queries a table that does not exist yet.
 **That the unscoped handle is a named value, not a flag.** Two jobs cannot be
 scoped, because they run before there is anything to scope by: provisioning the
 configured tenants at boot, and resolving a key to the tenant the hooks then
-filter on. Both ask for `name:"unscoped"`, so `grep` lists every consumer — a
-"skip the hooks" boolean would instead be something any caller could pass, and
-which callers may pass it is the whole question.
+filter on. Both ask for `fxkit.Unscoped`, a distinct type, so `grep` lists every
+consumer — a "skip the hooks" boolean would instead be something any caller
+could pass, and which callers may pass it is the whole question. A type also
+cannot be misspelled the way a `name:"unscoped"` string tag can, which is what
+it replaced.
 
 ## The shape of it
 
 ```
-logs ── dbbase ── Migrated ─┬─ unscoped handle ── spaces.Directory ─┐
+logs ──── fxkit ── Migrated ─┬─ unscoped handle ── spaces.Directory ─┐
                             │                                       │
                             └───────────── scoped handle ◀── hooks ─┘
                                                  │
-                            httpkit.API ◀── operations ── store (generated)
+                              huma.API ◀── operations ── store (generated)
                                                        └── notes  (hand-written)
 ```
 
-Four platform modules that would be the same in any application — `logs`,
-`dbbase`, `sqlbkit`, `httpkit` — and four that are this one: `store`, `access`,
+Two platform modules that would be the same in any application — `logs` and
+`fxkit`, which is the pool, the migration runner, the handles and the HTTP
+surface in one package — and four that are this one: `store`, `access`,
 `spaces`, `notes`. That split is what a platform repository makes into two
 packages: a standard stack every product composes, and the product.
+
+`fxkit` is glue to copy rather than a library to import. It was briefly a
+published module and is not one now
+([ADR-0044](/sqlb/adr/0044-the-container-is-an-adapter/) has the reversal):
+nearly all of it is opinion — chi, humachi, goose, `log/slog` — and opinions
+that load-bearing are better adapted in a file you own. Its `doc.go` states the
+four obligations a copy has to preserve, of which the boot refusal above is the
+first.
 
 ## What it is not
 

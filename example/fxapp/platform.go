@@ -8,12 +8,12 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/jryannel/sqlb/example/fxapp/config"
+	"github.com/jryannel/sqlb/example/fxapp/fxkit"
 	"github.com/jryannel/sqlb/example/fxapp/logs"
-	"github.com/jryannel/sqlb/sqlbfx"
 )
 
-// Platform is the reusable half of the module list: the logger, and the sqlbfx
-// kit fed by this application's configuration.
+// Platform is the reusable half of the module list: the logger, and the fxkit
+// glue fed by this application's configuration.
 //
 // The kit reads no environment variable — DBConfig and HTTPConfig are the
 // application's to provide, from wherever it keeps configuration (ADR-0044).
@@ -24,33 +24,33 @@ func Platform() fx.Option {
 	return fx.Options(
 		logs.Module,
 		fx.Provide(newDBConfig, newHTTPConfig),
-		sqlbfx.Module(),
+		fxkit.Module(),
 	)
 }
 
 // newDBConfig reads FXAPP_DATABASE_URL and the pool variables.
-func newDBConfig() (sqlbfx.DBConfig, error) {
+func newDBConfig() (fxkit.DBConfig, error) {
 	dsn, err := config.Require("DATABASE_URL")
 	if err != nil {
-		return sqlbfx.DBConfig{}, fmt.Errorf("fxapp: %w", err)
+		return fxkit.DBConfig{}, fmt.Errorf("fxapp: %w", err)
 	}
 	maxConns, err := config.Int("DB_MAX_OPEN_CONNS", 20)
 	if err != nil {
-		return sqlbfx.DBConfig{}, fmt.Errorf("fxapp: %w", err)
+		return fxkit.DBConfig{}, fmt.Errorf("fxapp: %w", err)
 	}
 	minIdle, err := config.Int("DB_MAX_IDLE_CONNS", 10)
 	if err != nil {
-		return sqlbfx.DBConfig{}, fmt.Errorf("fxapp: %w", err)
+		return fxkit.DBConfig{}, fmt.Errorf("fxapp: %w", err)
 	}
 	lifetime, err := config.Duration("DB_CONN_MAX_LIFETIME", time.Hour)
 	if err != nil {
-		return sqlbfx.DBConfig{}, fmt.Errorf("fxapp: %w", err)
+		return fxkit.DBConfig{}, fmt.Errorf("fxapp: %w", err)
 	}
 	connect, err := config.Duration("DB_CONNECT_TIMEOUT", 10*time.Second)
 	if err != nil {
-		return sqlbfx.DBConfig{}, fmt.Errorf("fxapp: %w", err)
+		return fxkit.DBConfig{}, fmt.Errorf("fxapp: %w", err)
 	}
-	return sqlbfx.DBConfig{
+	return fxkit.DBConfig{
 		DSN:             dsn,
 		MaxConns:        int32(maxConns),
 		MinIdleConns:    int32(minIdle),
@@ -62,12 +62,12 @@ func newDBConfig() (sqlbfx.DBConfig, error) {
 // newHTTPConfig reads FXAPP_ADDR and FXAPP_SHUTDOWN_TIMEOUT, and carries the
 // parts of the OpenAPI document the application owns: what it is called, and
 // how a caller authenticates.
-func newHTTPConfig() (sqlbfx.HTTPConfig, error) {
+func newHTTPConfig() (fxkit.HTTPConfig, error) {
 	timeout, err := config.Duration("SHUTDOWN_TIMEOUT", 15*time.Second)
 	if err != nil {
-		return sqlbfx.HTTPConfig{}, fmt.Errorf("fxapp: %w", err)
+		return fxkit.HTTPConfig{}, fmt.Errorf("fxapp: %w", err)
 	}
-	return sqlbfx.HTTPConfig{
+	return fxkit.HTTPConfig{
 		Addr:            config.Get("ADDR", ":8080"),
 		Title:           "Notes",
 		Version:         "1.0.0",
