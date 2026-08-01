@@ -101,6 +101,29 @@ Named in advance, so the break is a documented plan rather than a surprise.
   changes meaning. [ADR-0027](adr/0027-keyset-pagination.md) says what would
   make it worth building.
 
+### Three that broke without being listed here first
+
+`v0.6.0` broke three surfaces that were not under *Will move*, and the honest
+version is that all three came out of consumer reports rather than a plan. The
+[release notes](releases.md#v060) carry each with its mechanical edit, which is
+the other half of the promise above; this is the half that was missed, recorded
+where the announcement should have been.
+
+- **A computed column is opt-in.** `sqlb.Query[T]()` no longer projects declared
+  computed columns; `WithComputed(names…)` asks for them, and
+  `rest.Options.Computed` is the hand-written mount's form. A generated resource
+  opts into its own table's, so generated endpoints are unchanged. It broke
+  because the default charged every reader of a shared model for one screen's
+  aggregates, and made an existence check by id fail for want of a bind it had
+  no business supplying.
+- **The generated Go client is its own package.** `cli.New` takes a
+  `*client.Client` from the emitted `client` package. Regenerate, then the edit
+  is in the four-line main. It broke because a program wanting the typed encoder
+  could not take it without also taking cobra.
+- **A nil member of `OneOf` widens the set** rather than binding a `NULL` that
+  could never match. Hand-written Go only — the filter grammar has a separate
+  `isnull` operator and never routes a nil through `OneOf`.
+
 One behavioural change landed with cursors and is worth stating plainly, because
 it affects requests that do not use them: **every list is now ordered
 deterministically**, since `filter.Apply` appends the primary key when the sort
