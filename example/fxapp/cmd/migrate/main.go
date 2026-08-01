@@ -4,7 +4,7 @@
 //	go run ./cmd/migrate -force     rewrite them, for editing the schema in development
 //
 // It does not apply anything. sqlb produces migration files and stops there;
-// the runner is goose, invoked by the dbbase module at startup and by the
+// the runner is goose, invoked by the sqlbfx kit at startup and by the
 // tests. That split is the point — see example/tasks/cmd/migrate, which says
 // it at length, and whose second migration is the interesting case this one
 // does not have.

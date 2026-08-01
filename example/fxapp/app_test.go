@@ -14,11 +14,7 @@ import (
 
 	"github.com/jryannel/sqlb/example/fxapp"
 	"github.com/jryannel/sqlb/example/fxapp/access"
-	"github.com/jryannel/sqlb/example/fxapp/dbbase"
-	"github.com/jryannel/sqlb/example/fxapp/httpkit"
-	"github.com/jryannel/sqlb/example/fxapp/logs"
 	"github.com/jryannel/sqlb/example/fxapp/spaces"
-	"github.com/jryannel/sqlb/example/fxapp/sqlbkit"
 	"github.com/jryannel/sqlb/example/fxapp/store"
 )
 
@@ -224,7 +220,7 @@ func TestAccessIsRequired(t *testing.T) {
 // one removes notes.Module — the only contributor of hooks for store.Note —
 // and requires the boot to fail. sqlb refuses to mount a resource whose schema
 // declares a Scoped column with no registration behind it (ADR-0030), the
-// generated Register returns that refusal, httpkit's OperationSet carries it
+// generated Register returns that refusal, sqlbfx's OperationSet carries it
 // out, and fx reports it instead of listening.
 //
 // Without this assertion, "the container makes the ordering structural" would
@@ -239,10 +235,7 @@ func TestResourcesRefuseToMountWithoutHooks(t *testing.T) {
 	// rather than subtracted, because an fx.Options bundle is opaque — which
 	// is itself worth knowing before organising an application this way.
 	app := fx.New(
-		logs.Module,
-		dbbase.Module,
-		sqlbkit.Module,
-		httpkit.Module,
+		fxapp.Platform(),
 		store.Module,
 		access.Module,
 		spaces.Module,
@@ -289,7 +282,7 @@ func boot(t *testing.T, dsn string) *server {
 
 	t.Setenv("FXAPP_DATABASE_URL", dsn)
 	t.Setenv("FXAPP_SPACE_KEYS", keys)
-	// Port zero: the OS picks, and httpkit reports what it got, so two tests
+	// Port zero: the OS picks, and the kit reports what it got, so two tests
 	// running at once cannot collide on 8080.
 	t.Setenv("FXAPP_ADDR", "127.0.0.1:0")
 	t.Setenv("FXAPP_LOG_LEVEL", "warn")

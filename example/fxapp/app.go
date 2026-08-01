@@ -9,7 +9,7 @@
 // # What to read, and in what order
 //
 //	noteschema/schema.go   the source of truth: two tables, one of them a tenant
-//	sqlbkit/handles.go     the hook registry, assembled from a value group
+//	platform.go            the sqlbfx kit, fed by this application's configuration
 //	store/module.go        the generated resources, mounted on the scoped handle
 //	notes/hooks.go         the space boundary, one registration per statement kind
 //	app_test.go            the claims above, asserted — including the one that fails
@@ -19,12 +19,8 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/jryannel/sqlb/example/fxapp/access"
-	"github.com/jryannel/sqlb/example/fxapp/dbbase"
-	"github.com/jryannel/sqlb/example/fxapp/httpkit"
-	"github.com/jryannel/sqlb/example/fxapp/logs"
 	"github.com/jryannel/sqlb/example/fxapp/notes"
 	"github.com/jryannel/sqlb/example/fxapp/spaces"
-	"github.com/jryannel/sqlb/example/fxapp/sqlbkit"
 	"github.com/jryannel/sqlb/example/fxapp/store"
 )
 
@@ -35,20 +31,20 @@ import (
 // is decided by the parameters each constructor declares. The list is grouped
 // and commented for a reader, not for the container.
 //
-// What the grouping does say is where the seams are. The first group knows
-// nothing about notes or spaces and would be the same in any application; the
-// second is this one. That is the split a platform repository makes into two
-// modules — see the studio-apps/core layout, where the first group is an
+// What the grouping does say is where the seams are. Platform knows nothing
+// about notes or spaces and would be the same in any application; the rest is
+// this one. That is the split a platform repository makes into two modules —
+// see the studio-apps/core layout, where the first half is an
 // appbase.Standard() every product composes and the second is the product.
+// The four glue packages this example used to hand-write (dbbase, sqlbkit,
+// httpkit) are now the sqlbfx kit they were promoted into (ADR-0044), and
+// platform.go is what is left: the configuration boundary.
 func Modules() fx.Option {
 	return fx.Options(
-		// Platform. Reusable as-is: a logger, a connection and a migration
-		// runner, the sqlb handles, an HTTP surface with three value groups
-		// hanging off it.
-		logs.Module,
-		dbbase.Module,
-		sqlbkit.Module,
-		httpkit.Module,
+		// Platform: the logger and the sqlbfx kit — pool, migrations, the
+		// scoped and unscoped handles, chi + Huma, and the four value groups
+		// the modules below contribute to.
+		Platform(),
 
 		// This application. The schema's generated surface, who may speak for
 		// a space, the tenant, and the feature.

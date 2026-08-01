@@ -8,11 +8,13 @@
 // app_test.go asserts.
 package notes
 
-import "go.uber.org/fx"
+import (
+	"go.uber.org/fx"
+
+	"github.com/jryannel/sqlb/sqlbfx"
+)
 
 var Module = fx.Module("notes",
-	fx.Provide(
-		fx.Annotate(provideHooks, fx.ResultTags(`group:"hooks"`)),
-		fx.Annotate(provideOperations, fx.ResultTags(`group:"http-operations"`)),
-	),
+	sqlbfx.ProvideHooks(provideHooks),
+	sqlbfx.ProvideOperations(provideOperations),
 )

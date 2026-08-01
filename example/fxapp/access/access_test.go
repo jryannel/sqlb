@@ -55,7 +55,7 @@ func TestMiddleware(t *testing.T) {
 	}
 
 	// The middleware reaches the test through the value group, the same way
-	// httpkit gets it — so a change to the Order or the Module name is visible
+	// the kit gets it — so a change to the Order or the Module name is visible
 	// here rather than only at boot.
 	set := cfg.Middleware()
 	if set.Module != "access" {

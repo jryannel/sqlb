@@ -9,8 +9,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/jryannel/sqlb"
-	"github.com/jryannel/sqlb/example/fxapp/httpkit"
 	"github.com/jryannel/sqlb/example/fxapp/store"
+	"github.com/jryannel/sqlb/sqlbfx"
 )
 
 // provideOperations contributes the one endpoint the generator does not write.
@@ -20,8 +20,8 @@ import (
 // module. This is the other half: a module that owns a feature adds its
 // hand-written operations to the same group, and they land on the same API and
 // in the same OpenAPI document.
-func provideOperations(db *sqlb.DB) httpkit.OperationSet {
-	return httpkit.OperationSet{
+func provideOperations(db *sqlb.DB) sqlbfx.OperationSet {
+	return sqlbfx.OperationSet{
 		Module:   "notes",
 		Register: func(api huma.API) error { return registerInsights(api, db) },
 	}

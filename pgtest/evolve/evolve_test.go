@@ -16,7 +16,7 @@
 // expects to find the blog example's tables there and nothing else, so this
 // cannot live beside them.
 //
-// shadow.NormalizeChecks also rewrites the declared check expressions in place,
+// shadow.Normalize also rewrites the declared check expressions in place,
 // and there is one registry with no way to diff against a copy. A binary of its
 // own bounds that too. example/tasks/migrations/drift_test.go is the same
 // arrangement for the same two reasons.
@@ -119,7 +119,7 @@ func TestTheHistoryStillBuildsTheDeclaredSchema(t *testing.T) {
 
 	// Without this the enum CHECKs come back in Postgres's spelling and the
 	// declaration in the author's, and the diff below is never empty.
-	unprobed, err := shadow.NormalizeChecks(ctx, pool, target, shadow.Options{})
+	unprobed, err := shadow.Normalize(ctx, pool, target, shadow.Options{})
 	if err != nil {
 		t.Fatalf("normalising the declared checks: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestTheReplayedDatabaseShowsWhatEachRevisionDid(t *testing.T) {
 }
 
 // snapshotChecks records the declared check expressions so they can be put back
-// after NormalizeChecks rewrites them, since the second test in this package
+// after Normalize rewrites them, since the second test in this package
 // should not inherit a registry in Postgres's spelling.
 func snapshotChecks(reg *schema.Registry) map[*schema.TableDef]map[string]string {
 	out := map[*schema.TableDef]map[string]string{}
