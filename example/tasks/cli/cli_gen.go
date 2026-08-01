@@ -3,12 +3,8 @@
 package cli
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,328 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jryannel/sqlb/example/tasks/cli/client"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-// ------------------------------------------------------------------- runtime
-
-// Request is one call to the API, as the generated commands describe it.
-type Request struct {
-	Method string
-	// Path is measured from the API root and already encoded, e.g. "/tasks/6b1e".
-	Path string
-	// Query is the source of the query string. Repeating a key conjoins filter
-	// conditions, which is why this is url.Values rather than a map of strings.
-	Query url.Values
-	// Body is marshalled as JSON when it is not nil.
-	Body any
-}
-
-// Transport issues one request and returns the decoded response body, or nil
-// where the response carried none.
-//
-// Everything the schema cannot derive lives behind this: the base URL, the
-// credential, retry, and what a 401 does. Client implements one over net/http,
-// and setting Client.Transport replaces it — which is the seam to use for a
-// test that must not open a socket, or for a caller whose auth is a signature
-// rather than a bearer token.
-type Transport func(ctx context.Context, req Request) (json.RawMessage, error)
-
-// Client is the configuration a schema cannot supply. The root command binds
-// its fields to persistent flags.
-type Client struct {
-	// BaseURL is the root of the API, without a trailing slash.
-	BaseURL string
-	// Token is sent as an Authorization: Bearer header when it is set.
-	Token string
-	// Timeout bounds a single request. Zero means no timeout.
-	Timeout time.Duration
-	// Compact writes each response on one line rather than indenting it.
-	Compact bool
-	// Verbose logs each request's method and URL to Stderr.
-	Verbose bool
-
-	// HTTP is the client the built-in transport issues requests through.
-	// Leaving it nil builds one from Timeout.
-	HTTP *http.Client
-	// Transport replaces the built-in one entirely. Set it and BaseURL, Token,
-	// Timeout and HTTP are yours to honour or ignore.
-	//
-	// Do is still reachable, and does not consult this field, so wrapping the
-	// built-in transport rather than replacing it is a closure that ends in a
-	// call to it:
-	//
-	//	c.Transport = func(ctx context.Context, req Request) (json.RawMessage, error) {
-	//	    req.Query.Set("trace", traceID(ctx))
-	//	    return c.Do(ctx, req)
-	//	}
-	Transport Transport
-	// Stderr receives verbose logging. Defaults to os.Stderr.
-	Stderr io.Writer
-}
-
-// maxResponseBytes caps what one response may occupy in memory. A page is
-// bounded by the resource's ceiling, so reaching this means something upstream
-// is not the API this client was generated against.
-const maxResponseBytes = 64 << 20
-
-func (c *Client) stderr() io.Writer {
-	if c.Stderr != nil {
-		return c.Stderr
-	}
-	return os.Stderr
-}
-
-func (c *Client) transport() Transport {
-	if c.Transport != nil {
-		return c.Transport
-	}
-	return c.Do
-}
-
-// Do is the built-in transport, over net/http.
-//
-// It is exported so that a caller replacing Transport can still delegate to
-// it; it does not consult Transport itself, so doing so cannot recurse.
-func (c *Client) Do(ctx context.Context, req Request) (json.RawMessage, error) {
-	base := strings.TrimSuffix(c.BaseURL, "/")
-	if base == "" {
-		return nil, errors.New("no API address: pass --base-url")
-	}
-	u := base + req.Path
-	if len(req.Query) > 0 {
-		// Encode sorts by key, so the same flags always produce the same URL —
-		// which is what makes a request comparable in a log and cacheable by a
-		// proxy in front of the API.
-		u += "?" + req.Query.Encode()
-	}
-
-	var payload io.Reader
-	if req.Body != nil {
-		raw, err := json.Marshal(req.Body)
-		if err != nil {
-			return nil, fmt.Errorf("encoding the request body: %w", err)
-		}
-		payload = bytes.NewReader(raw)
-	}
-
-	r, err := http.NewRequestWithContext(ctx, req.Method, u, payload)
-	if err != nil {
-		return nil, err
-	}
-	r.Header.Set("Accept", "application/json")
-	if req.Body != nil {
-		r.Header.Set("Content-Type", "application/json")
-	}
-	if c.Token != "" {
-		r.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	if c.Verbose {
-		fmt.Fprintln(c.stderr(), req.Method, u)
-	}
-
-	client := c.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: c.Timeout}
-	}
-	resp, err := client.Do(r)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return nil, fmt.Errorf("reading the response: %w", err)
-	}
-	if resp.StatusCode >= 400 {
-		return nil, problemFrom(resp.StatusCode, body)
-	}
-	if resp.StatusCode == http.StatusNoContent || len(bytes.TrimSpace(body)) == 0 {
-		return nil, nil
-	}
-	return json.RawMessage(body), nil
-}
-
-// run issues one request and writes the response to the command's stdout.
-func (c *Client) run(cmd *cobra.Command, req Request, all bool) error {
-	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	var (
-		raw json.RawMessage
-		err error
-	)
-	if all {
-		raw, err = listAll(ctx, c.transport(), req)
-	} else {
-		raw, err = c.transport()(ctx, req)
-	}
-	if err != nil {
-		return err
-	}
-	// A delete answers 204, and there is nothing to print. Writing "null" would
-	// make a shell test for emptiness fail.
-	if len(raw) == 0 {
-		return nil
-	}
-	return writeJSON(cmd.OutOrStdout(), raw, c.Compact)
-}
-
-// listAll walks a collection by cursor and returns every row as one page.
-//
-// This is the loop a caller writes by hand, and it pages with `?cursor=` rather
-// than `?page=`: a walk that counts to its position costs more with every page
-// and can read a row twice when the table is written to underneath it, which is
-// exactly what a long walk makes likely.
-func listAll(ctx context.Context, t Transport, req Request) (json.RawMessage, error) {
-	type page struct {
-		Items      []json.RawMessage `json:"items"`
-		HasMore    bool              `json:"has_more"`
-		NextCursor *string           `json:"next_cursor,omitempty"`
-		Total      *int64            `json:"total,omitempty"`
-	}
-
-	out := page{Items: []json.RawMessage{}}
-	q := cloneValues(req.Query)
-	seen := map[string]bool{}
-
-	for {
-		req.Query = q
-		raw, err := t(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		var p page
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return nil, fmt.Errorf("walking the collection: the response is not a list page: %w", err)
-		}
-		out.Items = append(out.Items, p.Items...)
-		// The total describes the whole result set rather than the page, so the
-		// first response's answer is the answer.
-		if out.Total == nil {
-			out.Total = p.Total
-		}
-		if p.NextCursor == nil || *p.NextCursor == "" {
-			break
-		}
-		// A server that answered with the cursor it was handed would otherwise
-		// spin here forever, reading one page over and over.
-		if seen[*p.NextCursor] {
-			return nil, fmt.Errorf("the server repeated cursor %q; stopping rather than paging forever", *p.NextCursor)
-		}
-		seen[*p.NextCursor] = true
-
-		q = cloneValues(q)
-		q.Set("cursor", *p.NextCursor)
-		// A cursor names a position, so a page number or an offset alongside it
-		// is a second, contradictory answer to the same question.
-		q.Del("page")
-		q.Del("offset")
-	}
-	return json.Marshal(out)
-}
-
-func cloneValues(v url.Values) url.Values {
-	out := make(url.Values, len(v))
-	for k, values := range v {
-		out[k] = append([]string(nil), values...)
-	}
-	return out
-}
-
-// writeJSON writes a response body, indented unless asked otherwise.
-func writeJSON(w io.Writer, raw json.RawMessage, compact bool) error {
-	var buf bytes.Buffer
-	if compact {
-		if err := json.Compact(&buf, raw); err != nil {
-			return err
-		}
-	} else if err := json.Indent(&buf, raw, "", "  "); err != nil {
-		return err
-	}
-	buf.WriteByte('\n')
-	_, err := w.Write(buf.Bytes())
-	return err
-}
-
-// Problem is the RFC 9457 document every rejection returns.
-type Problem struct {
-	Type   string `json:"type,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Status int    `json:"status,omitempty"`
-	Detail string `json:"detail,omitempty"`
-	// Errors lists every problem found, not only the first, so a malformed
-	// request takes one round trip to fix rather than one per mistake.
-	Errors []*ProblemDetail `json:"errors,omitempty"`
-}
-
-// ProblemDetail is one rejected parameter or field.
-type ProblemDetail struct {
-	Message  string `json:"message"`
-	Location string `json:"location,omitempty"`
-	Value    any    `json:"value,omitempty"`
-	// Allowed is what would have been accepted instead, where the set is
-	// finite. It is the half of a rejection that turns a dead end into a fix,
-	// and printing it is most of the reason this client renders errors itself
-	// rather than echoing the response body.
-	Allowed []string `json:"allowed,omitempty"`
-}
-
-// Error renders the document as the message the caller sees on stderr.
-func (p *Problem) Error() string {
-	head := p.Detail
-	if head == "" {
-		head = p.Title
-	}
-	if head == "" {
-		head = "the request was rejected"
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s (HTTP %d)", head, p.Status)
-	for _, d := range p.Errors {
-		b.WriteString("\n  ")
-		if d.Location != "" {
-			b.WriteString(d.Location + ": ")
-		}
-		b.WriteString(d.Message)
-		if len(d.Allowed) > 0 {
-			fmt.Fprintf(&b, "\n    allowed: %s", strings.Join(d.Allowed, ", "))
-		}
-	}
-	return b.String()
-}
-
-// problemFrom decodes an error response, falling back to the status line for a
-// body this client did not produce — a proxy's 502 page, say.
-func problemFrom(status int, body []byte) error {
-	var p Problem
-	if err := json.Unmarshal(body, &p); err == nil && (p.Status != 0 || p.Detail != "" || len(p.Errors) > 0) {
-		if p.Status == 0 {
-			p.Status = status
-		}
-		return &p
-	}
-	text := strings.TrimSpace(string(body))
-	if len(text) > 512 {
-		text = text[:512] + "..."
-	}
-	if text == "" {
-		return errors.New("HTTP " + strconv.Itoa(status))
-	}
-	return errors.New("HTTP " + strconv.Itoa(status) + ": " + text)
-}
-
-// itemPath addresses one row. The path template is always {id} whatever the
-// primary key column is called, because the URL names the resource's identity
-// rather than its storage.
-func itemPath(collection, id string) string {
-	return collection + "/" + url.PathEscape(id)
-}
+// --------------------------------------------------------------------- cobra
 
 // setNullFields records an explicit null for each named column.
 //
@@ -393,6 +73,17 @@ func orDuration(configured, def time.Duration) time.Duration {
 	return def
 }
 
+// runRequest bridges cobra to the client's Run: the command supplies the
+// context and the output stream, and everything else is the client package's.
+//
+// Named runRequest rather than run because a generated unexported identifier
+// shares a package with whatever the consumer writes beside it, and run is a
+// name a hand-written file in a command package is likely to want — the tasks
+// example had one.
+func runRequest(c *client.Client, cmd *cobra.Command, req client.Request, all bool) error {
+	return c.Run(cmd.Context(), cmd.OutOrStdout(), req, all)
+}
+
 // normalizeFlag accepts a column's own spelling as well as the kebab-case one
 // cobra conventionally uses, so a name read out of sqlb.json or out of an error
 // response can be typed verbatim.
@@ -424,9 +115,9 @@ func registerCompletion(cmd *cobra.Command, flag string, values []string) {
 //	        os.Exit(1)
 //	    }
 //	}
-func New(c *Client) *cobra.Command {
+func New(c *client.Client) *cobra.Command {
 	if c == nil {
-		c = &Client{}
+		c = &client.Client{}
 	}
 	root := &cobra.Command{
 		Use:   "taskctl",
@@ -475,7 +166,7 @@ what that resource accepts.`,
 // ---------------------------------------------------------------- /comments
 
 // newCommentsCommand groups the operations /comments exposes.
-func newCommentsCommand(c *Client) *cobra.Command {
+func newCommentsCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "comments",
 		Short: "A comment on a task",
@@ -487,7 +178,7 @@ func newCommentsCommand(c *Client) *cobra.Command {
 }
 
 // newCommentsListCommand is GET /comments.
-func newCommentsListCommand(c *Client) *cobra.Command {
+func newCommentsListCommand(c *client.Client) *cobra.Command {
 	var (
 		filterID          []string
 		filterWorkspaceID []string
@@ -570,7 +261,7 @@ filtered, sorted or searched by any spelling.`,
 			if all && (cmd.Flags().Changed("page") || cursor != "") {
 				return errors.New("--all walks the result set with cursors, so it cannot be combined with --page or --cursor")
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: "/comments", Query: q}, all)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: "/comments", Query: q}, all)
 		},
 	}
 	flags := cmd.Flags()
@@ -616,7 +307,7 @@ cursor, so a concurrent insert cannot make it read a row twice.`)
 }
 
 // newCommentsGetCommand is GET /comments/{id}.
-func newCommentsGetCommand(c *Client) *cobra.Command {
+func newCommentsGetCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <id>",
 		Short: "Fetch one comment by primary key",
@@ -628,14 +319,14 @@ other rather than answering a question that was not asked.`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := url.Values{}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: itemPath("/comments", args[0]), Query: q}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath("/comments", args[0]), Query: q}, false)
 		},
 	}
 	return cmd
 }
 
 // newCommentsCreateCommand is Post /comments.
-func newCommentsCreateCommand(c *Client) *cobra.Command {
+func newCommentsCreateCommand(c *client.Client) *cobra.Command {
 	var (
 		valTaskID string
 		valBody   string
@@ -659,7 +350,7 @@ value overwriting it.`,
 			if cmd.Flags().Changed("body") {
 				body["body"] = valBody
 			}
-			return c.run(cmd, Request{Method: http.MethodPost, Path: "/comments", Body: body}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: "/comments", Body: body}, false)
 		},
 	}
 	flags := cmd.Flags()
@@ -675,7 +366,7 @@ value overwriting it.`,
 // ------------------------------------------------------------------- /lists
 
 // newListsCommand groups the operations /lists exposes.
-func newListsCommand(c *Client) *cobra.Command {
+func newListsCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "lists",
 		Short: "A named list of tasks within a workspace",
@@ -688,7 +379,7 @@ func newListsCommand(c *Client) *cobra.Command {
 }
 
 // newListsListCommand is GET /lists.
-func newListsListCommand(c *Client) *cobra.Command {
+func newListsListCommand(c *client.Client) *cobra.Command {
 	var (
 		filterID          []string
 		filterWorkspaceID []string
@@ -779,7 +470,7 @@ filtered, sorted or searched by any spelling.`,
 			if all && (cmd.Flags().Changed("page") || cursor != "") {
 				return errors.New("--all walks the result set with cursors, so it cannot be combined with --page or --cursor")
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: "/lists", Query: q}, all)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: "/lists", Query: q}, all)
 		},
 	}
 	flags := cmd.Flags()
@@ -831,7 +522,7 @@ cursor, so a concurrent insert cannot make it read a row twice.`)
 }
 
 // newListsGetCommand is GET /lists/{id}.
-func newListsGetCommand(c *Client) *cobra.Command {
+func newListsGetCommand(c *client.Client) *cobra.Command {
 	var expand []string
 	cmd := &cobra.Command{
 		Use:   "get <id>",
@@ -850,7 +541,7 @@ other rather than answering a question that was not asked.`,
 			if len(expand) > 0 {
 				q.Set("expand", strings.Join(expand, ","))
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: itemPath("/lists", args[0]), Query: q}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath("/lists", args[0]), Query: q}, false)
 		},
 	}
 	cmd.Flags().StringSliceVar(&expand, "expand", nil,
@@ -860,7 +551,7 @@ other rather than answering a question that was not asked.`,
 }
 
 // newListsCreateCommand is Post /lists.
-func newListsCreateCommand(c *Client) *cobra.Command {
+func newListsCreateCommand(c *client.Client) *cobra.Command {
 	var (
 		valName        string
 		valDescription string
@@ -896,7 +587,7 @@ value overwriting it.`,
 			if cmd.Flags().Changed("archived") {
 				body["archived"] = valArchived
 			}
-			return c.run(cmd, Request{Method: http.MethodPost, Path: "/lists", Body: body}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: "/lists", Body: body}, false)
 		},
 	}
 	flags := cmd.Flags()
@@ -916,7 +607,7 @@ value overwriting it.`,
 }
 
 // newListsUpdateCommand is Patch /lists/{id}.
-func newListsUpdateCommand(c *Client) *cobra.Command {
+func newListsUpdateCommand(c *client.Client) *cobra.Command {
 	var (
 		valName        string
 		valDescription string
@@ -955,7 +646,7 @@ once, at create.`,
 			if len(body) == 0 {
 				return errors.New("nothing to update: pass at least one field flag")
 			}
-			return c.run(cmd, Request{Method: http.MethodPatch, Path: itemPath("/lists", args[0]), Body: body}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodPatch, Path: client.ItemPath("/lists", args[0]), Body: body}, false)
 		},
 	}
 	flags := cmd.Flags()
@@ -975,7 +666,7 @@ once, at create.`,
 // ------------------------------------------------------------- /memberships
 
 // newMembershipsCommand groups the operations /memberships exposes.
-func newMembershipsCommand(c *Client) *cobra.Command {
+func newMembershipsCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "memberships",
 		Short: "A user's membership of a workspace, and their role in it",
@@ -988,7 +679,7 @@ func newMembershipsCommand(c *Client) *cobra.Command {
 }
 
 // newMembershipsListCommand is GET /memberships.
-func newMembershipsListCommand(c *Client) *cobra.Command {
+func newMembershipsListCommand(c *client.Client) *cobra.Command {
 	var (
 		filterID          []string
 		filterWorkspaceID []string
@@ -1063,7 +754,7 @@ filtered, sorted or searched by any spelling.`,
 			if all && (cmd.Flags().Changed("page") || cursor != "") {
 				return errors.New("--all walks the result set with cursors, so it cannot be combined with --page or --cursor")
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: "/memberships", Query: q}, all)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: "/memberships", Query: q}, all)
 		},
 	}
 	flags := cmd.Flags()
@@ -1106,7 +797,7 @@ cursor, so a concurrent insert cannot make it read a row twice.`)
 }
 
 // newMembershipsGetCommand is GET /memberships/{id}.
-func newMembershipsGetCommand(c *Client) *cobra.Command {
+func newMembershipsGetCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <id>",
 		Short: "Fetch one membership by primary key",
@@ -1118,14 +809,14 @@ other rather than answering a question that was not asked.`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := url.Values{}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: itemPath("/memberships", args[0]), Query: q}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath("/memberships", args[0]), Query: q}, false)
 		},
 	}
 	return cmd
 }
 
 // newMembershipsCreateCommand is Post /memberships.
-func newMembershipsCreateCommand(c *Client) *cobra.Command {
+func newMembershipsCreateCommand(c *client.Client) *cobra.Command {
 	var (
 		valUserID string
 		valRole   string
@@ -1149,7 +840,7 @@ value overwriting it.`,
 			if cmd.Flags().Changed("role") {
 				body["role"] = valRole
 			}
-			return c.run(cmd, Request{Method: http.MethodPost, Path: "/memberships", Body: body}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: "/memberships", Body: body}, false)
 		},
 	}
 	flags := cmd.Flags()
@@ -1163,7 +854,7 @@ value overwriting it.`,
 }
 
 // newMembershipsDeleteCommand is DELETE /memberships/{id}.
-func newMembershipsDeleteCommand(c *Client) *cobra.Command {
+func newMembershipsDeleteCommand(c *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Delete one membership by primary key",
@@ -1174,7 +865,7 @@ nothing to print.`,
 		Example: "  taskctl memberships delete <id>",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.run(cmd, Request{Method: http.MethodDelete, Path: itemPath("/memberships", args[0])}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodDelete, Path: client.ItemPath("/memberships", args[0])}, false)
 		},
 	}
 }
@@ -1182,7 +873,7 @@ nothing to print.`,
 // ------------------------------------------------------------------- /tasks
 
 // newTasksCommand groups the operations /tasks exposes.
-func newTasksCommand(c *Client) *cobra.Command {
+func newTasksCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tasks",
 		Short: "A unit of work, belonging to one list",
@@ -1196,7 +887,7 @@ func newTasksCommand(c *Client) *cobra.Command {
 }
 
 // newTasksListCommand is GET /tasks.
-func newTasksListCommand(c *Client) *cobra.Command {
+func newTasksListCommand(c *client.Client) *cobra.Command {
 	var (
 		filterID           []string
 		filterWorkspaceID  []string
@@ -1311,7 +1002,7 @@ filtered, sorted or searched by any spelling.`,
 			if all && (cmd.Flags().Changed("page") || cursor != "") {
 				return errors.New("--all walks the result set with cursors, so it cannot be combined with --page or --cursor")
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: "/tasks", Query: q}, all)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: "/tasks", Query: q}, all)
 		},
 	}
 	flags := cmd.Flags()
@@ -1387,7 +1078,7 @@ cursor, so a concurrent insert cannot make it read a row twice.`)
 }
 
 // newTasksGetCommand is GET /tasks/{id}.
-func newTasksGetCommand(c *Client) *cobra.Command {
+func newTasksGetCommand(c *client.Client) *cobra.Command {
 	var expand []string
 	cmd := &cobra.Command{
 		Use:   "get <id>",
@@ -1406,7 +1097,7 @@ other rather than answering a question that was not asked.`,
 			if len(expand) > 0 {
 				q.Set("expand", strings.Join(expand, ","))
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: itemPath("/tasks", args[0]), Query: q}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath("/tasks", args[0]), Query: q}, false)
 		},
 	}
 	cmd.Flags().StringSliceVar(&expand, "expand", nil,
@@ -1416,7 +1107,7 @@ other rather than answering a question that was not asked.`,
 }
 
 // newTasksCreateCommand is Post /tasks.
-func newTasksCreateCommand(c *Client) *cobra.Command {
+func newTasksCreateCommand(c *client.Client) *cobra.Command {
 	var (
 		valListID      string
 		valAssigneeID  string
@@ -1468,7 +1159,7 @@ value overwriting it.`,
 			if cmd.Flags().Changed("position") {
 				body["position"] = valPosition
 			}
-			return c.run(cmd, Request{Method: http.MethodPost, Path: "/tasks", Body: body}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: "/tasks", Body: body}, false)
 		},
 	}
 	flags := cmd.Flags()
@@ -1499,7 +1190,7 @@ value overwriting it.`,
 }
 
 // newTasksUpdateCommand is Patch /tasks/{id}.
-func newTasksUpdateCommand(c *Client) *cobra.Command {
+func newTasksUpdateCommand(c *client.Client) *cobra.Command {
 	var (
 		valListID      string
 		valAssigneeID  string
@@ -1561,7 +1252,7 @@ once, at create.`,
 			if len(body) == 0 {
 				return errors.New("nothing to update: pass at least one field flag")
 			}
-			return c.run(cmd, Request{Method: http.MethodPatch, Path: itemPath("/tasks", args[0]), Body: body}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodPatch, Path: client.ItemPath("/tasks", args[0]), Body: body}, false)
 		},
 	}
 	flags := cmd.Flags()
@@ -1593,7 +1284,7 @@ Columns: assignee_id, due_at.`)
 }
 
 // newTasksCompleteCommand is POST /tasks/{id}/complete.
-func newTasksCompleteCommand(c *Client) *cobra.Command {
+func newTasksCompleteCommand(c *client.Client) *cobra.Command {
 	var (
 		valNote string
 	)
@@ -1615,7 +1306,7 @@ This writes status, completed_at, and no other column.`,
 			if cmd.Flags().Changed("note") {
 				body["note"] = valNote
 			}
-			return c.run(cmd, Request{Method: http.MethodPost, Path: itemPath("/tasks", args[0]) + "/complete", Body: body}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: client.ItemPath("/tasks", args[0]) + "/complete", Body: body}, false)
 		},
 	}
 	flags := cmd.Flags()
@@ -1627,7 +1318,7 @@ This writes status, completed_at, and no other column.`,
 // ------------------------------------------------------------------- /users
 
 // newUsersCommand groups the operations /users exposes.
-func newUsersCommand(c *Client) *cobra.Command {
+func newUsersCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "users",
 		Short: "Work with users",
@@ -1638,7 +1329,7 @@ func newUsersCommand(c *Client) *cobra.Command {
 }
 
 // newUsersListCommand is GET /users.
-func newUsersListCommand(c *Client) *cobra.Command {
+func newUsersListCommand(c *client.Client) *cobra.Command {
 	var (
 		filterID    []string
 		filterEmail []string
@@ -1711,7 +1402,7 @@ filtered, sorted or searched by any spelling.`,
 			if all && (cmd.Flags().Changed("page") || cursor != "") {
 				return errors.New("--all walks the result set with cursors, so it cannot be combined with --page or --cursor")
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: "/users", Query: q}, all)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: "/users", Query: q}, all)
 		},
 	}
 	flags := cmd.Flags()
@@ -1751,7 +1442,7 @@ cursor, so a concurrent insert cannot make it read a row twice.`)
 }
 
 // newUsersGetCommand is GET /users/{id}.
-func newUsersGetCommand(c *Client) *cobra.Command {
+func newUsersGetCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <id>",
 		Short: "Fetch one user by primary key",
@@ -1763,7 +1454,7 @@ other rather than answering a question that was not asked.`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := url.Values{}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: itemPath("/users", args[0]), Query: q}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath("/users", args[0]), Query: q}, false)
 		},
 	}
 	return cmd
@@ -1772,7 +1463,7 @@ other rather than answering a question that was not asked.`,
 // -------------------------------------------------------------- /workspaces
 
 // newWorkspacesCommand groups the operations /workspaces exposes.
-func newWorkspacesCommand(c *Client) *cobra.Command {
+func newWorkspacesCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workspaces",
 		Short: "A tenant. Lists, tasks and comments all belong to exactly one",
@@ -1783,7 +1474,7 @@ func newWorkspacesCommand(c *Client) *cobra.Command {
 }
 
 // newWorkspacesListCommand is GET /workspaces.
-func newWorkspacesListCommand(c *Client) *cobra.Command {
+func newWorkspacesListCommand(c *client.Client) *cobra.Command {
 	var (
 		filterID   []string
 		filterName []string
@@ -1858,7 +1549,7 @@ filtered, sorted or searched by any spelling.`,
 			if all && (cmd.Flags().Changed("page") || cursor != "") {
 				return errors.New("--all walks the result set with cursors, so it cannot be combined with --page or --cursor")
 			}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: "/workspaces", Query: q}, all)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: "/workspaces", Query: q}, all)
 		},
 	}
 	flags := cmd.Flags()
@@ -1898,7 +1589,7 @@ cursor, so a concurrent insert cannot make it read a row twice.`)
 }
 
 // newWorkspacesGetCommand is GET /workspaces/{id}.
-func newWorkspacesGetCommand(c *Client) *cobra.Command {
+func newWorkspacesGetCommand(c *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <id>",
 		Short: "Fetch one workspace by primary key",
@@ -1910,7 +1601,7 @@ other rather than answering a question that was not asked.`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := url.Values{}
-			return c.run(cmd, Request{Method: http.MethodGet, Path: itemPath("/workspaces", args[0]), Query: q}, false)
+			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath("/workspaces", args[0]), Query: q}, false)
 		},
 	}
 	return cmd

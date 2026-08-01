@@ -45,6 +45,10 @@ func generateWith(t *testing.T, opts codegen.Options) map[string]string {
 		opts.Package = "gen"
 	}
 	opts.Dir = t.TempDir()
+	if opts.ClientImportPath == "" {
+		// Absolute Dir, so nothing can derive it. See Options.ClientImportPath.
+		opts.ClientImportPath = "example.com/app/cli/client"
+	}
 
 	files, err := codegen.Generate(opts)
 	if err != nil {

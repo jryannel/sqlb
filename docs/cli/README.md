@@ -1,4 +1,4 @@
-# Go CLI
+# Go client and CLI
 
 The REST layer's filter grammar is compositional and capability-gated, which is
 what makes it safe and also what makes it invisible from the outside.
@@ -26,10 +26,41 @@ codegen.Must(codegen.Generate(codegen.Options{
 }))
 ```
 
-That writes `cli/cli_gen.go`: one self-contained package that depends on cobra
-and the standard library. It does **not** import sqlb or the generated models,
-so the binary holds no database credential and needs no build tag to keep one
-out.
+That writes **two** packages:
+
+| File | Package | Depends on |
+|---|---|---|
+| `cli/client/client_gen.go` | the typed client — `Client`, `Request`, `Transport`, `Do`, `Run`, the problem document | the standard library, and nothing else |
+| `cli/cli_gen.go` | the cobra command tree | the client above, plus cobra |
+
+Neither imports sqlb or the generated models, so the binary holds no database
+credential and needs no build tag to keep one out.
+
+## Just the client
+
+If what you want is the typed client — a sync job, a server-to-server caller, an
+admin tool that already has a command tree of its own — set `ClientDir` and
+leave `CLIDir` empty:
+
+```go
+ClientDir: "apiclient",   // relative to Dir
+```
+
+That emits the client and no command tree. It is the same package the CLI
+imports, so a project can start with the CLI and add a Go consumer later without
+generating anything twice.
+
+```go
+c := &client.Client{BaseURL: "https://api.example.com", Token: tok}
+raw, err := c.Do(ctx, client.Request{Method: http.MethodGet, Path: "/tasks"})
+```
+
+The two were one package until
+[#97](https://github.com/jryannel/sqlb/issues/97), which meant a program that
+wanted to make one typed HTTP request took a command-line framework to do it.
+This is the split the TypeScript emitter already makes between `client.gen.ts`
+and `queries.gen.ts`, for the same reason: a consumer that does not want the
+framework should not pay for it.
 
 Then a `main` that is four lines, and is the whole of what is not generated:
 
@@ -49,9 +80,9 @@ func main() {
 }
 ```
 
-`codegen.Check` covers the emitted file, so the usual staleness gate catches a
+`codegen.Check` covers both emitted files, so the usual staleness gate catches a
 schema change that was never regenerated. A schema that exposes no resource
-emits no CLI at all, rather than a file that imports cobra for an empty tree.
+emits neither, rather than a file that imports cobra for an empty tree.
 
 Add the dependency with `go get github.com/spf13/cobra`.
 

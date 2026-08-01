@@ -69,10 +69,12 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   reaches a Flutter app as Dart — plus the cursor pager an infinite-scrolling
   list needs, which is the piece a mobile client otherwise rebuilds out of
   `has_more` and an offset counter
-  ([guide](https://jryannel.github.io/sqlb/dart/)) — and a shell as a
-  [cobra](https://github.com/spf13/cobra) command tree: one flag per filterable column, its operators in the usage string, so
-  `--help` states what a resource accepts without a request — which is the form
-  the guarantee has to take for a caller with no compile step, such as an agent
+  ([guide](https://jryannel.github.io/sqlb/dart/)) — and **Go**, as a typed
+  client that imports the standard library and nothing else, plus an optional
+  [cobra](https://github.com/spf13/cobra) command tree over it: one flag per
+  filterable column, its operators in the usage string, so `--help` states what
+  a resource accepts without a request — which is the form the guarantee has to
+  take for a caller with no compile step, such as an agent
   ([guide](https://jryannel.github.io/sqlb/cli/)).
 - **One dependency, and it is the one you already have.** The engine is written
   on [pgx](https://github.com/jackc/pgx) and takes nothing else; a CI gate fails

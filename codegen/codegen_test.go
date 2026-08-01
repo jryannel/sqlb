@@ -38,7 +38,13 @@ func squash(s string) string { return strings.Join(strings.Fields(s), " ") }
 func generate(t *testing.T, r *schema.Registry) map[string]string {
 	t.Helper()
 	dir := t.TempDir()
-	files, err := codegen.Generate(codegen.Options{Registry: r, Dir: dir, Package: "gen"})
+	// ClientImportPath is set rather than derived: these generate into a temp
+	// directory, which is absolute and outside any module, and an assertion
+	// naming the CLI's import of the client wants a fixed string anyway.
+	files, err := codegen.Generate(codegen.Options{
+		Registry: r, Dir: dir, Package: "gen",
+		ClientImportPath: "example.com/app/cli/client",
+	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
