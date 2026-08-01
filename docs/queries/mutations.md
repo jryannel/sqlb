@@ -18,6 +18,44 @@ back — the returned slice is shorter than the rows that went in, so position n
 longer identifies them, and writing back by position would hand one row's
 generated id to another. The returned slice is the account of what was written.
 
+## An upsert that assigns more than the proposed row
+
+Naming a column in `OnConflictUpdate` is shorthand for `col = EXCLUDED.col`.
+When that is not the assignment you want, `OnConflictSet` takes an expression:
+
+```go
+sqlb.InsertRows(&s).
+    OnConflictUpdate([]string{"key"}, "payload").
+    OnConflictSet("updated_at", sqlb.Now()).
+    OnConflictSet("hits", sqlb.Add(sqlb.Current("hits"), sqlb.Val(1))).
+    OnConflictSet("note", sqlb.Coalesce(sqlb.Excluded("note"), sqlb.Current("note")).Expr())
+```
+
+```sql
+ON CONFLICT ("key") DO UPDATE SET
+  "payload"    = EXCLUDED."payload",
+  "updated_at" = now(),
+  "hits"       = "secrets"."hits" + $4,
+  "note"       = coalesce(EXCLUDED."note", "secrets"."note")
+```
+
+`sqlb.Now()` is the one that matters most in practice. Computing the timestamp
+in Go moves its source from the database clock to the application clock, and
+forces the column into the INSERT list so `EXCLUDED` can echo it back — so on a
+row whose other timestamps come from Postgres, one column ends up on a different
+clock, and under skew they disagree with nothing to report it.
+
+**A column reference has to say which row it means.** Both are in scope inside
+`DO UPDATE`: the row being inserted and the row already stored. `Excluded(col)`
+is the first, `Current(col)` the second, and a bare `F(col)` is refused rather
+than resolved — `count = count + 1` reads like an accumulation whichever one it
+picks, so guessing would be choosing silently. Names are checked against the
+model on both sides, so a typo is an error from sqlb naming the column rather
+than a `42703` from Postgres at request time.
+
+Assignment values are ordinary bind parameters, numbered in the same sequence as
+the `VALUES` list.
+
 ## When the database refuses a write
 
 A unique index, a foreign key or a check constraint refusing a write is usually

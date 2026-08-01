@@ -257,7 +257,7 @@ completeness rather than re-argued; one belongs to the platform, not to sqlb.
 | Finding | Port | Their rank | Disposition |
 |---|---|---|---|
 | **Bind-parameter cast** — no `$1::date`; `cmp` wraps even an `Expr` in `Param{}` | single-app | #1, "highest-value single addition" | **Before 1.0** |
-| **Expressions in `ON CONFLICT DO UPDATE`** — only `EXCLUDED.<col>` | multi-app | "highest-value sqlb change surfaced by this port", High | **Before 1.0** |
+| **Expressions in `ON CONFLICT DO UPDATE`** — only `EXCLUDED.<col>` | multi-app | "highest-value sqlb change surfaced by this port", High | **Done** — `OnConflictSet` with `Excluded`/`Current` ([#90](https://github.com/jryannel/sqlb/issues/90)) |
 | **Null-aware negation** — `IsDistinctFrom`, NULL-inclusive `NotOneOf` | single-app | #2 | 1.1, documented now |
 | **`$N`-form raw predicate** — `RawPred` is positional, `$N` is referential | single-app | #4 | 1.1, documented now |
 | **Registry-aware coercion** — `filter.Coerce` is string→type only | single-app | #5 | 1.1 |
