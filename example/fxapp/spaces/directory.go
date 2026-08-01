@@ -11,6 +11,7 @@ import (
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/fxapp/access"
 	"github.com/jryannel/sqlb/example/fxapp/store"
+	"github.com/jryannel/sqlb/sqlbfx"
 )
 
 // Directory maps a verified slug to the space id the hooks put in a WHERE
@@ -32,7 +33,7 @@ type Directory struct {
 // nobody holds a key for is unreachable, and a space anybody may create is not
 // a boundary — so the two halves, the row and the key, are made in the same
 // place.
-func NewDirectory(unscoped *sqlb.DB, cfg access.Config, log *slog.Logger) (*Directory, error) {
+func NewDirectory(unscoped sqlbfx.Unscoped, cfg access.Config, log *slog.Logger) (*Directory, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

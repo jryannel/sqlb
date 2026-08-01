@@ -16,5 +16,5 @@ import "embed"
 var files embed.FS
 
 // FS exposes the embedded history. The store module wraps it in a
-// dbbase.MigrationSet; nothing here knows what fx is.
+// sqlbfx.MigrationSet; nothing here knows what fx is.
 func FS() embed.FS { return files }

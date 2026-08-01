@@ -94,7 +94,7 @@ func startPostgres() {
 
 // freshDatabase returns the DSN of an empty database.
 //
-// Empty, not migrated: applying the history is dbbase's job, so a test that
+// Empty, not migrated: applying the history is the sqlbfx kit's job, so a test that
 // migrated first would be testing a different program than the one that ships.
 // Every boot in this file therefore also asserts that the migrations apply.
 //

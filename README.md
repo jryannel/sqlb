@@ -166,7 +166,7 @@ server over the manifest.
 | [`example/recipes`](example/recipes/) | Eighty-odd small examples, one file per aspect — the place to look when you know what you are building and need to know how one piece is spelled |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
 | [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
-| [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx: hooks arriving through a value group, and a resource that refuses to mount without them |
+| [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx on the [`sqlbfx`](sqlbfx/) kit: hooks arriving through a value group, a pluggable auth module behind the principal seam, and a resource that refuses to mount without its hooks |
 | [`example/computed`](example/computed/) | Four ways to get a derived value out of Postgres — generated columns, trigger counters, projected expressions, views — and where sqlb's ceiling is today ([ADR-0041](docs/adr/0041-computed-fields.md)) |
 
 ## Development

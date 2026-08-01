@@ -6,13 +6,16 @@ replace github.com/jryannel/sqlb => ../../
 
 require (
 	github.com/danielgtaylor/huma/v2 v2.39.0
-	github.com/go-chi/chi/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jryannel/sqlb v0.0.0-00010101000000-000000000000
-	github.com/pressly/goose/v3 v3.27.3
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	go.uber.org/fx v1.23.0
+)
+
+require (
+	github.com/go-chi/chi/v5 v5.3.1 // indirect
+	github.com/pressly/goose/v3 v3.27.3 // indirect
 )
 
 require (
@@ -39,6 +42,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jryannel/sqlb/sqlbfx v0.0.0
 	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
@@ -77,3 +81,5 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/jryannel/sqlb/sqlbfx => ../../sqlbfx
