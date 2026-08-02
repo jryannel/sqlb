@@ -60,8 +60,19 @@ import (
 //
 // Together: 1,776 allocations to 279, and 173µs to 120µs, for a response that
 // is byte-identical down to the escaping. The arms are kept so that it stays
-// fixed. What remains on the response path is encoding/json's own floor —
-// time.Time.MarshalJSON and the boxing reflect does to hand it a value.
+// fixed.
+//
+// One of the two costs that reading called encoding/json's own floor turned
+// out not to be one. time.Time.MarshalJSON allocates a slice per value for the
+// encoder to copy out and drop, which is a floor of the Marshaler interface
+// rather than of JSON: a timestamp appended straight into the page's buffer
+// costs nothing and renders the same bytes. That is 279 allocations to 229 —
+// exactly the fifty rows — and about 7% of the request. See rowWriter.timestamp.
+//
+// What is left is the boxing reflect does to hand a column value to the
+// encoder, which is the same cost and would want the same treatment: a typed
+// appender per kind. It is unfinished because a value, unlike a timestamp,
+// needs the escaping encoding/json would have applied.
 
 const benchPageRows = 50
 
