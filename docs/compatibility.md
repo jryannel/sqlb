@@ -121,6 +121,20 @@ Named in advance, so the break is a documented plan rather than a surprise.
   new parameter alongside `?cursor=`, so again nothing a request can send today
   changes meaning. [ADR-0027](adr/0027-keyset-pagination.md) says what would
   make it worth building.
+- **The `sqlb` command's verb names**, which are still settling. `v0.8.0` moved
+  one: `sqlb-survey` became `sqlb survey`, a second binary folded into the one
+  command tree ([ADR-0032](adr/0032-sqlb-command.md)). The mechanical edit is
+  `./cmd/sqlb-survey …` → `./cmd/sqlb survey …`, and it is the cheap kind of
+  break — a script that invoked the old name stops with "no such file" rather
+  than doing something subtly different.
+
+  Listed here rather than under *Not covered* because a command line is
+  something a person memorises and a CI file hardcodes, so it deserves the
+  announcement even though the code behind it is a build-step tool. What it
+  does not get is the *Frozen* promise: the boundary ADR-0032 states is that
+  needing no schema package is a fact about a verb's arguments rather than a
+  reason for a separate binary, and any verb still on the wrong side of that
+  moves the same way this one did.
 
 ### Three that broke without being listed here first
 
@@ -159,14 +173,11 @@ Anything under `introspect`, `migrate`, `codegen` or `pgtest` that is reached
 only from a build step or a test. These are tools, not a runtime surface, and
 they change with less ceremony.
 
-**The `sqlb` command's verb names** are in that category, and `v0.8.0` used it:
-`sqlb-survey` became `sqlb survey`, a second binary folded into the one command
-tree ([ADR-0032](adr/0032-sqlb-command.md)). A script that invoked it takes a
-one-word edit, and it fails loudly rather than quietly. What is *not* in this
-category is the set of files a generator writes into the repository, because
-those are checked in and reviewed: `v0.8.0` adds `runtime.gen.ts` and
-`runtime.gen.dart` beside the clients, which arrive on the next regeneration
-and want committing with it.
+What is *not* in this category is the set of files a generator writes into the
+repository, because those are checked in and reviewed: `v0.8.0` adds
+`runtime.gen.ts` and `runtime.gen.dart` beside the clients, which arrive on the
+next regeneration and want committing with it. Nor are the command's verb
+*names*, which are [above](#will-move).
 
 ## The driver
 
