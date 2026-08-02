@@ -229,7 +229,33 @@ func newCompiler(d Dialect) *compiler {
 	if d == nil {
 		d = defaultDialect
 	}
-	return &compiler{d: d}
+	c := &compiler{d: d}
+	// One allocation instead of the six a doubling buffer takes to reach the
+	// length of an ordinary list statement. Overshooting costs a few hundred
+	// bytes that are freed with the compiler; undershooting costs a copy.
+	c.sb.Grow(512)
+	return c
+}
+
+// identWriter is a dialect that can quote an identifier straight into a buffer.
+// Postgres implements it, so the common path never builds the intermediate
+// string QuoteIdent returns — one allocation per identifier, and a statement
+// names one per projected column plus its table, its filters and its sorts.
+//
+// It is an optional interface rather than a change to Dialect so that a dialect
+// outside this package stays valid as written.
+type identWriter interface {
+	writeIdent(sb *strings.Builder, s string)
+}
+
+func (Postgres) writeIdent(sb *strings.Builder, s string) {
+	if strings.IndexByte(s, '"') >= 0 {
+		sb.WriteString(`"` + strings.ReplaceAll(s, `"`, `""`) + `"`)
+		return
+	}
+	sb.WriteByte('"')
+	sb.WriteString(s)
+	sb.WriteByte('"')
 }
 
 func (c *compiler) fail(format string, args ...any) {
@@ -256,6 +282,10 @@ func (c *compiler) bind(v any) {
 func (c *compiler) ident(s string) {
 	if s == "" {
 		c.fail("sqlb: empty identifier")
+		return
+	}
+	if w, ok := c.d.(identWriter); ok {
+		w.writeIdent(&c.sb, s)
 		return
 	}
 	c.write(c.d.QuoteIdent(s))
@@ -381,16 +411,20 @@ func (c *compiler) expr(e Expr) {
 
 	case Binary:
 		c.operand(n.Left)
-		c.write(" " + n.Op + " ")
+		c.write(" ")
+		c.write(n.Op)
+		c.write(" ")
 		c.operand(n.Right)
 
 	case Unary:
 		if n.Postfix {
 			c.operand(n.Operand)
-			c.write(" " + n.Op)
+			c.write(" ")
+			c.write(n.Op)
 			return
 		}
-		c.write(n.Op + " ")
+		c.write(n.Op)
+		c.write(" ")
 		c.operand(n.Operand)
 
 	case BetweenExpr:
@@ -424,7 +458,8 @@ func (c *compiler) expr(e Expr) {
 
 	case Cast:
 		c.operand(n.Inner)
-		c.write("::" + n.Type)
+		c.write("::")
+		c.write(n.Type)
 
 	case Raw:
 		c.raw(n)

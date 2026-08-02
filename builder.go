@@ -430,7 +430,9 @@ func (b *Builder[T]) compile(c *compiler) {
 	}
 
 	for _, j := range b.joins {
-		c.write(" " + j.kind + " ")
+		c.write(" ")
+		c.write(j.kind)
+		c.write(" ")
 		c.table(j.table)
 		if j.alias != "" && j.alias != j.table {
 			c.write(" AS ")
@@ -470,13 +472,16 @@ func (b *Builder[T]) compile(c *compiler) {
 	// the planner can see them. Both are ints validated above, so there is no
 	// injection surface.
 	if b.limit != nil {
-		c.write(" LIMIT " + strconv.Itoa(*b.limit))
+		c.write(" LIMIT ")
+		c.write(strconv.Itoa(*b.limit))
 	}
 	if b.offset != nil {
-		c.write(" OFFSET " + strconv.Itoa(*b.offset))
+		c.write(" OFFSET ")
+		c.write(strconv.Itoa(*b.offset))
 	}
 	if b.lock != "" {
-		c.write(" " + b.lock)
+		c.write(" ")
+		c.write(b.lock)
 	}
 }
 
