@@ -170,12 +170,13 @@ const SOURCES = [
     // Read in this order: what it is for, how it is built, what it promises,
     // how to leave, what it has shipped, what it has to do before that promise
     // becomes permanent, how it sits beside sqlc, how to move one endpoint
-    // across, and what an outside reader made of it. The refactoring page
-    // follows with-sqlc.md directly because it is the second half of that
-    // argument: one says which queries belong on which side, the other says
-    // what moving one costs. The review is a dated snapshot and says so in its
-    // own first paragraph, which is what makes it publishable rather than
-    // misleading.
+    // across, how many endpoints there are to move, and what an outside reader
+    // made of it. Those three run consecutively because they are one argument
+    // in three parts: with-sqlc.md says which queries belong on which side,
+    // refactoring-from-sqlc.md says what moving one costs, and
+    // surveying-a-codebase.md multiplies the second by the first over a whole
+    // repository. The review is a dated snapshot and says so in its own first
+    // paragraph, which is what makes it publishable rather than misleading.
     //
     // The exit sits directly after the compatibility promise on purpose: the
     // two answer the same reader's question, one page apart. The releases
@@ -191,6 +192,7 @@ const SOURCES = [
       "comparisons.md",
       "with-sqlc.md",
       "refactoring-from-sqlc.md",
+      "surveying-a-codebase.md",
       "review-adoption-readiness.md",
     ],
     order(slug) {

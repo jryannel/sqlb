@@ -172,6 +172,9 @@ to have checked something it never looked at.
 ## Next
 
 - [Diffing and rendering](README.md)
+- [Surveying an existing codebase](../surveying-a-codebase.md) — this page
+  answers what the database allows; that one answers how many of the routes and
+  queries in front of it sqlb would take
 - [Using your own structs](../start/structs-first.md) — the other half of
   adopting sqlb into a project that already exists
 - [ADR-0014](../adr/0014-migrations-and-import.md) — why the history beats
