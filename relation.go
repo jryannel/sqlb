@@ -136,6 +136,38 @@ func (r *RelationInfo) Target() (*Model, error) {
 	return r.target, r.err
 }
 
+// clone copies the declaration and drops the resolution, for Model.clone.
+//
+// The lazily resolved target is deliberately not carried across. A sync.Once
+// cannot be copied, and there is nothing to gain by trying: a relation belongs
+// to exactly one Model, so the copy re-resolves on first use and the original
+// keeps serving whoever still holds it. That is also what keeps the two from
+// sharing the mutable half of this struct, which is the whole point of copying
+// the model rather than writing through it.
+//
+// A forward relation's foreign key is rebased through remap rather than looked
+// up by name, so it follows its column through a Describe rename. A collection's
+// belongs to the *target* model and is resolved with the target inside Target,
+// so there is nothing to rebase and leaving it nil is the unresolved state the
+// copy should start in.
+func (r *RelationInfo) clone(remap map[*ColumnInfo]*ColumnInfo) *RelationInfo {
+	c := &RelationInfo{
+		Name:       r.Name,
+		Field:      r.Field,
+		Index:      r.Index,
+		Elem:       r.Elem,
+		Collection: r.Collection,
+		Order:      r.Order,
+		OrderDesc:  r.OrderDesc,
+		Limit:      r.Limit,
+		fkName:     r.fkName,
+	}
+	if !r.Collection {
+		c.FK = remap[r.FK]
+	}
+	return c
+}
+
 // Cap reports how many children this relation returns at most.
 func (r *RelationInfo) Cap() int {
 	if r.Limit > 0 {
