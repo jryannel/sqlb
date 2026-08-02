@@ -19,6 +19,14 @@ func build(cat *catalog, opts Options) (*schema.Registry, *Report, error) {
 		r = schema.NewModule(opts.Module)
 	}
 
+	// Recorded whatever else happens, and before the table walk can fail: the
+	// list is most valuable exactly when the import went badly, because a
+	// missing extension is what makes the *next* step fail rather than this one
+	// (issue #115).
+	for _, e := range cat.extensions {
+		rep.Extensions = append(rep.Extensions, e.Name)
+	}
+
 	byTable := groupByTable(cat)
 	selectTables(byTable, opts, rep)
 	order, err := dependencyOrder(cat, byTable, rep)

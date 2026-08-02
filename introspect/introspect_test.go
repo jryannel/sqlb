@@ -740,3 +740,40 @@ func TestEnumValuesFromArrayCheck(t *testing.T) {
 		t.Errorf("got %v,%v", got, ok)
 	}
 }
+
+// An extension is invisible to Diff rather than skipped by it, so it is
+// reported without changing whether the registry is clean. Both halves matter:
+// the list is what turns 228 identical "function does not exist" errors into
+// one line, and flipping Empty() would fail every adoption that uses pgvector
+// on a gap it has no way to close (issue #115).
+func TestReportExtensions(t *testing.T) {
+	rep := &Report{Extensions: []string{"vector", "uuid-ossp"}}
+
+	if !rep.Empty() {
+		t.Fatal("an extension is not a construct the registry failed to describe; Empty() must stay true")
+	}
+	if err := rep.Err(); err != nil {
+		t.Fatalf("Err() must stay nil for extensions alone: %v", err)
+	}
+	out := rep.String()
+	for _, want := range []string{
+		`CREATE EXTENSION IF NOT EXISTS "vector";`,
+		`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say how to create the extension:\nwant %q in:\n%s", want, out)
+		}
+	}
+	// The instruction, not just the names: the list is only useful as the step
+	// before a bootstrap.
+	if !strings.Contains(out, "Create them in the target database first") {
+		t.Errorf("the report names the extensions without saying what to do:\n%s", out)
+	}
+
+	// And a report with a real skip still carries them, since that is the case
+	// where the bootstrap is most likely to be attempted next.
+	rep.Skipped = []Skip{{Table: "t", Object: "c", Reason: "unmodelable"}}
+	if !strings.Contains(rep.String(), `CREATE EXTENSION IF NOT EXISTS "vector";`) {
+		t.Errorf("extensions are dropped from a non-empty report:\n%s", rep.String())
+	}
+}

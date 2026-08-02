@@ -30,6 +30,26 @@ type Report struct {
 	// describes the database, and a note does not change that answer — putting
 	// one there would fail a round-trip that is in fact clean.
 	Notes []string
+
+	// Extensions is every non-plpgsql extension the database has installed.
+	//
+	// It is here because an extension is *invisible* to this package's normal
+	// contract rather than skipped by it. A construct the DSL cannot express
+	// gets a Skip and the reader reconciles it; an extension was never read at
+	// all, so a clean Report and a clean Diff both claimed everything was
+	// represented about a schema that could not be created — the DDL naming
+	// uuid_generate_v4() applies only where uuid-ossp already exists.
+	//
+	// The failure that produced this field surfaced at the furthest possible
+	// point from its cause and in the wrong vocabulary: 228 identical "function
+	// uuid_generate_v4() does not exist" errors, one per dependent table, with
+	// the actual cause — two missing extensions — named nowhere (issue #115).
+	//
+	// Deliberately not Skipped, for the same reason Notes is not: Empty and Err
+	// answer whether the registry describes the *tables*, and every adoption
+	// using pgvector would otherwise report a gap it cannot close. Diff still
+	// renders no CREATE EXTENSION; this is the list to create first.
+	Extensions []string
 }
 
 // Skip is one construct that did not survive the import, where it was, and what
@@ -71,10 +91,11 @@ func (r *Report) Err() error {
 
 func (r *Report) String() string {
 	if r.Empty() {
+		out := "introspect: everything represented"
 		if len(r.Notes) > 0 {
-			return "introspect: everything represented\n" + r.notes()
+			out += "\n" + r.notes()
 		}
-		return "introspect: everything represented"
+		return out + r.extensions()
 	}
 	lines := make([]string, 0, len(r.Skipped))
 	for _, s := range r.Skipped {
@@ -93,7 +114,30 @@ func (r *Report) String() string {
 	if len(r.Notes) > 0 {
 		out += "\n" + r.notes()
 	}
-	return out
+	return out + r.extensions()
+}
+
+// extensions renders what has to exist before this schema can be created.
+//
+// Phrased as an instruction rather than as an observation, because that is the
+// whole point of reading them: the list is useless as trivia and load-bearing
+// as the step before a bootstrap. Diff renders no CREATE EXTENSION — dropping
+// one is a footgun with no upside, and creating one usually needs a superuser a
+// production runner deliberately does not have — so the statements are printed
+// for a person to run rather than generated into a migration (issue #115).
+func (r *Report) extensions() string {
+	if len(r.Extensions) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(r.Extensions))
+	for _, e := range r.Extensions {
+		lines = append(lines, `  CREATE EXTENSION IF NOT EXISTS "`+e+`";`)
+	}
+	sort.Strings(lines)
+	return "\nthe database has extensions installed, and no generated DDL creates them.\n" +
+		"Create them in the target database first, or the first bootstrap fails\n" +
+		"once per dependent table naming a function instead of the extension:\n" +
+		strings.Join(lines, "\n")
 }
 
 // notes renders the decisions this package made, under a heading that keeps

@@ -192,6 +192,22 @@ func runSurvey(ctx context.Context, out report, src, dst *pgxpool.Pool, modules,
 		out.printf("registry built: %d tables modelled\n\n", len(regAll.Tables()))
 	}
 	if repAll != nil {
+		// First, because it is the step before everything else in this run.
+		// Phase C bootstraps each table into the scratch database and Diff
+		// renders no CREATE EXTENSION, so a scratch database missing these
+		// fails once per table naming a function rather than once naming the
+		// extension — which is how this survey spent an hour (issue #115).
+		if len(repAll.Extensions) > 0 {
+			out.printf("### Extensions\n\n")
+			out.printf("The source database has %d extension(s). No generated DDL creates them,\n",
+				len(repAll.Extensions))
+			out.printf("so the scratch database needs them before Phase C means anything:\n\n")
+			out.printf("```sql\n")
+			for _, e := range repAll.Extensions {
+				out.printf("CREATE EXTENSION IF NOT EXISTS %q;\n", e)
+			}
+			out.printf("```\n\n")
+		}
 		out.printf("skipped constructs: %d\n", len(repAll.Skipped))
 		out.printf("notes: %d\n\n", len(repAll.Notes))
 		printByReason(out, repAll.Skipped)

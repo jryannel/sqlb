@@ -154,6 +154,23 @@ func readBack(t *testing.T, pool *pgxpool.Pool) *schema.Registry {
 	if !rep.Empty() {
 		t.Fatalf("the fixture is meant to be fully describable, and this was skipped:\n%s", rep)
 	}
+	// The fixture has a vector column, so pgvector is installed and the report
+	// must say so. Diff renders no CREATE EXTENSION, so this list is the only
+	// thing standing between an adopter and 228 identical "function does not
+	// exist" errors on the first bootstrap into an empty database (issue #115).
+	//
+	// Asserted here rather than in a unit test because the unit test cannot see
+	// whether the pg_extension query is right — a query returning nothing looks
+	// exactly like a database with no extensions.
+	var found bool
+	for _, e := range rep.Extensions {
+		if e == "vector" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pgvector is installed and the report does not name it: %v", rep.Extensions)
+	}
 	return reg
 }
 
