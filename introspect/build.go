@@ -241,6 +241,22 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 		}
 		t.Check(c.Name, c.Expr)
 	}
+	for _, u := range cons.uniques {
+		if col, dependent := coversSkippedColumn(u.Columns, skipped); dependent {
+			rep.add(name, u.Name, "unique constraint covers "+col+
+				", which was not imported, so the constraint cannot be declared either", u.Name)
+			continue
+		}
+		// Pin the name only when it is not the one the convention derives, for
+		// the reason the primary key above is treated the same way: a pinned
+		// name that matches the convention is noise in the declaration, and a
+		// declaration that omits a name Postgres did not choose is a rename.
+		if u.Name == name+"_"+strings.Join(u.Columns, "_")+"_key" {
+			t.Unique(u.Columns...)
+		} else {
+			t.UniqueNamed(u.Name, u.Columns...)
+		}
+	}
 	for _, idx := range p.indexes {
 		if idx.Expression || len(idx.Columns) == 0 {
 			rep.add(name, idx.Name, "index is over an expression rather than plain columns, "+
@@ -335,6 +351,7 @@ type constraints struct {
 	enums       map[string][]string      // by column, recovered from a CHECK
 	enumName    map[string]string        // by column, the CHECK's own name
 	tableChecks []schema.Check
+	uniques     []schema.Unique // composite, table-level
 }
 
 // classify sorts a table's constraints, reporting the ones the DSL has no way
@@ -363,11 +380,14 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 			c.pk = &r
 		case "u":
 			if len(row.Columns) != 1 {
-				// UniqueIndex would produce CREATE UNIQUE INDEX, which is a
-				// different object from a unique constraint and would diff as
-				// one, so this is reported rather than approximated.
-				rep.add(table, row.Name, "composite unique constraint; the DSL can declare a "+
-					"composite unique index, which is a different object and would diff as one", row.Def)
+				// A composite UNIQUE is a table-level constraint, not a column
+				// one. It used to be reported, because approximating it with a
+				// unique index would have diffed as a drop and a rebuild — the
+				// index being a different object (issue #108).
+				c.uniques = append(c.uniques, schema.Unique{
+					Name:    row.Name,
+					Columns: row.Columns,
+				})
 				continue
 			}
 			c.unique[row.Columns[0]] = row
@@ -428,6 +448,22 @@ func buildColumn(table string, col columnRow, cons *constraints,
 	if col.Identity != "" {
 		rep.add(table, col.Name, "identity column, which the DSL cannot declare "+
 			"(a default is the nearest thing)", col.Type)
+		return nil, false
+	}
+	// A serial is an identity column in older clothing, and the check above
+	// misses it because attidentity is empty for one. Left alone it imports as
+	// an ordinary column whose default happens to name a sequence, so the table
+	// reports clean and the DDL it produces does not run — the sequence is a
+	// separate object and Diff renders no CREATE SEQUENCE.
+	//
+	// The column goes rather than only its default: declaring the column
+	// without the default the database has would leave every Diff proposing to
+	// add one back, which is the permanently-red gate stripCast exists to avoid.
+	if isSequenceDefault(col.Default) {
+		rep.add(table, col.Name, "column draws its default from a sequence (a serial), "+
+			"which the DSL cannot declare — the sequence is a separate object, and a "+
+			"declaration without the default would diff against the real column forever",
+			col.Type)
 		return nil, false
 	}
 

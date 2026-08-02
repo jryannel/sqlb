@@ -222,6 +222,8 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 			{Table: "t", Name: "money", Type: "money"},
 			{Table: "t", Name: "total", Type: "integer", Generated: "s"},
 			{Table: "t", Name: "seq", Type: "integer", Identity: "a"},
+			{Table: "t", Name: "ser", Type: "bigint", NotNull: true,
+				Default: "nextval('t_ser_seq'::regclass)"},
 		},
 		constraints: []constraintRow{
 			{Table: "t", Name: "t_pkey", Type: "p", Columns: []string{"a", "b"}, Def: "PRIMARY KEY (a, b)"},
@@ -232,18 +234,26 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 			{Table: "t", Name: "t_lower_idx", Expression: true, Def: "CREATE INDEX ... (lower(a))"},
 		},
 	}
-	_, rep, err := build(cat, Options{})
+	r, rep, err := build(cat, Options{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	// The composite UNIQUE in this catalog is imported rather than reported
+	// (issue #108); everything else here still has no declaration.
+	if u := r.Get("t").Uniques(); len(u) != 1 || u[0].Name != "t_ab_key" {
+		t.Errorf("composite unique should be imported, got %+v", u)
+	}
+	if strings.Contains(rep.String(), "composite unique constraint") {
+		t.Errorf("composite unique should no longer be reported:\n%s", rep)
+	}
 	for _, want := range []string{
 		"composite primary key",
-		"composite unique constraint",
 		"contype x",
 		"expression",
 		"money",
 		"generated column",
 		"identity column",
+		"sequence",
 	} {
 		if !strings.Contains(rep.String(), want) {
 			t.Errorf("report should mention %q:\n%s", want, rep)
@@ -251,6 +261,77 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 	}
 	if rep.Err() == nil {
 		t.Error("Err should describe a non-empty report")
+	}
+}
+
+// A serial column used to import silently: attidentity is empty for one, so the
+// identity check missed it, the nextval default carried a regclass cast that
+// stripCast had no reason to touch, and the column arrived as an ordinary bigint
+// whose default named a sequence. The table then reported clean while the DDL it
+// produced failed to apply — "relation t_ser_seq does not exist" — and the
+// table's indexes failed behind it. Found by sqlb-survey on a second corpus
+// (issue #119); it was the only defect in either corpus that produced DDL which
+// does not run.
+func TestSerialColumnIsReportedRatherThanImportedSilently(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		def  string
+	}{
+		{"bigserial", "nextval('t_ser_seq'::regclass)"},
+		{"serial", "nextval('t_ser_seq'::regclass)"},
+		{"schema qualified", "nextval('public.t_ser_seq'::regclass)"},
+		{"unquoted", "nextval('t_ser_seq')"},
+		{"uppercase", "NEXTVAL('t_ser_seq'::regclass)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cat := &catalog{
+				tables: []tableRow{{Name: "t"}},
+				columns: []columnRow{
+					{Table: "t", Name: "id", Type: "uuid", NotNull: true},
+					{Table: "t", Name: "ser", Type: "bigint", NotNull: true, Default: tc.def},
+				},
+			}
+			r, rep, err := build(cat, Options{})
+			if err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			if !strings.Contains(rep.String(), "sequence") {
+				t.Errorf("report should name the sequence:\n%s", rep)
+			}
+			// The column must not arrive carrying the nextval default, or the
+			// rendered DDL references a sequence nothing creates.
+			if f := r.Get("t").Field("ser"); f != nil {
+				t.Errorf("serial column should be refused, not imported: %+v", f.Desc())
+			}
+			// The rest of the table still imports — refusing one column is not
+			// a reason to lose the others.
+			if f := r.Get("t").Field("id"); f == nil {
+				t.Error("the table's other columns should survive")
+			}
+		})
+	}
+}
+
+// A default that merely mentions a sequence-like name is not a serial. Only a
+// nextval draw is, and refusing anything else would drop ordinary columns.
+func TestNonSequenceDefaultsAreNotMistakenForSerial(t *testing.T) {
+	for _, def := range []string{
+		"'nextval'::text",
+		"'seq_'::text || (id)::text",
+		"0",
+		"now()",
+	} {
+		cat := &catalog{
+			tables:  []tableRow{{Name: "t"}},
+			columns: []columnRow{{Table: "t", Name: "c", Type: "text", Default: def}},
+		}
+		r, _, err := build(cat, Options{})
+		if err != nil {
+			t.Fatalf("build(%q): %v", def, err)
+		}
+		if f := r.Get("t").Field("c"); f == nil {
+			t.Errorf("default %q should import as an ordinary column", def)
+		}
 	}
 }
 

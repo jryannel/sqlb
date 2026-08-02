@@ -1053,6 +1053,40 @@ func TestDialectIsOverriddenPerStatement(t *testing.T) {
 	}
 }
 
+// Postgres quotes identifiers straight into the compiler's buffer rather than
+// through QuoteIdent's return value, which is one allocation per identifier and
+// a statement names one per projected column. The optimisation is only sound if
+// the two spellings agree, so this asserts they do — including on the embedded
+// quote, which is the one input where writeIdent does something other than wrap
+// the string, and which no other test in this package supplies.
+func TestQuotingAgreesWithQuoteIdent(t *testing.T) {
+	// Named through F rather than a model, because a column whose name contains
+	// a quote is exactly the hand-written reference QuoteIdent is the backstop
+	// for.
+	for _, name := range []string{"id", `we"ird`, `""`, "ünïcode"} {
+		sql, _, err := sqlb.Query[User]().ClearSelect().Select(sqlb.F(name)).SQL()
+		if err != nil {
+			t.Fatalf("SQL() for %q: %v", name, err)
+		}
+		want := "SELECT " + (sqlb.Postgres{}).QuoteIdent(name) + ` FROM "users"`
+		if sql != want {
+			t.Errorf("identifier %q\n got: %s\nwant: %s", name, sql, want)
+		}
+	}
+
+	// The other direction: a dialect that does not implement the fast path must
+	// still go through QuoteIdent. ansiDialect is one, so a change that made the
+	// fast path unconditional fails here.
+	alt, _, err := sqlb.Query[User]().ClearSelect().Select(sqlb.F(`we"ird`)).
+		UseDialect(ansiDialect{}).SQL()
+	if err != nil {
+		t.Fatalf("SQL(): %v", err)
+	}
+	if want := "SELECT `we\"ird` FROM `users`"; alt != want {
+		t.Errorf("dialect without the fast path\n got: %s\nwant: %s", alt, want)
+	}
+}
+
 // A field with no matching result column would scan as its zero value, which
 // is indistinguishable from a real zero: a mistyped alias on a Sum silently
 // reports 0 revenue. Collect must refuse rather than return a wrong number.

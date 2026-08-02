@@ -221,11 +221,31 @@ func renderTable(b *bytes.Buffer, t *schema.TableDef, names map[string]string, r
 	for _, c := range t.Checks() {
 		fmt.Fprintf(b, ".\n\tCheck(%s, %s)", strconv.Quote(c.Name), strconv.Quote(c.Expr))
 	}
+	for _, u := range t.Uniques() {
+		b.WriteString(".\n\t" + renderUnique(t, u))
+	}
 	for _, idx := range t.Indexes() {
 		b.WriteString(".\n\t" + renderIndex(t, idx))
 	}
 	b.WriteString("\n")
 	return nil
+}
+
+// renderUnique uses the shorthand when the constraint's name is the one the
+// convention derives, and UniqueNamed otherwise — the same rule renderIndex
+// applies, and for the same reason: a name that came from somewhere else has to
+// be kept, or the first diff after adoption drops and rebuilds the constraint.
+func renderUnique(t *schema.TableDef, u schema.Unique) string {
+	quoted := make([]string, len(u.Columns))
+	for i, c := range u.Columns {
+		quoted[i] = strconv.Quote(c)
+	}
+	args := strings.Join(quoted, ", ")
+
+	if u.Name == t.Name()+"_"+strings.Join(u.Columns, "_")+"_key" {
+		return fmt.Sprintf("Unique(%s)", args)
+	}
+	return fmt.Sprintf("UniqueNamed(%s, %s)", strconv.Quote(u.Name), args)
 }
 
 // renderIndex uses the shorthand when the index is exactly what the shorthand
