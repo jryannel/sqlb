@@ -32,10 +32,25 @@ import (
 	"github.com/jryannel/sqlb/schema"
 )
 
-// excluded names the tables no declaration will ever describe: the migration
-// runner's bookkeeping. River's tables are created at runtime and are not in
-// this database, so they need no entry.
-var excluded = []string{"goose_db_version"}
+// defaultExcluded names the bookkeeping tables of the migration runners a Go
+// Postgres project is most likely to be on. They are excluded rather than
+// reported because no declaration will ever describe them, and a survey that
+// counts them as blockers overstates the work.
+//
+// The list is a default, not a policy: -exclude replaces it, because a runner
+// this does not know about would otherwise show up as an unmodelable table and
+// read as a real result. Entries absent from the database are dropped before
+// the list reaches introspect — see the narrowing in main.
+var defaultExcluded = []string{
+	"goose_db_version",       // goose
+	"schema_migrations",      // golang-migrate, dbmate, ActiveRecord-style
+	"atlas_schema_revisions", // atlas
+	"_sqlx_migrations",       // sqlx
+	"flyway_schema_history",  // flyway
+}
+
+// excluded is the list actually used, set from -exclude in main.
+var excluded = defaultExcluded
 
 type tableResult struct {
 	Name     string
@@ -47,9 +62,19 @@ type tableResult struct {
 
 func main() {
 	modules := flag.String("modules", "", "comma-separated table-name prefixes to group the per-table verdict by, for a modular monolith whose tables are named <module>_<table> (e.g. billing,catalog)")
+	exclude := flag.String("exclude", "", "comma-separated tables to leave out entirely, replacing the built-in migration-runner list ("+strings.Join(defaultExcluded, ", ")+")")
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fatal("usage: sqlb-survey [-modules a,b,c] <src-migrated-dsn> <dst-empty-dsn>")
+		fatal("usage: sqlb-survey [-modules a,b,c] [-exclude t1,t2] <src-migrated-dsn> <dst-empty-dsn>")
+	}
+	wanted := defaultExcluded
+	if strings.TrimSpace(*exclude) != "" {
+		wanted = nil
+		for _, t := range strings.Split(*exclude, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				wanted = append(wanted, t)
+			}
+		}
 	}
 	ctx := context.Background()
 	src := open(ctx, flag.Arg(0))
@@ -57,9 +82,23 @@ func main() {
 	dst := open(ctx, flag.Arg(1))
 	defer dst.Close()
 
-	all := listTables(ctx, src)
-	fmt.Printf("# sqlb schema survey\n\n%d base tables (excluding %s)\n\n",
-		len(all), strings.Join(excluded, ", "))
+	// Narrow the exclusion list to what the database actually holds.
+	//
+	// introspect reports a name in Exclude that it does not find, deliberately
+	// — a typo would otherwise silently shrink what a gate checks. That is the
+	// right behaviour for a gate and the wrong one for a default list covering
+	// five migration runners, four of which are absent from any given project:
+	// they would arrive as four skipped constructs, which is a finding about
+	// this command's defaults rather than about the schema.
+	present := listTables(ctx, src, nil)
+	excluded = intersect(wanted, present)
+
+	all := listTables(ctx, src, excluded)
+	label := "nothing"
+	if len(excluded) > 0 {
+		label = strings.Join(excluded, ", ")
+	}
+	fmt.Printf("# sqlb schema survey\n\n%d base tables (excluding %s)\n\n", len(all), label)
 
 	// ---------------------------------------------------------------- phase A
 	// Whole-schema introspect. This is what a drift gate over the entire
@@ -377,11 +416,16 @@ func keys[V any](m map[string]V) []string {
 	return out
 }
 
-func listTables(ctx context.Context, db *pgxpool.Pool) []string {
+func listTables(ctx context.Context, db *pgxpool.Pool, skip []string) []string {
+	// A nil slice binds as SQL NULL, and `tablename <> ALL(NULL)` is NULL
+	// rather than true — so a nil skip list would match no rows at all.
+	if skip == nil {
+		skip = []string{}
+	}
 	rows, err := db.Query(ctx, `
 		SELECT tablename FROM pg_tables
 		WHERE schemaname = 'public' AND tablename <> ALL($1)
-		ORDER BY tablename`, excluded)
+		ORDER BY tablename`, skip)
 	if err != nil {
 		fatal("list tables: %v", err)
 	}
@@ -393,6 +437,21 @@ func listTables(ctx context.Context, db *pgxpool.Pool) []string {
 			fatal("scan table: %v", err)
 		}
 		out = append(out, t)
+	}
+	return out
+}
+
+// intersect returns the members of want that appear in have, order preserved.
+func intersect(want, have []string) []string {
+	set := make(map[string]bool, len(have))
+	for _, h := range have {
+		set[h] = true
+	}
+	var out []string
+	for _, w := range want {
+		if set[w] {
+			out = append(out, w)
+		}
 	}
 	return out
 }
