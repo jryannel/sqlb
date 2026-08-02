@@ -234,13 +234,20 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 			{Table: "t", Name: "t_lower_idx", Expression: true, Def: "CREATE INDEX ... (lower(a))"},
 		},
 	}
-	_, rep, err := build(cat, Options{})
+	r, rep, err := build(cat, Options{})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	// The composite UNIQUE in this catalog is imported rather than reported
+	// (issue #108); everything else here still has no declaration.
+	if u := r.Get("t").Uniques(); len(u) != 1 || u[0].Name != "t_ab_key" {
+		t.Errorf("composite unique should be imported, got %+v", u)
+	}
+	if strings.Contains(rep.String(), "composite unique constraint") {
+		t.Errorf("composite unique should no longer be reported:\n%s", rep)
+	}
 	for _, want := range []string{
 		"composite primary key",
-		"composite unique constraint",
 		"contype x",
 		"expression",
 		"money",

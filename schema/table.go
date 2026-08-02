@@ -171,6 +171,19 @@ type Check struct {
 	Expr string
 }
 
+// Unique is a table-level UNIQUE constraint over one or more columns — the
+// table-level peer of Field.Unique().
+//
+// It is a different object from a unique index, and the difference is not
+// cosmetic: only a constraint can be the target of
+// FOREIGN KEY … REFERENCES t (a, b) or be named in ON CONFLICT ON CONSTRAINT.
+// Declaring one where the database has the other produces a migration that
+// drops and rebuilds, which on a live table is the expensive kind.
+type Unique struct {
+	Name    string
+	Columns []string
+}
+
 // TableDef is a table declaration. Build one with Table, which also registers
 // it in the default registry.
 type TableDef struct {
@@ -183,6 +196,7 @@ type TableDef struct {
 	fields  []*Field
 	indexes []Index
 	checks  []Check
+	uniques []Unique
 	rest    *REST
 	actions []Action
 }
@@ -446,6 +460,52 @@ func (t *TableDef) AddIndex(idx Index) *TableDef {
 func (t *TableDef) Check(name, expr string) *TableDef {
 	t.checks = append(t.checks, Check{Name: name, Expr: expr})
 	return t
+}
+
+// Unique adds a composite UNIQUE constraint, named the way Postgres names one
+// itself: secrets_tenant_kind_tenant_id_name_key.
+//
+//	t.Unique("tenant_kind", "tenant_id", "name")
+//
+// # Why this is not UniqueIndex
+//
+// [TableDef.UniqueIndex] renders CREATE UNIQUE INDEX, which enforces the same
+// rule through a different object. Two of those differences are load-bearing:
+// a unique index cannot be the target of FOREIGN KEY … REFERENCES t (a, b),
+// and it cannot be named in ON CONFLICT ON CONSTRAINT. `UNIQUE (a, b)` written
+// inline in CREATE TABLE is also what a hand-written migration reaches for by
+// default, so a database being adopted usually has the constraint.
+//
+// Declaring the index where the database has the constraint is therefore not a
+// near-miss that diffs to nothing. It diffs to a drop and a rebuild, which is a
+// real migration on live data forced by the declaration language rather than by
+// anything the schema needs (issue #108).
+//
+// Use [TableDef.UniqueNamed] when the live name does not follow the
+// convention — which for a constraint an application may be matching on by
+// name, the same way [TableDef.IndexNamed] describes.
+func (t *TableDef) Unique(columns ...string) *TableDef {
+	t.uniques = append(t.uniques, Unique{
+		Name:    uniqueConstraintName(t.name, columns),
+		Columns: columns,
+	})
+	return t
+}
+
+// UniqueNamed adds a composite UNIQUE constraint under a name you choose,
+// rather than the one the convention would derive. See [TableDef.Unique].
+func (t *TableDef) UniqueNamed(name string, columns ...string) *TableDef {
+	t.uniques = append(t.uniques, Unique{Name: name, Columns: columns})
+	return t
+}
+
+// Uniques returns the table-level unique constraints.
+func (t *TableDef) Uniques() []Unique { return t.uniques }
+
+// uniqueConstraintName derives the name Postgres would have given the
+// constraint, which is what makes an adopted database diff to nothing.
+func uniqueConstraintName(table string, columns []string) string {
+	return table + "_" + strings.Join(columns, "_") + "_key"
 }
 
 // ReplaceIndexWhere rewrites a partial index's predicate, for the same reason

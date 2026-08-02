@@ -255,6 +255,34 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			},
 			want: "also claimed by table",
 		},
+		{
+			name: "unique constraint over a column that does not exist",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey()).Unique("id", "nope")
+			},
+			want: `unique constraint "p_id_nope_key" references unknown column "nope"`,
+		},
+		{
+			name: "unique constraint with no columns",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey()).UniqueNamed("p_empty_key")
+			},
+			want: "covers no columns",
+		},
+		{
+			// The derived name concatenates the table and every column, so it
+			// reaches 63 bytes without any single part looking long — and a
+			// truncated name diffs as a rename forever.
+			name: "derived unique constraint name past the identifier limit",
+			build: func(r *schema.Registry) {
+				r.Table("a_table_with_a_fairly_long_name",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Text("tenant_identifier"),
+					schema.Text("resource_identifier"),
+				).Unique("tenant_identifier", "resource_identifier")
+			},
+			want: "so give it a shorter name with UniqueNamed",
+		},
 	}
 
 	for _, tt := range tests {

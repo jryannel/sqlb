@@ -317,6 +317,25 @@ func (r *Registry) Validate() error {
 			}
 		}
 
+		for _, u := range t.Uniques() {
+			if len(u.Columns) == 0 {
+				report(t.name, "", "unique constraint %q covers no columns", u.Name)
+			}
+			for _, c := range u.Columns {
+				if !seen[c] {
+					report(t.name, "", "unique constraint %q references unknown column %q", u.Name, c)
+				}
+			}
+			// The derived name concatenates the table and every column, so it
+			// runs long sooner than an index name does — and a truncated
+			// constraint name leaves every later diff proposing to rename one
+			// spelling to the other forever. UniqueNamed is the way out.
+			if len(u.Name) > maxIdentBytes {
+				report(t.name, "", "unique constraint name %q is %d bytes; Postgres truncates at %d, "+
+					"so give it a shorter name with UniqueNamed", u.Name, len(u.Name), maxIdentBytes)
+			}
+		}
+
 		if t.rest != nil {
 			needsPK := t.rest.Ops.Has(OpRead) || t.rest.Ops.Has(OpUpdate) || t.rest.Ops.Has(OpDelete)
 			if needsPK && pks == 0 {

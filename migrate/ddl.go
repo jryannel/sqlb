@@ -627,6 +627,26 @@ func constraints(t *schema.TableDef) []constraint {
 		}
 	}
 
+	// Table-level UNIQUE constraints. These carry cols like the per-column
+	// form above, so a migration can build the backing index beforehand and
+	// adopt it, rather than holding a write lock while ADD CONSTRAINT builds
+	// one inline.
+	for _, u := range t.Uniques() {
+		cols := make([]string, len(u.Columns))
+		quoted := make([]string, len(u.Columns))
+		for i, c := range u.Columns {
+			cols[i] = c
+			quoted[i] = quoteIdent(c)
+		}
+		out = append(out, constraint{
+			name:   u.Name,
+			def:    "UNIQUE (" + strings.Join(quoted, ", ") + ")",
+			unique: true,
+			cols:   cols,
+			covers: cols,
+		})
+	}
+
 	for i, c := range t.Checks() {
 		out = append(out, constraint{
 			name:        checkConstraintName(t, c, i),

@@ -92,6 +92,12 @@ COMMENT ON COLUMN document_chunks.embedding IS 'The embedding, 1536 wide.';
 --
 -- contracted_hours_per_week is a numeric with a precision (#81), which is a
 -- different type from an unbounded numeric and was skipped outright.
+--
+-- The composite UNIQUE below is #108, and it is here in both spellings: one
+-- named the way Postgres names it, which must come back as the Unique()
+-- shorthand, and one named otherwise, which must keep its name through
+-- UniqueNamed. Approximating either as a unique index would diff as a drop and
+-- a rebuild, so this is the assertion that the constraint stays a constraint.
 CREATE TABLE members (
     id                        uuid PRIMARY KEY,
     org_id                    uuid NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
@@ -101,7 +107,9 @@ CREATE TABLE members (
     contracted_hours_per_week numeric(5,2),
     hired_on                  date,
     CONSTRAINT members_supervisor_id_fkey FOREIGN KEY (supervisor_id)
-        REFERENCES members (id) ON DELETE SET NULL
+        REFERENCES members (id) ON DELETE SET NULL,
+    CONSTRAINT members_org_id_name_key UNIQUE (org_id, name),
+    CONSTRAINT members_roster_slot UNIQUE (org_id, hired_on)
 );
 
 CREATE TABLE images (
