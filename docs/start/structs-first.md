@@ -40,8 +40,10 @@ reflection cannot infer:
 Naming a column that does not exist panics at startup and lists the ones that
 do.
 
-Call it from `init`. It mutates the cached model and does not lock, so it is
-only safe before any query has been built against that model.
+Call it from `init`, and it panics if you do not. Describing late is wrong
+because a query built before the description does not carry it and one built
+after does — not because it corrupts anything: each call publishes a fresh copy
+of the model, so a query already in flight keeps the one it started with.
 
 ## Relations
 

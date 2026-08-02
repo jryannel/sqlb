@@ -39,7 +39,7 @@ description = "Run all tests. No Docker and no Postgres needed: the engine's tes
 run = "go test ./..."
 
 [tasks.test-race]
-description = "Run all tests with the race detector. Worth running before touching anything that caches per-type state — the model cache, the hook registry, or Describe, which mutates a cached model on purpose and is only safe at init."
+description = "Run all tests with the race detector. Worth running before touching anything that caches per-type state — the model cache, the hook registry, or Describe, which publishes a fresh copy of a cached model rather than writing the one already handed out. concurrency_test.go and rest/concurrency_test.go are the tests that make this gate mean something: nothing else in the suite runs two requests at once."
 run = "go test -race ./..."
 
 [tasks.test-pg]
