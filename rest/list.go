@@ -22,13 +22,17 @@ import (
 // the table is written to mid-walk. It is present whenever there is a next page
 // and the model has a primary key to break ties with, including on a request
 // that paged by offset — so a client can switch to cursors without a flag.
+//
+// Items serialises itself, so that a page of rows is built in one buffer rather
+// than one per row; see rows.MarshalJSON. An empty page is `[]` rather than
+// `null`, so a client iterating the result does not have to test for it.
 type Page[T any] struct {
-	Items      []row[T] `json:"items" doc:"The rows on this page"`
-	Page       int      `json:"page" doc:"1-based page number"`
-	PerPage    int      `json:"per_page" doc:"Rows requested per page, after the resource's ceiling was applied"`
-	HasMore    bool     `json:"has_more" doc:"Whether a further page exists"`
-	NextCursor *string  `json:"next_cursor,omitempty" doc:"Position to resume from; pass it back as ?cursor="`
-	Total      *int64   `json:"total,omitempty" doc:"Total matching rows; present only when ?count=exact was given"`
+	Items      rows[T] `json:"items" doc:"The rows on this page"`
+	Page       int     `json:"page" doc:"1-based page number"`
+	PerPage    int     `json:"per_page" doc:"Rows requested per page, after the resource's ceiling was applied"`
+	HasMore    bool    `json:"has_more" doc:"Whether a further page exists"`
+	NextCursor *string `json:"next_cursor,omitempty" doc:"Position to resume from; pass it back as ?cursor="`
+	Total      *int64  `json:"total,omitempty" doc:"Total matching rows; present only when ?count=exact was given"`
 }
 
 // listInput carries the raw query string.
@@ -116,11 +120,6 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 				return nil, asHumaError(ctx, err, opts.name())
 			}
 			body.NextCursor = ptr(string(cursor))
-		}
-		// Items is marshalled as [] rather than null when empty: a client
-		// iterating the result should not have to test for it.
-		if body.Items == nil {
-			body.Items = []row[T]{}
 		}
 
 		// An unrecognised value is refused rather than ignored, like every

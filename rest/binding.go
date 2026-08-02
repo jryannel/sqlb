@@ -18,11 +18,22 @@ type binding[T any] struct {
 	opts  Options
 	model *sqlb.Model
 
-	// jsonName maps a column name to the JSON property it serialises as. The
-	// two usually coincide, because codegen writes `json:"org_id"` beside
-	// `db:"org_id"`, but a hand-written model may disagree and the response
-	// must follow the struct, not the column.
-	jsonName map[string]string
+	// jsonKey maps a column name onto the bytes that open its member in the
+	// response — `"org_id":`, quoted and with the colon.
+	//
+	// The property is usually the column name, because codegen writes
+	// `json:"org_id"` beside `db:"org_id"`, but a hand-written model may
+	// disagree and the response must follow the struct, not the column. It is
+	// held rendered rather than as the name because that is what serialising a
+	// row needs and it cannot change between requests; see jsonKeyOf. A column
+	// with no JSON name is absent rather than present holding nil, so a lookup
+	// miss is the skip condition.
+	jsonKey map[string][]byte
+
+	// relKey is the same rendering for the relations this resource declares
+	// expandable, keyed by the name `?expand` uses. Only declared relations can
+	// be reached, so this covers every key a response can carry.
+	relKey map[string][]byte
 
 	// selectable is the default projection: every non-hidden column, minus the
 	// computed ones this resource did not opt into. It drives the response
@@ -94,9 +105,13 @@ func bind[T any](opts Options) (*binding[T], error) {
 	b := &binding[T]{
 		opts:       opts,
 		model:      m,
-		jsonName:   make(map[string]string, len(m.Columns)),
+		jsonKey:    make(map[string][]byte, len(m.Columns)),
 		selectable: selectableFor(m, opts.Computed),
 	}
+
+	// The unrendered names, for the diagnostic below. Serialising wants the
+	// keys and nothing else, so this stays local.
+	jsonName := make(map[string]string, len(m.Columns))
 
 	rt := reflect.TypeFor[T]()
 	for _, col := range m.Columns {
@@ -104,7 +119,14 @@ func bind[T any](opts Options) (*binding[T], error) {
 		if err != nil {
 			return nil, err
 		}
-		b.jsonName[col.Name] = name
+		jsonName[col.Name] = name
+		if name != "" {
+			key, err := jsonKeyOf(name)
+			if err != nil {
+				return nil, fmt.Errorf("rest: %s.%s has an unencodable json name %q: %w", m.Type, col.Field, name, err)
+			}
+			b.jsonKey[col.Name] = key
+		}
 		if col.ReadOnly {
 			b.readOnly = append(b.readOnly, col.Index)
 			continue
@@ -118,10 +140,10 @@ func bind[T any](opts Options) (*binding[T], error) {
 	// that marshalled the struct directly — a debug log, a hand-written
 	// handler — so the mismatch is worth reporting where it is introduced.
 	for _, col := range m.Columns {
-		if col.Hidden && b.jsonName[col.Name] != "" {
+		if col.Hidden && jsonName[col.Name] != "" {
 			return nil, fmt.Errorf(
 				"rest: %s.%s is hidden but has json tag %q; hidden columns need `json:\"-\"` so they cannot be marshalled by accident",
-				m.Type, col.Field, b.jsonName[col.Name])
+				m.Type, col.Field, jsonName[col.Name])
 		}
 	}
 	// Computed names a column the model computes. An unknown one, or a stored
@@ -147,12 +169,21 @@ func bind[T any](opts Options) (*binding[T], error) {
 	// here: at request time the parameter parses cleanly against Options and the
 	// response would come back 200 with the relation missing.
 	for _, name := range opts.Expandable {
-		if m.Relation(name) == nil {
+		rel := m.Relation(name)
+		if rel == nil {
 			return nil, fmt.Errorf(
 				"rest: %s declares Expandable %q, but %s has no such relation (declared: %s); "+
 					"a relation is a field tagged `sqlb:\"expands=<column>\"` beside a column tagged `expand`",
 				opts.Path, name, m.Type.Name(), strings.Join(m.RelationNames(), ", "))
 		}
+		key, err := jsonKeyOf(rel.Name)
+		if err != nil {
+			return nil, fmt.Errorf("rest: relation %s of %s has an unencodable name: %w", rel.Name, m.Type, err)
+		}
+		if b.relKey == nil {
+			b.relKey = make(map[string][]byte, len(opts.Expandable))
+		}
+		b.relKey[name] = key
 	}
 
 	return b, nil
@@ -177,6 +208,27 @@ func jsonNameOf(rt reflect.Type, col *sqlb.ColumnInfo) (string, error) {
 		return sf.Name, nil
 	}
 	return name, nil
+}
+
+// jsonKeyOf renders a property name as the bytes that open its member: the
+// quoted name, then the colon.
+//
+// It is quoted through encoding/json rather than by wrapping the name in quote
+// characters, because a JSON name comes from a struct tag and may contain
+// anything — the escaping has to be the same escaping the rest of the document
+// gets, and only the encoder knows what that is.
+//
+// Precomputing it is worth a function because of where the alternative ran:
+// MarshalJSON serialises one column of one row, so quoting the *same* constant
+// name happened once per column per row — 400 times for a 50-row page of eight
+// columns, each an allocation. It was the largest single source of garbage on
+// the response path.
+func jsonKeyOf(name string) ([]byte, error) {
+	quoted, err := json.Marshal(name)
+	if err != nil {
+		return nil, err
+	}
+	return append(quoted, ':'), nil
 }
 
 // fieldByIndex walks an index path over a type, tolerating embedded pointers.
@@ -221,79 +273,166 @@ func (b *binding[T]) columnsFor(selected []string) []*sqlb.ColumnInfo {
 type row[T any] struct {
 	value T
 	cols  []*sqlb.ColumnInfo
-	names map[string]string
+	// keys is the binding's precomputed `"name":` per column. A column absent
+	// from it has no JSON name and is not serialised.
+	keys map[string][]byte
 	// expand are the relations this request asked to resolve. They are not
 	// columns, so they are serialised after them, under the relation's own
-	// name — which is the JSON name of the field the expansion landed in.
-	expand []*sqlb.RelationInfo
+	// name — which is the JSON name of the field the expansion landed in. Each
+	// carries its key for the same reason a column's is precomputed.
+	expand []expansion
+}
+
+// expansion is one relation to serialise, with its member key already rendered.
+type expansion struct {
+	rel *sqlb.RelationInfo
+	key []byte
+}
+
+// memberBytes is a rough guess at what one serialised column costs, used to
+// size a buffer in one allocation rather than letting it double its way there.
+// Guessing low only costs the growth it was avoiding, so it is set near the
+// small end: an id, a status, a timestamp.
+const memberBytes = 48
+
+// rowWriter is a buffer and the encoder bound to it.
+//
+// It is a type rather than two locals because a page shares one: encoding/json
+// asks each value for its own []byte, so a row that answered on its own would
+// allocate a buffer, fill it, and have the page copy it out and drop it — once
+// per row. rows.MarshalJSON hands every row the same writer instead, which is
+// what makes a page of fifty cost one buffer rather than fifty.
+//
+// The encoder points at the buffer, so a rowWriter must not be copied once
+// built. newRowWriter is the only constructor for that reason.
+type rowWriter struct {
+	buf bytes.Buffer
+	enc *json.Encoder
+	// written counts members of the object currently being built, so that the
+	// separator goes before every member but the first. A counter rather than
+	// the loop index because a column can be skipped, and keying the comma off
+	// the index would emit a leading one the moment the first column is the
+	// skipped one.
+	written int
+}
+
+func newRowWriter(hint int) *rowWriter {
+	w := &rowWriter{}
+	w.buf.Grow(hint)
+	w.enc = json.NewEncoder(&w.buf)
+	return w
+}
+
+// openMember writes the separator, if one is due, and the member's key.
+func (w *rowWriter) openMember(key []byte) {
+	if w.written > 0 {
+		w.buf.WriteByte(',')
+	}
+	w.written++
+	w.buf.Write(key)
+}
+
+// member writes one key and its value.
+//
+// The value goes through the bound encoder rather than json.Marshal, which
+// would allocate a copy of every value for us to append and then discard — one
+// allocation per column per row.
+func (w *rowWriter) member(key []byte, v any) error {
+	w.openMember(key)
+	if err := w.enc.Encode(v); err != nil {
+		return err
+	}
+	// Encode terminates a value with a newline, which is legal between tokens
+	// but is not what a response should carry. It is always exactly one byte,
+	// and Encode writes nothing at all when it fails, so this only ever removes
+	// the terminator it just wrote.
+	w.buf.Truncate(w.buf.Len() - 1)
+	return nil
+}
+
+// sizeHint is roughly what this row will occupy, for sizing a buffer.
+func (r row[T]) sizeHint() int {
+	return (len(r.cols)+len(r.expand))*memberBytes + 2
 }
 
 // MarshalJSON writes only the projected columns, in projection order, followed
 // by whatever relations the request expanded.
+//
+// A page does not reach this method — rows.MarshalJSON calls writeTo directly,
+// with a buffer the whole page shares. This is the single-row path: the item,
+// create and update responses.
 func (r row[T]) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.WriteByte('{')
+	w := newRowWriter(r.sizeHint())
+	if err := r.writeTo(w); err != nil {
+		return nil, err
+	}
+	return w.buf.Bytes(), nil
+}
+
+// writeTo appends the row to w as a JSON object.
+func (r row[T]) writeTo(w *rowWriter) error {
+	w.written = 0
+	w.buf.WriteByte('{')
 	rv := reflect.ValueOf(r.value)
 
-	// A separator counter rather than the loop index: a column can be skipped
-	// (no JSON name), and keying the comma off the index would emit a leading
-	// one the moment the first column is the skipped one.
-	written := 0
-	write := func(name string, v any) error {
-		if written > 0 {
-			buf.WriteByte(',')
-		}
-		written++
-		key, err := json.Marshal(name)
-		if err != nil {
-			return err
-		}
-		buf.Write(key)
-		buf.WriteByte(':')
-		encoded, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		buf.Write(encoded)
-		return nil
-	}
-
 	for _, col := range r.cols {
-		name := r.names[col.Name]
-		if name == "" {
+		key := r.keys[col.Name]
+		if key == nil {
 			continue
 		}
 		fv, ok := valueByIndex(rv, col.Index)
 		if !ok {
-			if written > 0 {
-				buf.WriteByte(',')
-			}
-			written++
-			key, err := json.Marshal(name)
-			if err != nil {
-				return nil, err
-			}
-			buf.Write(key)
-			buf.WriteString(":null")
+			w.openMember(key)
+			w.buf.WriteString("null")
 			continue
 		}
-		if err := write(name, fv.Interface()); err != nil {
-			return nil, fmt.Errorf("rest: encoding %s: %w", col.Name, err)
+		if err := w.member(key, fv.Interface()); err != nil {
+			return fmt.Errorf("rest: encoding %s: %w", col.Name, err)
 		}
 	}
 
-	for _, rel := range r.expand {
-		fv, ok := valueByIndex(rv, rel.Index)
+	for _, exp := range r.expand {
+		fv, ok := valueByIndex(rv, exp.rel.Index)
 		if !ok {
 			continue
 		}
-		if err := write(rel.Name, fv.Interface()); err != nil {
-			return nil, fmt.Errorf("rest: encoding expanded %s: %w", rel.Name, err)
+		if err := w.member(exp.key, fv.Interface()); err != nil {
+			return fmt.Errorf("rest: encoding expanded %s: %w", exp.rel.Name, err)
 		}
 	}
 
-	buf.WriteByte('}')
-	return buf.Bytes(), nil
+	w.buf.WriteByte('}')
+	return nil
+}
+
+// rows is a page of them, and the reason it is a named type rather than a
+// slice: encoding/json asks a value for its bytes, so the array is the smallest
+// unit that can be built in one buffer.
+type rows[T any] []row[T]
+
+// MarshalJSON writes the whole page into one buffer.
+//
+// An empty page marshals as `[]` rather than `null`, so a client iterating the
+// result does not have to test for it — which is why no handler has to replace
+// a nil slice before returning one.
+func (rs rows[T]) MarshalJSON() ([]byte, error) {
+	hint := 2
+	if len(rs) > 0 {
+		hint += len(rs) * (rs[0].sizeHint() + 1)
+	}
+	w := newRowWriter(hint)
+
+	w.buf.WriteByte('[')
+	for i := range rs {
+		if i > 0 {
+			w.buf.WriteByte(',')
+		}
+		if err := rs[i].writeTo(w); err != nil {
+			return nil, err
+		}
+	}
+	w.buf.WriteByte(']')
+	return w.buf.Bytes(), nil
 }
 
 // Schema reports the row's OpenAPI schema as T's, so the document describes the
@@ -340,13 +479,13 @@ func valueByIndex(v reflect.Value, index []int) (reflect.Value, bool) {
 }
 
 // rowsOf wraps scanned rows for serialisation under a projection.
-func (b *binding[T]) rowsOf(values []T, cols []*sqlb.ColumnInfo, expand []string) []row[T] {
+func (b *binding[T]) rowsOf(values []T, cols []*sqlb.ColumnInfo, expand []string) rows[T] {
 	// Resolved once for the page rather than per row: the relations are the
 	// same for every row in it, and the lookup is a scan of a short slice.
 	rels := b.relationsFor(expand)
-	out := make([]row[T], len(values))
+	out := make(rows[T], len(values))
 	for i, v := range values {
-		out[i] = row[T]{value: v, cols: cols, names: b.jsonName, expand: rels}
+		out[i] = row[T]{value: v, cols: cols, keys: b.jsonKey, expand: rels}
 	}
 	return out
 }
@@ -355,15 +494,20 @@ func (b *binding[T]) rowsOf(values []T, cols []*sqlb.ColumnInfo, expand []string
 // serialise. Names are already validated — by the parser against
 // Options.Expandable, and by bind against the model — so an unknown one here
 // would be a bug rather than bad input, and is skipped rather than guessed at.
-func (b *binding[T]) relationsFor(names []string) []*sqlb.RelationInfo {
+// Each carries the member key bind rendered for it, so serialising a page of
+// rows re-renders nothing.
+func (b *binding[T]) relationsFor(names []string) []expansion {
 	if len(names) == 0 {
 		return nil
 	}
-	out := make([]*sqlb.RelationInfo, 0, len(names))
+	out := make([]expansion, 0, len(names))
 	for _, name := range names {
-		if rel := b.model.Relation(name); rel != nil {
-			out = append(out, rel)
+		rel := b.model.Relation(name)
+		key := b.relKey[name]
+		if rel == nil || key == nil {
+			continue
 		}
+		out = append(out, expansion{rel: rel, key: key})
 	}
 	return out
 }
