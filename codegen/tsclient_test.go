@@ -176,6 +176,13 @@ func TestTSExpansionKeepsTheCollectionEnvelope(t *testing.T) {
 	if !contains(src, "& ('posts' extends E ? { posts: Collection<Post> } : unknown)") {
 		t.Errorf("a reverse expansion should keep the Collection envelope:\n%s", src)
 	}
+}
+
+// The envelope itself lives in the runtime now, once per output directory
+// rather than once per module (#110). The property is unchanged — Page extends
+// Collection rather than restating it — only its address is.
+func TestTSPageEnvelopeExtendsCollection(t *testing.T) {
+	src := generateTS(t, tsFixture())["runtime.gen.ts"]
 	if !contains(src, "export interface Page<T> extends Collection<T> {") {
 		t.Errorf("the page envelope should extend the collection rather than restate it:\n%s", src)
 	}
@@ -234,8 +241,20 @@ func TestTSQueriesAreTheOnlyFileThatNeedsTanStack(t *testing.T) {
 	files := generateTS(t, tsFixture())
 	client, queries := files["client.gen.ts"], files["queries.gen.ts"]
 
-	if strings.Contains(client, "import ") {
-		t.Errorf("the client file should import nothing:\n%s", client)
+	// The client imports its own runtime and nothing else. That is the claim
+	// worth holding: no framework, no bundler assumption, no pub package — a
+	// sibling generated file is not a dependency (#110).
+	for _, line := range strings.Split(client, "\n") {
+		if !strings.HasPrefix(line, "import ") {
+			continue
+		}
+		if !strings.Contains(line, "'./runtime.gen.ts'") {
+			t.Errorf("the client imports something other than its runtime: %s", line)
+		}
+	}
+	// And the runtime, which is what the client imports, imports nothing at all.
+	if strings.Contains(files["runtime.gen.ts"], "import ") {
+		t.Errorf("the runtime file should import nothing:\n%s", files["runtime.gen.ts"])
 	}
 	for _, want := range []string{
 		"import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';",

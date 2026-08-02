@@ -91,25 +91,31 @@ func renderDartClient(opts Options) ([]byte, error) {
 		return nil, err
 	}
 
-	var b bytes.Buffer
-	b.WriteString(dartHeader)
-	b.WriteString(dartRuntime)
+	// The body first, so the import can be decided from what it references.
+	// Dart is analysed with --fatal-infos, so an unused import fails the build
+	// (#110).
+	var body bytes.Buffer
 
 	// Row views for every table, not only the exposed ones: an expansion can
 	// name a table that has no endpoint of its own, and the row still has to
 	// have a type. This is the same call `.Expandable()` already makes on the
 	// server.
 	for _, t := range opts.Registry.Tables() {
-		if err := dartRowSection(&b, opts.Registry, t); err != nil {
+		if err := dartRowSection(&body, opts.Registry, t); err != nil {
 			return nil, err
 		}
 	}
 
 	for _, r := range resources {
-		dartResourceSection(&b, r)
+		dartResourceSection(&body, r)
 	}
 
-	dartTableEnum(&b, opts.Registry)
+	dartTableEnum(&body, opts.Registry)
+
+	var b bytes.Buffer
+	b.WriteString(dartHeader)
+	b.WriteString(dartRuntime)
+	b.Write(body.Bytes())
 	return b.Bytes(), nil
 }
 
