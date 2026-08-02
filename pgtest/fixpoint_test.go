@@ -152,6 +152,20 @@ CREATE TABLE bookings (
         WHERE (status = 'confirmed')
 );
 
+-- A composite UNIQUE *constraint*, which is a different object from the unique
+-- index above: only a constraint can be the target of REFERENCES t (a, b) or be
+-- named in ON CONFLICT ON CONSTRAINT, so declaring the index instead is not a
+-- spelling difference (issue #108). Here it is the write path's conflict
+-- target, which is why the shape is worth reproducing rather than simplifying.
+CREATE TABLE secrets (
+    id          uuid PRIMARY KEY,
+    tenant_kind text NOT NULL,
+    tenant_id   uuid NOT NULL,
+    name        text NOT NULL,
+    ciphertext  bytea NOT NULL,
+    CONSTRAINT secrets_tenant_kind_tenant_id_name_key UNIQUE (tenant_kind, tenant_id, name)
+);
+
 CREATE TABLE images (
     id         uuid PRIMARY KEY,
     creator_id uuid NOT NULL REFERENCES members (id) ON DELETE CASCADE,
