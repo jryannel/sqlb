@@ -397,5 +397,7 @@ here is `go test`, not a CLI.
 - [Capabilities](capabilities.md) — what each column lets the outside world do
 - [References and relations](references.md) — foreign keys, and both directions
   of one
+- [Schema practices](../best-practices.md) — which opinions the DSL enforces,
+  which it only recommends, and which refusals are merely unbuilt
 - [Migrations](../migrations/README.md) — turning a schema edit into DDL
 - [Queries](../queries/README.md) — using the models this produces

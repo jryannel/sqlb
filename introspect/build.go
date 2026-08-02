@@ -430,6 +430,22 @@ func buildColumn(table string, col columnRow, cons *constraints,
 			"(a default is the nearest thing)", col.Type)
 		return nil, false
 	}
+	// A serial is an identity column in older clothing, and the check above
+	// misses it because attidentity is empty for one. Left alone it imports as
+	// an ordinary column whose default happens to name a sequence, so the table
+	// reports clean and the DDL it produces does not run — the sequence is a
+	// separate object and Diff renders no CREATE SEQUENCE.
+	//
+	// The column goes rather than only its default: declaring the column
+	// without the default the database has would leave every Diff proposing to
+	// add one back, which is the permanently-red gate stripCast exists to avoid.
+	if isSequenceDefault(col.Default) {
+		rep.add(table, col.Name, "column draws its default from a sequence (a serial), "+
+			"which the DSL cannot declare — the sequence is a separate object, and a "+
+			"declaration without the default would diff against the real column forever",
+			col.Type)
+		return nil, false
+	}
 
 	elemType, isArray := splitArrayType(col.Type)
 	t, typeArg, scale, ok := columnType(elemType)
