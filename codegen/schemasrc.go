@@ -231,6 +231,17 @@ func renderTable(b *bytes.Buffer, t *schema.TableDef, names map[string]string, r
 	for _, u := range t.Uniques() {
 		b.WriteString(".\n\t" + renderUnique(t, u))
 	}
+	for _, e := range t.Exclusions() {
+		fmt.Fprintf(b, ".\n\tAddExclude(schema.Exclusion{\n\t\tName: %s,\n", strconv.Quote(e.Name))
+		if e.Using != "" {
+			fmt.Fprintf(b, "\t\tUsing: %s,\n", strconv.Quote(e.Using))
+		}
+		fmt.Fprintf(b, "\t\tElements: %s,\n", strconv.Quote(e.Elements))
+		if e.Where != "" {
+			fmt.Fprintf(b, "\t\tWhere: %s,\n", strconv.Quote(e.Where))
+		}
+		b.WriteString("\t})")
+	}
 	for _, idx := range t.Indexes() {
 		b.WriteString(".\n\t" + renderIndex(t, idx))
 	}

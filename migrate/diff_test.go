@@ -1230,3 +1230,77 @@ func TestCompositePrimaryKeyDDL(t *testing.T) {
 		}
 	}
 }
+
+// An EXCLUDE constraint renders as a constraint on the table, with its index
+// method, its element list and its predicate intact (issue #121).
+func TestExclusionDDL(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("bookings",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.UUID("coach_id"),
+			schema.Text("status"),
+			schema.Timestamp("starts_at"),
+			schema.Timestamp("ends_at"),
+		).AddExclude(schema.Exclusion{
+			Name:     "bookings_no_double_booking",
+			Using:    "gist",
+			Elements: "coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&",
+			Where:    "status = 'confirmed'",
+		})
+	})
+	c := only(t, diff(t, schema.NewRegistry(), target))
+	want := `CONSTRAINT "bookings_no_double_booking" EXCLUDE USING gist ` +
+		`(coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&) WHERE (status = 'confirmed')`
+	if !strings.Contains(c.Up, want) {
+		t.Fatalf("DDL is missing the constraint:\n got:\n%s\nwant to contain:\n%s", c.Up, want)
+	}
+}
+
+// Adding one to a table that exists is an ALTER, and it reverses to a drop.
+func TestExclusionAddedAndDropped(t *testing.T) {
+	plain := func(r *schema.Registry) {
+		r.Table("rooms", schema.UUIDv7("id").PrimaryKey(), schema.UUID("room_id"))
+	}
+	withExcl := func(r *schema.Registry) {
+		r.Table("rooms", schema.UUIDv7("id").PrimaryKey(), schema.UUID("room_id")).
+			AddExclude(schema.Exclusion{Name: "rooms_excl", Using: "gist", Elements: "room_id WITH ="})
+	}
+
+	add := only(t, diff(t, build(plain), build(withExcl)))
+	if !strings.Contains(add.Up, `ADD CONSTRAINT "rooms_excl" EXCLUDE USING gist (room_id WITH =)`) {
+		t.Fatalf("adding is not an ALTER ... ADD CONSTRAINT:\n%s", add.Up)
+	}
+	drop := only(t, diff(t, build(withExcl), build(plain)))
+	if !strings.Contains(drop.Up, `DROP CONSTRAINT "rooms_excl"`) {
+		t.Fatalf("dropping is not an ALTER ... DROP CONSTRAINT:\n%s", drop.Up)
+	}
+	if !strings.Contains(drop.Down, `ADD CONSTRAINT "rooms_excl" EXCLUDE`) {
+		t.Fatalf("the drop does not reverse to the constraint it removed:\n%s", drop.Down)
+	}
+}
+
+// A constraint naming a column the same migration adds must land after it, the
+// way a check over a new column already does — the element list is an
+// expression, so the columns are recognised by name.
+func TestExclusionWaitsForItsColumns(t *testing.T) {
+	before := func(r *schema.Registry) {
+		r.Table("bookings", schema.UUIDv7("id").PrimaryKey())
+	}
+	after := func(r *schema.Registry) {
+		r.Table("bookings",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.UUID("coach_id"),
+		).AddExclude(schema.Exclusion{
+			Name: "bookings_excl", Using: "gist", Elements: "coach_id WITH =",
+		})
+	}
+	changes := diff(t, build(before), build(after))
+	order := ups(changes)
+	addCol, addCon := indexOf(order, `ADD COLUMN "coach_id"`), indexOf(order, "ADD CONSTRAINT")
+	if addCol < 0 || addCon < 0 {
+		t.Fatalf("expected both an add column and an add constraint:\n%s", render(changes))
+	}
+	if addCon < addCol {
+		t.Fatalf("the constraint is added before the column it names:\n%s", render(changes))
+	}
+}

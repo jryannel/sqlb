@@ -192,6 +192,52 @@ type Unique struct {
 	Columns []string
 }
 
+// Exclusion is an EXCLUDE constraint: no two rows may hold values that are
+// pairwise related by the given operators.
+//
+// It is the one constraint with no near miss. A composite UNIQUE has a unique
+// index; a composite primary key has a surrogate; smallint has integer. Dropping
+// an exclusion has no equivalent at all — the alternatives are enforcing it in
+// application code, where two concurrent requests interleave between the check
+// and the insert, or leaving it as unmanaged DDL and holding a permanent
+// known-difference exception in the drift gate. It is the only construct in
+// either adoption corpus where not declaring it loses a *correctness* property
+// rather than a performance or ergonomic one (issue #121).
+//
+//	AddExclude(schema.Exclusion{
+//	    Name:     "bookings_no_double_booking",
+//	    Using:    "gist",
+//	    Elements: "coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&",
+//	    Where:    "status = 'confirmed'",
+//	})
+//
+// Elements and Where are hand-written SQL, the way [TableDef.Check] takes
+// hand-written SQL and for the same reason: Postgres stores a parse tree and
+// renders it back in its own spelling, so any structured form here would have to
+// reproduce that spelling exactly or every diff would propose replacing a
+// constraint that had not changed. Both are put through the same probe a check
+// goes through before a diff (shadow.Normalize), which asks Postgres rather than
+// guessing.
+//
+// An exclusion over a scalar with `=` needs the btree_gist extension, which no
+// generated DDL creates — introspect reports the extensions a database has so
+// the list is knowable before the first bootstrap rather than after 228 errors
+// (issue #115).
+type Exclusion struct {
+	Name string
+	// Using is the index method. Empty means Postgres's default, which is
+	// btree — and which almost no exclusion wants, since the operators that
+	// make one useful (&&, and = over a range) live in gist.
+	Using string
+	// Elements is the body of the constraint: the comma-separated
+	// `<column-or-expression> WITH <operator>` list, without the surrounding
+	// parentheses.
+	Elements string
+	// Where is the optional predicate that narrows which rows the constraint
+	// applies to, without the surrounding parentheses.
+	Where string
+}
+
 // TableDef is a table declaration. Build one with Table, which also registers
 // it in the default registry.
 type TableDef struct {
@@ -205,6 +251,7 @@ type TableDef struct {
 	indexes []Index
 	checks  []Check
 	uniques []Unique
+	excls   []Exclusion
 	pkCols  []string // a composite PRIMARY KEY, when the key is not one column
 	rest    *REST
 	actions []Action
@@ -362,6 +409,9 @@ func (t *TableDef) Indexes() []Index {
 // Checks returns the declared check constraints.
 func (t *TableDef) Checks() []Check { return t.checks }
 
+// Exclusions returns the declared EXCLUDE constraints.
+func (t *TableDef) Exclusions() []Exclusion { return t.excls }
+
 // CompositeKey returns the columns of a composite primary key, or nil when the
 // table's key is a single column — which [TableDef.PrimaryKey] returns — or when
 // it declares none.
@@ -499,6 +549,29 @@ func (t *TableDef) UniqueIndexNamed(name string, columns ...string) *TableDef {
 func (t *TableDef) PrimaryKeyColumns(columns ...string) *TableDef {
 	t.pkCols = columns
 	return t
+}
+
+// AddExclude adds an EXCLUDE constraint. See [Exclusion].
+func (t *TableDef) AddExclude(e Exclusion) *TableDef {
+	t.excls = append(t.excls, e)
+	return t
+}
+
+// ReplaceExclusion rewrites an already-declared exclusion's body and predicate,
+// for the same caller and the same reason as [TableDef.ReplaceCheckExpr]:
+// shadow.Normalize puts the declared spelling through Postgres and writes back
+// what Postgres stores, so the two sides of a diff are comparable.
+func (t *TableDef) ReplaceExclusion(name, using, elements, where string) bool {
+	for i := range t.excls {
+		if t.excls[i].Name != name {
+			continue
+		}
+		t.excls[i].Using = using
+		t.excls[i].Elements = elements
+		t.excls[i].Where = where
+		return true
+	}
+	return false
 }
 
 // AddIndex adds a fully specified index, for cases the shorthands do not cover

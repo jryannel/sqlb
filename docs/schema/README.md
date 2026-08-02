@@ -261,6 +261,45 @@ pair written out.
     Check("name", "status <> 'published' OR published_at IS NOT NULL")
 ```
 
+### Exclusion constraints
+
+An `EXCLUDE` constraint says no two rows may hold values pairwise related by the
+given operators. The canonical use is the one no application-level check can
+make safe:
+
+```go
+AddExclude(schema.Exclusion{
+    Name:     "bookings_no_double_booking",
+    Using:    "gist",
+    Elements: "coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&",
+    Where:    "status = 'confirmed'",
+})
+```
+
+One coach cannot hold two confirmed bookings whose time ranges overlap —
+enforced by the database, across concurrent transactions.
+
+This is the one constraint with **no near miss**. A composite `UNIQUE` has a
+unique index; a composite primary key has a surrogate; `smallint` still
+round-trips at the wrong width. Dropping an exclusion has no equivalent at all:
+either the invariant moves into application code, where two concurrent requests
+interleave between the check and the insert, or the table stays outside the
+declaration and the drift gate holds a permanent known-difference exception.
+
+`Elements` and `Where` are hand-written SQL, exactly as `Check` is, and for the
+same reason — Postgres stores a parse tree and renders it back in its own
+spelling, so a structured form would have to reproduce that spelling or every
+diff would propose replacing a constraint that had not changed. Both go through
+the probe in `shadow.Normalize`, which adds the real constraint to the shadow
+database and reads back what Postgres stored. Asking beats guessing.
+
+`Using` is the index method, and it is almost always `gist`: the operators that
+make an exclusion useful — `&&` over a range, and `=` over a scalar beside it —
+are gist's. Pairing a scalar `=` with a range needs the **btree_gist**
+extension, which no generated DDL creates; `sqlb introspect` lists the
+extensions a database has so that is knowable before the first bootstrap rather
+than after it fails.
+
 ### A composite primary key
 
 `Field.PrimaryKey()` declares a single-column key. When the key *is* a pair —

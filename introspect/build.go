@@ -253,6 +253,15 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 	if cons.pk != nil && cons.pk.Name != name+"_pkey" && !coversAnySkipped(cons.pk.Columns, skipped) {
 		t.PrimaryKeyNamed(cons.pk.Name)
 	}
+	for _, e := range cons.exclusions {
+		if col, dependent := coversSkippedColumn(excludeColumns(e, p.columns), skipped); dependent {
+			rep.add(name, e.Name, "exclusion constrains "+col+
+				", which was not imported, so the constraint cannot be declared either", e.Def())
+			continue
+		}
+		t.AddExclude(e)
+	}
+
 	for _, c := range cons.tableChecks {
 		if col, dependent := namesSkippedColumn(c.Expr, skipped); dependent {
 			rep.add(name, c.Name, "check constrains "+col+
@@ -368,8 +377,9 @@ type constraints struct {
 	pk          *constraintRow
 	unique      map[string]constraintRow // by column, single-column only
 	foreign     map[string]constraintRow // by column, single-column only
-	enums       map[string][]string      // by column, recovered from a CHECK
-	enumName    map[string]string        // by column, the CHECK's own name
+	exclusions  []schema.Exclusion
+	enums       map[string][]string // by column, recovered from a CHECK
+	enumName    map[string]string   // by column, the CHECK's own name
 	tableChecks []schema.Check
 	uniques     []schema.Unique // composite, table-level
 }
@@ -413,6 +423,15 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 				continue
 			}
 			c.foreign[row.Columns[0]] = row
+		case "x":
+			e, ok := schema.ParseExclusion(row.Def)
+			if !ok {
+				rep.add(table, row.Name, "exclusion constraint in a form this cannot read back "+
+					"(a clause beyond USING, the element list and WHERE)", row.Def)
+				continue
+			}
+			e.Name = row.Name
+			c.exclusions = append(c.exclusions, e)
 		case "c":
 			c.check(table, row, rep)
 		default:
@@ -824,4 +843,39 @@ func selectTables(byTable map[string]*tableParts, opts Options, rep *Report) {
 func coversAnySkipped(columns []string, skipped map[string]bool) bool {
 	_, any := coversSkippedColumn(columns, skipped)
 	return any
+}
+
+// excludeColumns lists the table's columns an exclusion mentions, for the
+// skipped-column check. Same approach and same reason as migrate's
+// excludeCovers: the elements are expressions, so the columns are recognised by
+// name rather than parsed out.
+func excludeColumns(e schema.Exclusion, columns []columnRow) []string {
+	body := e.Elements + " " + e.Where
+	var out []string
+	for _, c := range columns {
+		if containsWord(body, c.Name) {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
+func containsWord(s, name string) bool {
+	for i := 0; i+len(name) <= len(s); i++ {
+		if s[i:i+len(name)] != name {
+			continue
+		}
+		if i > 0 && isIdentByte(s[i-1]) {
+			continue
+		}
+		if j := i + len(name); j < len(s) && isIdentByte(s[j]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

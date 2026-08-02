@@ -115,7 +115,7 @@ func Normalize(ctx context.Context, db DB, reg *schema.Registry, opts Options) (
 	var unprobed []string
 	for _, t := range reg.Tables() {
 		predicates := partialIndexes(t)
-		if len(t.Checks()) == 0 && len(predicates) == 0 {
+		if len(t.Checks()) == 0 && len(predicates) == 0 && len(t.Exclusions()) == 0 {
 			continue
 		}
 		table := qualify(opts.Schema, t.Name())
@@ -154,8 +154,73 @@ func Normalize(ctx context.Context, db DB, reg *schema.Registry, opts Options) (
 			}
 			t.ReplaceIndexWhere(idx.Name, normalised)
 		}
+
+		// An exclusion is probed as a whole rather than predicate-first,
+		// because both halves are stored as parse trees: the element list holds
+		// expressions (tstzrange(starts_at, ends_at)) and the operators are
+		// resolved to particular ones. Adding the real constraint and reading
+		// pg_get_constraintdef back is the only thing that normalises both at
+		// once, and it is the same technique for the same reason as the check
+		// probe above.
+		for _, e := range t.Exclusions() {
+			normalised, err := probeExclusion(ctx, tx, table, e)
+			if err != nil {
+				unprobed = append(unprobed, t.Name()+"."+e.Name+" (exclusion): "+oneLine(err))
+				continue
+			}
+			t.ReplaceExclusion(e.Name, normalised.Using, normalised.Elements, normalised.Where)
+		}
 	}
 	return unprobed, nil
+}
+
+// probeExclusion adds the exclusion, reads back what Postgres stored, and undoes
+// it — probe's shape, with the constraint kind and the read that goes with it.
+//
+// Unlike a CHECK there is no NOT VALID for an exclusion, so this builds the
+// index. On the shadow database that is an index over an empty table, which
+// costs nothing; on a database with rows it would cost what building the index
+// costs, and this is only ever pointed at the shadow.
+func probeExclusion(ctx context.Context, tx pgx.Tx, table string, e schema.Exclusion) (schema.Exclusion, error) {
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+probeName); err != nil {
+		return schema.Exclusion{}, err
+	}
+	out, err := probeExclusionInner(ctx, tx, table, e)
+	if err != nil {
+		if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+probeName); rbErr != nil {
+			return schema.Exclusion{}, errors.Join(err, rbErr)
+		}
+		return schema.Exclusion{}, err
+	}
+	_, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+probeName)
+	return out, err
+}
+
+func probeExclusionInner(ctx context.Context, tx pgx.Tx, table string, e schema.Exclusion) (schema.Exclusion, error) {
+	add := fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s %s",
+		table, quoteIdent(probeName), e.Def())
+	if _, err := tx.Exec(ctx, add); err != nil {
+		return schema.Exclusion{}, err
+	}
+
+	const read = `
+		SELECT pg_get_constraintdef(con.oid)
+		FROM pg_constraint con
+		WHERE con.conname = $1 AND con.conrelid = $2::regclass`
+
+	var def string
+	if err := tx.QueryRow(ctx, read, probeName, table).Scan(&def); err != nil {
+		return schema.Exclusion{}, err
+	}
+	parsed, ok := schema.ParseExclusion(def)
+	if !ok {
+		// Postgres accepted a spelling this cannot read back, which would
+		// otherwise leave the declared side unnormalised and churn every diff.
+		// Reported as unprobed, which leaves the declaration exactly as written.
+		return schema.Exclusion{}, fmt.Errorf("postgres stored %q, which cannot be read back", def)
+	}
+	parsed.Name = e.Name
+	return parsed, nil
 }
 
 // partialIndexes lists the indexes on t that carry a predicate, which are the

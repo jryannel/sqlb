@@ -135,6 +135,23 @@ CREATE TABLE llmcatalog_models (
     PRIMARY KEY (provider, model_id)
 );
 
+-- An EXCLUDE constraint (issue #121): the one construct with no near miss.
+-- A composite UNIQUE has a unique index and a composite key has a surrogate;
+-- dropping this has no equivalent, only "enforce it in Go", where two concurrent
+-- requests interleave between the check and the insert. It needs a gist index, a
+-- range expression over two columns, per-element operators and a partial
+-- predicate at once, which is why it is the last of the declaration gaps.
+CREATE TABLE bookings (
+    id        uuid PRIMARY KEY,
+    coach_id  uuid NOT NULL,
+    status    text NOT NULL DEFAULT 'confirmed',
+    starts_at timestamptz NOT NULL,
+    ends_at   timestamptz NOT NULL,
+    CONSTRAINT bookings_no_double_booking
+        EXCLUDE USING gist (coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&)
+        WHERE (status = 'confirmed')
+);
+
 CREATE TABLE images (
     id         uuid PRIMARY KEY,
     creator_id uuid NOT NULL REFERENCES members (id) ON DELETE CASCADE,

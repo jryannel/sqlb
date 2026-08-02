@@ -625,6 +625,21 @@ func constraints(t *schema.TableDef) []constraint {
 		})
 	}
 
+	for _, e := range t.Exclusions() {
+		out = append(out, constraint{
+			name: e.Name,
+			def:  e.Def(),
+			// Not `unique`. That flag says a constraint is backed by an index a
+			// migration could build for itself beforehand with CREATE UNIQUE
+			// INDEX CONCURRENTLY and then adopt — and there is no such
+			// spelling for an exclusion: ADD CONSTRAINT ... EXCLUDE builds its
+			// own index and Postgres offers no USING INDEX form for it. Saying
+			// otherwise would make Unblock propose a rewrite that does not
+			// exist.
+			covers: excludeCovers(t, e),
+		})
+	}
+
 	for _, f := range t.StoredFields() {
 		d := f.Desc()
 		if d.Unique && !d.PrimaryKey {
@@ -1139,4 +1154,46 @@ func addConstraintUsingIndex(table string, c constraint) string {
 	}
 	return "ALTER TABLE " + quoteIdent(table) + " ADD CONSTRAINT " + quoteIdent(c.name) +
 		" " + kind + " USING INDEX " + quoteIdent(c.name) + ";"
+}
+
+// excludeCovers lists the table's own columns an exclusion names, so the diff
+// can recognise one that depends on a column the same migration is adding.
+//
+// Matched by name against the table's columns rather than parsed out of the
+// element list, because the elements are expressions — tstzrange(starts_at,
+// ends_at) names two columns inside a function call — and a parser here would
+// be a second, worse copy of one Postgres already has. Over-reporting is the
+// safe direction: a column named coincidentally by a literal only delays the
+// constraint until after the column exists, which it would anyway.
+func excludeCovers(t *schema.TableDef, e schema.Exclusion) []string {
+	body := e.Elements + " " + e.Where
+	var out []string
+	for _, f := range t.StoredFields() {
+		if containsWord(body, f.Desc().Name) {
+			out = append(out, f.Desc().Name)
+		}
+	}
+	return out
+}
+
+// containsWord reports whether name appears in s as a whole identifier, so that
+// "id" does not match "coach_id".
+func containsWord(s, name string) bool {
+	for i := 0; i+len(name) <= len(s); i++ {
+		if s[i:i+len(name)] != name {
+			continue
+		}
+		if i > 0 && isIdentByte(s[i-1]) {
+			continue
+		}
+		if j := i + len(name); j < len(s) && isIdentByte(s[j]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

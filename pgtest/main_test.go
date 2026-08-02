@@ -149,6 +149,13 @@ func bootstrap(t testing.TB, db *pgxpool.Pool) {
 		CREATE FUNCTION uuid_generate_v7() RETURNS uuid
 		LANGUAGE sql VOLATILE AS 'SELECT uuidv7()'
 	`)
+	// btree_gist, because an exclusion that pairs a scalar `=` with a range
+	// `&&` needs gist to have an operator class for the scalar — which is the
+	// shape every real double-booking constraint has. It ships with Postgres's
+	// contrib, so no image change; it does have to be created, which is exactly
+	// the step Diff renders nothing for and the extension report exists to name
+	// (issues #121, #115).
+	mustExec(t, db, `CREATE EXTENSION IF NOT EXISTS btree_gist`)
 }
 
 // databaseName derives a legal, unique database name from the test name.
