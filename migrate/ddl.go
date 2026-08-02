@@ -610,6 +610,19 @@ func constraints(t *schema.TableDef) []constraint {
 			cols:   []string{pk.Name()},
 			covers: []string{pk.Name()},
 		})
+	} else if cols := t.CompositeKey(); len(cols) > 0 {
+		quoted := make([]string, len(cols))
+		for i, c := range cols {
+			quoted[i] = quoteIdent(c)
+		}
+		out = append(out, constraint{
+			name:   primaryKeyName(t),
+			def:    "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")",
+			unique: true,
+			pk:     true,
+			cols:   append([]string(nil), cols...),
+			covers: append([]string(nil), cols...),
+		})
 	}
 
 	for _, f := range t.StoredFields() {

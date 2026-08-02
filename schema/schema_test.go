@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -669,4 +670,88 @@ func TestReadsIsReadAndList(t *testing.T) {
 			t.Errorf("schema.Reads exposes %s: %v", w.name, schema.Reads)
 		}
 	}
+}
+
+// A composite primary key is declarable, and everything that assumes one column
+// per row refuses it by name rather than by reporting a missing key.
+//
+// The refusals are the design, not a shortfall: the tables this exists for are
+// association tables where the pair is the row, and natural-key caches nothing
+// references. What they needed was to be declarable at all, so that one of them
+// stops taking its whole module out of the drift gate (issue #109).
+func TestCompositePrimaryKey(t *testing.T) {
+	t.Run("declares and reads back", func(t *testing.T) {
+		r := schema.NewRegistry()
+		models := r.Table("llmcatalog_models",
+			schema.Text("provider"),
+			schema.Text("model_id"),
+			schema.Text("display_name"),
+		).PrimaryKeyColumns("provider", "model_id")
+
+		if err := r.Validate(); err != nil {
+			t.Fatalf("a composite-key table must validate: %v", err)
+		}
+		want := []string{"provider", "model_id"}
+		if got := models.CompositeKey(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("CompositeKey() = %v, want %v", got, want)
+		}
+		// Every consumer that assumes a single column sees nil, which is the
+		// path a keyless table already takes.
+		if models.PrimaryKey() != nil {
+			t.Error("PrimaryKey() must be nil for a composite key, so single-column callers take the keyless path")
+		}
+	})
+
+	t.Run("cannot be exposed over REST", func(t *testing.T) {
+		r := schema.NewRegistry()
+		r.Table("pairs", schema.Text("a"), schema.Text("b")).
+			PrimaryKeyColumns("a", "b").
+			Expose(schema.REST{Path: "/pairs", Ops: schema.Reads})
+
+		err := r.Validate()
+		if err == nil {
+			t.Fatal("a composite-key table must not mount as a resource")
+		}
+		// Named as the reason, because "no primary key" is what every other
+		// consumer would say and it points at the wrong fix.
+		if !strings.Contains(err.Error(), "composite primary key") {
+			t.Errorf("the refusal does not name the cause:\n%v", err)
+		}
+	})
+
+	t.Run("cannot be the target of a Ref", func(t *testing.T) {
+		r := schema.NewRegistry()
+		models := r.Table("models", schema.Text("provider"), schema.Text("model_id")).
+			PrimaryKeyColumns("provider", "model_id")
+		r.Table("runs", schema.UUIDv7("id").PrimaryKey(), schema.Ref("model", models))
+
+		err := r.Validate()
+		if err == nil {
+			t.Fatal("a reference is single-column, so this target must be refused")
+		}
+		if !strings.Contains(err.Error(), "composite primary key") {
+			t.Errorf("the refusal does not distinguish this from a keyless target:\n%v", err)
+		}
+	})
+
+	t.Run("refuses one column", func(t *testing.T) {
+		r := schema.NewRegistry()
+		r.Table("t", schema.Text("a")).PrimaryKeyColumns("a")
+		err := r.Validate()
+		if err == nil {
+			t.Fatal("a one-column table-level key has a spelling already, and two spellings would differ in what they allow")
+		}
+		if !strings.Contains(err.Error(), "Field.PrimaryKey()") {
+			t.Errorf("the refusal does not point at the form to use instead:\n%v", err)
+		}
+	})
+
+	t.Run("refuses both forms at once", func(t *testing.T) {
+		r := schema.NewRegistry()
+		r.Table("t", schema.Text("a").PrimaryKey(), schema.Text("b")).
+			PrimaryKeyColumns("a", "b")
+		if err := r.Validate(); err == nil {
+			t.Fatal("one table has one primary key")
+		}
+	})
 }

@@ -274,6 +274,15 @@ func (r *Registry) Validate() error {
 					report(t.name, d.Name, "Ref target is nil (declaration order: the target table var must be initialised first)")
 				case r.Get(d.Ref.Table.name) == nil:
 					report(t.name, d.Name, "Ref target %q is not registered", d.Ref.Table.name)
+				case d.Ref.Table.PrimaryKey() == nil && len(d.Ref.Table.CompositeKey()) > 0:
+					// Named apart from "no primary key", because the fix is a
+					// different one: the target has a key and a reference here
+					// is single-column, so the answer is a surrogate on the
+					// target or no reference at all — not "give it a key".
+					report(t.name, d.Name, "Ref target %q has a composite primary key (%s), and a "+
+						"reference is single-column; give the target a surrogate key to point at, "+
+						"or leave the relationship undeclared",
+						d.Ref.Table.name, strings.Join(d.Ref.Table.CompositeKey(), ", "))
 				case d.Ref.Table.PrimaryKey() == nil:
 					report(t.name, d.Name, "Ref target %q has no primary key", d.Ref.Table.name)
 				}
@@ -283,6 +292,22 @@ func (r *Registry) Validate() error {
 			}
 		}
 
+		if pks > 0 && len(t.pkCols) > 0 {
+			report(t.name, "", "the table declares both a column primary key and PrimaryKeyColumns(%s); "+
+				"one table has one primary key, so use the table-level form for all of its columns "+
+				"or the column form for the single one",
+				strings.Join(t.pkCols, ", "))
+		}
+		if len(t.pkCols) == 1 {
+			// Legal Postgres and a spelling with two meanings in one schema.
+			// Refused rather than accepted quietly, because the two forms differ in
+			// what the rest of the DSL will then allow — a single-column key
+			// declared this way would silently lose Ref, REST and actions.
+			report(t.name, "", "PrimaryKeyColumns(%q) names one column, which is Field.PrimaryKey()'s job; "+
+				"the table-level form is for a key of two or more columns, and using it for one "+
+				"would silently give up Ref, REST exposure and row actions",
+				t.pkCols[0])
+		}
 		if pks > 1 {
 			// The reason rather than only the workaround: one column is what
 			// spells a row in a URL, a cursor and a generated cache key, and
@@ -336,6 +361,19 @@ func (r *Registry) Validate() error {
 			}
 		}
 
+		if t.rest != nil && len(t.pkCols) > 0 {
+			// A composite key is declarable precisely so that association
+			// tables and natural-key caches can be *gated* without being
+			// resources. Refused at declaration rather than at mount, and named
+			// as the reason rather than reported as "no primary key", which is
+			// what every other consumer will see and is misleading here: one
+			// column is what addresses a row in a URL, a cursor and a generated
+			// cache key, and each of those is a wire format (ADR-0034).
+			report(t.name, "", "has a composite primary key (%s) and is exposed over REST; "+
+				"/{id} addresses one column, so a table with this key cannot be a resource — "+
+				"add a surrogate key beside it if it needs to be one",
+				strings.Join(t.pkCols, ", "))
+		}
 		if t.rest != nil {
 			needsPK := t.rest.Ops.Has(OpRead) || t.rest.Ops.Has(OpUpdate) || t.rest.Ops.Has(OpDelete)
 			if needsPK && pks == 0 {

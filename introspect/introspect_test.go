@@ -247,7 +247,6 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 		t.Errorf("composite unique should no longer be reported:\n%s", rep)
 	}
 	for _, want := range []string{
-		"composite primary key",
 		"contype x",
 		"expression",
 		"money",

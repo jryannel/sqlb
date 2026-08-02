@@ -40,8 +40,10 @@ This page covers the column vocabulary and the table-level constructs.
 |---|---|---|
 | `Text(name)` | `text` | `string` |
 | `Varchar(name, n)` | `varchar(n)` | `string` |
+| `SmallInt(name)` | `smallint` | `int16` |
 | `Int(name)` | `int` | `int32` |
 | `BigInt(name)` | `bigint` | `int64` |
+| `Real(name)` | `real` | `float32` |
 | `Float(name)` / `Numeric(name)` | `float` / `numeric` | `float64` |
 | `Numeric(name, p, s)` | `numeric(p, s)` | `float64` |
 | `Bool(name)` | `bool` | `bool` |
@@ -258,6 +260,66 @@ pair written out.
     AddIndex(schema.Index{Columns: []string{"body"}, Method: "gin"}).
     Check("name", "status <> 'published' OR published_at IS NOT NULL")
 ```
+
+### A composite primary key
+
+`Field.PrimaryKey()` declares a single-column key. When the key *is* a pair —
+an association table where the pair is the row, a natural-key cache keyed by
+what it describes — declare it on the table:
+
+```go
+schema.Table("llmcatalog_models",
+    schema.Text("provider"),
+    schema.Text("model_id"),
+    schema.Text("display_name"),
+).PrimaryKeyColumns("provider", "model_id")
+```
+
+The alternative was a schema change: a surrogate `UUID` that nothing points at,
+plus a unique index to make the real key unique — 16 bytes and an extra index
+per row, identifying something no other table references. That is a change
+nobody would defend if sqlb vanished tomorrow, which is the test an adopter
+applies to every line of a migration.
+
+**A composite-key table is not a resource, and the schema refuses to make it
+one.** `TableDef.PrimaryKey()` returns nil for it, so it takes the keyless path
+everywhere row identity is assumed, and `Validate` refuses three things by name:
+
+| | Why |
+|---|---|
+| REST exposure | `/{id}` addresses one column, and so do the cursor and the generated cache key — each is a wire format (ADR-0034) |
+| Being the target of `Ref`/`ExternalRef` | A reference is single-column here too |
+| A non-collection `Action` | An id is one column |
+
+Those refusals are the design rather than a shortfall. What these tables needed
+was to be *declarable*, so that one of them stops taking its whole module out of
+the drift gate — the gate is per registry, and it is all-or-nothing. If such a
+table does need to be a resource, give it a surrogate key deliberately, which is
+then a decision rather than a tax.
+
+### `UniqueIndex` and `Unique` are different objects
+
+Both enforce the same rule and they are not interchangeable. `UNIQUE (a, b, c)`
+written inline in `CREATE TABLE` produces a **constraint**; `CREATE UNIQUE INDEX`
+produces an **index**. Postgres builds an index either way, but only a constraint
+can be
+
+- the target of `FOREIGN KEY … REFERENCES t (a, b)`, and
+- named in `ON CONFLICT ON CONSTRAINT`.
+
+So when a table already has a constraint, declaring the index instead is not a
+spelling difference: it diffs as a different object, and adopting that table
+would propose dropping the constraint and building an index in its place — a
+real migration on live data, forced by the declaration language rather than by
+anything the schema needed. `Unique` and `UniqueNamed` are the table-level peers
+of `Field.Unique()`, and they are what an adoption reaches for, because the
+inline form is how a composite natural key is ordinarily written.
+
+`Unique` names the constraint the way Postgres names one it generated itself —
+`secrets_tenant_kind_tenant_id_name_key` — rather than the way `UniqueIndex`
+names an index. Two conventions, deliberately: an index sqlb declares is one
+sqlb named, while a constraint is usually one that already exists under a name
+the application may be matching on.
 
 `AddIndex` takes a fully specified `Index` for what the shorthands do not cover
 — GIN indexes, partial indexes via `Where`, and per-column sort order via

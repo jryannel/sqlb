@@ -205,6 +205,7 @@ type TableDef struct {
 	indexes []Index
 	checks  []Check
 	uniques []Unique
+	pkCols  []string // a composite PRIMARY KEY, when the key is not one column
 	rest    *REST
 	actions []Action
 }
@@ -361,6 +362,17 @@ func (t *TableDef) Indexes() []Index {
 // Checks returns the declared check constraints.
 func (t *TableDef) Checks() []Check { return t.checks }
 
+// CompositeKey returns the columns of a composite primary key, or nil when the
+// table's key is a single column — which [TableDef.PrimaryKey] returns — or when
+// it declares none.
+//
+// Named for what it holds rather than as the getter half of
+// [TableDef.PrimaryKeyColumns], because PrimaryKey is already taken by the
+// single-column accessor and Go has no overloading. The asymmetry is worth one
+// odd name: every existing caller of PrimaryKey keeps working and sees nil,
+// which is the behaviour a composite-key table wants from all of them.
+func (t *TableDef) CompositeKey() []string { return t.pkCols }
+
 // Rest returns the REST exposure, or nil if the table is not exposed.
 func (t *TableDef) Rest() *REST { return t.rest }
 
@@ -451,6 +463,41 @@ func (t *TableDef) IndexNamed(name string, columns ...string) *TableDef {
 // application is most likely to be matching on.
 func (t *TableDef) UniqueIndexNamed(name string, columns ...string) *TableDef {
 	t.indexes = append(t.indexes, Index{Name: name, Columns: columns, Unique: true})
+	return t
+}
+
+// PrimaryKeyColumns declares a composite primary key over two or more columns.
+//
+// It is the table-level peer of [Field.PrimaryKey], and it exists because the
+// alternative was a schema change: a table whose identity is a pair had to grow
+// a surrogate UUID that nothing points at, plus an index to make the real key
+// unique, purely so the declaration language could describe it. On a natural-key
+// cache that is 16 bytes a row and an extra index, identifying something no
+// other table references — a change nobody would defend if sqlb vanished
+// tomorrow, which is the test an adopter applies (issue #109).
+//
+//	schema.Table("llmcatalog_models", ...).PrimaryKey("provider", "model_id")
+//
+// # What a composite key cannot do
+//
+// [TableDef.PrimaryKey] returns a *Field and returns nil for a table declared
+// this way, so a composite-key table takes the same path as a keyless one
+// everywhere row identity is assumed:
+//
+//   - it cannot be the target of [Ref] or [ExternalRef], because a reference is
+//     single-column here too;
+//   - it cannot be exposed over REST, because /{id} addresses one column;
+//   - it cannot carry a non-collection [TableDef.Action], for the same reason.
+//
+// Those refusals are the point rather than a shortfall. The tables this is for
+// — association tables where the pair *is* the row, and natural-key caches that
+// are re-derivable and referenced by nothing — are not resources, and what they
+// needed was to be *declarable*, so that one of them stops taking its whole
+// module out of the drift gate.
+//
+// Use [TableDef.PrimaryKeyNamed] to pin the constraint's name.
+func (t *TableDef) PrimaryKeyColumns(columns ...string) *TableDef {
+	t.pkCols = columns
 	return t
 }
 

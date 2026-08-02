@@ -215,6 +215,13 @@ func renderTable(b *bytes.Buffer, t *schema.TableDef, names map[string]string, r
 	if c := t.Comment(); c != "" {
 		fmt.Fprintf(b, ".\n\tDescribe(%s)", strconv.Quote(c))
 	}
+	if cols := t.CompositeKey(); len(cols) > 0 {
+		quoted := make([]string, len(cols))
+		for i, c := range cols {
+			quoted[i] = strconv.Quote(c)
+		}
+		fmt.Fprintf(b, ".\n\tPrimaryKeyColumns(%s)", strings.Join(quoted, ", "))
+	}
 	if pk := t.PrimaryKeyName(); pk != "" {
 		fmt.Fprintf(b, ".\n\tPrimaryKeyNamed(%s)", strconv.Quote(pk))
 	}

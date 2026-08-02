@@ -122,6 +122,19 @@ CREATE TABLE members (
     CONSTRAINT members_roster_slot UNIQUE (org_id, hired_on)
 );
 
+-- A composite PRIMARY KEY (issue #109): a natural-key cache, keyed by what it
+-- describes and referenced by nothing. The workaround was a surrogate UUID plus
+-- a unique index — 16 bytes and an index per row identifying something nothing
+-- points at — so the round trip has to reproduce the key the database has, not
+-- one the DSL found easier.
+CREATE TABLE llmcatalog_models (
+    provider     text NOT NULL,
+    model_id     text NOT NULL,
+    display_name text NOT NULL,
+    context_size integer,
+    PRIMARY KEY (provider, model_id)
+);
+
 CREATE TABLE images (
     id         uuid PRIMARY KEY,
     creator_id uuid NOT NULL REFERENCES members (id) ON DELETE CASCADE,

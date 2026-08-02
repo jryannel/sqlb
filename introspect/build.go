@@ -238,7 +238,19 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 	if p.table.Comment != "" {
 		t.Describe(p.table.Comment)
 	}
-	if cons.pk != nil && cons.pk.Name != name+"_pkey" && !skipped[cons.pk.Columns[0]] {
+	if cons.pk != nil && len(cons.pk.Columns) > 1 {
+		if col, dependent := coversSkippedColumn(cons.pk.Columns, skipped); dependent {
+			// The key itself is unimportable, so the table has no identity at
+			// all. Reported rather than declared without it, because a table
+			// silently missing its primary key is the quiet failure ADR-0014 is
+			// about — every later diff would propose adding one.
+			rep.add(name, cons.pk.Name, "primary key covers "+col+
+				", which was not imported, so the key cannot be declared either", cons.pk.Def)
+		} else {
+			t.PrimaryKeyColumns(cons.pk.Columns...)
+		}
+	}
+	if cons.pk != nil && cons.pk.Name != name+"_pkey" && !coversAnySkipped(cons.pk.Columns, skipped) {
 		t.PrimaryKeyNamed(cons.pk.Name)
 	}
 	for _, c := range cons.tableChecks {
@@ -379,11 +391,6 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 			// these as anything would invent constraints the DSL never emits.
 			continue
 		case "p":
-			if len(row.Columns) != 1 {
-				rep.add(table, row.Name, "composite primary key; the DSL declares at most "+
-					"one primary key column (a composite unique index is the nearest thing)", row.Def)
-				continue
-			}
 			r := row
 			c.pk = &r
 		case "u":
@@ -518,7 +525,10 @@ func buildColumn(table string, col columnRow, cons *constraints,
 			f.ConstraintNamed(u.Name)
 		}
 	}
-	if cons.pk != nil && cons.pk.Columns[0] == col.Name {
+	// Only a single-column key marks its column. A composite one is declared on
+	// the table below, and marking each of its columns would say something the
+	// DSL means differently — Field.PrimaryKey() is one key per column.
+	if cons.pk != nil && len(cons.pk.Columns) == 1 && cons.pk.Columns[0] == col.Name {
 		f.PrimaryKey()
 	}
 	return f, true
@@ -806,4 +816,12 @@ func selectTables(byTable map[string]*tableParts, opts Options, rep *Report) {
 		}
 		delete(byTable, name)
 	}
+}
+
+// coversAnySkipped reports whether any of the columns was left out of the
+// import. It is coversSkippedColumn without the name, for the callers that only
+// need the answer.
+func coversAnySkipped(columns []string, skipped map[string]bool) bool {
+	_, any := coversSkippedColumn(columns, skipped)
+	return any
 }

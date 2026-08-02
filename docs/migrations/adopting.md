@@ -65,10 +65,18 @@ sqlb introspect -dsn "$DSN"
 ```
 2 table(s) read
 
-  llmcatalog_models.llmcatalog_models_pkey: composite primary key; the DSL declares
-  at most one primary key column (a composite unique index is the nearest thing)
-      PRIMARY KEY (provider, model_id)
+  bookings.bookings_coach_id_tstzrange_excl: constraint of a kind the DSL cannot
+  declare (contype x)
+      EXCLUDE USING gist (coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&)
+      WHERE ((status = 'confirmed'::text))
+the database has extensions installed, and no generated DDL creates them.
+Create them in the target database first, or the first bootstrap fails
+once per dependent table naming a function instead of the extension:
+  CREATE EXTENSION IF NOT EXISTS "btree_gist";
 ```
+
+Two tables were read and one construct was refused, so the other table — a
+natural-key cache with a composite primary key — is adoptable as it stands.
 
 It exits non-zero when something was skipped, so *why did the drift gate refuse
 this module* is a command rather than a throwaway program. `-out schema.go`
