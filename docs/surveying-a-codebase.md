@@ -1,7 +1,7 @@
 # Surveying an existing codebase
 
 An adoption has two halves and only one of them has a command.
-[`sqlb-survey`](../cmd/sqlb-survey/main.go) answers the database half — which
+[`sqlb survey`](../cmd/sqlb/survey.go) answers the database half — which
 tables the schema DSL can describe, which cannot, and which module a single
 unmodelable table takes out of the drift gate. This page is the other half: the
 routes and the queries sitting in front of that database, and how many of each
@@ -38,7 +38,7 @@ resources are ready to mount" is worthless if nine of their tables carry a
 composite primary key the DSL cannot declare. The database sets the ceiling:
 
 ```bash
-go run ./cmd/sqlb-survey -modules billing,catalog "$SRC_DSN" "$SCRATCH_DSN"
+go run ./cmd/sqlb survey -modules billing,catalog "$SRC_DSN" "$SCRATCH_DSN"
 ```
 
 **Then count, in this order.** Each section narrows the one before it: routes
@@ -400,7 +400,7 @@ partial.
 ## The pilot falls out of the numbers
 
 Take the intersection of three lists: collections with a full CRUD set, whose
-tables `sqlb-survey` reports adoptable, and whose queries fall in the deflated
+tables `sqlb survey` reports adoptable, and whose queries fall in the deflated
 `real-filter` bucket. Ten, then fewer, then fewer again — and the *smallest*
 surviving member is the pilot, not the most important one —
 [§8 of the adoption review](review-adoption-existing-app.md#8-if-you-want-to-try-it--the-smallest-honest-experiment)

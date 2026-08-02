@@ -20,19 +20,38 @@ codegen.Must(codegen.Generate(codegen.Options{
     Dir:      "blog",
     Package:  "blog",
 
-    // Relative to Dir. One file lands here; nothing is emitted without it.
+    // Relative to Dir. Two files land here; nothing is emitted without it.
     DartDir: "mobile/lib/api",
 }))
 ```
 
-One file, `client.gen.dart`, and it **imports nothing** — not `dart:io`, not a
-pub package, not Flutter. There is no framework layer to make optional, because
-Dart has no equivalent of TanStack Query to bind to.
+Two files, and neither **imports anything** — not `dart:io`, not a pub package,
+not Flutter. There is no framework layer to make optional, because Dart has no
+equivalent of TanStack Query to bind to.
+
+| | |
+|---|---|
+| `runtime.gen.dart` | `Page`, `Collection`, `Problem`, `Transport`, `CursorPager` — the vocabulary an application names, and no schema-specific code. |
+| `client.gen.dart` | Row views, request bodies, the typed filter vocabulary, one function per exposed operation. Imports the runtime, and exports it. |
+
+The split is what Dart's nominal typing forces
+([#110](https://github.com/jryannel/sqlb/issues/110)). Two clients each
+declaring their own `Page` declare two *unrelated* classes, so no shared pager
+widget could accept both and the application could not give both one
+`Transport`. Two clients exporting one library offer one `Page`.
+
+`Row` and the `Cond` family stay with each client, because both keep a private
+contract with the generated code — the `_str`/`_int` protocol every row view
+inherits, and `Cond._encode` — and Dart privacy is per library. Duplicating
+them costs nothing observable, because nothing can observe them.
+
+Importing the client alone is still enough: `client.gen.dart` exports the
+runtime, so `Page`, `Problem` and `Transport` arrive with it.
 
 The client is emitted into the repository that consumes it, the way
 `models_gen.go` is. There is no pub package to install and therefore no way for
 the client to be a version behind the server it talks to. `codegen.Check` covers
-it, so the usual staleness gate catches a schema change that was never
+both, so the usual staleness gate catches a schema change that was never
 regenerated.
 
 ## What the types know

@@ -14,6 +14,158 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.8.0
+
+2026-08-02 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.8.0)
+
+The release that stopped refusing tables. Every version before this one was
+argued from the library outward. This one was argued inward, from two corpora
+of real databases and one 312-route application, and what they said is that the
+declaration language itself had become the thing blocking adoption — one
+construct at a time, and never the same one twice.
+
+**One break, and it is a word.** `sqlb-survey` is now `sqlb survey`, a second
+binary folded into the one command tree: needing no schema package is a fact
+about one verb's arguments, not a reason a user has to hear about a separate
+command — and the one it made separate was the adoption probe, the first thing
+somebody deciding whether to adopt sqlb would run, and the only thing `sqlb
+help` did not mention ([ADR-0032](adr/0032-sqlb-command.md)).
+
+```
+go run ./cmd/sqlb-survey …   →   go run ./cmd/sqlb survey …
+```
+
+It fails loudly rather than quietly, which is the whole of the risk.
+
+**Five constructs the database has and the DSL could not declare.** Each was
+found the same way — a survey refusing a table, then a person deciding whether
+to change the schema or give up — and each is here because the answer to that
+question kept being wrong. The gate is per registry and all-or-nothing, so one
+unmodelable table takes its whole module out.
+
+```go
+t.PrimaryKeyColumns("provider", "model_id")
+t.Unique("tenant_kind", "tenant_id", "name")
+t.AddExclude(schema.Exclusion{Using: "gist", Elements: …})
+schema.SmallInt("pos_x")        // smallint, int16
+schema.Real("confidence")       // real,     float32
+```
+
+The workarounds these replace are the reason they are worth the surface. A
+surrogate UUID beside a composite unique index is a schema change forced by the
+declaration language: 16 bytes and an index per row identifying something
+nothing points at, plus a data migration on any deployed database. Widening
+`smallint` to `integer` is four columns × two bytes × every row, forever, for
+nothing. Both fail the rule an adopter actually applies, which is that a schema
+change must be defensible if sqlb vanished tomorrow.
+
+The exclusion constraint is the one where dropping the construct loses a
+*correctness* property rather than performance or ergonomics. Its alternatives
+were enforcing the overlap in Go, where two concurrent requests interleave
+between the check and the insert — precisely the drift surface sqlb exists to
+remove — or holding a permanent known-difference exception in the gate. One app
+in ten, and the only skip in either corpus that cost correctness.
+
+**Two things that were reported wrong rather than not reported.** A `serial`
+column imported as an ordinary `bigint` whose default named a sequence, so the
+table read clean and the DDL it produced did not run; it is refused with a
+reason now, and the schema that found it goes from two apply failures and a
+residual of one to a fixpoint. And an extension was invisible on both sides — a
+clean `Report` and a clean `Diff` both claimed everything was represented about
+a schema that could not be created, which surfaced as 228 identical `function
+uuid_generate_v4() does not exist` errors naming a function when the missing
+thing was an extension. `introspect` reads `pg_extension` now and prints the
+statements to run, ahead of the skips, because that list is useless as trivia
+and load-bearing as the step before a bootstrap.
+
+Measured on the ten schemas that ranked composite `UNIQUE` first: clean tables
+174 to 214 of 233, partial 59 to 19.
+
+**The probe that found all of it is now a command**, rather than a throwaway
+program written twice per adoption. `sqlb survey` reports the whole database in
+three phases — the schema as a gate would see it, every table alone so a blocked
+one is named rather than mixed into a list of skips, and a render into a scratch
+database to separate a construct that survives import from one that survives the
+round trip. `-modules` groups the verdict the way a modular monolith is
+deployed, `-exclude` takes SQL wildcards so a project on another migration
+runner needs no patch, and an unmatched-table set above 25% now says which two
+explanations to check rather than reading as a shared core. `sqlb introspect` is
+the single-shot half, and takes a `-dsn` rather than a package.
+[Surveying an existing codebase](surveying-a-codebase.md) is the other half of
+that census — the routes and queries in front of the database.
+
+**Additive, and new:**
+
+- **`WireCase`.** `schema.NewModule("app").WireCase(schema.Camel)` makes
+  `created_at` read `createdAt` in the body, the filter, the sort, the OpenAPI
+  document and both clients, and leave it `created_at` in the database, in every
+  hand-written query and in `pg_dump`. One spelling per deployment, derived from
+  the column, no mapping layer and no per-field override —
+  [ADR-0036](adr/0036-the-wire-is-the-column-name.md) amended rather than
+  reversed. It exists because six applications were blocked on the same rename
+  and the escape the record offered was to rename 615 columns into quoted
+  camelCase identifiers, which is not reversible and should not have been in the
+  record. `Verbatim` is the default and regenerates byte-for-byte identically.
+- **`rest.Reads`** — `OpRead | OpList`, named. The most common mount in an
+  adoption was the one with no name, and with only `CRUD` named it read as a
+  resource with two thirds switched off rather than as an app that already has
+  its writes and has four different reasons a generated one would be wrong.
+- **`?not=(…)`** joins `?and=` and `?or=`, so a negated group no longer has to
+  be De Morgan'd by the caller — which got silently wrong rows rather than an
+  error. Both grammars spell the same set, and a test pins that rather than
+  leaving it to two parsers happening to agree.
+- **The TypeScript and Dart clients emit their runtime once**, beside the
+  client. A second module used to ship a second copy of `Page`, `Problem` and
+  `Transport` and ask the application to wire a second transport; in Dart,
+  nominal typing made those two *unrelated* classes, so no shared pager could
+  accept both.
+
+**And three that only show up in a profile.** A page of rows is one buffer with
+its keys rendered at registration — 1,776 allocations to 279 on a fifty-row
+page, 173µs to 120µs, byte-identical output. A timestamp is appended straight
+into that buffer rather than marshalled, which is the fifty allocations
+`time.Time.MarshalJSON` cannot avoid because the `Marshaler` interface makes the
+value answer in bytes it owns. An identifier is quoted into the compiler's
+buffer rather than into a string first, 25% off parse-apply-compile. None of the
+three changes a byte of any statement or any response.
+
+**What it cost:**
+
+- Two files appear on the next regeneration, `runtime.gen.ts` and
+  `runtime.gen.dart`, and want committing with it. A project with one module
+  need not notice otherwise: both clients re-export the runtime, so an existing
+  import keeps compiling.
+- A composite-key table is declarable so that it can be *gated*, and is refused
+  by name for REST exposure, as the target of a `Ref`, and for a non-collection
+  `Action`. One column is what addresses a row in a URL, a cursor and a cache
+  key, and each of those is a wire format.
+- Changing a deployment's `WireCase` after it ships is a breaking change for
+  that deployment, exactly as renaming a column is.
+  [compatibility.md](compatibility.md) says so where it freezes the wire
+  spelling.
+- `real` widens to `double precision` and *not* to `numeric`, and a diff that
+  would make that cast renders destructive: it swaps an approximate binary float
+  for an exact decimal, so what comes back is the rounded expansion of the
+  stored approximation rather than what anyone wrote.
+- `CREATE EXTENSION` is printed for a person, never emitted into a migration and
+  never dropped by one. Creating an extension usually needs a superuser a
+  production runner deliberately does not have. Worth revisiting with a decision
+  attached; not worth deciding as a side effect of fixing the diagnosis.
+
+**One fix worth naming on its own**, because the failure it prevents is silent.
+`Describe` checked its in-use flag when the `Description` was constructed and
+wrote in the chained calls after it, so a query starting in that window raced
+the writes to the fields the request path reads to decide what a caller may see
+— a torn read there is a hidden column reaching a response, not a crash. Every
+mutator now clones the model, writes the clone and publishes it, so a published
+`*Model` is never written again and a statement in flight keeps a consistent
+snapshot. [ADR-0010](adr/0010-codegen-is-optional.md)'s no-locks-on-the-read-path
+constraint holds because the cost moved to the writer, where it is one copy at
+startup. The two new concurrency tests are the only ones in the suite that run
+two requests at once, and two of them fail against the old code — one without
+the race detector, since copy-on-write is a property an ordinary CI run can
+check.
+
 ## v0.7.0
 
 2026-08-01 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.7.0)

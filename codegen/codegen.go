@@ -72,9 +72,10 @@ type Options struct {
 	// Empty means no client is emitted at all, which is the right default for a
 	// project that has no TypeScript consumer.
 	//
-	// Two files land there. The client is dependency-free; the queries file
-	// takes @tanstack/react-query as a peer dependency, so a project that does
-	// not use it sets TSQueriesFile to "-" and keeps the rest.
+	// Three files land there. The runtime and the client are dependency-free;
+	// the queries file takes @tanstack/react-query as a peer dependency, so a
+	// project that does not use it sets TSQueriesFile to "-" and keeps the
+	// rest.
 	TSDir         string
 	TSClientFile  string
 	TSQueriesFile string
@@ -143,10 +144,11 @@ type Options struct {
 	// server. Empty means no client is emitted, which is the right default for
 	// a project that has no Dart consumer.
 	//
-	// One file lands there, and it imports nothing: not a pub package, not even
-	// dart:io. There is no framework layer to make optional, because the
-	// mobile ecosystem has no equivalent of TanStack Query to bind to — the
-	// cursor pager it emits instead is plain Dart (ADR-0031).
+	// Two files land there — the client and the runtime library it exports —
+	// and neither imports anything: not a pub package, not even dart:io. There
+	// is no framework layer to make optional, because the mobile ecosystem has
+	// no equivalent of TanStack Query to bind to — the cursor pager it emits
+	// instead is plain Dart (ADR-0031).
 	DartDir  string
 	DartFile string
 
