@@ -43,14 +43,37 @@ the engine honest — anything it needs must be expressible without the schema
 package, which stops the two from fusing.
 
 **Costs.** Two ways to say the same thing, which can disagree; nothing checks
-either against the database. `Describe` mutates the cached model without locking,
-which is correct at `init` and wrong afterwards — documented, not enforced.
+either against the database. `Describe` remains an `init`-time call — describing
+late is still wrong, because a statement built before a description does not
+carry it and one built after does — but it is no longer *unsafe*, per the
+revision below.
+
+## Revised: describing is copy-on-write
+
+The trigger below fired. The `inUse` flag it called for was added and was not
+enough: it was tested when the `Description` was constructed, and the writes
+happen in the chained calls after that, so a query starting in between passed
+the guard and raced the writes to `Model.Table`, `ColumnInfo.Hidden` and
+`byName`. Confirmed under `-race`. That those are the fields the request path
+reads to decide what a caller may see is what made it worth fixing rather than
+documenting harder.
+
+The fix keeps this ADR's constraint — no lock on the read path — by inverting
+where the cost lands. `Describe` now copies the model, writes the copy, and
+publishes it into the model cache. A published `*Model` is never written again,
+so a statement in flight or a `rest` binding that captured one at mount holds a
+snapshot that stays consistent. Describing costs a copy, once, at startup;
+reading costs nothing, which is what the freeze would also have bought and what
+a mutex would not have.
+
+The panic stays, now as a diagnostic rather than a safety mechanism.
 
 ## What would change our mind
 
-- A `Describe` call after startup causes a real data race — add a
+- ~~A `Describe` call after startup causes a real data race — add a
   `sync.Once`-guarded freeze that panics on late mutation. Not a lock on the read
-  path: that taxes every query for a startup-only concern.
+  path: that taxes every query for a startup-only concern.~~ Fired; resolved by
+  copy-on-write instead of a freeze, for the reason above.
 - The two routes drift confusingly — make the generator emit `Describe` calls
   rather than tags, so there is one mechanism.
 - Nobody uses the runtime-only path — then this carries weight for nothing.

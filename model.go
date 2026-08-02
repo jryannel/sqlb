@@ -142,15 +142,26 @@ type Model struct {
 	// statement is a map lookup per column reference rather than a scan.
 	byDerived map[string]*ColumnInfo
 	// inUse is set the first time a statement is built against this model.
-	// Describe refuses to mutate a model past that point: doing so is a data
-	// race against every in-flight query, and a description that silently
-	// half-applied would be worse than one that never ran.
+	// Describe refuses to describe a model past that point, because a query
+	// built before the description does not carry it and one built after does,
+	// which is a difference no call site asked for. It is a diagnostic and not
+	// a lock: a published model is never written again, so describing one late
+	// is wrong rather than unsafe. See publish.
 	inUse atomic.Bool
 }
 
 // markInUse records that a statement has been built against this model, closing
 // it to further description.
-func (m *Model) markInUse() { m.inUse.Store(true) }
+//
+// The load in front of the store is not an optimisation of the first call but
+// of every one after it: this runs on the build path of every statement, and an
+// unconditional store would have every core in the process writing the same
+// cache line on every query to set a flag that has been true since startup.
+func (m *Model) markInUse() {
+	if !m.inUse.Load() {
+		m.inUse.Store(true)
+	}
+}
 
 // InUse reports whether a statement has been built against this model.
 func (m *Model) InUse() bool { return m.inUse.Load() }
@@ -180,6 +191,70 @@ func (m *Model) Selectable() []*ColumnInfo {
 }
 
 var modelCache sync.Map // reflect.Type -> *Model
+
+// clone returns a deep copy of everything a description can write.
+//
+// It is what makes describing a model copy-on-write: a published *Model is
+// never written again, so a reader that has one — an in-flight query, a REST
+// binding that captured it at mount — holds a snapshot that stays internally
+// consistent no matter what is described afterwards. The alternative was
+// writing through the shared pointer and hoping nobody was reading, which the
+// inUse flag could only ever half-check (it was tested when the Description was
+// built and the writes happened in the calls after that).
+//
+// The ColumnInfo values are copied because a description writes them. Their
+// slice fields are not: Index and Needs are only ever replaced wholesale, never
+// written through, so a copy may share the backing array with the original.
+func (m *Model) clone() *Model {
+	n := &Model{
+		Type:    m.Type,
+		Table:   m.Table,
+		Columns: make([]*ColumnInfo, len(m.Columns)),
+		byName:  make(map[string]*ColumnInfo, len(m.Columns)),
+	}
+	n.inUse.Store(m.inUse.Load())
+
+	// remap carries pointer identity across the copy, which is what lets the
+	// rest of this rebase by *which column* rather than by name — so a relation
+	// or a primary key follows its column through a rename.
+	remap := make(map[*ColumnInfo]*ColumnInfo, len(m.Columns))
+	for i, col := range m.Columns {
+		cp := *col
+		n.Columns[i] = &cp
+		// byName is rebuilt rather than remapped: every writer of it maintains
+		// byName[k].Name == k, so the columns are the whole truth of it.
+		n.byName[cp.Name] = &cp
+		remap[col] = &cp
+	}
+	// A nil column remaps to nil, which is what an undeclared one should stay.
+	n.PK, n.Scope, n.Soft = remap[m.PK], remap[m.Scope], remap[m.Soft]
+
+	if len(m.Derived) > 0 {
+		n.Derived = make([]*ColumnInfo, len(m.Derived))
+		n.byDerived = make(map[string]*ColumnInfo, len(m.Derived))
+		for i, col := range m.Derived {
+			cp := remap[col]
+			n.Derived[i] = cp
+			n.byDerived[cp.Name] = cp
+		}
+	}
+
+	if len(m.Relations) > 0 {
+		n.Relations = make([]*RelationInfo, len(m.Relations))
+		for i, rel := range m.Relations {
+			n.Relations[i] = rel.clone(remap)
+		}
+	}
+	return n
+}
+
+// publish installs m as the model for its type, replacing whatever was there.
+//
+// Every reader resolves through the cache, so this is the moment a description
+// takes effect — atomically, and for statements built after it. One built
+// before keeps the model it started with, which is the property that makes
+// describing under traffic safe rather than merely unlikely to be caught.
+func (m *Model) publish() { modelCache.Store(m.Type, m) }
 
 // ModelOf returns the model for T, reflecting over it once and caching the
 // result. It panics if T is not a struct, which is a programming error rather

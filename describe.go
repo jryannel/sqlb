@@ -32,18 +32,25 @@ import (
 // Descriptions merge onto whatever the tags already said, so a partly tagged
 // model can be completed here.
 //
-// Call it during initialisation, before any query runs. It mutates the cached
-// model in place and does not lock, because doing so would put a mutex on the
-// read path of every query to pay for something that happens once at startup.
-// Calling it after the first statement has been built against the model panics
-// rather than racing. Naming a column that does not exist panics too, listing
-// the ones that do.
+// Call it during initialisation, before any query runs, and it panics if you do
+// not. That is a diagnostic rather than a lock: describing late is wrong because
+// a statement built before the description does not carry it and one built after
+// does, which is a difference no call site asked for.
+//
+// It is not, however, a data race. Each call copies the model, writes the copy
+// and publishes it, so the model a statement resolved is never written again.
+// A query in flight, or a REST binding that captured the model when it mounted,
+// keeps a consistent snapshot of the description that was in force when it
+// started. Nothing on the read path locks, which is what this arrangement buys
+// that a mutex would not: describing costs a copy, once, at startup, and reading
+// costs nothing.
+//
+// Naming a column that does not exist panics, listing the ones that do — and it
+// panics before anything is published, so a description that fails partway leaves
+// the model as it was rather than half-applied.
 func Describe[T any]() *Description[T] {
 	m := ModelOf[T]()
 	if m.InUse() {
-		// Mutating the cached model now would race against every in-flight
-		// query, and a half-applied description is a capability silently
-		// missing rather than a visible failure.
 		panic(fmt.Sprintf(
 			"sqlb: Describe[%s] called after a statement was already built against it; "+
 				"describe models during initialisation, before any query runs", m.Type))
@@ -51,54 +58,76 @@ func Describe[T any]() *Description[T] {
 	return &Description[T]{m: m}
 }
 
-// Description is a set of pending metadata changes to a model.
+// Description is a set of metadata changes to a model.
+//
+// It holds the most recently published model rather than a pending edit: each
+// call publishes, so a chain is a sequence of whole models and a reader always
+// sees one of them.
 type Description[T any] struct {
 	m *Model
 }
 
-// Model returns the model being described, for inspection.
+// Model returns the model as described so far, for inspection.
 func (d *Description[T]) Model() *Model { return d.m }
+
+// apply writes fn's changes to a copy of the model and publishes it.
+//
+// Copying per call rather than once per chain is what keeps every published
+// model immutable: the one this call started from may already have been handed
+// to a statement. The copies are small and a description happens at startup.
+//
+// fn panics on a name the model does not have, which is why publishing comes
+// after it: a failed description leaves the previous model in place.
+func (d *Description[T]) apply(fn func(*Model)) *Description[T] {
+	next := d.m.clone()
+	fn(next)
+	next.publish()
+	d.m = next
+	return d
+}
 
 // Table overrides the table name, which is otherwise derived from the type
 // name or taken from a TableName method.
 func (d *Description[T]) Table(name string) *Description[T] {
-	d.m.Table = name
-	return d
+	return d.apply(func(m *Model) { m.Table = name })
 }
 
 // Column overrides the column a Go field maps to, for when the derived
 // snake_case name is not the real one and the struct cannot be given a tag.
 func (d *Description[T]) Column(field, column string) *Description[T] {
-	for _, col := range d.m.Columns {
-		if col.Field != field {
-			continue
+	return d.apply(func(m *Model) {
+		for _, col := range m.Columns {
+			if col.Field != field {
+				continue
+			}
+			if other, taken := m.byName[column]; taken && other != col {
+				panic(fmt.Sprintf("sqlb: cannot map %s.%s to column %q: already mapped from field %s",
+					m.Type, field, column, other.Field))
+			}
+			delete(m.byName, col.Name)
+			col.Name = column
+			m.byName[column] = col
+			return
 		}
-		if other, taken := d.m.byName[column]; taken && other != col {
-			panic(fmt.Sprintf("sqlb: cannot map %s.%s to column %q: already mapped from field %s",
-				d.m.Type, field, column, other.Field))
-		}
-		delete(d.m.byName, col.Name)
-		col.Name = column
-		d.m.byName[column] = col
-		return d
-	}
-	panic(fmt.Sprintf("sqlb: %s has no field %q (fields: %s)",
-		d.m.Type, field, strings.Join(d.fieldNames(), ", ")))
+		panic(fmt.Sprintf("sqlb: %s has no field %q (fields: %s)",
+			m.Type, field, strings.Join(fieldNamesOf(m), ", ")))
+	})
 }
 
 // PrimaryKey marks the key column. It implies ReadOnly and Filterable, and is
 // what lets the REST layer address a single row.
 func (d *Description[T]) PrimaryKey(column string) *Description[T] {
-	col := d.column("PrimaryKey", column)
-	if d.m.PK != nil && d.m.PK != col {
-		panic(fmt.Sprintf("sqlb: %s already has primary key %q, cannot also use %q",
-			d.m.Type, d.m.PK.Name, column))
-	}
-	col.PrimaryKey = true
-	col.ReadOnly = true
-	col.Filterable = true
-	d.m.PK = col
-	return d
+	return d.apply(func(m *Model) {
+		col := columnOf(m, "PrimaryKey", column)
+		if m.PK != nil && m.PK != col {
+			panic(fmt.Sprintf("sqlb: %s already has primary key %q, cannot also use %q",
+				m.Type, m.PK.Name, column))
+		}
+		col.PrimaryKey = true
+		col.ReadOnly = true
+		col.Filterable = true
+		m.PK = col
+	})
 }
 
 // Defaulted marks columns that carry a database default. Inserts omit such a
@@ -162,10 +191,14 @@ func (d *Description[T]) SQLType(name string, columns ...string) *Description[T]
 // A computed column cannot be searchable, and saying so panics rather than
 // being ignored — for the reason Computed gives.
 func (d *Description[T]) Searchable(columns ...string) *Description[T] {
+	// Read before the copy rather than inside it because the callback each
+	// hands to apply sees only a column. The type is the one thing a copy
+	// cannot change.
+	t := d.m.Type
 	return d.each("Searchable", columns, func(c *ColumnInfo) {
 		if c.Computed() {
 			panic(fmt.Sprintf("sqlb: Searchable(%q): %s computes that column; ?search fans out over text columns, not expressions",
-				c.Name, d.m.Type))
+				c.Name, t))
 		}
 		c.Searchable = true
 		c.Filterable = true
@@ -194,28 +227,30 @@ func (d *Description[T]) Hidden(columns ...string) *Description[T] {
 // generate, and it writes no predicate: [rest.Resource] refuses to mount a
 // resource whose obligations no hook satisfies, and that is all it does.
 func (d *Description[T]) Scoped(column string) *Description[T] {
-	col := d.column("Scoped", column)
-	if d.m.Scope != nil && d.m.Scope != col {
-		panic(fmt.Sprintf("sqlb: %s already scopes on %q, cannot also use %q",
-			d.m.Type, d.m.Scope.Name, column))
-	}
-	col.Scoped = true
-	d.m.Scope = col
-	return d
+	return d.apply(func(m *Model) {
+		col := columnOf(m, "Scoped", column)
+		if m.Scope != nil && m.Scope != col {
+			panic(fmt.Sprintf("sqlb: %s already scopes on %q, cannot also use %q",
+				m.Type, m.Scope.Name, column))
+		}
+		col.Scoped = true
+		m.Scope = col
+	})
 }
 
 // SoftDeleted declares the column a soft-delete predicate is expected to
 // filter — the runtime form of schema.SoftDelete's half that is not a column
 // definition. Like Scoped it obliges a BeforeQuery hook and nothing more.
 func (d *Description[T]) SoftDeleted(column string) *Description[T] {
-	col := d.column("SoftDeleted", column)
-	if d.m.Soft != nil && d.m.Soft != col {
-		panic(fmt.Sprintf("sqlb: %s already soft-deletes on %q, cannot also use %q",
-			d.m.Type, d.m.Soft.Name, column))
-	}
-	col.SoftDelete = true
-	d.m.Soft = col
-	return d
+	return d.apply(func(m *Model) {
+		col := columnOf(m, "SoftDeleted", column)
+		if m.Soft != nil && m.Soft != col {
+			panic(fmt.Sprintf("sqlb: %s already soft-deletes on %q, cannot also use %q",
+				m.Type, m.Soft.Name, column))
+		}
+		col.SoftDelete = true
+		m.Soft = col
+	})
 }
 
 // Computed declares that a column is a SQL expression rather than storage: the
@@ -250,11 +285,12 @@ func (d *Description[T]) SoftDeleted(column string) *Description[T] {
 // Scoped uses, for the same reason: an unbound expression is false for every row
 // forever and looks exactly like a working feature (ADR-0030, ADR-0041).
 func (d *Description[T]) Computed(column, expr string, needs ...string) *Description[T] {
-	col := d.column("Computed", column)
-	if err := setComputed(d.m, col, expr, needs); err != nil {
-		panic(err.Error())
-	}
-	return d
+	return d.apply(func(m *Model) {
+		col := columnOf(m, "Computed", column)
+		if err := setComputed(m, col, expr, needs); err != nil {
+			panic(err.Error())
+		}
+	})
 }
 
 // Relation declares an expandable reference: field is the Go field an expanded
@@ -299,43 +335,49 @@ func (d *Description[T]) Computed(column, expr string, needs ...string) *Descrip
 // and only a capped result has to decide which rows it keeps. Passing them to a
 // forward relation is refused rather than ignored.
 func (d *Description[T]) Relation(field, fkColumn string, opts ...RelationOption) *Description[T] {
-	sf, ok := d.m.Type.FieldByName(field)
-	if !ok {
-		panic(fmt.Sprintf("sqlb: Relation(%q, %q): %s has no such field (fields: %s)",
-			field, fkColumn, d.m.Type, strings.Join(d.fieldNames(), ", ")))
-	}
-	for _, col := range d.m.Columns {
-		if col.Field == field {
-			panic(fmt.Sprintf(
-				"sqlb: Relation(%q, %q): %s.%s is mapped to column %q; "+
-					"a relation field holds an expanded row, not a value of its own — tag it `db:\"-\"`",
-				field, fkColumn, d.m.Type, field, col.Name))
+	return d.apply(func(m *Model) {
+		sf, ok := m.Type.FieldByName(field)
+		if !ok {
+			panic(fmt.Sprintf("sqlb: Relation(%q, %q): %s has no such field (fields: %s)",
+				field, fkColumn, m.Type, strings.Join(fieldNamesOf(m), ", ")))
 		}
-	}
+		for _, col := range m.Columns {
+			if col.Field == field {
+				panic(fmt.Sprintf(
+					"sqlb: Relation(%q, %q): %s.%s is mapped to column %q; "+
+						"a relation field holds an expanded row, not a value of its own — tag it `db:\"-\"`",
+					field, fkColumn, m.Type, field, col.Name))
+			}
+		}
 
-	rt := relationTag{fk: fkColumn}
-	for _, opt := range opts {
-		opt(&rt)
-	}
-	rel, err := newRelation(sf, sf.Index, rt)
-	if err != nil {
-		panic(err.Error())
-	}
-	if prev := d.m.Relation(rel.Name); prev != nil {
-		panic(fmt.Sprintf("sqlb: Relation(%q, %q): %s already expands %q, from field %s",
-			field, fkColumn, d.m.Type, rel.Name, prev.Field))
-	}
+		rt := relationTag{fk: fkColumn}
+		for _, opt := range opts {
+			opt(&rt)
+		}
+		rel, err := newRelation(sf, sf.Index, rt)
+		if err != nil {
+			panic(err.Error())
+		}
+		if prev := m.Relation(rel.Name); prev != nil {
+			panic(fmt.Sprintf("sqlb: Relation(%q, %q): %s already expands %q, from field %s",
+				field, fkColumn, m.Type, rel.Name, prev.Field))
+		}
 
-	// A collection joins on a column of the target, which this description
-	// cannot see and must not mark expandable: that column's capabilities
-	// describe the target's own endpoint. It resolves with the target instead,
-	// on first expansion.
-	if !rel.Collection {
-		rel.FK = d.column("Relation", fkColumn)
-		rel.FK.Expandable = true
-	}
-	d.m.Relations = append(d.m.Relations, rel)
-	return d
+		// A collection joins on a column of the target, which this description
+		// cannot see and must not mark expandable: that column's capabilities
+		// describe the target's own endpoint. It resolves with the target instead,
+		// on first expansion.
+		if !rel.Collection {
+			rel.FK = columnOf(m, "Relation", fkColumn)
+			rel.FK.Expandable = true
+		}
+		// Appended to a slice of its own rather than relying on clone having
+		// left no spare capacity. It has not — clone sizes exactly — but an
+		// append that grew into spare capacity would write into the model this
+		// one was copied from, and that is too quiet a thing to leave resting
+		// on how a function two files away allocates.
+		m.Relations = append(append([]*RelationInfo(nil), m.Relations...), rel)
+	})
 }
 
 // RelationOption adjusts a collection expansion declared through Describe. The
@@ -373,27 +415,32 @@ func (d *Description[T]) Timestamps(columns ...string) *Description[T] {
 	})
 }
 
-func (d *Description[T]) each(what string, columns []string, apply func(*ColumnInfo)) *Description[T] {
-	for _, name := range columns {
-		apply(d.column(what, name))
-	}
-	return d
+func (d *Description[T]) each(what string, columns []string, set func(*ColumnInfo)) *Description[T] {
+	return d.apply(func(m *Model) {
+		for _, name := range columns {
+			set(columnOf(m, what, name))
+		}
+	})
 }
 
-// column resolves a name, panicking with the available columns if it is not
+// columnOf resolves a name, panicking with the available columns if it is not
 // one. Failing loudly at startup is the point: a mistyped column here would
 // otherwise silently leave a capability off and surface as a 400 much later.
-func (d *Description[T]) column(what, name string) *ColumnInfo {
-	if col := d.m.Column(name); col != nil {
+//
+// It takes the model rather than reading the Description's, because a
+// description resolves against the copy it is about to publish and not against
+// the one already in the cache.
+func columnOf(m *Model, what, name string) *ColumnInfo {
+	if col := m.Column(name); col != nil {
 		return col
 	}
 	panic(fmt.Sprintf("sqlb: %s(%q): %s has no such column (columns: %s)",
-		what, name, d.m.Type, strings.Join(d.m.ColumnNames(), ", ")))
+		what, name, m.Type, strings.Join(m.ColumnNames(), ", ")))
 }
 
-func (d *Description[T]) fieldNames() []string {
-	out := make([]string, len(d.m.Columns))
-	for i, c := range d.m.Columns {
+func fieldNamesOf(m *Model) []string {
+	out := make([]string, len(m.Columns))
+	for i, c := range m.Columns {
 		out[i] = c.Field
 	}
 	return out

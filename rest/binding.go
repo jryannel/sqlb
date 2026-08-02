@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
@@ -332,6 +333,35 @@ func (w *rowWriter) openMember(key []byte) {
 	w.buf.Write(key)
 }
 
+// timestamp writes t as encoding/json would, and reports whether it did.
+//
+// It is worth a special case because time.Time is the one type a generated
+// resource carries that allocates on every value: MarshalJSON opens with a
+// make of its own, which the encoder then copies out and drops. AppendFormat
+// writes the same bytes into the buffer the page is already filling. On the
+// benchmark page — fifty rows, one timestamp each — that was a fifth of the
+// allocations left on the response path.
+//
+// The two formats agree wherever MarshalJSON succeeds; where it fails it is
+// the error that matters, so the cases it rejects return false and go back
+// through the encoder to raise it. Those are a year outside [0,9999] and a
+// zone a whole day or more from UTC, neither of which survives a round trip
+// through timestamptz — the guard is here because AppendFormat would render
+// them as malformed JSON rather than refuse.
+func (w *rowWriter) timestamp(t time.Time) bool {
+	if y := t.Year(); y < 0 || y > 9999 {
+		return false
+	}
+	if _, off := t.Zone(); off <= -24*3600 || off >= 24*3600 {
+		return false
+	}
+	b := w.buf.AvailableBuffer()
+	b = append(b, '"')
+	b = t.AppendFormat(b, time.RFC3339Nano)
+	w.buf.Write(append(b, '"'))
+	return true
+}
+
 // member writes one key and its value.
 //
 // The value goes through the bound encoder rather than json.Marshal, which
@@ -339,6 +369,18 @@ func (w *rowWriter) openMember(key []byte) {
 // allocation per column per row.
 func (w *rowWriter) member(key []byte, v any) error {
 	w.openMember(key)
+	switch t := v.(type) {
+	case time.Time:
+		if w.timestamp(t) {
+			return nil
+		}
+	case *time.Time:
+		// A nil one is null, which the encoder writes for free; only a value
+		// worth formatting takes the fast path.
+		if t != nil && w.timestamp(*t) {
+			return nil
+		}
+	}
 	if err := w.enc.Encode(v); err != nil {
 		return err
 	}
