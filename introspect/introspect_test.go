@@ -269,7 +269,7 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 // stripCast had no reason to touch, and the column arrived as an ordinary bigint
 // whose default named a sequence. The table then reported clean while the DDL it
 // produced failed to apply — "relation t_ser_seq does not exist" — and the
-// table's indexes failed behind it. Found by sqlb-survey on a second corpus
+// table's indexes failed behind it. Found by sqlb survey on a second corpus
 // (issue #119); it was the only defect in either corpus that produced DDL which
 // does not run.
 func TestSerialColumnIsReportedRatherThanImportedSilently(t *testing.T) {

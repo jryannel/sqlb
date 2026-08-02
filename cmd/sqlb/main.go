@@ -5,6 +5,8 @@
 //	sqlb check ./taskschema                 report stale artefacts, write nothing
 //	sqlb migrate -name adds_priority ./taskschema   write the next migration
 //	sqlb migrate -check ./taskschema        report whether the schema has moved ahead
+//	sqlb survey $SRC $SCRATCH               report what sqlb could describe of a
+//	                                        database it did not declare
 //
 // # Two gates, and only one of them needs a database
 //
@@ -28,6 +30,13 @@
 //
 // What the driver does once it is running lives in codegen.Main, not in emitted
 // source, so that the interesting half of this command is ordinary tested code.
+//
+// # The one verb that does not
+//
+// `survey` is the exception, and for the reason that proves the rule: it builds
+// its registry by introspecting a live database rather than by importing a
+// declaration, so there is nothing to link in and nothing to compile. It takes
+// two DSNs and runs in this process. See survey.go.
 //
 // # What it costs
 //
@@ -81,6 +90,9 @@ Usage:
     sqlb eject [flags] <package>     write the exit: the schema as SQL and the
                                      resources as plain handlers, importing pgx
                                      and the standard library and nothing else
+    sqlb survey [flags] <src> <dst>  report which of an existing database's tables
+                                     sqlb could describe, and why not — the
+                                     adoption probe, run against two DSNs
     sqlb version                     print the version this binary was built from
 
 Flags for check:
@@ -105,6 +117,13 @@ Flags for eject:
 
     -check                report whether the committed exit is stale; write nothing
 
+Flags for survey:
+
+    -modules a,b,c        table-name prefixes to group the per-table verdict by,
+                          for a modular monolith
+    -exclude t1,t2        tables to leave out entirely, replacing the built-in
+                          migration-runner list
+
 <package> is the Go package that declares the schema, in the form go build
 takes — usually ./schema or ./taskschema. It must export:
 
@@ -118,6 +137,10 @@ given one. migrate reads the current schema by
 replaying the committed history into a scratch Postgres, so it needs the
 Project's ShadowDB — except for the first migration, which diffs against
 nothing and needs no database at all.
+
+survey is the odd one out and takes no package: it reads a database that has no
+declaration yet, which is the question it exists to answer. Run "sqlb survey"
+with no arguments for what its two DSNs must be.
 `
 
 // run is main without the exit, so that the tests can drive the whole command.
@@ -140,6 +163,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version())
 		return nil
+	case "survey":
+		// Handled here rather than below because it is the one verb that reads
+		// a database instead of a declaration: there is no package to resolve
+		// and no driver to compile, so none of what follows applies to it.
+		return survey(args[1:], stdout, stderr)
 	case "generate", "check", "migrate", "impact", "eject":
 	default:
 		_, _ = fmt.Fprintf(stderr, "sqlb: unknown command %q\n\n", verb)

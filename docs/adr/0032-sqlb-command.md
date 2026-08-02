@@ -48,6 +48,15 @@ and none left behind on a failure.
 **The driver is three lines, and everything it could contain lives in
 `codegen.Main`.** Generated code cannot be tested; the package it calls can.
 
+**A verb that reads a database rather than a declaration compiles nothing, and
+is still a verb of this command.** `sqlb survey` builds its registry by
+introspecting a live Postgres, so there is no package to link in and the driver
+mechanism has nothing to do. It runs in the `sqlb` process and takes two DSNs
+where the others take a package. The compile is a consequence of
+[ADR-0004](0004-schema-as-go-dsl.md), not a property of the command — so the
+right boundary is one binary with one help text, not one binary per argument
+shape.
+
 **A project declares itself by exporting `SqlbProject() codegen.Project`.**
 
 ```go
@@ -224,3 +233,21 @@ files rather than fail.
   than carried through as text, so a difference between two of those is never
   formatting — and naming a normalisation step that does not touch them would be
   advice that cannot help.
+- 2026-08-02 — `sqlb-survey` folded in as `sqlb survey`. It had been a second
+  `main` since #112 because it needs no schema package, and that reasoning was
+  backwards: needing no package is a fact about one verb's *arguments*, not a
+  reason for a second binary a user has to hear about separately. Two commands
+  meant two help texts, two install lines, and an adoption probe absent from
+  `sqlb help` — which is where somebody deciding whether to adopt sqlb looks
+  first. The Decision above now says what the boundary actually is.
+
+  Cobra was considered for the merged tree and rejected on this command's own
+  shape rather than on dependency policy alone. `cmd/sqlb` deliberately does not
+  parse the driving verbs' flags — it forwards them opaquely, and they are
+  parsed on the far side by `codegen.Run`. Cobra confined to `cmd/sqlb` would
+  therefore own a five-case switch and none of the flags, and cobra pushed far
+  enough to own them would put a command-line framework in `codegen`, which is a
+  library package every consumer imports. That is the cost
+  [ADR-0040](0040-the-driver-is-a-dependency.md) says a new dependency has to
+  argue for, and this one has no argument: the framework would be paid for by
+  every consumer to improve the help text of a binary only maintainers run.

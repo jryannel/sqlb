@@ -19,7 +19,7 @@ should survive sqlb disappearing tomorrow; where one would not, it is in
 
 ## Where the evidence comes from
 
-Counts come from `sqlb-survey` over two production schemas: **valiro-go**
+Counts come from `sqlb survey` over two production schemas: **valiro-go**
 (68 tables) and **mind-vm/studio-apps** (ten independent app deployments,
 233 tables) — 301 tables. Practices without a count say so; a practice can be
 right without being measured, but it should not pretend to evidence it lacks.
@@ -323,12 +323,12 @@ cascades are now the largest single category of what remains.
 
 # Finding out where a schema actually stands
 
-`sqlb-survey` answers all of this against a real database — what imports clean,
+`sqlb survey` answers all of this against a real database — what imports clean,
 what imports partially, what a round trip fails to reproduce. Read-only against
 the source, seconds to run.
 
 ```bash
-go run github.com/jryannel/sqlb/cmd/sqlb-survey@main "$SRC" "$SCRATCH" > survey.md
+go run github.com/jryannel/sqlb/cmd/sqlb@main survey "$SRC" "$SCRATCH" > survey.md
 ```
 
 The scratch database must carry the same extensions as the source
