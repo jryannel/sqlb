@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -45,13 +46,15 @@ type tableResult struct {
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		fatal("usage: sqlb-survey <src-migrated-dsn> <dst-empty-dsn>")
+	modules := flag.String("modules", "", "comma-separated table-name prefixes to group the per-table verdict by, for a modular monolith whose tables are named <module>_<table> (e.g. billing,catalog)")
+	flag.Parse()
+	if flag.NArg() != 2 {
+		fatal("usage: sqlb-survey [-modules a,b,c] <src-migrated-dsn> <dst-empty-dsn>")
 	}
 	ctx := context.Background()
-	src := open(ctx, os.Args[1])
+	src := open(ctx, flag.Arg(0))
 	defer src.Close()
-	dst := open(ctx, os.Args[2])
+	dst := open(ctx, flag.Arg(1))
 	defer dst.Close()
 
 	all := listTables(ctx, src)
@@ -144,6 +147,8 @@ func main() {
 	}
 	fmt.Printf("%s\n\n", strings.Join(names, ", "))
 
+	printByModule(*modules, results)
+
 	// ---------------------------------------------------------------- phase C
 	// Fixpoint. Render the modelled registry's DDL into an empty database and
 	// re-introspect: anything the round trip does not preserve is a construct
@@ -219,6 +224,96 @@ func main() {
 	fmt.Printf("- skipped constructs (whole schema): %d\n", lenSkips(repAll))
 	fmt.Printf("- DDL apply failures: %d\n", len(applyFails))
 	fmt.Printf("- fixpoint residual: %d\n", len(residual))
+}
+
+// printByModule regroups the per-table verdict by table-name prefix.
+//
+// A flat verdict list under-reports a modular monolith. The gate is per
+// registry, and a modular monolith has one registry per module (ADR-0015), so
+// a table that cannot be modelled does not take out "the schema" — it takes
+// out its module, and the count of affected modules is what decides how much
+// of the port is blocked. Whether one blocked table means one app or six is
+// not visible in a list sorted by table name.
+//
+// Prefixes are supplied rather than guessed: inferring them from table names
+// would split hotel_rooms and hotels into two modules, and a wrong split reads
+// as a real result.
+func printByModule(spec string, results []tableResult) {
+	if strings.TrimSpace(spec) == "" {
+		return
+	}
+	prefixes := make([]string, 0)
+	for _, p := range strings.Split(spec, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			prefixes = append(prefixes, p)
+		}
+	}
+	if len(prefixes) == 0 {
+		return
+	}
+	// Longest prefix wins, so a module named "user" does not claim the tables
+	// of one named "user_billing".
+	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
+
+	type mod struct{ clean, partial, refused int }
+	mods := map[string]*mod{}
+	for _, p := range prefixes {
+		mods[p] = &mod{}
+	}
+	unclaimed := &mod{}
+	var unclaimedNames []string
+
+	for _, r := range results {
+		m, name := unclaimed, ""
+		for _, p := range prefixes {
+			if strings.HasPrefix(r.Name, p+"_") {
+				m, name = mods[p], p
+				break
+			}
+		}
+		switch {
+		case r.Err != "":
+			m.refused++
+		case len(r.Skips) > 0:
+			m.partial++
+		default:
+			m.clean++
+		}
+		if name == "" {
+			unclaimedNames = append(unclaimedNames, r.Name)
+		}
+	}
+
+	fmt.Printf("### By module\n\n")
+	fmt.Printf("| module | tables | clean | partial | refused | gate |\n")
+	fmt.Printf("|---|---:|---:|---:|---:|---|\n")
+	sort.Strings(prefixes)
+	blocked := 0
+	for _, p := range prefixes {
+		m := mods[p]
+		total := m.clean + m.partial + m.refused
+		gate := "green"
+		if m.partial+m.refused > 0 {
+			gate = "**blocked**"
+			blocked++
+		}
+		fmt.Printf("| %s | %d | %d | %d | %d | %s |\n", p, total, m.clean, m.partial, m.refused, gate)
+	}
+	if n := unclaimed.clean + unclaimed.partial + unclaimed.refused; n > 0 {
+		gate := "green"
+		if unclaimed.partial+unclaimed.refused > 0 {
+			gate = "**blocked**"
+			blocked++
+		}
+		fmt.Printf("| _(no prefix)_ | %d | %d | %d | %d | %s |\n",
+			n, unclaimed.clean, unclaimed.partial, unclaimed.refused, gate)
+	}
+	fmt.Printf("\n**%d of %d modules blocked.**\n\n", blocked, len(prefixes))
+	if len(unclaimedNames) > 0 {
+		sort.Strings(unclaimedNames)
+		fmt.Printf("Tables matching no prefix (%d) — shared, or a prefix is missing from -modules:\n\n%s\n\n",
+			len(unclaimedNames), strings.Join(unclaimedNames, ", "))
+	}
 }
 
 func lenSkips(r *introspect.Report) int {
