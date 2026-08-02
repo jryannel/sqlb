@@ -104,9 +104,22 @@ func (d *Description[T]) Column(field, column string) *Description[T] {
 				panic(fmt.Sprintf("sqlb: cannot map %s.%s to column %q: already mapped from field %s",
 					m.Type, field, column, other.Field))
 			}
+			// The wire spelling follows the column unless something set it
+			// apart — a `wire:` tag, which a described struct will not usually
+			// carry. Without this the request path keeps resolving the name the
+			// rename replaced, and a filter on the new one answers "unknown"
+			// while the allowed list shows it.
+			renameWire := col.Wire == col.Name
 			delete(m.byName, col.Name)
+			if renameWire {
+				delete(m.byWire, col.Wire)
+			}
 			col.Name = column
 			m.byName[column] = col
+			if renameWire {
+				col.Wire = column
+				m.byWire[column] = col
+			}
 			return
 		}
 		panic(fmt.Sprintf("sqlb: %s has no field %q (fields: %s)",

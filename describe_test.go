@@ -343,3 +343,36 @@ func TestDescribeRelationRejectsANonStructField(t *testing.T) {
 	}()
 	sqlb.Describe[Bad]().Relation("Extra", "list_id")
 }
+
+// A described model's wire index has to survive the copy a Description
+// publishes, and a rename has to move it.
+//
+// Both were missed when WireCase landed: the copy predates byWire and rebuilt
+// only byName, so every described model resolved filters against an empty
+// index — and the failure was a filter answering "unknown parameter" while the
+// allowed list beside it named that very parameter.
+func TestDescribedModelResolvesByWire(t *testing.T) {
+	type Invoice struct {
+		ID        string `db:"id"`
+		AmountDue int64  `db:"amount_due"`
+		Legacy    string
+	}
+	m := sqlb.Describe[Invoice]().
+		PrimaryKey("id").
+		Filterable("amount_due").
+		Column("Legacy", "renamed_col").
+		Filterable("renamed_col").
+		Model()
+
+	if col := m.ColumnByWire("amount_due"); col == nil {
+		t.Fatal("a described column is not reachable by its wire name, so no filter can name it")
+	}
+	// The rename moved both indexes, and the name it replaced is gone from
+	// each — otherwise two spellings answer, which is what ADR-0036 forbids.
+	if col := m.ColumnByWire("renamed_col"); col == nil || col.Name != "renamed_col" {
+		t.Errorf("the rename did not move the wire index: %+v", col)
+	}
+	if m.ColumnByWire("legacy") != nil {
+		t.Error("the pre-rename spelling still resolves")
+	}
+}

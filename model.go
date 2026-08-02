@@ -232,6 +232,7 @@ func (m *Model) clone() *Model {
 		Table:   m.Table,
 		Columns: make([]*ColumnInfo, len(m.Columns)),
 		byName:  make(map[string]*ColumnInfo, len(m.Columns)),
+		byWire:  make(map[string]*ColumnInfo, len(m.Columns)),
 	}
 	n.inUse.Store(m.inUse.Load())
 
@@ -242,9 +243,11 @@ func (m *Model) clone() *Model {
 	for i, col := range m.Columns {
 		cp := *col
 		n.Columns[i] = &cp
-		// byName is rebuilt rather than remapped: every writer of it maintains
-		// byName[k].Name == k, so the columns are the whole truth of it.
+		// byName and byWire are rebuilt rather than remapped: every writer of
+		// them maintains byName[k].Name == k and byWire[k].Wire == k, so the
+		// columns are the whole truth of both.
 		n.byName[cp.Name] = &cp
+		n.byWire[cp.Wire] = &cp
 		remap[col] = &cp
 	}
 	// A nil column remaps to nil, which is what an undeclared one should stay.
