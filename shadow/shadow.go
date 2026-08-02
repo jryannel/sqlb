@@ -70,6 +70,17 @@ type Options struct {
 	// database is read back.
 	Schema string
 	Module string
+
+	// Only and Exclude are passed through too, and narrow what is read back
+	// rather than what is replayed. The whole history always runs — replaying a
+	// subset of it would build a schema no file describes, which is the failure
+	// this package exists to catch — so these narrow the reading only.
+	//
+	// A module adopting a few tables at a time needs both halves: the history
+	// builds sixty-nine tables and the declaration covers five, and without this
+	// the report is about the sixty-four nobody asked about.
+	Only    []string
+	Exclude []string
 }
 
 // Result reports what was replayed, so a failure or a surprise can be traced to
@@ -130,8 +141,10 @@ func Build(ctx context.Context, db DB, opts Options) (*schema.Registry, *introsp
 	}
 
 	reg, report, err := introspect.Registry(ctx, db, introspect.Options{
-		Schema: opts.Schema,
-		Module: opts.Module,
+		Schema:  opts.Schema,
+		Module:  opts.Module,
+		Only:    opts.Only,
+		Exclude: opts.Exclude,
 	})
 	if err != nil {
 		return nil, nil, res, fmt.Errorf("shadow: reading back the replayed schema: %w", err)

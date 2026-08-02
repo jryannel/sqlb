@@ -40,24 +40,48 @@ func renderTSClient(opts Options) ([]byte, error) {
 		return nil, err
 	}
 
-	var b bytes.Buffer
-	b.WriteString(tsClientHeader)
-	b.WriteString(tsRuntime)
+	// The body first, so the import list can be computed from what it actually
+	// references rather than guessed. noUnusedLocals makes a guess a build
+	// failure, and the set genuinely varies by schema (#110).
+	var body bytes.Buffer
 
 	// Row types for every table, not only the exposed ones: an expansion can
 	// name a table that has no endpoint of its own, and the row still has to
 	// have a type. This is the same call `.Expandable()` already makes on the
 	// server.
 	for _, t := range opts.Registry.Tables() {
-		tsRowTypes(&b, opts.Registry, t)
+		tsRowTypes(&body, opts.Registry, t)
 	}
 
 	for _, r := range resources {
-		tsResourceSection(&b, r)
+		tsResourceSection(&body, r)
 	}
 
-	tsKeyIndex(&b, resources)
+	tsKeyIndex(&body, resources)
+
+	if name := tsUnexportedUse(body.String()); name != "" {
+		return nil, fmt.Errorf(
+			"codegen: the TypeScript client calls %q, which the runtime does not export — "+
+				"export it from tsRuntime, or the emitted client will not compile", name)
+	}
+
+	var b bytes.Buffer
+	b.WriteString(tsClientHeader)
+	b.WriteString(tsRuntimeImports(body.String(), opts.tsRuntimeImport()))
+	b.Write(body.Bytes())
 	return b.Bytes(), nil
+}
+
+// renderTSRuntime emits the schema-independent half on its own.
+//
+// It takes no options because it depends on nothing: two projects rendering it
+// produce identical bytes, which is what lets several modules share one file
+// and keeps `check` meaningful for each of them (#110).
+func renderTSRuntime() []byte {
+	var b bytes.Buffer
+	b.WriteString(tsRuntimeHeader)
+	b.WriteString(tsRuntime)
+	return b.Bytes()
 }
 
 // renderTSQueries emits layer 4. It returns nil when nothing is exposed, so a
@@ -140,7 +164,16 @@ type tsResource struct {
 	searchable bool
 	relations  []tsRelation
 	pk         string
+
+	// wire is the schema's wire case, carried on the resource so that every
+	// name this file emits goes through one function rather than each site
+	// remembering to. A client is generated *against* the wire, so the column's
+	// own name appears nowhere in it except in a doc comment.
+	wire schema.WireCase
 }
+
+// n spells one of this resource's column names the way the wire does.
+func (r *tsResource) n(name string) string { return r.wire.WireName(name) }
 
 // tsRelation is one entry of a resource's ?expand vocabulary, in the direction
 // it is served.
@@ -167,6 +200,7 @@ func tsResources(reg *schema.Registry) ([]tsResource, error) {
 			plural:   GoName(t.LocalName()),
 			path:     rest.Path,
 			ops:      rest.Ops,
+			wire:     reg.Wire(),
 		}
 		for _, f := range t.Fields() {
 			d := f.Desc()
@@ -174,14 +208,14 @@ func tsResources(reg *schema.Registry) ([]tsResource, error) {
 				continue
 			}
 			if d.PrimaryKey {
-				r.pk = d.Name
+				r.pk = r.n(d.Name)
 			}
-			r.selectable = append(r.selectable, d.Name)
+			r.selectable = append(r.selectable, r.n(d.Name))
 			if d.Filterable {
 				r.filterable = append(r.filterable, d)
 			}
 			if d.Sortable {
-				r.sortable = append(r.sortable, d.Name)
+				r.sortable = append(r.sortable, r.n(d.Name))
 			}
 			if d.Searchable {
 				r.searchable = true
@@ -228,6 +262,7 @@ func tsRelationOf(reg *schema.Registry, t *schema.TableDef, name string) (tsRela
 // tsRowTypes emits the enums, the row interface and the request bodies for one
 // table.
 func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
+	wire := reg.Wire()
 	typeName := TypeName(t.LocalName())
 	fmt.Fprintf(b, "\n// %s\n", tsRule(t.Name()))
 
@@ -248,10 +283,10 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 	}
 	fmt.Fprintf(b, "export interface %s {\n", typeName)
 
-	// Property names are the `json` tag spelling, which is snake_case.
-	// Camel-casing would need a runtime mapping layer, and the point of the
-	// emitted client is that there is nothing between the response and the
-	// caller. ADR-0028.
+	// Property names are the `json` tag spelling, which is what the schema's
+	// WireCase computed. Both sides come from that one function, so there is no
+	// mapping layer between the response and the caller — which is the property
+	// ADR-0036 protects and the reason the case is per schema, not per column.
 	rels := tsForwardRelations(t)
 	for _, f := range t.Fields() {
 		d := f.Desc()
@@ -268,7 +303,7 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 			// error anywhere.
 			fmt.Fprintf(b, "  /** bigint. Values above 2^53 lose precision in JSON. */\n")
 		}
-		fmt.Fprintf(b, "  %s: %s;\n", tsProp(d.Name), tsType(typeName, d))
+		fmt.Fprintf(b, "  %s: %s;\n", tsProp(wire.WireName(d.Name)), tsType(typeName, d))
 		if rel, ok := rels[d.Name]; ok {
 			fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. */\n", rel.name)
 			fmt.Fprintf(b, "  %s?: %s;\n", tsProp(rel.name), tsRelationType(rel))
@@ -283,7 +318,7 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 	}
 	fmt.Fprintln(b, "}")
 
-	tsBodyTypes(b, t, typeName)
+	tsBodyTypes(b, t, typeName, wire)
 	tsActionBodies(b, t, typeName)
 }
 
@@ -308,7 +343,7 @@ func tsForwardRelations(t *schema.TableDef) map[string]tsRelation {
 
 // tsBodyTypes emits the create and patch bodies, over the same column sets the
 // Go bodies use, so the two cannot disagree about what a request may write.
-func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string) {
+func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string, wire schema.WireCase) {
 	rest := t.Rest()
 	if rest == nil {
 		return
@@ -323,7 +358,7 @@ func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string) {
 		for _, f := range fields {
 			d := f.Desc()
 			tsDoc(b, "  ", d.Comment)
-			fmt.Fprintf(b, "  %s%s: %s;\n", tsProp(d.Name), tsOptional(optionalOnCreate(d)), tsType(typeName, d))
+			fmt.Fprintf(b, "  %s%s: %s;\n", tsProp(wire.WireName(d.Name)), tsOptional(optionalOnCreate(d)), tsType(typeName, d))
 		}
 		fmt.Fprintln(b, "}")
 	}
@@ -342,7 +377,7 @@ func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string) {
 		for _, f := range fields {
 			d := f.Desc()
 			tsDoc(b, "  ", d.Comment)
-			fmt.Fprintf(b, "  %s?: %s;\n", tsProp(d.Name), tsType(typeName, d))
+			fmt.Fprintf(b, "  %s?: %s;\n", tsProp(wire.WireName(d.Name)), tsType(typeName, d))
 		}
 		fmt.Fprintln(b, "}")
 	}
@@ -385,7 +420,7 @@ func tsResourceSection(b *bytes.Buffer, r tsResource) {
 	// implicit index signature and an interface none.
 	fmt.Fprintf(b, "export type %sWhere = {\n", r.typeName)
 	for _, d := range r.filterable {
-		fmt.Fprintf(b, "  %s?: %s;\n", tsProp(d.Name), tsCondType(r.typeName, d))
+		fmt.Fprintf(b, "  %s?: %s;\n", tsProp(r.n(d.Name)), tsCondType(r.typeName, d))
 	}
 	fmt.Fprintln(b, "};")
 
@@ -650,7 +685,8 @@ func tsElemType(typeName string, d *schema.FieldDesc) string {
 		return tsEnumName(typeName, d)
 	}
 	switch d.Type {
-	case schema.TypeInt, schema.TypeBigInt, schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt, schema.TypeReal,
+		schema.TypeFloat, schema.TypeNumeric:
 		// bigint is `number` with a known limit: JSON.parse loses precision
 		// above 2^53, so a counter is fine and a bigint surrogate key is not.
 		// Typing it `string` would be correct for the key and wrong for every
@@ -826,11 +862,28 @@ const tsClientHeader = `// Code generated by github.com/jryannel/sqlb. DO NOT ED
 // derivable from a schema — the same seam the server takes by mounting onto a
 // router the application built.
 //
-// Property names are the wire spelling, which is snake_case. Camel-casing
-// would need a runtime mapping layer between the response and the caller, and
-// the point of a generated client is that there is nothing there.
+// Property names are the wire spelling, which is the column's own name unless
+// the schema declared a WireCase. There is no mapping layer either way: the
+// spelling is computed once, at generation time, so there is nothing between
+// the response and the caller.
 //
-// ADR-0028.
+// ADR-0028, ADR-0036.
+`
+
+const tsRuntimeHeader = `// Code generated by github.com/jryannel/sqlb. DO NOT EDIT.
+//
+// The part of the client that does not depend on any schema: the response
+// envelopes, the problem document, the transport signature and the encoder for
+// the filter grammar.
+//
+// It is a file of its own so that an application with more than one generated
+// module has one copy rather than N — one Page, one Problem, one Transport to
+// wire — and so a shared pager or error boundary can be written once. A client
+// re-exports everything here, so importing it from the client keeps working
+// (ADR-0028, issue #110).
+//
+// It imports nothing, and it is derived from nothing schema-specific: two
+// projects generating it produce the same bytes.
 `
 
 // tsRuntime is the part of the emitted file that does not depend on the
@@ -1108,7 +1161,11 @@ export function encodeItemQuery(query: { expand?: readonly string[] } = {}): str
   return out.toString();
 }
 
-function itemPath(collection: string, id: string | number): string {
+/** The path of one row: the collection, then the id, encoded.
+ *
+ * Exported because the per-schema client calls it, and it is the same helper
+ * the Go client exports as ItemPath. */
+export function itemPath(collection: string, id: string | number): string {
   return collection + '/' + encodeURIComponent(String(id));
 }
 `

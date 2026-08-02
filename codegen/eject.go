@@ -267,7 +267,8 @@ func ejectModels(opts EjectOptions, tables []*schema.TableDef) ([]byte, error) {
 		fmt.Fprintf(b, "type %s struct {\n", typeName)
 		for _, f := range t.Fields() {
 			d := f.Desc()
-			fmt.Fprintf(b, "\t%s %s `db:%q %s`", GoName(d.Name), ejectGoType(d), d.Name, jsonTag(d))
+			fmt.Fprintf(b, "\t%s %s `db:%q %s`", GoName(d.Name), ejectGoType(d), d.Name,
+				jsonTag(d, opts.Registry.Wire()))
 			switch {
 			case d.Computed():
 				fmt.Fprint(b, " // computed: ", d.Expr)

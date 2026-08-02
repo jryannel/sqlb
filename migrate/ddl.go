@@ -63,10 +63,14 @@ func scalarSQLType(d *schema.FieldDesc) (string, error) {
 			return fmt.Sprintf("varchar(%d)", d.Size), nil
 		}
 		return "text", nil
+	case schema.TypeSmallInt:
+		return "smallint", nil
 	case schema.TypeInt:
 		return "integer", nil
 	case schema.TypeBigInt:
 		return "bigint", nil
+	case schema.TypeReal:
+		return "real", nil
 	case schema.TypeFloat:
 		return "double precision", nil
 	case schema.TypeNumeric:
@@ -120,6 +124,11 @@ func widens(from, to *schema.FieldDesc) bool {
 		return false
 	}
 	switch from.Type {
+	case schema.TypeSmallInt:
+		switch to.Type {
+		case schema.TypeInt, schema.TypeBigInt, schema.TypeNumeric:
+			return true
+		}
 	case schema.TypeInt:
 		switch to.Type {
 		case schema.TypeBigInt, schema.TypeNumeric:
@@ -127,6 +136,15 @@ func widens(from, to *schema.FieldDesc) bool {
 		}
 	case schema.TypeBigInt:
 		if to.Type == schema.TypeNumeric {
+			return true
+		}
+	case schema.TypeReal:
+		// real to double precision only. Not to numeric: the cast is legal but
+		// it converts a binary float to an exact decimal, so the value that
+		// comes back is the rounded decimal expansion of the stored
+		// approximation rather than what anyone wrote. That is a conversion a
+		// person decides on, not one a generated migration performs unasked.
+		if to.Type == schema.TypeFloat {
 			return true
 		}
 	case schema.TypeVarchar:
@@ -591,6 +609,34 @@ func constraints(t *schema.TableDef) []constraint {
 			pk:     true,
 			cols:   []string{pk.Name()},
 			covers: []string{pk.Name()},
+		})
+	} else if cols := t.CompositeKey(); len(cols) > 0 {
+		quoted := make([]string, len(cols))
+		for i, c := range cols {
+			quoted[i] = quoteIdent(c)
+		}
+		out = append(out, constraint{
+			name:   primaryKeyName(t),
+			def:    "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")",
+			unique: true,
+			pk:     true,
+			cols:   append([]string(nil), cols...),
+			covers: append([]string(nil), cols...),
+		})
+	}
+
+	for _, e := range t.Exclusions() {
+		out = append(out, constraint{
+			name: e.Name,
+			def:  e.Def(),
+			// Not `unique`. That flag says a constraint is backed by an index a
+			// migration could build for itself beforehand with CREATE UNIQUE
+			// INDEX CONCURRENTLY and then adopt — and there is no such
+			// spelling for an exclusion: ADD CONSTRAINT ... EXCLUDE builds its
+			// own index and Postgres offers no USING INDEX form for it. Saying
+			// otherwise would make Unblock propose a rewrite that does not
+			// exist.
+			covers: excludeCovers(t, e),
 		})
 	}
 
@@ -1108,4 +1154,46 @@ func addConstraintUsingIndex(table string, c constraint) string {
 	}
 	return "ALTER TABLE " + quoteIdent(table) + " ADD CONSTRAINT " + quoteIdent(c.name) +
 		" " + kind + " USING INDEX " + quoteIdent(c.name) + ";"
+}
+
+// excludeCovers lists the table's own columns an exclusion names, so the diff
+// can recognise one that depends on a column the same migration is adding.
+//
+// Matched by name against the table's columns rather than parsed out of the
+// element list, because the elements are expressions — tstzrange(starts_at,
+// ends_at) names two columns inside a function call — and a parser here would
+// be a second, worse copy of one Postgres already has. Over-reporting is the
+// safe direction: a column named coincidentally by a literal only delays the
+// constraint until after the column exists, which it would anyway.
+func excludeCovers(t *schema.TableDef, e schema.Exclusion) []string {
+	body := e.Elements + " " + e.Where
+	var out []string
+	for _, f := range t.StoredFields() {
+		if containsWord(body, f.Desc().Name) {
+			out = append(out, f.Desc().Name)
+		}
+	}
+	return out
+}
+
+// containsWord reports whether name appears in s as a whole identifier, so that
+// "id" does not match "coach_id".
+func containsWord(s, name string) bool {
+	for i := 0; i+len(name) <= len(s); i++ {
+		if s[i:i+len(name)] != name {
+			continue
+		}
+		if i > 0 && isIdentByte(s[i-1]) {
+			continue
+		}
+		if j := i + len(name); j < len(s) && isIdentByte(s[j]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

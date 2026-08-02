@@ -72,6 +72,23 @@ const (
 // for a fully exposed collection.
 const CRUD = OpCreate | OpRead | OpUpdate | OpDelete
 
+// Reads is the read-only resource: generated reads, hand-written writes.
+//
+// This is the shape an adopting application actually reaches for, and it is
+// deliberate rather than unfinished. An app already has its writes, and the
+// reasons they stay hand-written do not go away — in the port that motivated
+// this constant, six of seven resources withheld something and no two withheld
+// for the same reason: a create that writes bytes to object storage before the
+// row, a row that is born in one domain verb and closed in another, a column
+// whose transition *is* the publish the org gets notified about, per-field
+// authorization a hook can constrain but not express.
+//
+// Naming it matters because with only CRUD named, this reads as a CRUD
+// resource with two thirds switched off — as a library that could not serve
+// the writes, rather than the most common and most deliberate mount there is
+// (issue #101).
+const Reads = OpRead | OpList
+
 // Has reports whether the mask contains op.
 func (o Op) Has(op Op) bool { return o&op != 0 }
 

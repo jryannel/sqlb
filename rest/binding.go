@@ -137,6 +137,29 @@ func bind[T any](opts Options) (*binding[T], error) {
 		}
 	}
 
+	// The body's spelling and the request's spelling must be the same string.
+	//
+	// The response body is json.Marshal over the struct, so its keys come from
+	// the `json` tag; a filter parameter is resolved through ColumnInfo.Wire,
+	// which comes from the `sqlb` tag. Codegen writes both from one WireCase
+	// and they cannot disagree — but a hand-written model, or a generated one
+	// edited by hand, can produce a resource whose response says `createdAt`
+	// and whose filter only answers to `created_at`. That is precisely the two
+	// spellings ADR-0036 exists to prevent, so it refuses to mount rather than
+	// serving an API whose own document is wrong about it.
+	for _, col := range m.Columns {
+		if col.Hidden {
+			continue
+		}
+		if name := jsonName[col.Name]; name != "" && name != col.Wire {
+			return nil, fmt.Errorf(
+				"rest: %s.%s is spelled %q in the body and %q on the wire; one column has one "+
+					"spelling, so a filter or a sort naming it would not match its own response "+
+					"(ADR-0036) — regenerate the model, or make the json and sqlb tags agree",
+				m.Type, col.Field, name, col.Wire)
+		}
+	}
+
 	// A hidden column carrying a JSON name would be serialised by any code
 	// that marshalled the struct directly — a debug log, a hand-written
 	// handler — so the mismatch is worth reporting where it is introduced.

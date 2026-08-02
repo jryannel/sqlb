@@ -1043,3 +1043,73 @@ func TestNotGroupReachesTheStatement(t *testing.T) {
 		}
 	}
 }
+
+// Reads is the read-only mount, and it exposes no write.
+//
+// rest.Op mirrors schema.Op by hand — rest may not import schema, which is what
+// keeps the runtime usable without the DSL — so the two Reads constants are two
+// declarations of one fact. The bit values are asserted literally here rather
+// than against schema's copy, because importing schema to compare them is the
+// edge this package exists not to have.
+func TestReadsExposesNoWrite(t *testing.T) {
+	if rest.Reads != rest.OpRead|rest.OpList {
+		t.Fatalf("rest.Reads = %v, want read|list", rest.Reads)
+	}
+	for _, w := range []struct {
+		op   rest.Op
+		name string
+	}{{rest.OpCreate, "create"}, {rest.OpUpdate, "update"}, {rest.OpDelete, "delete"}} {
+		if rest.Reads.Has(w.op) {
+			t.Errorf("rest.Reads exposes %s: %v", w.name, rest.Reads)
+		}
+	}
+	// The mirror: schema.Reads is OpRead|OpList over the same bit layout, so
+	// both are 2|16 = 18. A change to either bitmask that did not change the
+	// other lands here.
+	if uint8(rest.Reads) != 2|16 {
+		t.Fatalf("rest.Reads = %d; schema.Op's layout puts read|list at %d", uint8(rest.Reads), 2|16)
+	}
+}
+
+// The body's spelling and the request's spelling are two tags on one field, and
+// a resource whose two disagree serves an API its own document is wrong about:
+// the response says createdAt and the filter only answers to created_at. That
+// is the two spellings ADR-0036 exists to prevent, so it refuses to mount.
+//
+// Codegen cannot produce this — both tags come from one WireCase — but a
+// hand-written model can, and so can a generated one edited by hand.
+func TestMountRefusesDisagreeingSpellings(t *testing.T) {
+	type Mismatched struct {
+		ID        string `db:"id" json:"id" sqlb:"pk"`
+		CreatedAt string `db:"created_at" json:"createdAt" sqlb:"filter"`
+	}
+
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("t", "1"))
+	err := rest.Resource[Mismatched, rest.None[Mismatched], rest.None[Mismatched]](
+		api, db.db, rest.Options{Path: "/things", Ops: rest.Reads})
+	if err == nil {
+		t.Fatal("a resource whose body and wire spellings disagree must not mount")
+	}
+	for _, want := range []string{"createdAt", "created_at", "one spelling"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not explain itself (missing %q):\n%v", want, err)
+		}
+	}
+}
+
+// The agreeing case, which is what codegen emits: the json tag and the sqlb
+// wire entry say the same thing, and the resource mounts.
+func TestMountAcceptsAgreeingSpellings(t *testing.T) {
+	type Consistent struct {
+		ID        string `db:"id" json:"id" sqlb:"pk"`
+		CreatedAt string `db:"created_at" json:"createdAt" sqlb:"filter,wire:createdAt"`
+	}
+
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("t", "1"))
+	if err := rest.Resource[Consistent, rest.None[Consistent], rest.None[Consistent]](
+		api, db.db, rest.Options{Path: "/things", Ops: rest.Reads}); err != nil {
+		t.Fatalf("a consistently spelled resource must mount: %v", err)
+	}
+}

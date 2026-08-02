@@ -79,6 +79,17 @@ type Options struct {
 	TSClientFile  string
 	TSQueriesFile string
 
+	// TSRuntimeFile names the file holding the part of the client that does
+	// not depend on the schema — the envelopes, the problem document, the
+	// transport signature and the filter encoder. Defaults to runtime.gen.ts.
+	//
+	// It is a separate file because a second module in the same application
+	// otherwise ships a second copy of all of it, and asks the application to
+	// wire one Transport per module (#110). Point two projects at one path and
+	// they share it: the content is derived from nothing schema-specific, so
+	// the second writer produces the same bytes and `check` stays meaningful.
+	TSRuntimeFile string
+
 	// CLIDir emits a cobra command-line client, into a directory relative to
 	// Dir — "cli" in a repository whose binary lives beside its server. Empty
 	// means no CLI is emitted, which is the right default for a project that
@@ -139,6 +150,12 @@ type Options struct {
 	DartDir  string
 	DartFile string
 
+	// DartRuntimeFile names the shared Dart library, defaulting to
+	// runtime.gen.dart. It holds the response envelopes, the problem document
+	// and the transport signature — the types an application names when it
+	// writes one pager or wires one transport across two modules (#110).
+	DartRuntimeFile string
+
 	// Types replaces the Go type emitted for the columns each override
 	// matches — the sqlc `overrides:` equivalent, and the reason a codebase
 	// whose ids are uuid.UUID rather than string can generate its models
@@ -160,8 +177,36 @@ func (o Options) restFile() string     { return orDefault(o.RestFile, "rest_gen.
 
 func (o Options) tsClientFile() string  { return orDefault(o.TSClientFile, "client.gen.ts") }
 func (o Options) tsQueriesFile() string { return orDefault(o.TSQueriesFile, "queries.gen.ts") }
+func (o Options) tsRuntimeFile() string { return orDefault(o.TSRuntimeFile, "runtime.gen.ts") }
+
+// tsRuntimeImport is how the client names the runtime in an import: the file,
+// relative to itself, by its real name.
+//
+// Relative and inside the directory the generator already owns, which is what
+// makes this need no configuration in the ordinary case — unlike Go, where the
+// same split needed ClientImportPath because a Go import is a module path
+// rather than a file path.
+//
+// # Why the extension is written
+//
+// The other generated import — queries.gen.ts naming client.gen — omits it,
+// and gets away with it because that file is only ever typechecked. This one is
+// in a file that *runs*: the client is imported directly by tests under
+// `node --test` with type stripping, and Node's resolver needs a real path.
+//
+// Omitting it would be a bundler assumption, and "no bundler assumption" is a
+// property this client claims in its own header. It needs
+// `allowImportingTsExtensions` in tsconfig, which a project consuming the
+// client as source rather than compiling it already has.
+func (o Options) tsRuntimeImport() string {
+	return "./" + o.tsRuntimeFile()
+}
 
 func (o Options) dartFile() string { return orDefault(o.DartFile, "client.gen.dart") }
+
+func (o Options) dartRuntimeFile() string {
+	return orDefault(o.DartRuntimeFile, "runtime.gen.dart")
+}
 
 func (o Options) cliFile() string    { return orDefault(o.CLIFile, "cli_gen.go") }
 func (o Options) clientFile() string { return orDefault(o.ClientFile, "client_gen.go") }
@@ -429,6 +474,12 @@ func render(opts Options) (map[string][]byte, error) {
 		files[name] = src
 	}
 	if opts.TSDir != "" {
+		// The runtime first, for the reason the Go client is emitted before the
+		// CLI: a reader of the file list should meet the thing being imported
+		// before the thing importing it.
+		if name := opts.tsRuntimeFile(); name != "-" {
+			files[filepath.Join(opts.TSDir, name)] = renderTSRuntime()
+		}
 		if name := opts.tsClientFile(); name != "-" {
 			src, err := renderTSClient(opts)
 			if err != nil {
@@ -449,6 +500,9 @@ func render(opts Options) (map[string][]byte, error) {
 		}
 	}
 	if opts.DartDir != "" {
+		if name := opts.dartRuntimeFile(); name != "-" {
+			files[filepath.Join(opts.DartDir, name)] = renderDartRuntime()
+		}
 		if name := opts.dartFile(); name != "-" {
 			src, err := renderDartClient(opts)
 			if err != nil {

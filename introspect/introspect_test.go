@@ -247,8 +247,6 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 		t.Errorf("composite unique should no longer be reported:\n%s", rep)
 	}
 	for _, want := range []string{
-		"composite primary key",
-		"contype x",
 		"expression",
 		"money",
 		"generated column",
@@ -609,8 +607,8 @@ func TestColumnType(t *testing.T) {
 		// column imported as the wrong type produces a migration proposing to
 		// change the real one.
 		{"numeric(bad,2)", "", 0, 0, false},
-		{"smallint", schema.TypeInt, 0, 0, false},
-		{"real", schema.TypeFloat, 0, 0, false},
+		{"smallint", schema.TypeSmallInt, 0, 0, true},
+		{"real", schema.TypeReal, 0, 0, true},
 		{"money", "", 0, 0, false},
 		{"timestamp without time zone", "", 0, 0, false},
 		{"json", "", 0, 0, false},
@@ -738,5 +736,114 @@ func TestEnumValuesFromArrayCheck(t *testing.T) {
 	got, ok = enumValues("labels", "(labels <@ ARRAY['red'::text]::text[])")
 	if !ok || strings.Join(got, ",") != "red" {
 		t.Errorf("got %v,%v", got, ok)
+	}
+}
+
+// An extension is invisible to Diff rather than skipped by it, so it is
+// reported without changing whether the registry is clean. Both halves matter:
+// the list is what turns 228 identical "function does not exist" errors into
+// one line, and flipping Empty() would fail every adoption that uses pgvector
+// on a gap it has no way to close (issue #115).
+func TestReportExtensions(t *testing.T) {
+	rep := &Report{Extensions: []string{"vector", "uuid-ossp"}}
+
+	if !rep.Empty() {
+		t.Fatal("an extension is not a construct the registry failed to describe; Empty() must stay true")
+	}
+	if err := rep.Err(); err != nil {
+		t.Fatalf("Err() must stay nil for extensions alone: %v", err)
+	}
+	out := rep.String()
+	for _, want := range []string{
+		`CREATE EXTENSION IF NOT EXISTS "vector";`,
+		`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say how to create the extension:\nwant %q in:\n%s", want, out)
+		}
+	}
+	// The instruction, not just the names: the list is only useful as the step
+	// before a bootstrap.
+	if !strings.Contains(out, "Create them in the target database first") {
+		t.Errorf("the report names the extensions without saying what to do:\n%s", out)
+	}
+
+	// And a report with a real skip still carries them, since that is the case
+	// where the bootstrap is most likely to be attempted next.
+	rep.Skipped = []Skip{{Table: "t", Object: "c", Reason: "unmodelable"}}
+	if !strings.Contains(rep.String(), `CREATE EXTENSION IF NOT EXISTS "vector";`) {
+		t.Errorf("extensions are dropped from a non-empty report:\n%s", rep.String())
+	}
+}
+
+// An EXCLUDE constraint is declared rather than skipped.
+//
+// It is the one construct with no near miss, which is why it was worth the
+// grammar: dropping it moves a database invariant into application code, where
+// two concurrent requests interleave between the check and the insert
+// (issue #121).
+func TestExclusionIsDeclared(t *testing.T) {
+	const def = `EXCLUDE USING gist (coach_id WITH =, ` +
+		`tstzrange(starts_at, ends_at) WITH &&) WHERE ((status = 'confirmed'::text))`
+	cat := &catalog{
+		tables: []tableRow{{Name: "bookings"}},
+		columns: []columnRow{
+			{Table: "bookings", Name: "id", Type: "uuid", NotNull: true},
+			{Table: "bookings", Name: "coach_id", Type: "uuid", NotNull: true},
+			{Table: "bookings", Name: "status", Type: "text", NotNull: true},
+			{Table: "bookings", Name: "starts_at", Type: "timestamp with time zone", NotNull: true},
+			{Table: "bookings", Name: "ends_at", Type: "timestamp with time zone", NotNull: true},
+		},
+		constraints: []constraintRow{
+			{Table: "bookings", Name: "bookings_pkey", Type: "p", Columns: []string{"id"}},
+			{Table: "bookings", Name: "bookings_no_overlap", Type: "x", Def: def},
+		},
+	}
+	reg, rep, err := build(cat, Options{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if !rep.Empty() {
+		t.Fatalf("an exclusion is declarable now, and this reported it:\n%s", rep)
+	}
+	excls := reg.Get("bookings").Exclusions()
+	if len(excls) != 1 {
+		t.Fatalf("Exclusions() = %v, want one", excls)
+	}
+	got := excls[0]
+	if got.Name != "bookings_no_overlap" {
+		t.Errorf("name = %q", got.Name)
+	}
+	if got.Using != "gist" {
+		t.Errorf("Using = %q, want gist — the method is what makes the operators available", got.Using)
+	}
+	// Rendered back byte for byte, which is what keeps the diff from proposing
+	// to replace a constraint that has not changed.
+	if rendered := got.Def(); rendered != def {
+		t.Errorf("round trip\n got: %s\nwant: %s", rendered, def)
+	}
+}
+
+// A form the parser cannot read back is reported rather than half-imported, the
+// same contract every other construct here has: a constraint imported without a
+// clause it carries is one whose next diff proposes replacing it.
+func TestUnreadableExclusionIsReported(t *testing.T) {
+	cat := &catalog{
+		tables:  []tableRow{{Name: "t"}},
+		columns: []columnRow{{Table: "t", Name: "id", Type: "uuid", NotNull: true}},
+		constraints: []constraintRow{
+			{Table: "t", Name: "t_pkey", Type: "p", Columns: []string{"id"}},
+			{Table: "t", Name: "t_excl", Type: "x", Def: "EXCLUDE USING gist (id WITH =) DEFERRABLE"},
+		},
+	}
+	reg, rep, err := build(cat, Options{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(reg.Get("t").Exclusions()) != 0 {
+		t.Error("a constraint carrying a clause this cannot render must not be declared")
+	}
+	if !strings.Contains(rep.String(), "cannot read back") {
+		t.Errorf("the report does not say what was wrong:\n%s", rep)
 	}
 }

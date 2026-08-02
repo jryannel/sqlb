@@ -19,6 +19,14 @@ func build(cat *catalog, opts Options) (*schema.Registry, *Report, error) {
 		r = schema.NewModule(opts.Module)
 	}
 
+	// Recorded whatever else happens, and before the table walk can fail: the
+	// list is most valuable exactly when the import went badly, because a
+	// missing extension is what makes the *next* step fail rather than this one
+	// (issue #115).
+	for _, e := range cat.extensions {
+		rep.Extensions = append(rep.Extensions, e.Name)
+	}
+
 	byTable := groupByTable(cat)
 	selectTables(byTable, opts, rep)
 	order, err := dependencyOrder(cat, byTable, rep)
@@ -230,9 +238,30 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 	if p.table.Comment != "" {
 		t.Describe(p.table.Comment)
 	}
-	if cons.pk != nil && cons.pk.Name != name+"_pkey" && !skipped[cons.pk.Columns[0]] {
+	if cons.pk != nil && len(cons.pk.Columns) > 1 {
+		if col, dependent := coversSkippedColumn(cons.pk.Columns, skipped); dependent {
+			// The key itself is unimportable, so the table has no identity at
+			// all. Reported rather than declared without it, because a table
+			// silently missing its primary key is the quiet failure ADR-0014 is
+			// about — every later diff would propose adding one.
+			rep.add(name, cons.pk.Name, "primary key covers "+col+
+				", which was not imported, so the key cannot be declared either", cons.pk.Def)
+		} else {
+			t.PrimaryKeyColumns(cons.pk.Columns...)
+		}
+	}
+	if cons.pk != nil && cons.pk.Name != name+"_pkey" && !coversAnySkipped(cons.pk.Columns, skipped) {
 		t.PrimaryKeyNamed(cons.pk.Name)
 	}
+	for _, e := range cons.exclusions {
+		if col, dependent := coversSkippedColumn(excludeColumns(e, p.columns), skipped); dependent {
+			rep.add(name, e.Name, "exclusion constrains "+col+
+				", which was not imported, so the constraint cannot be declared either", e.Def())
+			continue
+		}
+		t.AddExclude(e)
+	}
+
 	for _, c := range cons.tableChecks {
 		if col, dependent := namesSkippedColumn(c.Expr, skipped); dependent {
 			rep.add(name, c.Name, "check constrains "+col+
@@ -348,8 +377,9 @@ type constraints struct {
 	pk          *constraintRow
 	unique      map[string]constraintRow // by column, single-column only
 	foreign     map[string]constraintRow // by column, single-column only
-	enums       map[string][]string      // by column, recovered from a CHECK
-	enumName    map[string]string        // by column, the CHECK's own name
+	exclusions  []schema.Exclusion
+	enums       map[string][]string // by column, recovered from a CHECK
+	enumName    map[string]string   // by column, the CHECK's own name
 	tableChecks []schema.Check
 	uniques     []schema.Unique // composite, table-level
 }
@@ -371,11 +401,6 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 			// these as anything would invent constraints the DSL never emits.
 			continue
 		case "p":
-			if len(row.Columns) != 1 {
-				rep.add(table, row.Name, "composite primary key; the DSL declares at most "+
-					"one primary key column (a composite unique index is the nearest thing)", row.Def)
-				continue
-			}
 			r := row
 			c.pk = &r
 		case "u":
@@ -398,6 +423,15 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 				continue
 			}
 			c.foreign[row.Columns[0]] = row
+		case "x":
+			e, ok := schema.ParseExclusion(row.Def)
+			if !ok {
+				rep.add(table, row.Name, "exclusion constraint in a form this cannot read back "+
+					"(a clause beyond USING, the element list and WHERE)", row.Def)
+				continue
+			}
+			e.Name = row.Name
+			c.exclusions = append(c.exclusions, e)
 		case "c":
 			c.check(table, row, rep)
 		default:
@@ -510,7 +544,10 @@ func buildColumn(table string, col columnRow, cons *constraints,
 			f.ConstraintNamed(u.Name)
 		}
 	}
-	if cons.pk != nil && cons.pk.Columns[0] == col.Name {
+	// Only a single-column key marks its column. A composite one is declared on
+	// the table below, and marking each of its columns would say something the
+	// DSL means differently — Field.PrimaryKey() is one key per column.
+	if cons.pk != nil && len(cons.pk.Columns) == 1 && cons.pk.Columns[0] == col.Name {
 		f.PrimaryKey()
 	}
 	return f, true
@@ -653,10 +690,14 @@ func plainField(name string, t schema.Type, typeArg, scale int) *schema.Field {
 		return schema.Text(name)
 	case schema.TypeVarchar:
 		return schema.Varchar(name, typeArg)
+	case schema.TypeSmallInt:
+		return schema.SmallInt(name)
 	case schema.TypeInt:
 		return schema.Int(name)
 	case schema.TypeBigInt:
 		return schema.BigInt(name)
+	case schema.TypeReal:
+		return schema.Real(name)
 	case schema.TypeFloat:
 		return schema.Float(name)
 	case schema.TypeNumeric:
@@ -794,4 +835,47 @@ func selectTables(byTable map[string]*tableParts, opts Options, rep *Report) {
 		}
 		delete(byTable, name)
 	}
+}
+
+// coversAnySkipped reports whether any of the columns was left out of the
+// import. It is coversSkippedColumn without the name, for the callers that only
+// need the answer.
+func coversAnySkipped(columns []string, skipped map[string]bool) bool {
+	_, any := coversSkippedColumn(columns, skipped)
+	return any
+}
+
+// excludeColumns lists the table's columns an exclusion mentions, for the
+// skipped-column check. Same approach and same reason as migrate's
+// excludeCovers: the elements are expressions, so the columns are recognised by
+// name rather than parsed out.
+func excludeColumns(e schema.Exclusion, columns []columnRow) []string {
+	body := e.Elements + " " + e.Where
+	var out []string
+	for _, c := range columns {
+		if containsWord(body, c.Name) {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
+func containsWord(s, name string) bool {
+	for i := 0; i+len(name) <= len(s); i++ {
+		if s[i:i+len(name)] != name {
+			continue
+		}
+		if i > 0 && isIdentByte(s[i-1]) {
+			continue
+		}
+		if j := i + len(name); j < len(s) && isIdentByte(s[j]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

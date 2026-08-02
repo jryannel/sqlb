@@ -59,6 +59,9 @@ CREATE TABLE document_chunks (
     body       text NOT NULL,
     score      numeric,
     weight     double precision,
+    confidence real,
+    rating     smallint,
+    weekdays   smallint[],
     revision   bigint NOT NULL DEFAULT 0,
     tags       text[],
     meta       jsonb DEFAULT '{}'::jsonb,
@@ -66,13 +69,20 @@ CREATE TABLE document_chunks (
     archived   boolean NOT NULL DEFAULT false,
     published  date,
     created_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT document_chunks_body_not_empty CHECK (char_length(body) > 0)
+    CONSTRAINT document_chunks_body_not_empty CHECK (char_length(body) > 0),
+    -- Over a smallint column on purpose. An unsupported column type does not
+    -- cost one column: everything defined over it goes with it, and three of
+    -- the eight distinct skips in the survey behind #120 were that cascade
+    -- rather than independent gaps. If smallint ever regresses to a skip, this
+    -- constraint and the index below fall with it and say so.
+    CONSTRAINT document_chunks_rating_range CHECK (rating >= 1 AND rating <= 5)
 );
 
 CREATE INDEX idx_chunks_org ON document_chunks (org_id);
 CREATE INDEX idx_chunks_tags ON document_chunks USING gin (tags);
 CREATE INDEX idx_chunks_live ON document_chunks (org_id, created_at) WHERE NOT archived;
 CREATE UNIQUE INDEX idx_chunks_org_title ON document_chunks (org_id, title);
+CREATE INDEX idx_chunks_rating ON document_chunks (rating, created_at DESC);
 CREATE INDEX idx_chunks_embedding ON document_chunks
     USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
@@ -112,6 +122,50 @@ CREATE TABLE members (
     CONSTRAINT members_roster_slot UNIQUE (org_id, hired_on)
 );
 
+-- A composite PRIMARY KEY (issue #109): a natural-key cache, keyed by what it
+-- describes and referenced by nothing. The workaround was a surrogate UUID plus
+-- a unique index — 16 bytes and an index per row identifying something nothing
+-- points at — so the round trip has to reproduce the key the database has, not
+-- one the DSL found easier.
+CREATE TABLE llmcatalog_models (
+    provider     text NOT NULL,
+    model_id     text NOT NULL,
+    display_name text NOT NULL,
+    context_size integer,
+    PRIMARY KEY (provider, model_id)
+);
+
+-- An EXCLUDE constraint (issue #121): the one construct with no near miss.
+-- A composite UNIQUE has a unique index and a composite key has a surrogate;
+-- dropping this has no equivalent, only "enforce it in Go", where two concurrent
+-- requests interleave between the check and the insert. It needs a gist index, a
+-- range expression over two columns, per-element operators and a partial
+-- predicate at once, which is why it is the last of the declaration gaps.
+CREATE TABLE bookings (
+    id        uuid PRIMARY KEY,
+    coach_id  uuid NOT NULL,
+    status    text NOT NULL DEFAULT 'confirmed',
+    starts_at timestamptz NOT NULL,
+    ends_at   timestamptz NOT NULL,
+    CONSTRAINT bookings_no_double_booking
+        EXCLUDE USING gist (coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&)
+        WHERE (status = 'confirmed')
+);
+
+-- A composite UNIQUE *constraint*, which is a different object from the unique
+-- index above: only a constraint can be the target of REFERENCES t (a, b) or be
+-- named in ON CONFLICT ON CONSTRAINT, so declaring the index instead is not a
+-- spelling difference (issue #108). Here it is the write path's conflict
+-- target, which is why the shape is worth reproducing rather than simplifying.
+CREATE TABLE secrets (
+    id          uuid PRIMARY KEY,
+    tenant_kind text NOT NULL,
+    tenant_id   uuid NOT NULL,
+    name        text NOT NULL,
+    ciphertext  bytea NOT NULL,
+    CONSTRAINT secrets_tenant_kind_tenant_id_name_key UNIQUE (tenant_kind, tenant_id, name)
+);
+
 CREATE TABLE images (
     id         uuid PRIMARY KEY,
     creator_id uuid NOT NULL REFERENCES members (id) ON DELETE CASCADE,
@@ -143,6 +197,23 @@ func readBack(t *testing.T, pool *pgxpool.Pool) *schema.Registry {
 	}
 	if !rep.Empty() {
 		t.Fatalf("the fixture is meant to be fully describable, and this was skipped:\n%s", rep)
+	}
+	// The fixture has a vector column, so pgvector is installed and the report
+	// must say so. Diff renders no CREATE EXTENSION, so this list is the only
+	// thing standing between an adopter and 228 identical "function does not
+	// exist" errors on the first bootstrap into an empty database (issue #115).
+	//
+	// Asserted here rather than in a unit test because the unit test cannot see
+	// whether the pg_extension query is right — a query returning nothing looks
+	// exactly like a database with no extensions.
+	var found bool
+	for _, e := range rep.Extensions {
+		if e == "vector" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pgvector is installed and the report does not name it: %v", rep.Extensions)
 	}
 	return reg
 }

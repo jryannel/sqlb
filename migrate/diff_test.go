@@ -639,9 +639,20 @@ func TestDiffColumnType(t *testing.T) {
 		wantType    string
 		destructive bool
 	}{
+		{"smallint to int widens", schema.SmallInt("n"), schema.Int("n"), "integer", false},
+		{"smallint to bigint widens", schema.SmallInt("n"), schema.BigInt("n"), "bigint", false},
+		{"int to smallint narrows", schema.Int("n"), schema.SmallInt("n"), "smallint", true},
 		{"int to bigint widens", schema.Int("n"), schema.BigInt("n"), "bigint", false},
 		{"bigint to int narrows", schema.BigInt("n"), schema.Int("n"), "integer", true},
 		{"int to numeric widens", schema.Int("n"), schema.Numeric("n"), "numeric", false},
+		{"real to double widens", schema.Real("n"), schema.Float("n"), "double precision", false},
+		{"double to real narrows", schema.Float("n"), schema.Real("n"), "real", true},
+		// real to numeric is a cast Postgres will make and a conversion nobody
+		// asked for: an approximate binary float becomes an exact decimal, so
+		// the value that comes back is the rounded expansion of the stored
+		// approximation. Destructive, so the migration is generated commented
+		// out and a person decides.
+		{"real to numeric is not a widening", schema.Real("n"), schema.Numeric("n"), "numeric", true},
 		{"varchar to text widens", schema.Varchar("n", 50), schema.Text("n"), "text", false},
 		{"text to varchar narrows", schema.Text("n"), schema.Varchar("n", 50), "varchar(50)", true},
 		{"longer varchar widens", schema.Varchar("n", 50), schema.Varchar("n", 100), "varchar(100)", false},
@@ -1111,4 +1122,185 @@ func indexOf(haystack []string, needle string) int {
 		}
 	}
 	return -1
+}
+
+// A table-level UNIQUE renders as a constraint, not as an index, and keeps the
+// name it was declared under.
+//
+// The distinction is the whole of issue #108: a composite unique *index* was the
+// nearest thing the DSL could declare, and it is a different object — it cannot
+// be the target of REFERENCES t (a, b), cannot be named in ON CONFLICT ON
+// CONSTRAINT, and diffs as an index, so adopting a table that had a constraint
+// meant proposing to drop it and build an index in its place.
+func TestCompositeUniqueConstraint(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("secrets",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.Text("tenant_kind"),
+			schema.UUID("tenant_id"),
+			schema.Text("name"),
+		).Unique("tenant_kind", "tenant_id", "name")
+	})
+	c := only(t, diff(t, schema.NewRegistry(), target))
+	want := `CONSTRAINT "secrets_tenant_kind_tenant_id_name_key" UNIQUE ("tenant_kind", "tenant_id", "name")`
+	if !strings.Contains(c.Up, want) {
+		t.Fatalf("DDL is missing %q:\n%s", want, c.Up)
+	}
+	// Not an index. A CREATE UNIQUE INDEX here would be the approximation this
+	// replaces, and it would look correct in every registry-level comparison.
+	if strings.Contains(c.Up, "CREATE UNIQUE INDEX") {
+		t.Errorf("the constraint was rendered as an index:\n%s", c.Up)
+	}
+}
+
+// The name is pinnable, because Postgres reports a violated constraint by name
+// and applications match on it — so a bootstrap that could not reproduce the
+// live name would propose a rename that turns a handled 23505 into a 500.
+func TestCompositeUniqueKeepsItsName(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("secrets",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.Text("a"),
+			schema.Text("b"),
+		).UniqueNamed("secrets_natural_key", "a", "b")
+	})
+	c := only(t, diff(t, schema.NewRegistry(), target))
+	if !strings.Contains(c.Up, `CONSTRAINT "secrets_natural_key" UNIQUE ("a", "b")`) {
+		t.Fatalf("the declared name was not used:\n%s", c.Up)
+	}
+}
+
+// Adding one to a table that exists is an ALTER, and dropping it is destructive
+// — it is an invariant, and a migration that removes one silently is the case
+// ADR-0014 is about.
+func TestCompositeUniqueAddedAndDropped(t *testing.T) {
+	plain := func(r *schema.Registry) {
+		r.Table("secrets", schema.UUIDv7("id").PrimaryKey(), schema.Text("a"), schema.Text("b"))
+	}
+	withUnique := func(r *schema.Registry) {
+		r.Table("secrets", schema.UUIDv7("id").PrimaryKey(), schema.Text("a"), schema.Text("b")).
+			Unique("a", "b")
+	}
+
+	add := only(t, diff(t, build(plain), build(withUnique)))
+	if !strings.Contains(add.Up, `ADD CONSTRAINT "secrets_a_b_key" UNIQUE ("a", "b")`) {
+		t.Fatalf("adding is not an ALTER ... ADD CONSTRAINT:\n%s", add.Up)
+	}
+	if add.Destructive {
+		t.Error("adding a constraint destroys nothing")
+	}
+
+	drop := only(t, diff(t, build(withUnique), build(plain)))
+	if !strings.Contains(drop.Up, `DROP CONSTRAINT "secrets_a_b_key"`) {
+		t.Fatalf("dropping is not an ALTER ... DROP CONSTRAINT:\n%s", drop.Up)
+	}
+	// Not destructive, and that is the convention every other constraint here
+	// follows rather than a judgement about this one: dropping a constraint
+	// removes no data, and the Down restores it exactly. A composite unique
+	// behaving differently from a single-column one would be the surprise.
+	if drop.Destructive {
+		t.Error("dropping a constraint loses no data, and reverses cleanly")
+	}
+	if !strings.Contains(drop.Down, `ADD CONSTRAINT "secrets_a_b_key" UNIQUE ("a", "b")`) {
+		t.Fatalf("the drop does not reverse to the constraint it removed:\n%s", drop.Down)
+	}
+}
+
+// A composite primary key renders as one PRIMARY KEY over its columns, in the
+// order declared, and never as a surrogate plus a unique index — which is the
+// workaround it replaces and a schema change the adopter could not justify
+// (issue #109).
+func TestCompositePrimaryKeyDDL(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("llmcatalog_models",
+			schema.Text("provider"),
+			schema.Text("model_id"),
+			schema.Text("display_name"),
+		).PrimaryKeyColumns("provider", "model_id")
+	})
+	c := only(t, diff(t, schema.NewRegistry(), target))
+	want := `CONSTRAINT "llmcatalog_models_pkey" PRIMARY KEY ("provider", "model_id")`
+	if !strings.Contains(c.Up, want) {
+		t.Fatalf("DDL is missing %q:\n%s", want, c.Up)
+	}
+	// No surrogate was invented, and no unique index stood in for the key.
+	for _, unwanted := range []string{"gen_random_uuid", "uuid_generate", "CREATE UNIQUE INDEX"} {
+		if strings.Contains(c.Up, unwanted) {
+			t.Errorf("the workaround leaked into the DDL (%s):\n%s", unwanted, c.Up)
+		}
+	}
+}
+
+// An EXCLUDE constraint renders as a constraint on the table, with its index
+// method, its element list and its predicate intact (issue #121).
+func TestExclusionDDL(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("bookings",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.UUID("coach_id"),
+			schema.Text("status"),
+			schema.Timestamp("starts_at"),
+			schema.Timestamp("ends_at"),
+		).AddExclude(schema.Exclusion{
+			Name:     "bookings_no_double_booking",
+			Using:    "gist",
+			Elements: "coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&",
+			Where:    "status = 'confirmed'",
+		})
+	})
+	c := only(t, diff(t, schema.NewRegistry(), target))
+	want := `CONSTRAINT "bookings_no_double_booking" EXCLUDE USING gist ` +
+		`(coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&) WHERE (status = 'confirmed')`
+	if !strings.Contains(c.Up, want) {
+		t.Fatalf("DDL is missing the constraint:\n got:\n%s\nwant to contain:\n%s", c.Up, want)
+	}
+}
+
+// Adding one to a table that exists is an ALTER, and it reverses to a drop.
+func TestExclusionAddedAndDropped(t *testing.T) {
+	plain := func(r *schema.Registry) {
+		r.Table("rooms", schema.UUIDv7("id").PrimaryKey(), schema.UUID("room_id"))
+	}
+	withExcl := func(r *schema.Registry) {
+		r.Table("rooms", schema.UUIDv7("id").PrimaryKey(), schema.UUID("room_id")).
+			AddExclude(schema.Exclusion{Name: "rooms_excl", Using: "gist", Elements: "room_id WITH ="})
+	}
+
+	add := only(t, diff(t, build(plain), build(withExcl)))
+	if !strings.Contains(add.Up, `ADD CONSTRAINT "rooms_excl" EXCLUDE USING gist (room_id WITH =)`) {
+		t.Fatalf("adding is not an ALTER ... ADD CONSTRAINT:\n%s", add.Up)
+	}
+	drop := only(t, diff(t, build(withExcl), build(plain)))
+	if !strings.Contains(drop.Up, `DROP CONSTRAINT "rooms_excl"`) {
+		t.Fatalf("dropping is not an ALTER ... DROP CONSTRAINT:\n%s", drop.Up)
+	}
+	if !strings.Contains(drop.Down, `ADD CONSTRAINT "rooms_excl" EXCLUDE`) {
+		t.Fatalf("the drop does not reverse to the constraint it removed:\n%s", drop.Down)
+	}
+}
+
+// A constraint naming a column the same migration adds must land after it, the
+// way a check over a new column already does — the element list is an
+// expression, so the columns are recognised by name.
+func TestExclusionWaitsForItsColumns(t *testing.T) {
+	before := func(r *schema.Registry) {
+		r.Table("bookings", schema.UUIDv7("id").PrimaryKey())
+	}
+	after := func(r *schema.Registry) {
+		r.Table("bookings",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.UUID("coach_id"),
+		).AddExclude(schema.Exclusion{
+			Name: "bookings_excl", Using: "gist", Elements: "coach_id WITH =",
+		})
+	}
+	changes := diff(t, build(before), build(after))
+	order := ups(changes)
+	addCol, addCon := indexOf(order, `ADD COLUMN "coach_id"`), indexOf(order, "ADD CONSTRAINT")
+	if addCol < 0 || addCon < 0 {
+		t.Fatalf("expected both an add column and an add constraint:\n%s", render(changes))
+	}
+	if addCon < addCol {
+		t.Fatalf("the constraint is added before the column it names:\n%s", render(changes))
+	}
 }

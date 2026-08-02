@@ -93,6 +93,9 @@ Usage:
     sqlb survey [flags] <src> <dst>  report which of an existing database's tables
                                      sqlb could describe, and why not — the
                                      adoption probe, run against two DSNs
+    sqlb introspect [flags]          read a database and report what the schema
+                                     DSL can declare, or write the declaration.
+                                     Takes a -dsn, not a package
     sqlb version                     print the version this binary was built from
 
 Flags for check:
@@ -121,8 +124,22 @@ Flags for survey:
 
     -modules a,b,c        table-name prefixes to group the per-table verdict by,
                           for a modular monolith
-    -exclude t1,t2        tables to leave out entirely, replacing the built-in
-                          migration-runner list
+    -modules-file <file>  JSON mapping module name to its exact table names, for
+                          a repo whose prefixes cannot cover every table
+    -exclude t1,pattern   tables to leave out entirely, in addition to the
+                          built-in migration-runner list. A percent sign matches
+                          any run of characters
+
+Flags for introspect:
+
+    -dsn <dsn>            the database to read (required)
+    -migrations <dir>     replay this migration directory into -dsn and read back
+                          what it built, rather than reading -dsn as it stands
+    -module <name>        read one module, named <module>_<table>
+    -only a,b             read these tables and no others
+    -exclude a,b          leave these tables out
+    -out <file>           write the declaration as Go source instead of reporting
+    -package <name>       package name for -out
 
 <package> is the Go package that declares the schema, in the form go build
 takes — usually ./schema or ./taskschema. It must export:
@@ -168,6 +185,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// a database instead of a declaration: there is no package to resolve
 		// and no driver to compile, so none of what follows applies to it.
 		return survey(args[1:], stdout, stderr)
+	case "introspect":
+		// The same reasoning, and the same shape: a -dsn rather than a package.
+		return introspectCmd(args[1:], stdout, stderr)
 	case "generate", "check", "migrate", "impact", "eject":
 	default:
 		_, _ = fmt.Fprintf(stderr, "sqlb: unknown command %q\n\n", verb)

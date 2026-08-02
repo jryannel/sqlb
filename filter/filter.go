@@ -489,7 +489,10 @@ func (p *parser) errAllowed(param, value, reason string, allowed []string) {
 // filterableColumn resolves a parameter name to a column the request is
 // permitted to filter on, recording an error otherwise.
 func (p *parser) filterableColumn(name string) *sqlb.ColumnInfo {
-	col := p.model.Column(name)
+	// ColumnByWire, not Column: the name arrived from a request, and a request
+	// spells a column the way the wire does. They are the same string unless
+	// the schema declared a WireCase (ADR-0036's amendment).
+	col := p.model.ColumnByWire(name)
 	// A hidden column is reported as unknown rather than as un-filterable, so
 	// that its existence cannot be probed by reading the rejection. A computed
 	// column this resource does not select is unknown in the plainer sense:
@@ -525,18 +528,20 @@ func (p *parser) capable(c capability) []string {
 		if col.Hidden || !p.opts.computedAllowed(col) {
 			continue
 		}
+		// Wire, not Name: this list is what a caller is told it may type, and
+		// the two differ whenever the schema declared a WireCase.
 		switch c {
 		case capFilter:
 			if col.Filterable {
-				out = append(out, col.Name)
+				out = append(out, col.Wire)
 			}
 		case capSort:
 			if col.Sortable {
-				out = append(out, col.Name)
+				out = append(out, col.Wire)
 			}
 		case capSearch:
 			if col.Searchable {
-				out = append(out, col.Name)
+				out = append(out, col.Wire)
 			}
 		}
 	}
@@ -1103,7 +1108,7 @@ func (p *parser) parseSort(raw string) []sqlb.Order {
 			}
 		}
 
-		col := p.model.Column(term)
+		col := p.model.ColumnByWire(term)
 		switch {
 		case col == nil || col.Hidden || !p.opts.computedAllowed(col):
 			p.errAllowed("sort", term, "unknown column", p.capable(capSort))
@@ -1157,7 +1162,7 @@ func (p *parser) parseSelect(raw string) []string {
 		if name == "" {
 			continue
 		}
-		col := p.model.Column(name)
+		col := p.model.ColumnByWire(name)
 		if col == nil || col.Hidden || !p.opts.computedAllowed(col) {
 			p.errAllowed("select", name, "unknown column", p.selectableNames())
 			continue
@@ -1492,7 +1497,9 @@ func (p *parser) selectableNames() []string {
 		if !p.opts.computedAllowed(col) {
 			continue
 		}
-		out = append(out, col.Name)
+		// The wire spelling, because a 400 that lists names the caller cannot
+		// type is worse than one that lists nothing.
+		out = append(out, col.Wire)
 	}
 	return out
 }

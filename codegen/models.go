@@ -79,6 +79,7 @@ func renderModels(opts Options) ([]byte, error) {
 	}
 
 	b := header(opts.Package, sortedSet(imports))
+	wire := opts.Registry.Wire()
 
 	for _, t := range tables {
 		typeName := TypeName(t.LocalName())
@@ -114,7 +115,8 @@ func renderModels(opts Options) ([]byte, error) {
 		for _, f := range t.Fields() {
 			d := f.Desc()
 			fmt.Fprintf(b, "\t%s %s `db:%q %s%s`",
-				GoName(d.Name), goType(typeName, t.Name(), d, ov), d.Name, jsonTag(d), capTag(d))
+				GoName(d.Name), goType(typeName, t.Name(), d, ov), d.Name,
+				jsonTag(d, wire), capTag(d, wire))
 			if c := d.Comment; c != "" {
 				fmt.Fprintf(b, " // %s", c)
 			}
@@ -387,11 +389,11 @@ func goType(typeName, table string, d *schema.FieldDesc, ov *overrides) string {
 // every projection, but a hidden column that could still be marshalled is one
 // stray json.Marshal away from leaking — a debug log, a hand-written handler —
 // and the tag closes that off at the type.
-func jsonTag(d *schema.FieldDesc) string {
+func jsonTag(d *schema.FieldDesc, wire schema.WireCase) string {
 	if d.Hidden {
 		return `json:"-"`
 	}
-	return fmt.Sprintf("json:%q", d.Name)
+	return fmt.Sprintf("json:%q", wire.WireName(d.Name))
 }
 
 // capTag renders the `sqlb` struct tag, omitted entirely when a column has
@@ -407,10 +409,17 @@ func jsonTag(d *schema.FieldDesc) string {
 // type is not a capability. Capabilities are the things a request may reach the
 // column through, and putting the type in that list made the schema's own
 // documentation print it twice on one line.
-func capTag(d *schema.FieldDesc) string {
-	parts := make([]string, 0, 2)
+func capTag(d *schema.FieldDesc, wire schema.WireCase) string {
+	parts := make([]string, 0, 3)
 	if d.Type != "" {
 		parts = append(parts, "type:"+string(d.Type))
+	}
+	// Only when it differs, so a Verbatim schema emits byte-for-byte what it
+	// always did and this change is invisible to every existing project. The
+	// runtime is told the spelling rather than computing one: nothing on the
+	// request path may import the schema package (ADR-0036's amendment).
+	if w := wire.WireName(d.Name); w != d.Name {
+		parts = append(parts, "wire:"+w)
 	}
 	if caps := d.Capabilities(); caps != "" {
 		parts = append(parts, caps)

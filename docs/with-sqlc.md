@@ -39,7 +39,10 @@ Which leaves the question this page does not answer — what moving one of those
 queries actually costs, and whether you have to move all of it.
 [Refactoring a sqlc endpoint](refactoring-from-sqlc.md) is the worked version:
 four stages over one list endpoint, with a stopping point after each, and a test
-that requires all four to return the same rows.
+that requires all four to return the same rows. And
+[Surveying an existing codebase](surveying-a-codebase.md) is the count that
+turns this table into a number — how many of your named queries fall in each
+row of it, measured rather than estimated.
 
 ## Who owns the schema
 

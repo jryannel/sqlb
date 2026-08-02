@@ -461,6 +461,18 @@ func widthChange(o, n *fieldView) (Level, string, bool) {
 			}
 		}
 	}
+	if or, ok := floatRank(o.typ); ok {
+		if nr, ok := floatRank(n.typ); ok {
+			switch {
+			case nr > or:
+				return LevelUnknown, fmt.Sprintf(
+					"widened %s->%s; a client with a narrower float type may overflow", o.typ, n.typ), true
+			case nr < or:
+				return LevelBreaking, fmt.Sprintf(
+					"narrowed %s->%s; a value that fit before is now rejected", o.typ, n.typ), true
+			}
+		}
+	}
 	if ow, ok := textWidth(o); ok {
 		if nw, ok := textWidth(n); ok {
 			switch {
@@ -709,9 +721,30 @@ func union(a, b map[string]resource) []string {
 
 func intRank(t schema.Type) (int, bool) {
 	switch t {
-	case schema.TypeInt:
+	case schema.TypeSmallInt:
 		return 1, true
+	case schema.TypeInt:
+		return 2, true
 	case schema.TypeBigInt:
+		return 3, true
+	}
+	return 0, false
+}
+
+// floatRank is intRank for the binary float family.
+//
+// It is separate rather than one ranking over every numeric type, because a
+// change between the families is not a width change at all: real to numeric
+// swaps an approximate type for an exact one, which changes what the same
+// arithmetic returns and is exactly the "classify by hand" case diffType falls
+// through to. Within the family the ordinary width argument holds — widening
+// admits values a narrower client overflows on, narrowing rejects values that
+// fit before.
+func floatRank(t schema.Type) (int, bool) {
+	switch t {
+	case schema.TypeReal:
+		return 1, true
+	case schema.TypeFloat:
 		return 2, true
 	}
 	return 0, false

@@ -215,6 +215,13 @@ func renderTable(b *bytes.Buffer, t *schema.TableDef, names map[string]string, r
 	if c := t.Comment(); c != "" {
 		fmt.Fprintf(b, ".\n\tDescribe(%s)", strconv.Quote(c))
 	}
+	if cols := t.CompositeKey(); len(cols) > 0 {
+		quoted := make([]string, len(cols))
+		for i, c := range cols {
+			quoted[i] = strconv.Quote(c)
+		}
+		fmt.Fprintf(b, ".\n\tPrimaryKeyColumns(%s)", strings.Join(quoted, ", "))
+	}
 	if pk := t.PrimaryKeyName(); pk != "" {
 		fmt.Fprintf(b, ".\n\tPrimaryKeyNamed(%s)", strconv.Quote(pk))
 	}
@@ -223,6 +230,17 @@ func renderTable(b *bytes.Buffer, t *schema.TableDef, names map[string]string, r
 	}
 	for _, u := range t.Uniques() {
 		b.WriteString(".\n\t" + renderUnique(t, u))
+	}
+	for _, e := range t.Exclusions() {
+		fmt.Fprintf(b, ".\n\tAddExclude(schema.Exclusion{\n\t\tName: %s,\n", strconv.Quote(e.Name))
+		if e.Using != "" {
+			fmt.Fprintf(b, "\t\tUsing: %s,\n", strconv.Quote(e.Using))
+		}
+		fmt.Fprintf(b, "\t\tElements: %s,\n", strconv.Quote(e.Elements))
+		if e.Where != "" {
+			fmt.Fprintf(b, "\t\tWhere: %s,\n", strconv.Quote(e.Where))
+		}
+		b.WriteString("\t})")
 	}
 	for _, idx := range t.Indexes() {
 		b.WriteString(".\n\t" + renderIndex(t, idx))
@@ -505,10 +523,14 @@ func typeConstant(t schema.Type) (string, error) {
 		return "schema.TypeText", nil
 	case schema.TypeVarchar:
 		return "schema.TypeVarchar", nil
+	case schema.TypeSmallInt:
+		return "schema.TypeSmallInt", nil
 	case schema.TypeInt:
 		return "schema.TypeInt", nil
 	case schema.TypeBigInt:
 		return "schema.TypeBigInt", nil
+	case schema.TypeReal:
+		return "schema.TypeReal", nil
 	case schema.TypeFloat:
 		return "schema.TypeFloat", nil
 	case schema.TypeNumeric:
@@ -538,10 +560,14 @@ func fieldConstructor(d *schema.FieldDesc) (string, error) {
 		return "schema.Text(" + name + ")", nil
 	case schema.TypeVarchar:
 		return fmt.Sprintf("schema.Varchar(%s, %d)", name, d.Size), nil
+	case schema.TypeSmallInt:
+		return "schema.SmallInt(" + name + ")", nil
 	case schema.TypeInt:
 		return "schema.Int(" + name + ")", nil
 	case schema.TypeBigInt:
 		return "schema.BigInt(" + name + ")", nil
+	case schema.TypeReal:
+		return "schema.Real(" + name + ")", nil
 	case schema.TypeFloat:
 		return "schema.Float(" + name + ")", nil
 	case schema.TypeNumeric:

@@ -240,3 +240,10 @@ stage 2 are both real answers.
 - **Stage 4** if you want the REST surface generated too, and accept huma.
 
 Going backwards is cheap at every step, which is the point of doing it in four.
+
+Once you know what one endpoint costs, the next question is how many endpoints
+of this shape you have.
+[Surveying an existing codebase](surveying-a-codebase.md) is that count: the
+route table split into a CRUD core and a tail of domain verbs, the named queries
+bucketed by whether sqlc can express them at all, and the tenant predicate
+counted where it is repeated by convention.

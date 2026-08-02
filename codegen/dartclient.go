@@ -91,26 +91,55 @@ func renderDartClient(opts Options) ([]byte, error) {
 		return nil, err
 	}
 
-	var b bytes.Buffer
-	b.WriteString(dartHeader)
-	b.WriteString(dartRuntime)
+	// The body first, so the import can be decided from what it references.
+	// Dart is analysed with --fatal-infos, so an unused import fails the build
+	// (#110).
+	var body bytes.Buffer
 
 	// Row views for every table, not only the exposed ones: an expansion can
 	// name a table that has no endpoint of its own, and the row still has to
 	// have a type. This is the same call `.Expandable()` already makes on the
 	// server.
 	for _, t := range opts.Registry.Tables() {
-		if err := dartRowSection(&b, opts.Registry, t); err != nil {
+		if err := dartRowSection(&body, opts.Registry, t); err != nil {
 			return nil, err
 		}
 	}
 
 	for _, r := range resources {
-		dartResourceSection(&b, r)
+		dartResourceSection(&body, r)
 	}
 
-	dartTableEnum(&b, opts.Registry)
+	dartTableEnum(&body, opts.Registry)
+
+	// The per-client half of the runtime, then the schema's own types. The
+	// import is decided against both, because the private half references the
+	// shared types too — Row throws MissingColumn.
+	_, perClient := splitDartRuntime(body.String())
+	rest := perClient + body.String()
+
+	var b bytes.Buffer
+	b.WriteString(dartHeader)
+	b.WriteString(dartRuntimeImports(rest, opts.dartRuntimeFile()))
+	b.WriteString(rest)
 	return b.Bytes(), nil
+}
+
+// renderDartRuntime emits the shared library: the response envelopes, the
+// problem document and the transport signature.
+//
+// This is what makes a second module work at all. Dart is nominally typed, so
+// two files each declaring Page produce two unrelated classes — no shared pager
+// widget can accept both, and the application cannot give both clients one
+// Transport. Every client exports this library, so two of them now offer the
+// same Page rather than two of their own (#110).
+func renderDartRuntime() []byte {
+	shared, _ := splitDartRuntime("")
+
+	var b bytes.Buffer
+	b.WriteString(dartRuntimeHeader)
+	b.WriteString(shared)
+	return b.Bytes()
 }
 
 // dartResource is everything about one exposed table the emitter needs,
@@ -130,6 +159,11 @@ type dartResource struct {
 	searchable bool
 	relations  []dartRelation
 	hasPK      bool
+
+	// wire is the schema's wire case. Dart member names are camelCase either
+	// way — dartMember produces the same identifier from created_at and
+	// createdAt — so what this changes is only the strings that go on the wire.
+	wire schema.WireCase
 }
 
 // dartRelation is one entry of a resource's ?expand vocabulary, in the
@@ -159,6 +193,7 @@ func dartResources(reg *schema.Registry) ([]dartResource, error) {
 			plural: dartPascal(t.LocalName()),
 			path:   rest.Path,
 			ops:    rest.Ops,
+			wire:   reg.Wire(),
 		}
 		for _, f := range t.Fields() {
 			d := f.Desc()
@@ -278,7 +313,7 @@ func dartRowSection(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) e
 	}
 	fmt.Fprintln(b, "}")
 
-	dartBodyTypes(b, t, base)
+	dartBodyTypes(b, t, base, reg.Wire())
 	dartActionBodies(b, t, base)
 	return nil
 }
@@ -294,6 +329,7 @@ type dartRowMember struct {
 // schema whose names collide, since two members of the same name is a compile
 // error the consumer would find rather than this generator.
 func dartRowMembers(reg *schema.Registry, t *schema.TableDef) ([]dartRowMember, error) {
+	wire := reg.Wire()
 	base := dartTypeBase(t)
 	taken := map[string]string{}
 	claim := func(name, by string) error {
@@ -336,7 +372,7 @@ func dartRowMembers(reg *schema.Registry, t *schema.TableDef) ([]dartRowMember, 
 		}
 		out = append(out, dartRowMember{
 			doc:    dartColumnDoc(d, fmt.Sprintf("The %s.%s column.", t.Name(), d.Name)),
-			getter: dartGetter(base, name, d),
+			getter: dartGetter(base, name, d, wire),
 		})
 
 		// The relation sits directly under the key it expands, because the two
@@ -411,8 +447,8 @@ func dartColumnDoc(d *schema.FieldDesc, lead string) string {
 //
 // The readers are inherited from Row rather than passed the map and the type
 // name, which is what keeps a getter to one line the formatter will not break.
-func dartGetter(base, member string, d *schema.FieldDesc) string {
-	col := dartString(d.Name)
+func dartGetter(base, member string, d *schema.FieldDesc, wire schema.WireCase) string {
+	col := dartString(wire.WireName(d.Name))
 	isEnum := d.Type == schema.TypeEnum && len(d.EnumValues) > 0
 
 	// An array column is a JSON array on the wire, and a NULL one is null —
@@ -453,9 +489,9 @@ func dartGetter(base, member string, d *schema.FieldDesc) string {
 // OrNull suffix.
 func dartReader(t schema.Type) (fn, typ string) {
 	switch t {
-	case schema.TypeInt, schema.TypeBigInt:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt:
 		return "_int", "int"
-	case schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeReal, schema.TypeFloat, schema.TypeNumeric:
 		return "_double", "double"
 	case schema.TypeBool:
 		return "_bool", "bool"
@@ -481,9 +517,9 @@ func dartReader(t schema.Type) (fn, typ string) {
 // handed the value already pulled out of the JSON list.
 func dartElemReader(t schema.Type) (decode, typ string) {
 	switch t {
-	case schema.TypeInt, schema.TypeBigInt:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt:
 		return "_asInt", "int"
-	case schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeReal, schema.TypeFloat, schema.TypeNumeric:
 		return "_asDouble", "double"
 	case schema.TypeBool:
 		return "_asBool", "bool"
@@ -605,7 +641,7 @@ func dartEnum(b *bytes.Buffer, base string, t *schema.TableDef, d *schema.FieldD
 
 // dartBodyTypes emits the create and patch bodies, over the same column sets
 // the Go bodies use, so the two cannot disagree about what a request may write.
-func dartBodyTypes(b *bytes.Buffer, t *schema.TableDef, base string) {
+func dartBodyTypes(b *bytes.Buffer, t *schema.TableDef, base string, wire schema.WireCase) {
 	rest := t.Rest()
 	if rest == nil {
 		return
@@ -641,7 +677,7 @@ func dartBodyTypes(b *bytes.Buffer, t *schema.TableDef, base string) {
 		for _, f := range fields {
 			d := f.Desc()
 			member := dartMember(d.Name)
-			entry := fmt.Sprintf("%s: _wire(%s)", dartString(d.Name), member)
+			entry := fmt.Sprintf("%s: _wire(%s)", dartString(wire.WireName(d.Name)), member)
 			if optionalOnCreate(d) {
 				entry = fmt.Sprintf("if (%s != null) %s", member, entry)
 			}
@@ -680,7 +716,7 @@ func dartBodyTypes(b *bytes.Buffer, t *schema.TableDef, base string) {
 			}
 			dartDoc(b, "  ", doc)
 			fmt.Fprintf(b, "  void %s(%s value) => _changes[%s] = _wire(value);\n",
-				dartMember(d.Name), dartBodyType(base, d, false), dartString(d.Name))
+				dartMember(d.Name), dartBodyType(base, d, false), dartString(wire.WireName(d.Name)))
 		}
 		fmt.Fprintln(b)
 		dartDoc(b, "  ", "Whether the patch would write nothing, which the server answers 400 to.")
@@ -730,13 +766,13 @@ func dartResourceSection(b *bytes.Buffer, r dartResource) {
 	fmt.Fprintf(b, "\n// %s\n", dartRule(r.path))
 
 	dartWireEnum(b, r.base+"Column", r.table.Name(),
-		"Columns [select] may name. The primary key is always returned.", r.selectable)
+		"Columns [select] may name. The primary key is always returned.", r.selectable, r.wire)
 
 	if len(r.sortable) > 0 {
 		fmt.Fprintln(b)
 		dartDoc(b, "", "Sortable columns. Take [asc] or [desc] to get a term [sort] accepts.")
 		fmt.Fprintf(b, "enum %sSort implements WireValue {\n", r.base)
-		docs, names, wires := dartColumnMembers(r.table.Name(), "Order by %s.%s.", r.sortable)
+		docs, names, wires := dartColumnMembers(r.table.Name(), "Order by %s.%s.", r.sortable, r.wire)
 		dartEnumBody(b, docs, names, wires)
 		fmt.Fprintf(b, "\n  const %sSort(this.wire);\n", r.base)
 		fmt.Fprintln(b, "\n  @override\n  final String wire;")
@@ -777,14 +813,14 @@ func dartResourceSection(b *bytes.Buffer, r dartResource) {
 
 // dartWireEnum emits a plain vocabulary enum: members with a wire spelling and
 // nothing else.
-func dartWireEnum(b *bytes.Buffer, name, table, doc string, columns []*schema.FieldDesc) {
+func dartWireEnum(b *bytes.Buffer, name, table, doc string, columns []*schema.FieldDesc, wire schema.WireCase) {
 	if len(columns) == 0 {
 		return
 	}
 	fmt.Fprintln(b)
 	dartDoc(b, "", doc)
 	fmt.Fprintf(b, "enum %s implements WireValue {\n", name)
-	docs, names, wires := dartColumnMembers(table, "The %s.%s column.", columns)
+	docs, names, wires := dartColumnMembers(table, "The %s.%s column.", columns, wire)
 	dartEnumBody(b, docs, names, wires)
 	fmt.Fprintf(b, "\n  const %s(this.wire);\n", name)
 	fmt.Fprintln(b, "\n  @override\n  final String wire;")
@@ -793,11 +829,13 @@ func dartWireEnum(b *bytes.Buffer, name, table, doc string, columns []*schema.Fi
 
 // dartColumnMembers is the doc, member name and wire spelling of one enum
 // member per column, for the vocabulary enums built straight off a column set.
-func dartColumnMembers(table, format string, columns []*schema.FieldDesc) (docs, names, wires []string) {
+func dartColumnMembers(table, format string, columns []*schema.FieldDesc, wire schema.WireCase) (docs, names, wires []string) {
 	for _, d := range columns {
+		// The doc names the database column; the enum value is what goes on
+		// the wire. Two different jobs, and only the second one moves.
 		docs = append(docs, fmt.Sprintf(format, table, d.Name))
 		names = append(names, dartMember(d.Name))
-		wires = append(wires, d.Name)
+		wires = append(wires, wire.WireName(d.Name))
 	}
 	return docs, names, wires
 }
@@ -826,7 +864,7 @@ func dartWhere(b *bytes.Buffer, r dartResource) {
 	fmt.Fprintln(b)
 	fmt.Fprintln(b, "  void _encode(_Query out) {")
 	for _, d := range r.filterable {
-		fmt.Fprintf(b, "    %s?._encode(out, %s);\n", dartMember(d.Name), dartString(d.Name))
+		fmt.Fprintf(b, "    %s?._encode(out, %s);\n", dartMember(d.Name), dartString(r.wire.WireName(d.Name)))
 	}
 	fmt.Fprintln(b, "  }")
 	fmt.Fprintln(b, "}")
@@ -1342,6 +1380,27 @@ const dartHeader = `// Code generated by github.com/jryannel/sqlb. DO NOT EDIT.
 // ADR-0031.
 
 // ignore_for_file: unused_element
+`
+
+const dartRuntimeHeader = `// Code generated by github.com/jryannel/sqlb. DO NOT EDIT.
+//
+// The vocabulary every generated client shares: the response envelopes, the
+// problem document, the transport signature and the cursor pager.
+//
+// It is a library of its own because Dart is nominally typed. Two clients each
+// declaring Page would declare two unrelated classes, so an application with
+// two modules could not pass a page from either to one widget, nor give both
+// one Transport — an 'as' prefix made that compile without making it work.
+// Every client exports this library, so importing a client still offers Page,
+// Problem and Transport, and two clients now offer the same ones (issue #110).
+//
+// What is NOT here: Row and the filter-condition types. Dart privacy is per
+// library, and both keep their contract with the generated code private — the
+// _str/_int protocol a row view inherits, and Cond._encode. They stay with each
+// client, where being duplicated costs nothing observable because nothing can
+// observe them.
+//
+// It imports nothing — not even a pub package.
 `
 
 // dartRuntime is the part of the emitted file that does not depend on the

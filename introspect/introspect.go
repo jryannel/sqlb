@@ -113,6 +113,18 @@ type catalog struct {
 	columns     []columnRow
 	constraints []constraintRow
 	indexes     []indexRow
+	// extensions is every non-plpgsql extension installed in the database.
+	//
+	// Not a table-level construct, and read anyway: an extension is invisible
+	// to Diff rather than skipped by it, so a clean Report and a clean Diff
+	// both said "everything is represented" about a schema that could not be
+	// created at all (issue #115).
+	extensions []extensionRow
+}
+
+type extensionRow struct {
+	Name   string
+	Schema string
 }
 
 type tableRow struct {
@@ -190,6 +202,19 @@ FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = $1 AND c.relkind = 'r'
 ORDER BY c.relname`
+
+// extensionQuery reads what CREATE EXTENSION installed.
+//
+// plpgsql is excluded because every Postgres has it and nobody declared it. No
+// schema filter: an extension is installed per database, not per schema, so an
+// extension living in a dedicated "extensions" schema is still the one the
+// introspected tables depend on.
+const extensionQuery = `
+SELECT e.extname, n.nspname
+FROM pg_extension e
+JOIN pg_namespace n ON n.oid = e.extnamespace
+WHERE e.extname <> 'plpgsql'
+ORDER BY e.extname`
 
 const columnQuery = `
 SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
@@ -275,18 +300,18 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 	}
 	cat := &catalog{}
 
-	if err := query(ctx, db, tableQuery, nspname, func(rows pgx.Rows) error {
+	if err := query(ctx, db, tableQuery, func(rows pgx.Rows) error {
 		var r tableRow
 		if err := rows.Scan(&r.Name, &r.Comment); err != nil {
 			return err
 		}
 		cat.tables = append(cat.tables, r)
 		return nil
-	}); err != nil {
+	}, nspname); err != nil {
 		return nil, fmt.Errorf("introspect: reading tables: %w", err)
 	}
 
-	if err := query(ctx, db, columnQuery, nspname, func(rows pgx.Rows) error {
+	if err := query(ctx, db, columnQuery, func(rows pgx.Rows) error {
 		var r columnRow
 		if err := rows.Scan(&r.Table, &r.Name, &r.Type, &r.NotNull, &r.Default,
 			&r.Comment, &r.Identity, &r.Generated); err != nil {
@@ -294,11 +319,11 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 		}
 		cat.columns = append(cat.columns, r)
 		return nil
-	}); err != nil {
+	}, nspname); err != nil {
 		return nil, fmt.Errorf("introspect: reading columns: %w", err)
 	}
 
-	if err := query(ctx, db, constraintQuery, nspname, func(rows pgx.Rows) error {
+	if err := query(ctx, db, constraintQuery, func(rows pgx.Rows) error {
 		var r constraintRow
 		var cols, refCols string
 		if err := rows.Scan(&r.Table, &r.Name, &r.Type, &cols, &r.RefTable, &refCols,
@@ -308,11 +333,22 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 		r.Columns, r.RefCols = splitList(cols), splitList(refCols)
 		cat.constraints = append(cat.constraints, r)
 		return nil
-	}); err != nil {
+	}, nspname); err != nil {
 		return nil, fmt.Errorf("introspect: reading constraints: %w", err)
 	}
 
-	if err := query(ctx, db, indexQuery, nspname, func(rows pgx.Rows) error {
+	if err := query(ctx, db, extensionQuery, func(rows pgx.Rows) error {
+		var r extensionRow
+		if err := rows.Scan(&r.Name, &r.Schema); err != nil {
+			return err
+		}
+		cat.extensions = append(cat.extensions, r)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("introspect: reading extensions: %w", err)
+	}
+
+	if err := query(ctx, db, indexQuery, func(rows pgx.Rows) error {
 		var r indexRow
 		var cols, classes, options, sortOpts string
 		if err := rows.Scan(&r.Table, &r.Name, &r.Unique, &r.Method, &r.Where,
@@ -329,7 +365,7 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 		r.Options = splitList(options)
 		cat.indexes = append(cat.indexes, r)
 		return nil
-	}); err != nil {
+	}, nspname); err != nil {
 		return nil, fmt.Errorf("introspect: reading indexes: %w", err)
 	}
 
@@ -358,8 +394,8 @@ func parseIndexOptions(raw string) []int16 {
 	return out
 }
 
-func query(ctx context.Context, db sqlb.Executor, sqlText, arg string, scan func(pgx.Rows) error) error {
-	rows, err := db.Query(ctx, sqlText, arg)
+func query(ctx context.Context, db sqlb.Executor, sqlText string, scan func(pgx.Rows) error, args ...any) error {
+	rows, err := db.Query(ctx, sqlText, args...)
 	if err != nil {
 		return err
 	}

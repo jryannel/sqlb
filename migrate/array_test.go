@@ -74,3 +74,34 @@ func TestArrayTypeChangeIsNotAWidening(t *testing.T) {
 		t.Error("text[] to text was not reported as destructive")
 	}
 }
+
+// smallint and real render at the width the database already has, scalar and
+// array alike. Widening either to suit the DSL was a schema change an adopter
+// could not justify, which is what issues #114 and #120 were about — so the
+// declaration has to reach the DDL unwidened or the fix is cosmetic.
+func TestNarrowNumericWidthsRenderUnwidened(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("events",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.SmallInt("pos_x"),
+			schema.SmallInt("weekdays").Array().Nullable(),
+			schema.Real("confidence").Nullable(),
+		)
+	})
+	change := only(t, diff(t, schema.NewRegistry(), target))
+	for _, want := range []string{
+		`"pos_x" smallint NOT NULL`,
+		`"weekdays" smallint[]`,
+		`"confidence" real`,
+	} {
+		if !strings.Contains(change.Up, want) {
+			t.Errorf("DDL is missing %q:\n%s", want, change.Up)
+		}
+	}
+	// The point of the issue: nothing in the generated DDL widened.
+	for _, unwanted := range []string{"integer", "double precision"} {
+		if strings.Contains(change.Up, unwanted) {
+			t.Errorf("a narrow width was widened to %q:\n%s", unwanted, change.Up)
+		}
+	}
+}

@@ -55,6 +55,39 @@ os.WriteFile("blogschema/schema.go", src, 0o644)
 `introspect` reports every construct it could not express rather than dropping
 it, which is what makes the report worth reading rather than skipping.
 
+The same two calls are a command, which is what you want the first fifty times —
+before there is a package to put any of this in:
+
+```bash
+sqlb introspect -dsn "$DSN"
+```
+
+```
+2 table(s) read
+
+  bookings.bookings_coach_id_tstzrange_excl: constraint of a kind the DSL cannot
+  declare (contype x)
+      EXCLUDE USING gist (coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&)
+      WHERE ((status = 'confirmed'::text))
+the database has extensions installed, and no generated DDL creates them.
+Create them in the target database first, or the first bootstrap fails
+once per dependent table naming a function instead of the extension:
+  CREATE EXTENSION IF NOT EXISTS "btree_gist";
+```
+
+Two tables were read and one construct was refused, so the other table — a
+natural-key cache with a composite primary key — is adoptable as it stands.
+
+It exits non-zero when something was skipped, so *why did the drift gate refuse
+this module* is a command rather than a throwaway program. `-out schema.go`
+writes the declaration instead of reporting, `-only`/`-exclude`/`-module` narrow
+what is read, and `-migrations <dir>` replays a history into the given database
+and reads back what it built rather than reading the database as it stands —
+the stronger source, for the reason the next section gives.
+
+Unlike every other `sqlb` verb it takes no package argument: it reads a database
+rather than a declaration, so there is nothing to link.
+
 That pair is the multiplier for a database of any size: sixty-nine tables become
 sixty-nine declarations to *review*, not sixty-nine to write. So the two halves
 have to agree about what the DSL can express — a type `introspect` reads and
@@ -172,6 +205,9 @@ to have checked something it never looked at.
 ## Next
 
 - [Diffing and rendering](README.md)
+- [Surveying an existing codebase](../surveying-a-codebase.md) — this page
+  answers what the database allows; that one answers how many of the routes and
+  queries in front of it sqlb would take
 - [Using your own structs](../start/structs-first.md) — the other half of
   adopting sqlb into a project that already exists
 - [ADR-0014](../adr/0014-migrations-and-import.md) — why the history beats

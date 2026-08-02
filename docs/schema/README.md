@@ -40,8 +40,10 @@ This page covers the column vocabulary and the table-level constructs.
 |---|---|---|
 | `Text(name)` | `text` | `string` |
 | `Varchar(name, n)` | `varchar(n)` | `string` |
+| `SmallInt(name)` | `smallint` | `int16` |
 | `Int(name)` | `int` | `int32` |
 | `BigInt(name)` | `bigint` | `int64` |
+| `Real(name)` | `real` | `float32` |
 | `Float(name)` / `Numeric(name)` | `float` / `numeric` | `float64` |
 | `Numeric(name, p, s)` | `numeric(p, s)` | `float64` |
 | `Bool(name)` | `bool` | `bool` |
@@ -248,6 +250,40 @@ knows to *ask* for the first: a resource over a soft-deleting model does not
 mount until a hook confines it. [`example/blog`](../start/first-app.md) is that
 pair written out.
 
+## The wire spelling
+
+Every column has one spelling on the wire — the JSON body, the filter grammar's
+parameter names, `?sort`, the OpenAPI document and both generated clients. By
+default it is the column's own name, so `created_at` is `created_at` everywhere.
+
+A schema whose front end is camelCase says so once:
+
+```go
+var Module = schema.NewModule("app").WireCase(schema.Camel)
+
+// or, for a schema using the package-level Table():
+func init() { schema.SetWireCase(schema.Camel) }
+```
+
+`created_at` is then `createdAt` in the body, in `?createdAt=gte.…`, in
+`?sort=-createdAt`, in the OpenAPI document and in both clients — and still
+`created_at` in the database, in every hand-written query and in `pg_dump`.
+
+There is deliberately **no per-column override**. One setting, applied by one
+pure function, is what keeps the five surfaces from disagreeing; a per-column
+mapping is the part with a reason to drift ([ADR-0036](../adr/0036-the-wire-is-the-column-name.md)).
+
+**A case that cannot round-trip is refused at build time.** `snake → camel` is
+not invertible over every name: `pos_x_2` becomes `posX2`, which reads back as
+`pos_x2`. `Validate` computes both directions for every column and fails the
+schema naming the column and both spellings, so an ambiguity is a build error on
+a schema nobody has deployed rather than a wrong parameter name in a shipped
+client. Rename the column, or leave the schema `Verbatim`.
+
+A CLI flag keeps its kebab-cased spelling either way — `--created-at` under
+both — because a flag is a local affordance rather than a wire format. What
+moves is the query parameter it sends.
+
 ## Indexes and constraints
 
 ```go
@@ -258,6 +294,105 @@ pair written out.
     AddIndex(schema.Index{Columns: []string{"body"}, Method: "gin"}).
     Check("name", "status <> 'published' OR published_at IS NOT NULL")
 ```
+
+### Exclusion constraints
+
+An `EXCLUDE` constraint says no two rows may hold values pairwise related by the
+given operators. The canonical use is the one no application-level check can
+make safe:
+
+```go
+AddExclude(schema.Exclusion{
+    Name:     "bookings_no_double_booking",
+    Using:    "gist",
+    Elements: "coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&",
+    Where:    "status = 'confirmed'",
+})
+```
+
+One coach cannot hold two confirmed bookings whose time ranges overlap —
+enforced by the database, across concurrent transactions.
+
+This is the one constraint with **no near miss**. A composite `UNIQUE` has a
+unique index; a composite primary key has a surrogate; `smallint` still
+round-trips at the wrong width. Dropping an exclusion has no equivalent at all:
+either the invariant moves into application code, where two concurrent requests
+interleave between the check and the insert, or the table stays outside the
+declaration and the drift gate holds a permanent known-difference exception.
+
+`Elements` and `Where` are hand-written SQL, exactly as `Check` is, and for the
+same reason — Postgres stores a parse tree and renders it back in its own
+spelling, so a structured form would have to reproduce that spelling or every
+diff would propose replacing a constraint that had not changed. Both go through
+the probe in `shadow.Normalize`, which adds the real constraint to the shadow
+database and reads back what Postgres stored. Asking beats guessing.
+
+`Using` is the index method, and it is almost always `gist`: the operators that
+make an exclusion useful — `&&` over a range, and `=` over a scalar beside it —
+are gist's. Pairing a scalar `=` with a range needs the **btree_gist**
+extension, which no generated DDL creates; `sqlb introspect` lists the
+extensions a database has so that is knowable before the first bootstrap rather
+than after it fails.
+
+### A composite primary key
+
+`Field.PrimaryKey()` declares a single-column key. When the key *is* a pair —
+an association table where the pair is the row, a natural-key cache keyed by
+what it describes — declare it on the table:
+
+```go
+schema.Table("llmcatalog_models",
+    schema.Text("provider"),
+    schema.Text("model_id"),
+    schema.Text("display_name"),
+).PrimaryKeyColumns("provider", "model_id")
+```
+
+The alternative was a schema change: a surrogate `UUID` that nothing points at,
+plus a unique index to make the real key unique — 16 bytes and an extra index
+per row, identifying something no other table references. That is a change
+nobody would defend if sqlb vanished tomorrow, which is the test an adopter
+applies to every line of a migration.
+
+**A composite-key table is not a resource, and the schema refuses to make it
+one.** `TableDef.PrimaryKey()` returns nil for it, so it takes the keyless path
+everywhere row identity is assumed, and `Validate` refuses three things by name:
+
+| | Why |
+|---|---|
+| REST exposure | `/{id}` addresses one column, and so do the cursor and the generated cache key — each is a wire format (ADR-0034) |
+| Being the target of `Ref`/`ExternalRef` | A reference is single-column here too |
+| A non-collection `Action` | An id is one column |
+
+Those refusals are the design rather than a shortfall. What these tables needed
+was to be *declarable*, so that one of them stops taking its whole module out of
+the drift gate — the gate is per registry, and it is all-or-nothing. If such a
+table does need to be a resource, give it a surrogate key deliberately, which is
+then a decision rather than a tax.
+
+### `UniqueIndex` and `Unique` are different objects
+
+Both enforce the same rule and they are not interchangeable. `UNIQUE (a, b, c)`
+written inline in `CREATE TABLE` produces a **constraint**; `CREATE UNIQUE INDEX`
+produces an **index**. Postgres builds an index either way, but only a constraint
+can be
+
+- the target of `FOREIGN KEY … REFERENCES t (a, b)`, and
+- named in `ON CONFLICT ON CONSTRAINT`.
+
+So when a table already has a constraint, declaring the index instead is not a
+spelling difference: it diffs as a different object, and adopting that table
+would propose dropping the constraint and building an index in its place — a
+real migration on live data, forced by the declaration language rather than by
+anything the schema needed. `Unique` and `UniqueNamed` are the table-level peers
+of `Field.Unique()`, and they are what an adoption reaches for, because the
+inline form is how a composite natural key is ordinarily written.
+
+`Unique` names the constraint the way Postgres names one it generated itself —
+`secrets_tenant_kind_tenant_id_name_key` — rather than the way `UniqueIndex`
+names an index. Two conventions, deliberately: an index sqlb declares is one
+sqlb named, while a constraint is usually one that already exists under a name
+the application may be matching on.
 
 `AddIndex` takes a fully specified `Index` for what the shorthands do not cover
 — GIN indexes, partial indexes via `Where`, and per-column sort order via

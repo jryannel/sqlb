@@ -24,9 +24,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -42,9 +44,12 @@ import (
 // reported because no declaration will ever describe them, and a survey that
 // counts them as blockers overstates the work.
 //
-// The list is a default, not a policy: -exclude replaces it, because a runner
-// this does not know about would otherwise show up as an unmodelable table and
-// read as a real result. Entries absent from the database are dropped before
+// The list is a default, not a policy, and -exclude *extends* it rather than
+// replacing it (#123). Replacing was the wrong default: it covers a runner used
+// once per database, and a modular monolith running goose per module carries
+// one bookkeeping table per module — none matching anything here. A caller who
+// had to name those by hand also had to drop the five below to do it, and got
+// no warning that they had. Entries absent from the database are dropped before
 // the list reaches introspect — see the narrowing in survey.
 var defaultExcluded = []string{
 	"goose_db_version",       // goose
@@ -87,8 +92,13 @@ Flags:
 
     -modules a,b,c    table-name prefixes to group the per-table verdict by, for
                       a modular monolith whose tables are named <module>_<table>
-    -exclude t1,t2    tables to leave out entirely, replacing the built-in
-                      migration-runner list, which is:
+    -modules-file f   JSON mapping module name to its exact table names, for a
+                      repo whose prefixes cannot cover every table. Wins over
+                      -modules
+    -exclude t1,%%pat  tables to leave out entirely, in addition to the built-in
+                      migration-runner list below. %% matches any run of
+                      characters, so -exclude '%%_schema_migrations' covers a
+                      goose-per-module monolith:
                           %s
 
 <src-migrated-dsn> is the database to survey; it is only read from.
@@ -96,7 +106,8 @@ Flags:
 must already carry the extensions the source uses — Diff renders no CREATE
 EXTENSION, so a bootstrap into a bare database fails once per table with
 "function uuid_generate_v4() does not exist" rather than once with the missing
-extension named.
+extension named — and Phase A prints the list as runnable SQL, so the second
+run of this command is the one that works.
 `
 
 // survey runs the whole report, and is what `sqlb survey` dispatches to.
@@ -110,7 +121,8 @@ func survey(args []string, stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stderr, surveyUsage, strings.Join(defaultExcluded, "\n                          "))
 	}
 	modules := fs.String("modules", "", "comma-separated table-name prefixes to group the per-table verdict by")
-	exclude := fs.String("exclude", "", "comma-separated tables to leave out entirely, replacing the built-in migration-runner list")
+	exclude := fs.String("exclude", "", "comma-separated tables to leave out entirely, in addition to the built-in migration-runner list. % matches any run of characters, so -exclude '%_schema_migrations' covers a goose-per-module monolith")
+	modulesFile := fs.String("modules-file", "", `JSON file mapping module name to its exact table names, {"billing": ["invoices", ...]}, for a repo whose prefixes cannot cover every table. Takes precedence over -modules`)
 	if err := fs.Parse(args); err != nil {
 		// flag has already printed what was wrong and the usage above it.
 		return exitCode(2)
@@ -141,19 +153,16 @@ func survey(args []string, stdout, stderr io.Writer) error {
 	}
 	defer dst.Close()
 
-	return runSurvey(ctx, report{stdout}, src, dst, *modules, *exclude)
+	return runSurvey(ctx, report{stdout}, src, dst, *modules, *modulesFile, *exclude)
 }
 
 // runSurvey is survey with the connections already open, which is what makes
 // the report itself reachable from a test that has a database.
-func runSurvey(ctx context.Context, out report, src, dst *pgxpool.Pool, modules, exclude string) error {
-	wanted := defaultExcluded
-	if strings.TrimSpace(exclude) != "" {
-		wanted = nil
-		for _, t := range strings.Split(exclude, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				wanted = append(wanted, t)
-			}
+func runSurvey(ctx context.Context, out report, src, dst *pgxpool.Pool, modules, modulesFile, exclude string) error {
+	wanted := append([]string(nil), defaultExcluded...)
+	for _, t := range strings.Split(exclude, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			wanted = append(wanted, t)
 		}
 	}
 
@@ -165,11 +174,15 @@ func runSurvey(ctx context.Context, out report, src, dst *pgxpool.Pool, modules,
 	// five migration runners, four of which are absent from any given project:
 	// they would arrive as four skipped constructs, which is a finding about
 	// this command's defaults rather than about the schema.
+	//
+	// It expands as well, because a pattern is the only workable spelling for a
+	// runner used once per module: a goose-per-module monolith carries 11 to 17
+	// bookkeeping tables and none of them matches a built-in name (#123).
 	present, err := listTables(ctx, src, nil)
 	if err != nil {
 		return err
 	}
-	excluded := intersect(wanted, present)
+	excluded := selectExcluded(wanted, present)
 
 	all, err := listTables(ctx, src, excluded)
 	if err != nil {
@@ -192,6 +205,22 @@ func runSurvey(ctx context.Context, out report, src, dst *pgxpool.Pool, modules,
 		out.printf("registry built: %d tables modelled\n\n", len(regAll.Tables()))
 	}
 	if repAll != nil {
+		// First, because it is the step before everything else in this run.
+		// Phase C bootstraps each table into the scratch database and Diff
+		// renders no CREATE EXTENSION, so a scratch database missing these
+		// fails once per table naming a function rather than once naming the
+		// extension — which is how this survey spent an hour (issue #115).
+		if len(repAll.Extensions) > 0 {
+			out.printf("### Extensions\n\n")
+			out.printf("The source database has %d extension(s). No generated DDL creates them,\n",
+				len(repAll.Extensions))
+			out.printf("so the scratch database needs them before Phase C means anything:\n\n")
+			out.printf("```sql\n")
+			for _, e := range repAll.Extensions {
+				out.printf("CREATE EXTENSION IF NOT EXISTS %q;\n", e)
+			}
+			out.printf("```\n\n")
+		}
 		out.printf("skipped constructs: %d\n", len(repAll.Skipped))
 		out.printf("notes: %d\n\n", len(repAll.Notes))
 		printByReason(out, repAll.Skipped)
@@ -267,7 +296,7 @@ func runSurvey(ctx context.Context, out report, src, dst *pgxpool.Pool, modules,
 	}
 	out.printf("%s\n\n", strings.Join(names, ", "))
 
-	printByModule(out, modules, results)
+	printByModule(out, modules, modulesFile, results)
 
 	// ---------------------------------------------------------------- phase C
 	out.printf("## Phase C — round-trip fixpoint\n\n")
@@ -381,7 +410,15 @@ func fixpoint(
 // Prefixes are supplied rather than guessed: inferring them from table names
 // would split hotel_rooms and hotels into two modules, and a wrong split reads
 // as a real result.
-func printByModule(out report, spec string, results []tableResult) {
+func printByModule(out report, spec, mapFile string, results []tableResult) {
+	// An exact mapping wins where it is given. The prefix convention is the
+	// right default and this is its escape: grandfathered bare names are
+	// permanent in the repos that have them, so a survey that can only group by
+	// prefix cannot describe those repos at all (#122).
+	if strings.TrimSpace(mapFile) != "" {
+		printByMapping(out, mapFile, results)
+		return
+	}
 	if strings.TrimSpace(spec) == "" {
 		return
 	}
@@ -455,15 +492,50 @@ func printByModule(out report, spec string, results []tableResult) {
 			gate = "**blocked**"
 			blocked++
 		}
-		out.printf("| _(no prefix)_ | %d | %d | %d | %d | %s |\n",
+		// Named for what it is rather than for what it might be. The row used
+		// to read "_(no prefix)_", which a reader completes as "the shared
+		// core" — and a monolith with a large shared core is entirely
+		// believable, so nothing prompted anyone to doubt it (#122).
+		out.printf("| _unmatched — NOT a module_ | %d | %d | %d | %d | %s |\n",
 			n, unclaimed.clean, unclaimed.partial, unclaimed.refused, gate)
 	}
 	out.printf("\n**%d of %d modules blocked.**\n\n", blocked, groups)
 	if len(unclaimedNames) > 0 {
 		sort.Strings(unclaimedNames)
-		out.printf("Tables matching no prefix (%d) — shared, or a prefix is missing from -modules:\n\n%s\n\n",
-			len(unclaimedNames), strings.Join(unclaimedNames, ", "))
+		total := len(results)
+		unmatched := len(unclaimedNames)
+		out.printf("### Unmatched tables\n\n")
+		out.printf("**%d of %d tables (%d%%) matched no prefix in -modules.**\n\n",
+			unmatched, total, percent(unmatched, total))
+		// A threshold, because the failure this guards against is silent and
+		// the wrong answer is plausible. Below it, unmatched tables are the
+		// ordinary shared core and grandfathered names every real monolith
+		// has; above it, the likeliest explanation is a wrong or incomplete
+		// flag value, and a reader who is told so checks it.
+		if percent(unmatched, total) >= unmatchedWarnPercent {
+			out.printf("> **Check the flag before reading this as a finding.** More than %d%% of the\n"+
+				"> schema matched nothing, which is more often an incomplete -modules value than\n"+
+				"> a genuinely large shared core. Grandfathered bare names are the other cause,\n"+
+				"> and they are frozen legacy rather than shared — the two are not distinguishable\n"+
+				"> from a prefix, so this needs an answer from the repository, not from the survey.\n\n",
+				unmatchedWarnPercent)
+		}
+		out.printf("%s\n\n", strings.Join(unclaimedNames, ", "))
 	}
+}
+
+// unmatchedWarnPercent is where an unmatched set stops reading as a shared core
+// and starts reading as a wrong flag. Chosen from the two corpora that produced
+// issue #122: 43 of 68 tables unmatched was a wrong flag value, and 16 of 30 was
+// a real set of permanently grandfathered names. Both are above it, which is the
+// point — the warning asks a question rather than answering one.
+const unmatchedWarnPercent = 25
+
+func percent(n, total int) int {
+	if total == 0 {
+		return 0
+	}
+	return n * 100 / total
 }
 
 func lenSkips(r *introspect.Report) int {
@@ -552,19 +624,159 @@ func listTables(ctx context.Context, db *pgxpool.Pool, skip []string) ([]string,
 	return out, rows.Err()
 }
 
-// intersect returns the members of want that appear in have, order preserved.
-func intersect(want, have []string) []string {
-	set := make(map[string]bool, len(have))
-	for _, h := range have {
-		set[h] = true
-	}
+// selectExcluded expands the wanted patterns against the tables the database
+// actually has.
+//
+// Two jobs in one pass. It narrows, because introspect reports a name in
+// Exclude that it does not find — deliberately, since a typo would otherwise
+// silently shrink what a gate checks. And it expands, because a pattern is the
+// only workable spelling for a runner used once per module: a goose-per-module
+// monolith carries 11 to 17 bookkeeping tables and none of them matches a
+// built-in name (#123).
+func selectExcluded(want, have []string) []string {
 	var out []string
-	for _, w := range want {
-		if set[w] {
-			out = append(out, w)
+	seen := map[string]bool{}
+	for _, h := range have {
+		for _, w := range want {
+			if !matchPattern(w, h) || seen[h] {
+				continue
+			}
+			seen[h] = true
+			out = append(out, h)
 		}
 	}
+	sort.Strings(out)
 	return out
+}
+
+// matchPattern reports whether name matches pattern, where % stands for any run
+// of characters.
+//
+// SQL's wildcard rather than the shell's, because the pattern this exists for
+// is one a caller would otherwise have had to write as a LIKE against
+// information_schema to discover the table names by hand. A pattern with no %
+// is an exact name, which is what every caller before #123 wrote.
+func matchPattern(pattern, name string) bool {
+	if !strings.Contains(pattern, "%") {
+		return pattern == name
+	}
+	parts := strings.Split(pattern, "%")
+	if !strings.HasPrefix(name, parts[0]) {
+		return false
+	}
+	rest := name[len(parts[0]):]
+	last := parts[len(parts)-1]
+	for _, seg := range parts[1 : len(parts)-1] {
+		k := strings.Index(rest, seg)
+		if k < 0 {
+			return false
+		}
+		rest = rest[k+len(seg):]
+	}
+	return strings.HasSuffix(rest, last)
+}
+
+// printByMapping is printByModule over an exact table-to-module mapping.
+//
+// Same table, same verdict, same blocked count — the only thing that changes is
+// how a table finds its module, and therefore what "unmatched" means. Here an
+// unmatched table is one the caller left out of the file, which is a fact about
+// the file and worth saying plainly rather than warning about.
+func printByMapping(out report, path string, results []tableResult) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		out.printf("**-modules-file could not be read:** %s\n\n", oneline(err.Error()))
+		return
+	}
+	var mapping map[string][]string
+	if err := json.Unmarshal(raw, &mapping); err != nil {
+		out.printf("**-modules-file %s is not valid JSON:** %s\n\n", path, oneline(err.Error()))
+		return
+	}
+	if len(mapping) == 0 {
+		out.printf("**-modules-file %s lists no modules.**\n\n", path)
+		return
+	}
+
+	owner := map[string]string{}
+	for mod, tables := range mapping {
+		for _, t := range tables {
+			if prev, dup := owner[t]; dup {
+				out.printf("**-modules-file %s lists %q under both %q and %q**, so the grouping "+
+					"would mean nothing.\n\n", path, t, prev, mod)
+				return
+			}
+			owner[t] = mod
+		}
+	}
+
+	type mod struct{ clean, partial, refused int }
+	mods := map[string]*mod{}
+	for name := range mapping {
+		mods[name] = &mod{}
+	}
+	unlisted := &mod{}
+	var unlistedNames []string
+
+	for _, r := range results {
+		m := unlisted
+		if name, ok := owner[r.Name]; ok {
+			m = mods[name]
+		} else {
+			unlistedNames = append(unlistedNames, r.Name)
+		}
+		switch {
+		case r.Err != "":
+			m.refused++
+		case len(r.Skips) > 0:
+			m.partial++
+		default:
+			m.clean++
+		}
+	}
+
+	names := make([]string, 0, len(mapping))
+	for name := range mapping {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out.printf("### By module (exact mapping from %s)\n\n", path)
+	out.printf("| module | tables | clean | partial | refused | gate |\n")
+	out.printf("|---|---:|---:|---:|---:|---|\n")
+	blocked := 0
+	for _, name := range names {
+		m := mods[name]
+		total := m.clean + m.partial + m.refused
+		gate := "green"
+		if m.partial+m.refused > 0 {
+			gate = "**blocked**"
+			blocked++
+		}
+		out.printf("| %s | %d | %d | %d | %d | %s |\n", name, total, m.clean, m.partial, m.refused, gate)
+	}
+	out.printf("\n**%d of %d modules blocked.**\n\n", blocked, len(names))
+
+	// A module in the file with no tables in the database is a stale mapping,
+	// and it reads as a green module — the one way this grouping can quietly
+	// overstate how much is adoptable.
+	var empty []string
+	for _, name := range names {
+		if m := mods[name]; m.clean+m.partial+m.refused == 0 {
+			empty = append(empty, name)
+		}
+	}
+	if len(empty) > 0 {
+		out.printf("**%d module(s) in the mapping have no tables in this database** — stale entries, "+
+			"and they count as green above: %s\n\n", len(empty), strings.Join(empty, ", "))
+	}
+	if len(unlistedNames) > 0 {
+		sort.Strings(unlistedNames)
+		out.printf("### Not in the mapping\n\n")
+		out.printf("**%d of %d tables (%d%%) are absent from %s** and are counted in no module:\n\n%s\n\n",
+			len(unlistedNames), len(results), percent(len(unlistedNames), len(results)), path,
+			strings.Join(unlistedNames, ", "))
+	}
 }
 
 func open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {

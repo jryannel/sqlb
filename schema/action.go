@@ -177,7 +177,12 @@ func (r *Registry) validateActions(t *TableDef, report func(string, string, stri
 		// by. Reported here rather than at mount because the declaration is
 		// where the mistake is.
 		if !a.IsCollection() && t.PrimaryKey() == nil {
-			report(t.name, "", "action %q addresses a row by id but the table declares no primary key", a.Name)
+			if cols := t.CompositeKey(); len(cols) > 0 {
+				report(t.name, "", "action %q addresses a row by id but the table's key is composite (%s), "+
+					"and one column is what an id is", a.Name, strings.Join(cols, ", "))
+			} else {
+				report(t.name, "", "action %q addresses a row by id but the table declares no primary key", a.Name)
+			}
 		}
 
 		r.validateActionBody(t, a, report)

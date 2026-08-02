@@ -62,6 +62,26 @@ exposing neither create nor update passes `rest.None[T]` for both. Registration
 is the startup path, so failures are returned rather than panicked — a mistake
 should name the resource that caused it.
 
+`rest.CRUD | rest.OpList` is the fully exposed collection. The other named
+shape is **`rest.Reads`** — `OpRead | OpList`, generated reads with the writes
+left hand-written:
+
+```go
+rest.Must(rest.Resource[blog.Post, rest.None[blog.Post], rest.None[blog.Post]](api, db, rest.Options{
+    Path: "/posts",
+    Ops:  rest.Reads,
+}))
+```
+
+That is the mount an application adopting sqlb into an existing REST surface
+reaches for, and it is deliberate rather than unfinished: the app already has
+its writes, and the reasons they stay hand-written are domain reasons that do
+not expire — a create that writes bytes to object storage before the row, a row
+born in one domain verb and closed in another, a column whose transition *is*
+the publish that notifies the org, per-field authorization a hook can constrain
+but not express. Reaching for `rest.CRUD` and switching two thirds of it off
+describes the same mount as a shortfall; this one names it (issue #101).
+
 The handlers are **not** generated: `rest.Resource[T, C, U]` is one generic
 function serving every resource. What is per-resource is the OpenAPI document,
 built from each column's capabilities.

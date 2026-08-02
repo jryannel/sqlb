@@ -17,6 +17,14 @@ const (
 // for a fully exposed collection.
 const CRUD = OpCreate | OpRead | OpUpdate | OpDelete
 
+// Reads is the read-only exposure: generated reads, hand-written writes.
+//
+// The peer of CRUD, and the shape an application adopting sqlb into an
+// existing REST surface reaches for — it already has its writes, and the
+// reasons they stay hand-written are domain reasons that do not expire. See
+// [rest.Reads] for the worked version of why (issue #101).
+const Reads = OpRead | OpList
+
 // Has reports whether the mask contains op.
 func (o Op) Has(op Op) bool { return o&op != 0 }
 
@@ -184,6 +192,52 @@ type Unique struct {
 	Columns []string
 }
 
+// Exclusion is an EXCLUDE constraint: no two rows may hold values that are
+// pairwise related by the given operators.
+//
+// It is the one constraint with no near miss. A composite UNIQUE has a unique
+// index; a composite primary key has a surrogate; smallint has integer. Dropping
+// an exclusion has no equivalent at all — the alternatives are enforcing it in
+// application code, where two concurrent requests interleave between the check
+// and the insert, or leaving it as unmanaged DDL and holding a permanent
+// known-difference exception in the drift gate. It is the only construct in
+// either adoption corpus where not declaring it loses a *correctness* property
+// rather than a performance or ergonomic one (issue #121).
+//
+//	AddExclude(schema.Exclusion{
+//	    Name:     "bookings_no_double_booking",
+//	    Using:    "gist",
+//	    Elements: "coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&",
+//	    Where:    "status = 'confirmed'",
+//	})
+//
+// Elements and Where are hand-written SQL, the way [TableDef.Check] takes
+// hand-written SQL and for the same reason: Postgres stores a parse tree and
+// renders it back in its own spelling, so any structured form here would have to
+// reproduce that spelling exactly or every diff would propose replacing a
+// constraint that had not changed. Both are put through the same probe a check
+// goes through before a diff (shadow.Normalize), which asks Postgres rather than
+// guessing.
+//
+// An exclusion over a scalar with `=` needs the btree_gist extension, which no
+// generated DDL creates — introspect reports the extensions a database has so
+// the list is knowable before the first bootstrap rather than after 228 errors
+// (issue #115).
+type Exclusion struct {
+	Name string
+	// Using is the index method. Empty means Postgres's default, which is
+	// btree — and which almost no exclusion wants, since the operators that
+	// make one useful (&&, and = over a range) live in gist.
+	Using string
+	// Elements is the body of the constraint: the comma-separated
+	// `<column-or-expression> WITH <operator>` list, without the surrounding
+	// parentheses.
+	Elements string
+	// Where is the optional predicate that narrows which rows the constraint
+	// applies to, without the surrounding parentheses.
+	Where string
+}
+
 // TableDef is a table declaration. Build one with Table, which also registers
 // it in the default registry.
 type TableDef struct {
@@ -197,6 +251,8 @@ type TableDef struct {
 	indexes []Index
 	checks  []Check
 	uniques []Unique
+	excls   []Exclusion
+	pkCols  []string // a composite PRIMARY KEY, when the key is not one column
 	rest    *REST
 	actions []Action
 }
@@ -353,6 +409,20 @@ func (t *TableDef) Indexes() []Index {
 // Checks returns the declared check constraints.
 func (t *TableDef) Checks() []Check { return t.checks }
 
+// Exclusions returns the declared EXCLUDE constraints.
+func (t *TableDef) Exclusions() []Exclusion { return t.excls }
+
+// CompositeKey returns the columns of a composite primary key, or nil when the
+// table's key is a single column — which [TableDef.PrimaryKey] returns — or when
+// it declares none.
+//
+// Named for what it holds rather than as the getter half of
+// [TableDef.PrimaryKeyColumns], because PrimaryKey is already taken by the
+// single-column accessor and Go has no overloading. The asymmetry is worth one
+// odd name: every existing caller of PrimaryKey keeps working and sees nil,
+// which is the behaviour a composite-key table wants from all of them.
+func (t *TableDef) CompositeKey() []string { return t.pkCols }
+
 // Rest returns the REST exposure, or nil if the table is not exposed.
 func (t *TableDef) Rest() *REST { return t.rest }
 
@@ -444,6 +514,64 @@ func (t *TableDef) IndexNamed(name string, columns ...string) *TableDef {
 func (t *TableDef) UniqueIndexNamed(name string, columns ...string) *TableDef {
 	t.indexes = append(t.indexes, Index{Name: name, Columns: columns, Unique: true})
 	return t
+}
+
+// PrimaryKeyColumns declares a composite primary key over two or more columns.
+//
+// It is the table-level peer of [Field.PrimaryKey], and it exists because the
+// alternative was a schema change: a table whose identity is a pair had to grow
+// a surrogate UUID that nothing points at, plus an index to make the real key
+// unique, purely so the declaration language could describe it. On a natural-key
+// cache that is 16 bytes a row and an extra index, identifying something no
+// other table references — a change nobody would defend if sqlb vanished
+// tomorrow, which is the test an adopter applies (issue #109).
+//
+//	schema.Table("llmcatalog_models", ...).PrimaryKey("provider", "model_id")
+//
+// # What a composite key cannot do
+//
+// [TableDef.PrimaryKey] returns a *Field and returns nil for a table declared
+// this way, so a composite-key table takes the same path as a keyless one
+// everywhere row identity is assumed:
+//
+//   - it cannot be the target of [Ref] or [ExternalRef], because a reference is
+//     single-column here too;
+//   - it cannot be exposed over REST, because /{id} addresses one column;
+//   - it cannot carry a non-collection [TableDef.Action], for the same reason.
+//
+// Those refusals are the point rather than a shortfall. The tables this is for
+// — association tables where the pair *is* the row, and natural-key caches that
+// are re-derivable and referenced by nothing — are not resources, and what they
+// needed was to be *declarable*, so that one of them stops taking its whole
+// module out of the drift gate.
+//
+// Use [TableDef.PrimaryKeyNamed] to pin the constraint's name.
+func (t *TableDef) PrimaryKeyColumns(columns ...string) *TableDef {
+	t.pkCols = columns
+	return t
+}
+
+// AddExclude adds an EXCLUDE constraint. See [Exclusion].
+func (t *TableDef) AddExclude(e Exclusion) *TableDef {
+	t.excls = append(t.excls, e)
+	return t
+}
+
+// ReplaceExclusion rewrites an already-declared exclusion's body and predicate,
+// for the same caller and the same reason as [TableDef.ReplaceCheckExpr]:
+// shadow.Normalize puts the declared spelling through Postgres and writes back
+// what Postgres stores, so the two sides of a diff are comparable.
+func (t *TableDef) ReplaceExclusion(name, using, elements, where string) bool {
+	for i := range t.excls {
+		if t.excls[i].Name != name {
+			continue
+		}
+		t.excls[i].Using = using
+		t.excls[i].Elements = elements
+		t.excls[i].Where = where
+		return true
+	}
+	return false
 }
 
 // AddIndex adds a fully specified index, for cases the shorthands do not cover
