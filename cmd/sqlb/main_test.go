@@ -166,3 +166,74 @@ func TestVersionSaysSomething(t *testing.T) {
 		t.Errorf("version printed %q, which does not name the tool", out)
 	}
 }
+
+// introspect is the one verb with no package argument, so the two mistakes the
+// other five train a caller into must both be answered rather than passed to
+// flag.Parse as something unrecognisable (issue #112).
+func TestIntrospectArguments(t *testing.T) {
+	t.Run("needs a database", func(t *testing.T) {
+		code, out := invoke(t, "introspect")
+		if code == 0 {
+			t.Fatalf("introspect with no -dsn must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "-dsn") {
+			t.Errorf("the error does not name the flag that is missing:\n%s", out)
+		}
+	})
+
+	t.Run("rejects a package argument by saying why it has none", func(t *testing.T) {
+		code, out := invoke(t, "introspect", "-dsn", "postgres://x", blog)
+		if code == 0 {
+			t.Fatalf("introspect with a package argument must fail:\n%s", out)
+		}
+		// The habit every other verb builds is to put the package last, so the
+		// message has to explain rather than just refuse.
+		if !strings.Contains(out, "no schema package to link") {
+			t.Errorf("the error refuses without explaining:\n%s", out)
+		}
+	})
+
+	t.Run("is listed in the usage", func(t *testing.T) {
+		_, out := invoke(t, "help")
+		if !strings.Contains(out, "sqlb introspect") {
+			t.Errorf("introspect is missing from the usage:\n%s", out)
+		}
+		if !strings.Contains(out, "Flags for introspect:") {
+			t.Errorf("introspect's flags are missing from the usage:\n%s", out)
+		}
+	})
+}
+
+func TestPackageFromPath(t *testing.T) {
+	cases := []struct{ path, want string }{
+		{"blogschema/schema.go", "blogschema"},
+		{"./internal/orgschema/schema.go", "orgschema"},
+		{"/abs/path/taskschema/schema.go", "taskschema"},
+		// No directory to take a name from, so the default has to be a legal
+		// package name rather than "" — an unbuildable file is a worse outcome
+		// than a name the caller renames.
+		{"schema.go", "schema"},
+		{"/schema.go", "schema"},
+	}
+	for _, c := range cases {
+		if got := packageFromPath(c.path); got != c.want {
+			t.Errorf("packageFromPath(%q) = %q, want %q", c.path, got, c.want)
+		}
+	}
+}
+
+func TestSplitFlag(t *testing.T) {
+	got := splitFlag(" a , b ,, c,")
+	want := []string{"a", "b", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("splitFlag = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("splitFlag = %v, want %v", got, want)
+		}
+	}
+	if len(splitFlag("")) != 0 {
+		t.Errorf("an empty flag must be no entries, not one empty one")
+	}
+}

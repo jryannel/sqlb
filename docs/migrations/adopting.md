@@ -55,6 +55,31 @@ os.WriteFile("blogschema/schema.go", src, 0o644)
 `introspect` reports every construct it could not express rather than dropping
 it, which is what makes the report worth reading rather than skipping.
 
+The same two calls are a command, which is what you want the first fifty times —
+before there is a package to put any of this in:
+
+```bash
+sqlb introspect -dsn "$DSN"
+```
+
+```
+2 table(s) read
+
+  llmcatalog_models.llmcatalog_models_pkey: composite primary key; the DSL declares
+  at most one primary key column (a composite unique index is the nearest thing)
+      PRIMARY KEY (provider, model_id)
+```
+
+It exits non-zero when something was skipped, so *why did the drift gate refuse
+this module* is a command rather than a throwaway program. `-out schema.go`
+writes the declaration instead of reporting, `-only`/`-exclude`/`-module` narrow
+what is read, and `-migrations <dir>` replays a history into the given database
+and reads back what it built rather than reading the database as it stands —
+the stronger source, for the reason the next section gives.
+
+Unlike every other `sqlb` verb it takes no package argument: it reads a database
+rather than a declaration, so there is nothing to link.
+
 That pair is the multiplier for a database of any size: sixty-nine tables become
 sixty-nine declarations to *review*, not sixty-nine to write. So the two halves
 have to agree about what the DSL can express — a type `introspect` reads and
