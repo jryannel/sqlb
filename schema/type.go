@@ -20,12 +20,18 @@ package schema
 type Type string
 
 const (
-	TypeText      Type = "text"
-	TypeVarchar   Type = "varchar"
-	TypeInt       Type = "int"
-	TypeBigInt    Type = "bigint"
-	TypeFloat     Type = "float"
-	TypeNumeric   Type = "numeric"
+	TypeText     Type = "text"
+	TypeVarchar  Type = "varchar"
+	TypeSmallInt Type = "smallint"
+	TypeInt      Type = "int"
+	TypeBigInt   Type = "bigint"
+	// TypeReal is the 4-byte float. It is a distinct type from TypeFloat for
+	// the same reason TypeSmallInt is distinct from TypeInt: importing it as
+	// the wider one would make every later diff propose widening a column the
+	// database is content with (issues #114, #120).
+	TypeReal    Type = "real"
+	TypeFloat   Type = "float"
+	TypeNumeric Type = "numeric"
 	TypeBool      Type = "bool"
 	TypeUUID      Type = "uuid"
 	TypeTimestamp Type = "timestamptz"
@@ -51,9 +57,9 @@ const (
 // already handled (issue #53). A test walks this list now.
 func Types() []Type {
 	return []Type{
-		TypeText, TypeVarchar, TypeInt, TypeBigInt, TypeFloat, TypeNumeric,
-		TypeBool, TypeUUID, TypeTimestamp, TypeDate, TypeTime, TypeJSON,
-		TypeBytes, TypeEnum, TypeVector,
+		TypeText, TypeVarchar, TypeSmallInt, TypeInt, TypeBigInt, TypeReal,
+		TypeFloat, TypeNumeric, TypeBool, TypeUUID, TypeTimestamp, TypeDate,
+		TypeTime, TypeJSON, TypeBytes, TypeEnum, TypeVector,
 	}
 }
 
@@ -63,10 +69,17 @@ func (t Type) GoType() string {
 	switch t {
 	case TypeText, TypeVarchar, TypeUUID, TypeEnum:
 		return "string"
+	case TypeSmallInt:
+		// int16 rather than int32, so a Describe over existing sqlc output
+		// matches without a type override: sqlc already emits int16 for
+		// smallint (issue #114).
+		return "int16"
 	case TypeInt:
 		return "int32"
 	case TypeBigInt:
 		return "int64"
+	case TypeReal:
+		return "float32"
 	case TypeFloat, TypeNumeric:
 		return "float64"
 	case TypeBool:

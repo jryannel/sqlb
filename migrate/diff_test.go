@@ -639,9 +639,20 @@ func TestDiffColumnType(t *testing.T) {
 		wantType    string
 		destructive bool
 	}{
+		{"smallint to int widens", schema.SmallInt("n"), schema.Int("n"), "integer", false},
+		{"smallint to bigint widens", schema.SmallInt("n"), schema.BigInt("n"), "bigint", false},
+		{"int to smallint narrows", schema.Int("n"), schema.SmallInt("n"), "smallint", true},
 		{"int to bigint widens", schema.Int("n"), schema.BigInt("n"), "bigint", false},
 		{"bigint to int narrows", schema.BigInt("n"), schema.Int("n"), "integer", true},
 		{"int to numeric widens", schema.Int("n"), schema.Numeric("n"), "numeric", false},
+		{"real to double widens", schema.Real("n"), schema.Float("n"), "double precision", false},
+		{"double to real narrows", schema.Float("n"), schema.Real("n"), "real", true},
+		// real to numeric is a cast Postgres will make and a conversion nobody
+		// asked for: an approximate binary float becomes an exact decimal, so
+		// the value that comes back is the rounded expansion of the stored
+		// approximation. Destructive, so the migration is generated commented
+		// out and a person decides.
+		{"real to numeric is not a widening", schema.Real("n"), schema.Numeric("n"), "numeric", true},
 		{"varchar to text widens", schema.Varchar("n", 50), schema.Text("n"), "text", false},
 		{"text to varchar narrows", schema.Text("n"), schema.Varchar("n", 50), "varchar(50)", true},
 		{"longer varchar widens", schema.Varchar("n", 50), schema.Varchar("n", 100), "varchar(100)", false},

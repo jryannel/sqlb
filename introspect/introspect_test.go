@@ -609,8 +609,8 @@ func TestColumnType(t *testing.T) {
 		// column imported as the wrong type produces a migration proposing to
 		// change the real one.
 		{"numeric(bad,2)", "", 0, 0, false},
-		{"smallint", schema.TypeInt, 0, 0, false},
-		{"real", schema.TypeFloat, 0, 0, false},
+		{"smallint", schema.TypeSmallInt, 0, 0, true},
+		{"real", schema.TypeReal, 0, 0, true},
 		{"money", "", 0, 0, false},
 		{"timestamp without time zone", "", 0, 0, false},
 		{"json", "", 0, 0, false},

@@ -63,10 +63,14 @@ func scalarSQLType(d *schema.FieldDesc) (string, error) {
 			return fmt.Sprintf("varchar(%d)", d.Size), nil
 		}
 		return "text", nil
+	case schema.TypeSmallInt:
+		return "smallint", nil
 	case schema.TypeInt:
 		return "integer", nil
 	case schema.TypeBigInt:
 		return "bigint", nil
+	case schema.TypeReal:
+		return "real", nil
 	case schema.TypeFloat:
 		return "double precision", nil
 	case schema.TypeNumeric:
@@ -120,6 +124,11 @@ func widens(from, to *schema.FieldDesc) bool {
 		return false
 	}
 	switch from.Type {
+	case schema.TypeSmallInt:
+		switch to.Type {
+		case schema.TypeInt, schema.TypeBigInt, schema.TypeNumeric:
+			return true
+		}
 	case schema.TypeInt:
 		switch to.Type {
 		case schema.TypeBigInt, schema.TypeNumeric:
@@ -127,6 +136,15 @@ func widens(from, to *schema.FieldDesc) bool {
 		}
 	case schema.TypeBigInt:
 		if to.Type == schema.TypeNumeric {
+			return true
+		}
+	case schema.TypeReal:
+		// real to double precision only. Not to numeric: the cast is legal but
+		// it converts a binary float to an exact decimal, so the value that
+		// comes back is the rounded decimal expansion of the stored
+		// approximation rather than what anyone wrote. That is a conversion a
+		// person decides on, not one a generated migration performs unasked.
+		if to.Type == schema.TypeFloat {
 			return true
 		}
 	case schema.TypeVarchar:

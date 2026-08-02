@@ -453,9 +453,9 @@ func dartGetter(base, member string, d *schema.FieldDesc) string {
 // OrNull suffix.
 func dartReader(t schema.Type) (fn, typ string) {
 	switch t {
-	case schema.TypeInt, schema.TypeBigInt:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt:
 		return "_int", "int"
-	case schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeReal, schema.TypeFloat, schema.TypeNumeric:
 		return "_double", "double"
 	case schema.TypeBool:
 		return "_bool", "bool"
@@ -481,9 +481,9 @@ func dartReader(t schema.Type) (fn, typ string) {
 // handed the value already pulled out of the JSON list.
 func dartElemReader(t schema.Type) (decode, typ string) {
 	switch t {
-	case schema.TypeInt, schema.TypeBigInt:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt:
 		return "_asInt", "int"
-	case schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeReal, schema.TypeFloat, schema.TypeNumeric:
 		return "_asDouble", "double"
 	case schema.TypeBool:
 		return "_asBool", "bool"

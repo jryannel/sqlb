@@ -168,9 +168,9 @@ func ejectParser(d *schema.FieldDesc) string {
 		return "ParseText"
 	}
 	switch d.Type {
-	case schema.TypeInt, schema.TypeBigInt:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt:
 		return "ParseInt"
-	case schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeReal, schema.TypeFloat, schema.TypeNumeric:
 		return "ParseFloat"
 	case schema.TypeBool:
 		return "ParseBool"

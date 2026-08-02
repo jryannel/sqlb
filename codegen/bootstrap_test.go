@@ -28,10 +28,14 @@ func sample(t schema.Type) *schema.Field {
 		return schema.Text("f")
 	case schema.TypeVarchar:
 		return schema.Varchar("f", 200)
+	case schema.TypeSmallInt:
+		return schema.SmallInt("f")
 	case schema.TypeInt:
 		return schema.Int("f")
 	case schema.TypeBigInt:
 		return schema.BigInt("f")
+	case schema.TypeReal:
+		return schema.Real("f")
 	case schema.TypeFloat:
 		return schema.Float("f")
 	case schema.TypeNumeric:

@@ -54,15 +54,16 @@ func columnType(formatted string) (t schema.Type, typeArg, scale int, ok bool) {
 			return "", 0, 0, false
 		}
 		return schema.TypeVarchar, n, 0, true
-	case "integer", "smallint":
-		// smallint widens to integer, which is the safe direction: the DSL
-		// cannot express it, and a migration from this schema would widen the
-		// column rather than narrow it.
-		return schema.TypeInt, 0, 0, base == "integer"
+	case "smallint":
+		return schema.TypeSmallInt, 0, 0, true
+	case "integer":
+		return schema.TypeInt, 0, 0, true
 	case "bigint":
 		return schema.TypeBigInt, 0, 0, true
-	case "double precision", "real":
-		return schema.TypeFloat, 0, 0, base == "double precision"
+	case "real":
+		return schema.TypeReal, 0, 0, true
+	case "double precision":
+		return schema.TypeFloat, 0, 0, true
 	case "numeric":
 		// A numeric with a precision is a different type from an unbounded
 		// one, and since #81 the DSL can say so: Numeric(name, p, s). Postgres

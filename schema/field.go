@@ -206,6 +206,26 @@ func Int(name string) *Field    { return newField(name, TypeInt) }
 func BigInt(name string) *Field { return newField(name, TypeBigInt) }
 func Float(name string) *Field  { return newField(name, TypeFloat) }
 
+// SmallInt is the 2-byte integer, Go int16.
+//
+// It is a sibling of [Int] rather than a width argument to it, which is how
+// [BigInt] is already spelled. A schema that could not say `smallint` had to
+// widen the column to `integer` to be declarable at all — a schema change whose
+// only justification is the declaration language, which is exactly the change
+// an adopter cannot defend (issue #114).
+//
+// It filters, sorts and orders exactly as [Int] does; there are no capability
+// semantics of its own.
+func SmallInt(name string) *Field { return newField(name, TypeSmallInt) }
+
+// Real is the 4-byte float, Go float32.
+//
+// The peer of [SmallInt] in the float family, and filed for the same reason: a
+// model-confidence score or any other value never compared for equality is what
+// `real` is for, and widening it to `double precision` to suit the DSL is a
+// schema change the adopter cannot justify on its own merits (issue #120).
+func Real(name string) *Field { return newField(name, TypeReal) }
+
 // Numeric is an exact decimal. Called with no arguments it is unbounded —
 // `numeric` — which is what a rate, a rating or anything else that wants
 // arbitrary precision should be.
@@ -912,8 +932,9 @@ func (d *FieldDesc) GoType() string {
 // array of either is a shape no generated client can narrow past `unknown`.
 func IsArrayElement(t Type) bool {
 	switch t {
-	case TypeText, TypeVarchar, TypeEnum, TypeInt, TypeBigInt, TypeFloat,
-		TypeNumeric, TypeBool, TypeUUID, TypeTimestamp, TypeDate, TypeTime:
+	case TypeText, TypeVarchar, TypeEnum, TypeSmallInt, TypeInt, TypeBigInt,
+		TypeReal, TypeFloat, TypeNumeric, TypeBool, TypeUUID, TypeTimestamp,
+		TypeDate, TypeTime:
 		return true
 	}
 	return false

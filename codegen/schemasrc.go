@@ -505,10 +505,14 @@ func typeConstant(t schema.Type) (string, error) {
 		return "schema.TypeText", nil
 	case schema.TypeVarchar:
 		return "schema.TypeVarchar", nil
+	case schema.TypeSmallInt:
+		return "schema.TypeSmallInt", nil
 	case schema.TypeInt:
 		return "schema.TypeInt", nil
 	case schema.TypeBigInt:
 		return "schema.TypeBigInt", nil
+	case schema.TypeReal:
+		return "schema.TypeReal", nil
 	case schema.TypeFloat:
 		return "schema.TypeFloat", nil
 	case schema.TypeNumeric:
@@ -538,10 +542,14 @@ func fieldConstructor(d *schema.FieldDesc) (string, error) {
 		return "schema.Text(" + name + ")", nil
 	case schema.TypeVarchar:
 		return fmt.Sprintf("schema.Varchar(%s, %d)", name, d.Size), nil
+	case schema.TypeSmallInt:
+		return "schema.SmallInt(" + name + ")", nil
 	case schema.TypeInt:
 		return "schema.Int(" + name + ")", nil
 	case schema.TypeBigInt:
 		return "schema.BigInt(" + name + ")", nil
+	case schema.TypeReal:
+		return "schema.Real(" + name + ")", nil
 	case schema.TypeFloat:
 		return "schema.Float(" + name + ")", nil
 	case schema.TypeNumeric:

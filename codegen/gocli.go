@@ -512,8 +512,8 @@ func cliFilterExample(d *schema.FieldDesc) string {
 		return fmt.Sprintf("%s eq.%s", flag, d.EnumValues[0])
 	case d.Type == schema.TypeBool:
 		return flag + " eq.true"
-	case d.Type == schema.TypeInt, d.Type == schema.TypeBigInt,
-		d.Type == schema.TypeFloat, d.Type == schema.TypeNumeric:
+	case d.Type == schema.TypeSmallInt, d.Type == schema.TypeInt, d.Type == schema.TypeBigInt,
+		d.Type == schema.TypeReal, d.Type == schema.TypeFloat, d.Type == schema.TypeNumeric:
 		return fmt.Sprintf("%s gte.10 --%s lt.100", flag, flag)
 	case d.Type == schema.TypeTimestamp:
 		return flag + " gte.2026-01-01T00:00:00Z"
@@ -766,9 +766,9 @@ func cliValueExample(d *schema.FieldDesc) string {
 		}
 	case schema.TypeBool:
 		return "true"
-	case schema.TypeInt, schema.TypeBigInt:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt:
 		return "1"
-	case schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeReal, schema.TypeFloat, schema.TypeNumeric:
 		return "1.5"
 	case schema.TypeTimestamp:
 		return "2026-01-01T09:00:00Z"
@@ -850,10 +850,14 @@ func cliNullableNames(fields []*schema.Field) []string {
 // one and produce two different messages for the same mistake.
 func cliFlagType(d *schema.FieldDesc) string {
 	switch d.Type {
+	case schema.TypeSmallInt:
+		return "int16"
 	case schema.TypeInt:
 		return "int32"
 	case schema.TypeBigInt:
 		return "int64"
+	case schema.TypeReal:
+		return "float32"
 	case schema.TypeFloat, schema.TypeNumeric:
 		return "float64"
 	case schema.TypeBool:

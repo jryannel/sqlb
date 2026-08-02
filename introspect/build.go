@@ -653,10 +653,14 @@ func plainField(name string, t schema.Type, typeArg, scale int) *schema.Field {
 		return schema.Text(name)
 	case schema.TypeVarchar:
 		return schema.Varchar(name, typeArg)
+	case schema.TypeSmallInt:
+		return schema.SmallInt(name)
 	case schema.TypeInt:
 		return schema.Int(name)
 	case schema.TypeBigInt:
 		return schema.BigInt(name)
+	case schema.TypeReal:
+		return schema.Real(name)
 	case schema.TypeFloat:
 		return schema.Float(name)
 	case schema.TypeNumeric:

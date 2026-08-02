@@ -59,6 +59,9 @@ CREATE TABLE document_chunks (
     body       text NOT NULL,
     score      numeric,
     weight     double precision,
+    confidence real,
+    rating     smallint,
+    weekdays   smallint[],
     revision   bigint NOT NULL DEFAULT 0,
     tags       text[],
     meta       jsonb DEFAULT '{}'::jsonb,
@@ -66,13 +69,20 @@ CREATE TABLE document_chunks (
     archived   boolean NOT NULL DEFAULT false,
     published  date,
     created_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT document_chunks_body_not_empty CHECK (char_length(body) > 0)
+    CONSTRAINT document_chunks_body_not_empty CHECK (char_length(body) > 0),
+    -- Over a smallint column on purpose. An unsupported column type does not
+    -- cost one column: everything defined over it goes with it, and three of
+    -- the eight distinct skips in the survey behind #120 were that cascade
+    -- rather than independent gaps. If smallint ever regresses to a skip, this
+    -- constraint and the index below fall with it and say so.
+    CONSTRAINT document_chunks_rating_range CHECK (rating >= 1 AND rating <= 5)
 );
 
 CREATE INDEX idx_chunks_org ON document_chunks (org_id);
 CREATE INDEX idx_chunks_tags ON document_chunks USING gin (tags);
 CREATE INDEX idx_chunks_live ON document_chunks (org_id, created_at) WHERE NOT archived;
 CREATE UNIQUE INDEX idx_chunks_org_title ON document_chunks (org_id, title);
+CREATE INDEX idx_chunks_rating ON document_chunks (rating, created_at DESC);
 CREATE INDEX idx_chunks_embedding ON document_chunks
     USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 

@@ -245,10 +245,14 @@ func ejectZeroLiteral(d *schema.FieldDesc) string {
 	switch d.Type {
 	case schema.TypeText, schema.TypeVarchar, schema.TypeUUID, schema.TypeEnum:
 		return `""`
+	case schema.TypeSmallInt:
+		return "int16(0)"
 	case schema.TypeInt:
 		return "int32(0)"
 	case schema.TypeBigInt:
 		return "int64(0)"
+	case schema.TypeReal:
+		return "float32(0)"
 	case schema.TypeFloat, schema.TypeNumeric:
 		return "float64(0)"
 	case schema.TypeBool:

@@ -650,7 +650,8 @@ func tsElemType(typeName string, d *schema.FieldDesc) string {
 		return tsEnumName(typeName, d)
 	}
 	switch d.Type {
-	case schema.TypeInt, schema.TypeBigInt, schema.TypeFloat, schema.TypeNumeric:
+	case schema.TypeSmallInt, schema.TypeInt, schema.TypeBigInt, schema.TypeReal,
+		schema.TypeFloat, schema.TypeNumeric:
 		// bigint is `number` with a known limit: JSON.parse loses precision
 		// above 2^53, so a counter is fine and a bigint surrogate key is not.
 		// Typing it `string` would be correct for the key and wrong for every
