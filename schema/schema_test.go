@@ -655,3 +655,18 @@ func TestFilterableArrayNeedsAGINIndex(t *testing.T) {
 		t.Errorf("an unfilterable array was required to carry an index: %v", err)
 	}
 }
+
+// Reads is the read-only exposure, and it is exactly OpRead|OpList.
+func TestReadsIsReadAndList(t *testing.T) {
+	if schema.Reads != schema.OpRead|schema.OpList {
+		t.Fatalf("schema.Reads = %v, want read|list", schema.Reads)
+	}
+	for _, w := range []struct {
+		op   schema.Op
+		name string
+	}{{schema.OpCreate, "create"}, {schema.OpUpdate, "update"}, {schema.OpDelete, "delete"}} {
+		if schema.Reads.Has(w.op) {
+			t.Errorf("schema.Reads exposes %s: %v", w.name, schema.Reads)
+		}
+	}
+}

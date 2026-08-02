@@ -17,6 +17,14 @@ const (
 // for a fully exposed collection.
 const CRUD = OpCreate | OpRead | OpUpdate | OpDelete
 
+// Reads is the read-only exposure: generated reads, hand-written writes.
+//
+// The peer of CRUD, and the shape an application adopting sqlb into an
+// existing REST surface reaches for — it already has its writes, and the
+// reasons they stay hand-written are domain reasons that do not expire. See
+// [rest.Reads] for the worked version of why (issue #101).
+const Reads = OpRead | OpList
+
 // Has reports whether the mask contains op.
 func (o Op) Has(op Op) bool { return o&op != 0 }
 

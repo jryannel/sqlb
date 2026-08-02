@@ -1043,3 +1043,30 @@ func TestNotGroupReachesTheStatement(t *testing.T) {
 		}
 	}
 }
+
+// Reads is the read-only mount, and it exposes no write.
+//
+// rest.Op mirrors schema.Op by hand — rest may not import schema, which is what
+// keeps the runtime usable without the DSL — so the two Reads constants are two
+// declarations of one fact. The bit values are asserted literally here rather
+// than against schema's copy, because importing schema to compare them is the
+// edge this package exists not to have.
+func TestReadsExposesNoWrite(t *testing.T) {
+	if rest.Reads != rest.OpRead|rest.OpList {
+		t.Fatalf("rest.Reads = %v, want read|list", rest.Reads)
+	}
+	for _, w := range []struct {
+		op   rest.Op
+		name string
+	}{{rest.OpCreate, "create"}, {rest.OpUpdate, "update"}, {rest.OpDelete, "delete"}} {
+		if rest.Reads.Has(w.op) {
+			t.Errorf("rest.Reads exposes %s: %v", w.name, rest.Reads)
+		}
+	}
+	// The mirror: schema.Reads is OpRead|OpList over the same bit layout, so
+	// both are 2|16 = 18. A change to either bitmask that did not change the
+	// other lands here.
+	if uint8(rest.Reads) != 2|16 {
+		t.Fatalf("rest.Reads = %d; schema.Op's layout puts read|list at %d", uint8(rest.Reads), 2|16)
+	}
+}

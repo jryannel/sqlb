@@ -29,9 +29,9 @@ const (
 	// the same reason TypeSmallInt is distinct from TypeInt: importing it as
 	// the wider one would make every later diff propose widening a column the
 	// database is content with (issues #114, #120).
-	TypeReal    Type = "real"
-	TypeFloat   Type = "float"
-	TypeNumeric Type = "numeric"
+	TypeReal      Type = "real"
+	TypeFloat     Type = "float"
+	TypeNumeric   Type = "numeric"
 	TypeBool      Type = "bool"
 	TypeUUID      Type = "uuid"
 	TypeTimestamp Type = "timestamptz"
