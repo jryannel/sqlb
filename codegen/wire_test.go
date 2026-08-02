@@ -1,6 +1,7 @@
 package codegen_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,4 +142,107 @@ func firstLines(s string, n int) string {
 		lines = lines[:n]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Two modules emitted into one directory share the runtime, which is the whole
+// of issue #110.
+//
+// The TypeScript half is a size question — structural typing means duplicate
+// Page interoperate — but the Dart half is a correctness one: nominal typing
+// makes two Page<T> unrelated classes, so before this an application could not
+// pass a page from either module to one widget, nor give both clients one
+// Transport.
+func TestTwoModulesShareOneRuntime(t *testing.T) {
+	family := schema.NewModule("family")
+	family.Table("children", schema.UUIDv7("id").PrimaryKey(), schema.Text("name")).
+		Expose(schema.REST{Path: "/children", Ops: schema.Reads})
+
+	tutor := schema.NewModule("tutor")
+	tutor.Table("sessions", schema.UUIDv7("id").PrimaryKey(), schema.Text("topic")).
+		Expose(schema.REST{Path: "/sessions", Ops: schema.Reads})
+
+	dir := t.TempDir()
+	emit := func(r *schema.Registry, tsFile, dartFile string) map[string][]byte {
+		t.Helper()
+		files, err := codegen.Generate(codegen.Options{
+			Registry: r, Dir: dir, Package: "gen",
+			TSDir: "web", DartDir: "mobile",
+			TSClientFile: tsFile, TSQueriesFile: "-", DartFile: dartFile,
+		})
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		out := map[string][]byte{}
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[filepath.Base(f)] = b
+		}
+		return out
+	}
+
+	a := emit(family, "family.gen.ts", "family.gen.dart")
+	b := emit(tutor, "tutor.gen.ts", "tutor.gen.dart")
+
+	// The runtime is byte-identical, which is what lets the second module write
+	// the same path without the first noticing — and what keeps `check`
+	// meaningful for both.
+	for _, name := range []string{"runtime.gen.ts", "runtime.gen.dart"} {
+		if !bytes.Equal(a[name], b[name]) {
+			t.Errorf("%s differs between two modules, so they cannot share it", name)
+		}
+		if len(a[name]) == 0 {
+			t.Fatalf("%s was not emitted", name)
+		}
+	}
+
+	// And neither module declares the shared types itself any more. A second
+	// declaration is exactly what produced the Dart ambiguous_import.
+	for name, src := range map[string][]byte{
+		"family.gen.dart": a["family.gen.dart"],
+		"tutor.gen.dart":  b["tutor.gen.dart"],
+	} {
+		if bytes.Contains(src, []byte("\nclass Page<T> extends Collection<T> {")) {
+			t.Errorf("%s declares its own Page, so two modules would have two", name)
+		}
+		if !bytes.Contains(src, []byte("export 'runtime.gen.dart';")) {
+			t.Errorf("%s does not export the runtime, so importing it offers no Page", name)
+		}
+	}
+	for name, src := range map[string][]byte{
+		"family.gen.ts": a["family.gen.ts"],
+		"tutor.gen.ts":  b["tutor.gen.ts"],
+	} {
+		if bytes.Contains(src, []byte("export interface Page<T>")) {
+			t.Errorf("%s declares its own Page", name)
+		}
+		if !bytes.Contains(src, []byte("export * from './runtime.gen.ts';")) {
+			t.Errorf("%s does not re-export the runtime", name)
+		}
+	}
+}
+
+// Row and the filter conditions stay with each client, and that is deliberate:
+// Dart privacy is per library and both keep a private contract with the
+// generated code, so sharing them would need that protocol made public.
+func TestDartKeepsRowAndConditionsPerClient(t *testing.T) {
+	files := generateAll(t, wireFixture(schema.Verbatim))
+	client, runtime := files["client.gen.dart"], files["runtime.gen.dart"]
+
+	for _, name := range []string{"abstract class Row {", "class Cond<T extends Object> {"} {
+		if !strings.Contains(client, name) {
+			t.Errorf("the client should still declare %q", name)
+		}
+		if strings.Contains(runtime, name) {
+			t.Errorf("the shared runtime declares %q, whose contract with the client is private", name)
+		}
+	}
+	// The shared half is what an application names across modules.
+	for _, name := range []string{"class Page<T>", "typedef Transport", "class Problem {"} {
+		if !strings.Contains(runtime, name) {
+			t.Errorf("the shared runtime should declare %q", name)
+		}
+	}
 }

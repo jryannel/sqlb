@@ -19,58 +19,8 @@
 // ADR-0031.
 
 // ignore_for_file: unused_element
-
-// -------------------------------------------------------------------- runtime
-
-/// A value with a spelling on the wire.
-///
-/// Every generated enum implements it, so the encoder can write a filter
-/// carrying a typed value without knowing which enum it is.
-abstract interface class WireValue {
-  /// The value as the server spells it.
-  String get wire;
-}
-
-/// Thrown when a row is asked for a column the response did not carry.
-///
-/// Dart cannot narrow a type by a runtime projection, so this is where a
-/// [select] that dropped a column is reported: at the read, naming the column
-/// and the fix, rather than as a null that travels somewhere else first.
-class MissingColumn implements Exception {
-  /// Names the row type and the column that was absent.
-  const MissingColumn(this.type, this.column);
-
-  /// The row view that was read, e.g. Task.
-  final String type;
-
-  /// The column, in its wire spelling.
-  final String column;
-
-  @override
-  String toString() =>
-      'MissingColumn: $type.$column was not in the response. Add it to '
-      'select, or drop select to get every column.';
-}
-
-/// Thrown when a column carries a value its generated enum does not have.
-///
-/// The value set grew on the server and this client predates it, so the fix is
-/// to regenerate rather than to handle the value.
-class UnknownEnumValue implements Exception {
-  /// Names the enum and the value that was not in it.
-  const UnknownEnumValue(this.type, this.value);
-
-  /// The generated enum, e.g. TaskStatus.
-  final String type;
-
-  /// The value the server sent.
-  final String value;
-
-  @override
-  String toString() =>
-      'UnknownEnumValue: $type has no value $value. The schema this client '
-      'was generated from is older than the server; regenerate it.';
-}
+import 'runtime.gen.dart';
+export 'runtime.gen.dart';
 
 /// The shared behaviour of every generated row: the decoded response object it
 /// wraps, and equality over it.
@@ -215,229 +165,6 @@ abstract class Row {
 
   @override
   String toString() => '$runtimeType($_json)';
-}
-
-/// A capped set of expanded child rows.
-///
-/// [hasMore] reports truncation, which a bare list could not, so a caller
-/// showing twenty of two hundred can tell.
-class Collection<T> {
-  /// Wraps rows that are already decoded.
-  const Collection({required this.items, required this.hasMore});
-
-  /// Decodes an envelope, mapping each element with [item].
-  factory Collection.fromJson(
-    Map<String, dynamic> json,
-    T Function(Map<String, dynamic>) item,
-  ) {
-    return Collection<T>(
-      items: _rows(json, item),
-      hasMore: json['has_more'] as bool? ?? false,
-    );
-  }
-
-  /// The rows, in the order the server returned them.
-  final List<T> items;
-
-  /// Whether the server had more rows than it returned.
-  final bool hasMore;
-}
-
-/// The body of every list response: a collection, plus where in the walk it is.
-class Page<T> extends Collection<T> {
-  /// Wraps rows that are already decoded.
-  const Page({
-    required super.items,
-    required super.hasMore,
-    required this.page,
-    required this.perPage,
-    this.nextCursor,
-    this.total,
-  });
-
-  /// Decodes a list response, mapping each element with [item].
-  factory Page.fromJson(
-    Map<String, dynamic> json,
-    T Function(Map<String, dynamic>) item,
-  ) {
-    return Page<T>(
-      items: _rows(json, item),
-      hasMore: json['has_more'] as bool? ?? false,
-      page: (json['page'] as num?)?.toInt() ?? 1,
-      perPage: (json['per_page'] as num?)?.toInt() ?? 0,
-      nextCursor: json['next_cursor'] as String?,
-      total: (json['total'] as num?)?.toInt(),
-    );
-  }
-
-  /// The one-based page number this response is.
-  final int page;
-
-  /// The page size the server used, which may be smaller than the one asked
-  /// for.
-  final int perPage;
-
-  /// Where to resume, present whenever a next page exists. Prefer it to
-  /// [page]: it costs the same at any depth and cannot skip or repeat a row
-  /// when the table is written to mid-walk.
-  final String? nextCursor;
-
-  /// Total matching rows, present only when countExact was asked for.
-  final int? total;
-}
-
-/// One rejected parameter or field.
-class ProblemDetail {
-  /// Builds a detail. Decoded from a response rather than constructed, mostly.
-  const ProblemDetail({
-    required this.message,
-    this.location,
-    this.value,
-    this.allowed = const [],
-  });
-
-  /// Decodes one entry of a problem document's errors array.
-  factory ProblemDetail.fromJson(Map<String, dynamic> json) => ProblemDetail(
-    message: json['message'] as String? ?? '',
-    location: json['location'] as String?,
-    value: json['value'],
-    allowed: ((json['allowed'] as List<dynamic>?) ?? const [])
-        .map((value) => '$value')
-        .toList(growable: false),
-  );
-
-  /// What was wrong.
-  final String message;
-
-  /// Where the problem is, e.g. query.sort.
-  final String? location;
-
-  /// The value that was rejected.
-  final Object? value;
-
-  /// What would have been accepted instead, where the set is finite. This is
-  /// the half of an error that turns a dead end into a fix, and it is why this
-  /// type exists at all rather than a message string.
-  final List<String> allowed;
-}
-
-/// The RFC 9457 problem document every rejection returns.
-class Problem {
-  /// Builds a problem document.
-  const Problem({
-    this.type,
-    this.title,
-    this.status,
-    this.detail,
-    this.errors = const [],
-  });
-
-  /// Decodes a problem document.
-  factory Problem.fromJson(Map<String, dynamic> json) => Problem(
-    type: json['type'] as String?,
-    title: json['title'] as String?,
-    status: (json['status'] as num?)?.toInt(),
-    detail: json['detail'] as String?,
-    errors: ((json['errors'] as List<dynamic>?) ?? const [])
-        .map((value) => ProblemDetail.fromJson(value as Map<String, dynamic>))
-        .toList(growable: false),
-  );
-
-  /// Narrows a decoded error body to a problem document, or null if it is not
-  /// one. A transport uses this to decide whether the body it got is worth
-  /// decoding.
-  static Problem? tryParse(Object? body) {
-    if (body is! Map<String, dynamic>) return null;
-    if (body['status'] is num || body['errors'] is List) {
-      return Problem.fromJson(body);
-    }
-    return null;
-  }
-
-  /// A URI naming the problem kind.
-  final String? type;
-
-  /// A short summary.
-  final String? title;
-
-  /// The HTTP status.
-  final int? status;
-
-  /// A longer explanation.
-  final String? detail;
-
-  /// One entry per rejected parameter or field.
-  final List<ProblemDetail> errors;
-
-  /// The values a rejection named for one parameter, e.g.
-  /// allowedFor('query.sort'). Empty when the rejection named none.
-  List<String> allowedFor(String location) {
-    for (final error in errors) {
-      if (error.location == location) return error.allowed;
-    }
-    return const [];
-  }
-}
-
-/// One request, as the generated functions describe it.
-class ApiRequest {
-  /// Describes a request. Built by the generated functions, not by hand.
-  const ApiRequest({
-    required this.method,
-    required this.path,
-    this.query,
-    this.body,
-    this.cancel,
-  });
-
-  /// GET, POST, PATCH or DELETE.
-  final String method;
-
-  /// Path from the API root, already encoded, e.g. /tasks/1.
-  final String path;
-
-  /// Encoded query string without the leading question mark.
-  final String? query;
-
-  /// The JSON body, already reduced to maps and lists.
-  final Object? body;
-
-  /// Whatever the transport's HTTP client cancels with, passed through
-  /// untouched. Dio takes a CancelToken here; a client that has no such notion
-  /// ignores it. It is [Object] rather than a package type so that this file
-  /// keeps its promise to import nothing.
-  final Object? cancel;
-}
-
-/// The application's request function.
-///
-/// Everything not derivable from the schema lives behind this: the base URL,
-/// the auth header, refresh, retry, offline behaviour and what a 401 does. It
-/// returns the decoded JSON body, or null for a 204.
-///
-/// A minimal one over Dio:
-///
-///     final Transport transport = (request) async {
-///       final response = await dio.request<Object?>(
-///         request.query == null || request.query!.isEmpty
-///             ? request.path
-///             : '${request.path}?${request.query}',
-///         options: Options(method: request.method),
-///         data: request.body,
-///         cancelToken: request.cancel as CancelToken?,
-///       );
-///       return response.data;
-///     };
-typedef Transport = Future<Object?> Function(ApiRequest request);
-
-/// One term of an ordering: a sortable column, ascending or descending.
-class SortTerm implements WireValue {
-  /// Wraps a term the server will accept. Reach for a generated Sort enum's
-  /// asc or desc rather than building one of these by hand.
-  const SortTerm(this.wire);
-
-  @override
-  final String wire;
 }
 
 /// Operators every column type accepts.
@@ -885,84 +612,6 @@ class NullableTextCond {
   }
 }
 
-/// Walks a list endpoint by cursor: the shape an infinite-scrolling list needs,
-/// and the arithmetic keyset pagination exists to replace.
-///
-/// It holds rows and a position, and nothing about how they are displayed, so
-/// it drops into a Riverpod notifier, a BLoC or a StatefulWidget without
-/// preferring any of them.
-class CursorPager<T> {
-  /// Wraps a fetch that takes the cursor to resume from, or null for the first
-  /// page. The generated per-resource pagers supply one.
-  CursorPager(this._fetch);
-
-  final Future<Page<T>> Function(String? cursor) _fetch;
-
-  /// The rows loaded so far, in order. Owned by the pager: read it, do not
-  /// mutate it.
-  final List<T> items = [];
-
-  String? _cursor;
-  bool _exhausted = false;
-  int? _total;
-  Future<void>? _inFlight;
-
-  /// Whether another page exists. False before the first load only because
-  /// nothing has been fetched yet.
-  bool get hasMore => !_exhausted;
-
-  /// Whether a fetch is in flight.
-  bool get isLoading => _inFlight != null;
-
-  /// Total matching rows, if a load asked for the count.
-  int? get total => _total;
-
-  /// Fetches the next page and appends it.
-  ///
-  /// Concurrent calls collapse onto the one already running, which is what a
-  /// scroll listener needs: it fires on every frame near the end of the list
-  /// and only the first call should reach the network.
-  Future<void> loadMore() {
-    final pending = _inFlight;
-    if (pending != null) return pending;
-    if (_exhausted) return Future<void>.value();
-    final started = _load().whenComplete(() => _inFlight = null);
-    _inFlight = started;
-    return started;
-  }
-
-  Future<void> _load() async {
-    final page = await _fetch(_cursor);
-    items.addAll(page.items);
-    _total = page.total ?? _total;
-    _cursor = page.nextCursor;
-    if (_cursor == null) _exhausted = true;
-  }
-
-  /// Discards everything loaded and starts the walk over, which is what a
-  /// pull-to-refresh does.
-  ///
-  /// A fetch already in flight is not cancelled and its rows are still
-  /// appended. Cancel it through the transport if that matters.
-  void reset() {
-    items.clear();
-    _cursor = null;
-    _exhausted = false;
-    _total = null;
-  }
-}
-
-// --------------------------------------------------------------------- decoding
-
-List<T> _rows<T>(
-  Map<String, dynamic> json,
-  T Function(Map<String, dynamic>) item,
-) {
-  return ((json['items'] as List<dynamic>?) ?? const [])
-      .map((value) => item(value as Map<String, dynamic>))
-      .toList(growable: false);
-}
-
 bool _jsonEquals(Object? a, Object? b) {
   if (identical(a, b)) return true;
   if (a is Map && b is Map) {
@@ -1008,22 +657,6 @@ Object? _wire(Object? value) {
   return value;
 }
 
-/// One value in the filter grammar: an enum by its wire spelling, a timestamp
-/// as RFC 3339 UTC, everything else as it prints.
-String _scalar(Object? value) {
-  if (value is WireValue) return value.wire;
-  if (value is DateTime) return value.toUtc().toIso8601String();
-  return '$value';
-}
-
-/// A member of a comma-separated list is quoted when it carries a comma or a
-/// quote, which is how the server's parser reads it back whole.
-String _member(Object? value) {
-  final text = _scalar(value);
-  if (!text.contains(',') && !text.contains('"')) return text;
-  return '"${text.replaceAll('"', '\\"')}"';
-}
-
 void _comparison(
   _Query out,
   String column, {
@@ -1054,14 +687,6 @@ void _comparison(
 /// pulled out of the JSON list, which is what makes them shareable between the
 /// nullable and non-nullable readers.
 String _asStr(Object v) => v as String;
-
-int _asInt(Object v) => (v as num).toInt();
-
-double _asDouble(Object v) => (v as num).toDouble();
-
-bool _asBool(Object v) => v as bool;
-
-DateTime _asTime(Object v) => DateTime.parse(v as String);
 
 /// Decodes one element of an enum array, naming the type in the error so a
 /// value the schema has since grown is reported as what it is.
@@ -1184,6 +809,22 @@ Page<T> _page<T>(Object? json, T Function(Map<String, dynamic>) make) =>
 
 T _row<T>(Object? json, T Function(Map<String, dynamic>) make) =>
     make(json! as Map<String, dynamic>);
+
+/// One value in the filter grammar: an enum by its wire spelling, a timestamp
+/// as RFC 3339 UTC, everything else as it prints.
+String _scalar(Object? value) {
+  if (value is WireValue) return value.wire;
+  if (value is DateTime) return value.toUtc().toIso8601String();
+  return '$value';
+}
+
+/// A member of a comma-separated list is quoted when it carries a comma or a
+/// quote, which is how the server's parser reads it back whole.
+String _member(Object? value) {
+  final text = _scalar(value);
+  if (!text.contains(',') && !text.contains('"')) return text;
+  return '"${text.replaceAll('"', '\\"')}"';
+}
 
 // ------------------------------------------------------------------- comments
 

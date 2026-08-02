@@ -150,6 +150,12 @@ type Options struct {
 	DartDir  string
 	DartFile string
 
+	// DartRuntimeFile names the shared Dart library, defaulting to
+	// runtime.gen.dart. It holds the response envelopes, the problem document
+	// and the transport signature — the types an application names when it
+	// writes one pager or wires one transport across two modules (#110).
+	DartRuntimeFile string
+
 	// Types replaces the Go type emitted for the columns each override
 	// matches — the sqlc `overrides:` equivalent, and the reason a codebase
 	// whose ids are uuid.UUID rather than string can generate its models
@@ -197,6 +203,10 @@ func (o Options) tsRuntimeImport() string {
 }
 
 func (o Options) dartFile() string { return orDefault(o.DartFile, "client.gen.dart") }
+
+func (o Options) dartRuntimeFile() string {
+	return orDefault(o.DartRuntimeFile, "runtime.gen.dart")
+}
 
 func (o Options) cliFile() string    { return orDefault(o.CLIFile, "cli_gen.go") }
 func (o Options) clientFile() string { return orDefault(o.ClientFile, "client_gen.go") }
@@ -490,6 +500,9 @@ func render(opts Options) (map[string][]byte, error) {
 		}
 	}
 	if opts.DartDir != "" {
+		if name := opts.dartRuntimeFile(); name != "-" {
+			files[filepath.Join(opts.DartDir, name)] = renderDartRuntime()
+		}
 		if name := opts.dartFile(); name != "-" {
 			src, err := renderDartClient(opts)
 			if err != nil {

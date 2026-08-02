@@ -155,3 +155,248 @@ func tsRuntimeImports(body, from string) string {
 	b.WriteString("export * from '" + from + "';\n")
 	return b.String()
 }
+
+// dartDeclPattern matches a top-level Dart declaration's name, through the
+// modifier soup Dart 3 allows before `class`.
+var dartDeclPattern = regexp.MustCompile(
+	`^(?:(?:abstract|base|interface|final|sealed|mixin) )*(?:class|enum|mixin|extension|typedef) ([A-Za-z_][A-Za-z0-9_]*)`)
+
+var dartIdentTail = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*$`)
+
+// dartSharedNames is what goes in the shared library, and it is a short list on
+// purpose.
+//
+// These are the types an application names when it writes one pager widget,
+// wires one transport, or catches one error across two modules — which is
+// exactly what #110 reports it cannot do. Sharing them makes those one
+// declaration instead of one per module.
+//
+// Row and the Cond family are deliberately absent, and not for want of trying.
+// Dart privacy is per *library*, and both keep their contract with the
+// generated client private: Row declares the _str/_int/_one/_many protocol
+// every row view inherits, and the client emits `cond?._encode(out, 'id')` over
+// a private _Query. Sharing either would need that protocol made public and
+// documented — a change to what every generated client exposes, and a decision
+// rather than a refactor.
+//
+// Leaving them per client costs duplication of code nothing can observe,
+// because all of it is private. What it does not cost is the thing the issue is
+// about: two modules now agree about Page, Transport and Problem.
+var dartSharedNames = map[string]bool{
+	"Collection": true, "Page": true,
+	"Problem": true, "ProblemDetail": true,
+	"ApiRequest": true, "Transport": true,
+	"CursorPager": true, "SortTerm": true, "WireValue": true,
+	"MissingColumn": true, "UnknownEnumValue": true,
+}
+
+// splitDartRuntime partitions the Dart runtime into the shared library and the
+// half that stays with each client.
+//
+// clientBody is the schema's own generated types, and it is an input because
+// the per-client half's contents depend on it: the resource sections call
+// _get, _page, _row and _itemPath, and a reachability walk that only looked at
+// the runtime would leave every one of them behind. The shared half does not
+// depend on it, so renderDartRuntime passes nothing.
+func splitDartRuntime(clientBody string) (shared, perClient string) {
+	decls := dartDeclarations(dartRuntime)
+
+	var pub, priv []dartDecl
+	for _, d := range decls {
+		switch {
+		case d.name != "" && strings.HasPrefix(d.name, "_"):
+			// Placed below, by which half reaches it.
+		case dartSharedNames[d.name]:
+			pub = append(pub, d)
+		default:
+			// Including the unnamed runs — leading comments and section
+			// banners — which belong to the file they were written for.
+			priv = append(priv, d)
+		}
+	}
+
+	// A private helper goes wherever it is referenced, and into both halves if
+	// both reference it. Duplicating one is free: a private name is scoped to
+	// its library, so two copies cannot collide, and each is used where it
+	// lands — which matters, because Dart is analysed with --fatal-infos and an
+	// unreferenced private is an error.
+	//
+	// To a fixpoint, since a private helper may call another.
+	return renderDecls(withPrivates(decls, pub, "")),
+		renderDecls(withPrivates(decls, priv, clientBody))
+}
+
+// withPrivates adds every private declaration this half reaches, repeating
+// until nothing new is pulled in. seed is source that will sit beside the half
+// but is not part of it — the generated client body, whose calls count.
+func withPrivates(all, half []dartDecl, seed string) []dartDecl {
+	taken := map[string]bool{}
+	for {
+		body := seed + renderDecls(half)
+		var added bool
+		for _, d := range all {
+			if d.name == "" || !strings.HasPrefix(d.name, "_") || taken[d.name] {
+				continue
+			}
+			if !usesSymbol(body, d.name) {
+				continue
+			}
+			taken[d.name] = true
+			half = append(half, d)
+			added = true
+		}
+		if !added {
+			return half
+		}
+	}
+}
+
+func renderDecls(decls []dartDecl) string {
+	var b strings.Builder
+	for _, d := range decls {
+		b.WriteString(d.src)
+	}
+	return b.String()
+}
+
+type dartDecl struct {
+	src  string
+	name string
+}
+
+// dartDeclarations cuts the runtime into top-level declarations, each carrying
+// the doc comment and blank lines that precede it.
+//
+// Column zero is the boundary, with one correction that cost an afternoon: a
+// line beginning at column zero is only a *new* declaration if it begins with a
+// letter, an underscore or an annotation. A multi-line signature closes on a
+// `)` in column zero —
+//
+//	List<T> _rows<T>(
+//	  Map<String, dynamic> json,
+//	) {
+//
+// — and reading that as a new declaration cuts the function in half, which the
+// analyser then reports as a syntax error three declarations later.
+func dartDeclarations(src string) []dartDecl {
+	var out []dartDecl
+	var pending, current strings.Builder
+	depth, open := 0, false
+
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		out = append(out, dartDecl{
+			src:  pending.String() + current.String(),
+			name: dartDeclName(current.String()),
+		})
+		pending.Reset()
+		current.Reset()
+	}
+
+	for _, line := range strings.SplitAfter(src, "\n") {
+		trimmed := strings.TrimRight(line, "\n")
+		starts := startsDeclaration(trimmed)
+
+		if current.Len() == 0 && !starts {
+			pending.WriteString(line)
+			continue
+		}
+		if starts && !open && current.Len() > 0 {
+			flush()
+		}
+
+		current.WriteString(line)
+		depth += strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+		switch {
+		case depth > 0:
+			open = true
+		case open && depth == 0:
+			open = false
+			flush()
+		case !open && strings.HasSuffix(trimmed, ";"):
+			flush()
+		}
+	}
+	flush()
+	if pending.Len() > 0 {
+		out = append(out, dartDecl{src: pending.String()})
+	}
+	return out
+}
+
+// startsDeclaration reports whether a line begins a new top-level declaration:
+// column zero, and an identifier or an annotation rather than punctuation
+// closing the previous one.
+func startsDeclaration(line string) bool {
+	if line == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+		return false
+	}
+	if strings.HasPrefix(line, "//") {
+		return false
+	}
+	c := line[0]
+	return c == '@' || c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// dartDeclName reads the declared name out of a declaration's first line.
+//
+// Two shapes. A keyword declaration names itself after the keyword. Everything
+// else is a function or a variable, whose name is the identifier immediately
+// before the parameter list or the assignment — so this cannot take the first
+// identifier, which would answer "List" for `List<T> _rows<T>(…)`.
+func dartDeclName(src string) string {
+	line := src
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	if m := dartDeclPattern.FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	cut := len(line)
+	for _, c := range []byte{'(', '='} {
+		if i := strings.IndexByte(line, c); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	// A trailing type-parameter list is stripped. Only the trailing one:
+	// cutting at the first `<` would answer the return type.
+	head := strings.TrimRight(line[:cut], " ")
+	if strings.HasSuffix(head, ">") {
+		depth := 0
+		for i := len(head) - 1; i >= 0; i-- {
+			if head[i] == '>' {
+				depth++
+			} else if head[i] == '<' {
+				depth--
+				if depth == 0 {
+					head = head[:i]
+					break
+				}
+			}
+		}
+	}
+	if m := dartIdentTail.FindStringSubmatch(head); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// dartRuntimeImports renders the directives a client needs.
+//
+// Two, and they do different jobs: `export` re-exports the shared library to
+// whoever imports the client — which is what keeps `import 'client.gen.dart'`
+// offering Page and Transport, and what makes two clients offer the *same*
+// ones — while `import` is what brings them into this library's own scope.
+func dartRuntimeImports(body, from string) string {
+	var b strings.Builder
+	for name := range dartSharedNames {
+		if usesSymbol(body, name) {
+			b.WriteString("import '" + from + "';\n")
+			break
+		}
+	}
+	b.WriteString("export '" + from + "';\n")
+	return b.String()
+}
