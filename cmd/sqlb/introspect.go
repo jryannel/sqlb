@@ -49,7 +49,8 @@ func introspectCmd(args []string, stdout, stderr io.Writer) error {
 		return exitCode(2)
 	}
 	if strings.TrimSpace(*dsn) == "" {
-		return fmt.Errorf("introspect needs a database: sqlb introspect -dsn postgres://...")
+		return fmt.Errorf("introspect needs a database, for example: " +
+			"sqlb introspect -dsn postgres://user@localhost/app")
 	}
 	if fs.NArg() > 0 {
 		// The other verbs take a package as their last argument, so this is the
