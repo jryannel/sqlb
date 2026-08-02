@@ -250,6 +250,40 @@ knows to *ask* for the first: a resource over a soft-deleting model does not
 mount until a hook confines it. [`example/blog`](../start/first-app.md) is that
 pair written out.
 
+## The wire spelling
+
+Every column has one spelling on the wire — the JSON body, the filter grammar's
+parameter names, `?sort`, the OpenAPI document and both generated clients. By
+default it is the column's own name, so `created_at` is `created_at` everywhere.
+
+A schema whose front end is camelCase says so once:
+
+```go
+var Module = schema.NewModule("app").WireCase(schema.Camel)
+
+// or, for a schema using the package-level Table():
+func init() { schema.SetWireCase(schema.Camel) }
+```
+
+`created_at` is then `createdAt` in the body, in `?createdAt=gte.…`, in
+`?sort=-createdAt`, in the OpenAPI document and in both clients — and still
+`created_at` in the database, in every hand-written query and in `pg_dump`.
+
+There is deliberately **no per-column override**. One setting, applied by one
+pure function, is what keeps the five surfaces from disagreeing; a per-column
+mapping is the part with a reason to drift ([ADR-0036](../adr/0036-the-wire-is-the-column-name.md)).
+
+**A case that cannot round-trip is refused at build time.** `snake → camel` is
+not invertible over every name: `pos_x_2` becomes `posX2`, which reads back as
+`pos_x2`. `Validate` computes both directions for every column and fails the
+schema naming the column and both spellings, so an ambiguity is a build error on
+a schema nobody has deployed rather than a wrong parameter name in a shipped
+client. Rename the column, or leave the schema `Verbatim`.
+
+A CLI flag keeps its kebab-cased spelling either way — `--created-at` under
+both — because a flag is a local affordance rather than a wire format. What
+moves is the query parameter it sends.
+
 ## Indexes and constraints
 
 ```go

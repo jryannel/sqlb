@@ -79,7 +79,7 @@ func cliActionCommand1(b *bytes.Buffer, r cliResource, a schema.Action) {
 	if len(fields) > 0 {
 		fmt.Fprintln(b, "\t\t\tbody := map[string]any{}")
 		for _, f := range fields {
-			cliBodyAssignment(b, f.Desc())
+			cliBodyAssignment(b, f.Desc(), r.wire)
 		}
 		body = ", Body: body"
 	}

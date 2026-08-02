@@ -140,7 +140,16 @@ type tsResource struct {
 	searchable bool
 	relations  []tsRelation
 	pk         string
+
+	// wire is the schema's wire case, carried on the resource so that every
+	// name this file emits goes through one function rather than each site
+	// remembering to. A client is generated *against* the wire, so the column's
+	// own name appears nowhere in it except in a doc comment.
+	wire schema.WireCase
 }
+
+// n spells one of this resource's column names the way the wire does.
+func (r *tsResource) n(name string) string { return r.wire.WireName(name) }
 
 // tsRelation is one entry of a resource's ?expand vocabulary, in the direction
 // it is served.
@@ -167,6 +176,7 @@ func tsResources(reg *schema.Registry) ([]tsResource, error) {
 			plural:   GoName(t.LocalName()),
 			path:     rest.Path,
 			ops:      rest.Ops,
+			wire:     reg.Wire(),
 		}
 		for _, f := range t.Fields() {
 			d := f.Desc()
@@ -174,14 +184,14 @@ func tsResources(reg *schema.Registry) ([]tsResource, error) {
 				continue
 			}
 			if d.PrimaryKey {
-				r.pk = d.Name
+				r.pk = r.n(d.Name)
 			}
-			r.selectable = append(r.selectable, d.Name)
+			r.selectable = append(r.selectable, r.n(d.Name))
 			if d.Filterable {
 				r.filterable = append(r.filterable, d)
 			}
 			if d.Sortable {
-				r.sortable = append(r.sortable, d.Name)
+				r.sortable = append(r.sortable, r.n(d.Name))
 			}
 			if d.Searchable {
 				r.searchable = true
@@ -228,6 +238,7 @@ func tsRelationOf(reg *schema.Registry, t *schema.TableDef, name string) (tsRela
 // tsRowTypes emits the enums, the row interface and the request bodies for one
 // table.
 func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
+	wire := reg.Wire()
 	typeName := TypeName(t.LocalName())
 	fmt.Fprintf(b, "\n// %s\n", tsRule(t.Name()))
 
@@ -268,7 +279,7 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 			// error anywhere.
 			fmt.Fprintf(b, "  /** bigint. Values above 2^53 lose precision in JSON. */\n")
 		}
-		fmt.Fprintf(b, "  %s: %s;\n", tsProp(d.Name), tsType(typeName, d))
+		fmt.Fprintf(b, "  %s: %s;\n", tsProp(wire.WireName(d.Name)), tsType(typeName, d))
 		if rel, ok := rels[d.Name]; ok {
 			fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. */\n", rel.name)
 			fmt.Fprintf(b, "  %s?: %s;\n", tsProp(rel.name), tsRelationType(rel))
@@ -283,7 +294,7 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 	}
 	fmt.Fprintln(b, "}")
 
-	tsBodyTypes(b, t, typeName)
+	tsBodyTypes(b, t, typeName, wire)
 	tsActionBodies(b, t, typeName)
 }
 
@@ -308,7 +319,7 @@ func tsForwardRelations(t *schema.TableDef) map[string]tsRelation {
 
 // tsBodyTypes emits the create and patch bodies, over the same column sets the
 // Go bodies use, so the two cannot disagree about what a request may write.
-func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string) {
+func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string, wire schema.WireCase) {
 	rest := t.Rest()
 	if rest == nil {
 		return
@@ -323,7 +334,7 @@ func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string) {
 		for _, f := range fields {
 			d := f.Desc()
 			tsDoc(b, "  ", d.Comment)
-			fmt.Fprintf(b, "  %s%s: %s;\n", tsProp(d.Name), tsOptional(optionalOnCreate(d)), tsType(typeName, d))
+			fmt.Fprintf(b, "  %s%s: %s;\n", tsProp(wire.WireName(d.Name)), tsOptional(optionalOnCreate(d)), tsType(typeName, d))
 		}
 		fmt.Fprintln(b, "}")
 	}
@@ -342,7 +353,7 @@ func tsBodyTypes(b *bytes.Buffer, t *schema.TableDef, typeName string) {
 		for _, f := range fields {
 			d := f.Desc()
 			tsDoc(b, "  ", d.Comment)
-			fmt.Fprintf(b, "  %s?: %s;\n", tsProp(d.Name), tsType(typeName, d))
+			fmt.Fprintf(b, "  %s?: %s;\n", tsProp(wire.WireName(d.Name)), tsType(typeName, d))
 		}
 		fmt.Fprintln(b, "}")
 	}
@@ -385,7 +396,7 @@ func tsResourceSection(b *bytes.Buffer, r tsResource) {
 	// implicit index signature and an interface none.
 	fmt.Fprintf(b, "export type %sWhere = {\n", r.typeName)
 	for _, d := range r.filterable {
-		fmt.Fprintf(b, "  %s?: %s;\n", tsProp(d.Name), tsCondType(r.typeName, d))
+		fmt.Fprintf(b, "  %s?: %s;\n", tsProp(r.n(d.Name)), tsCondType(r.typeName, d))
 	}
 	fmt.Fprintln(b, "};")
 

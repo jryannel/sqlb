@@ -1,7 +1,8 @@
 # ADR-0036: The wire spells a column the way the schema does
 
-- **Status:** Amended 2026-08-02 — the decision holds; the *derivation* is now a
-  declared function of the column name rather than the identity function. See
+- **Status:** Working, amended 2026-08-02 — the decision holds; the *derivation*
+  is now a declared function of the column name rather than the identity
+  function, and is implemented. See
   [Amendment](#amendment-2026-08-02--the-spelling-is-a-declared-function-not-the-identity-function).
 - **Confidence:** High that a single spelling is right and that a per-field
   mapping is the thing to refuse. The Medium confidence in *snake_case as the one
@@ -263,12 +264,15 @@ it.
 
 ## Revisions
 
-- 2026-08-02 — **Amended.** The "port stalls on the rename" trigger fired
-  ([#116](https://github.com/jryannel/sqlb/issues/116)). The spelling becomes a
-  declared function of the column name, `Verbatim` by default; the per-field
-  override stays refused; "rename the columns instead" is withdrawn as advice
-  that would permanently damage a Postgres schema. Not yet implemented — this
-  records the decision, the required build-time round-trip guard, and the seam.
+- 2026-08-02 — **Amended, and implemented the same day.** The "port stalls on
+  the rename" trigger fired ([#116](https://github.com/jryannel/sqlb/issues/116)).
+  The spelling becomes a declared function of the column name, `Verbatim` by
+  default; the per-field override stays refused; "rename the columns instead" is
+  withdrawn as advice that would permanently damage a Postgres schema.
+  `schema.WireCase(Camel)` reaches all five surfaces, `Validate` refuses a column
+  the case cannot round-trip, and a resource whose body and wire spellings
+  disagree refuses to mount. A `Verbatim` schema regenerates byte-for-byte
+  identically, which `generate-check` holds it to.
 - 2026-07-29 — Written. The behaviour predates this record; what is new is that
   it is a policy with a stated cost and a stated escape, which is what
   [the road to 1.0](../release-1.0.md) put in the pre-freeze set. Prompted by

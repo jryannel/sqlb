@@ -17,6 +17,7 @@ import (
 type Registry struct {
 	mu     sync.RWMutex
 	module string
+	wire   WireCase
 	tables []*TableDef
 	byName map[string]*TableDef
 }
@@ -141,6 +142,10 @@ func (r *Registry) Validate() error {
 	// this catches is between two references declared in different tables.
 	// Keyed by target table and name; the value is where it was claimed from.
 	inverses := make(map[string]string)
+
+	// Before anything else: if the schema's wire case cannot spell one of its
+	// own columns reversibly, nothing generated from it is trustworthy.
+	r.validateWireNames(report)
 
 	for _, t := range r.Tables() {
 		if !isIdent(t.name) {

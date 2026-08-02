@@ -20,6 +20,16 @@ type Tabler interface {
 type ColumnInfo struct {
 	// Name is the SQL column name.
 	Name string
+	// Wire is how this column is spelled on the wire — in the JSON body, in a
+	// filter parameter, in ?sort and in the OpenAPI document.
+	//
+	// Equal to Name unless the schema declared a WireCase, in which case
+	// codegen writes the computed spelling into the `sqlb` tag as `wire=…`.
+	// The request path is *told* the spelling rather than computing one:
+	// nothing here may import the schema package (that is what keeps the
+	// runtime usable without the DSL), and a second implementation of the
+	// transformation is exactly the disagreement ADR-0036 exists to prevent.
+	Wire string
 	// Field is the Go struct field name.
 	Field string
 	// Index is the reflect field index path, which may traverse embedded structs.
@@ -138,6 +148,9 @@ type Model struct {
 	Soft  *ColumnInfo
 
 	byName map[string]*ColumnInfo
+	// byWire indexes the same columns by their wire spelling, which is what a
+	// request names. Identical to byName unless the schema declared a WireCase.
+	byWire map[string]*ColumnInfo
 	// byDerived is Derived keyed by name, built once here so that compiling a
 	// statement is a map lookup per column reference rather than a scan.
 	byDerived map[string]*ColumnInfo
@@ -168,6 +181,14 @@ func (m *Model) InUse() bool { return m.inUse.Load() }
 
 // Column returns the named column, or nil.
 func (m *Model) Column(name string) *ColumnInfo { return m.byName[name] }
+
+// ColumnByWire returns the column a request named, or nil.
+//
+// The request path resolves through this rather than through Column: a caller
+// spells a column the way the wire does, and the two differ whenever the schema
+// declared a WireCase. Everything that builds SQL keeps using Column, because
+// what reaches Postgres is the database's own name.
+func (m *Model) ColumnByWire(wire string) *ColumnInfo { return m.byWire[wire] }
 
 // ColumnNames returns every mapped column name in declaration order.
 func (m *Model) ColumnNames() []string {
@@ -290,7 +311,7 @@ func buildModel(t reflect.Type) (*Model, error) {
 		return nil, fmt.Errorf("sqlb: model type %s is %s, want struct", t, t.Kind())
 	}
 
-	m := &Model{Type: t, Table: tableNameFor(t), byName: map[string]*ColumnInfo{}}
+	m := &Model{Type: t, Table: tableNameFor(t), byName: map[string]*ColumnInfo{}, byWire: map[string]*ColumnInfo{}}
 	if err := collectColumns(m, t, nil); err != nil {
 		return nil, err
 	}
@@ -472,6 +493,7 @@ func collectColumns(m *Model, t reflect.Type, prefix []int) error {
 
 		col := &ColumnInfo{
 			Name:     name,
+			Wire:     name,
 			Field:    sf.Name,
 			Index:    index,
 			Type:     sf.Type,
@@ -502,6 +524,11 @@ func collectColumns(m *Model, t reflect.Type, prefix []int) error {
 
 		m.Columns = append(m.Columns, col)
 		m.byName[name] = col
+		if prev, dup := m.byWire[col.Wire]; dup {
+			return fmt.Errorf("sqlb: model %s spells two columns %q on the wire (%s and %s)",
+				m.Type, col.Wire, prev.Field, sf.Name)
+		}
+		m.byWire[col.Wire] = col
 	}
 	return nil
 }
@@ -532,6 +559,15 @@ func applyCapabilities(c *ColumnInfo, tag string) {
 			}
 		case "type":
 			c.PGType = arg
+		case "wire":
+			// Written by codegen only when the schema's WireCase spells the
+			// column differently from the database. An empty argument is
+			// ignored rather than blanking the name, so a malformed tag
+			// degrades to today's behaviour instead of producing a column with
+			// no wire spelling at all.
+			if arg != "" {
+				c.Wire = arg
+			}
 		case "search":
 			c.Searchable = true
 			c.Filterable = true

@@ -151,7 +151,15 @@ type cliResource struct {
 	searchable []string
 	relations  []string
 	pk         string
+
+	// wire is the schema's wire case. A flag is a local affordance and keeps
+	// its kebab-cased spelling either way; what this changes is the query
+	// parameter and the request-body key, which are wire format.
+	wire schema.WireCase
 }
+
+// n spells one of this resource's column names the way the wire does.
+func (r *cliResource) n(name string) string { return r.wire.WireName(name) }
 
 func cliResources(reg *schema.Registry, bin string) ([]cliResource, error) {
 	var out []cliResource
@@ -168,6 +176,7 @@ func cliResources(reg *schema.Registry, bin string) ([]cliResource, error) {
 			path:      rest.Path,
 			ops:       rest.Ops,
 			relations: expandableRelations(reg, t),
+			wire:      reg.Wire(),
 		}
 		for _, f := range t.Fields() {
 			d := f.Desc()
@@ -179,17 +188,17 @@ func cliResources(reg *schema.Registry, bin string) ([]cliResource, error) {
 				continue
 			}
 			if d.PrimaryKey {
-				r.pk = d.Name
+				r.pk = r.n(d.Name)
 			}
-			r.selectable = append(r.selectable, d.Name)
+			r.selectable = append(r.selectable, r.n(d.Name))
 			if d.Filterable {
 				r.filterable = append(r.filterable, d)
 			}
 			if d.Sortable {
-				r.sortable = append(r.sortable, d.Name)
+				r.sortable = append(r.sortable, r.n(d.Name))
 			}
 			if d.Searchable {
-				r.searchable = append(r.searchable, d.Name)
+				r.searchable = append(r.searchable, r.n(d.Name))
 			}
 		}
 		out = append(out, r)
@@ -358,7 +367,7 @@ func cliListCommand(b *bytes.Buffer, r cliResource) {
 	for _, d := range r.filterable {
 		// Repeating a parameter conjoins its conditions, so a repeated flag
 		// becomes a repeated parameter rather than a joined value.
-		fmt.Fprintf(b, "\t\t\tfor _, v := range %s {\n\t\t\t\tq.Add(%q, v)\n\t\t\t}\n", cliFilterVar(d), d.Name)
+		fmt.Fprintf(b, "\t\t\tfor _, v := range %s {\n\t\t\t\tq.Add(%q, v)\n\t\t\t}\n", cliFilterVar(d), r.n(d.Name))
 	}
 	if len(r.searchable) > 0 {
 		fmt.Fprintln(b, "\t\t\tif search != \"\" {\n\t\t\t\tq.Set(\"search\", search)\n\t\t\t}")
@@ -628,7 +637,7 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 	}
 	fmt.Fprintln(b, "\t\t\tbody := map[string]any{}")
 	for _, f := range fields {
-		cliBodyAssignment(b, f.Desc())
+		cliBodyAssignment(b, f.Desc(), r.wire)
 	}
 	if kind == forUpdate && len(nullable) > 0 {
 		// A flag can say "title is now empty" but not "title is now null", and
@@ -813,7 +822,7 @@ func cliIDPlaceholder(r cliResource) string {
 // Presence is read from the flag rather than from the value, because a flag
 // left out and a flag set to the zero value must send different requests: the
 // first writes nothing, the second writes 0, "" or false.
-func cliBodyAssignment(b *bytes.Buffer, d *schema.FieldDesc) {
+func cliBodyAssignment(b *bytes.Buffer, d *schema.FieldDesc, wire schema.WireCase) {
 	name := cliFlagName(d.Name)
 	v := cliValueVar(d)
 	fmt.Fprintf(b, "\t\t\tif cmd.Flags().Changed(%q) {\n", name)
@@ -824,9 +833,9 @@ func cliBodyAssignment(b *bytes.Buffer, d *schema.FieldDesc) {
 		fmt.Fprintf(b, "\t\t\t\tif !json.Valid([]byte(%s)) {\n", v)
 		fmt.Fprintf(b, "\t\t\t\t\treturn fmt.Errorf(\"--%s: not valid JSON: %%s\", %s)\n", name, v)
 		fmt.Fprintf(b, "\t\t\t\t}\n")
-		fmt.Fprintf(b, "\t\t\t\tbody[%q] = json.RawMessage(%s)\n", d.Name, v)
+		fmt.Fprintf(b, "\t\t\t\tbody[%q] = json.RawMessage(%s)\n", wire.WireName(d.Name), v)
 	} else {
-		fmt.Fprintf(b, "\t\t\t\tbody[%q] = %s\n", d.Name, v)
+		fmt.Fprintf(b, "\t\t\t\tbody[%q] = %s\n", wire.WireName(d.Name), v)
 	}
 	fmt.Fprintln(b, "\t\t\t}")
 }
@@ -1029,7 +1038,32 @@ func cliValueVar(d *schema.FieldDesc) string { return "val" + GoName(d.Name) }
 // cliFlagName is the column name as a flag: kebab-case, which is the cobra
 // convention. The normalisation function on the root command accepts the
 // snake_case spelling too, so a name copied out of the manifest also works.
-func cliFlagName(column string) string { return strings.ReplaceAll(column, "_", "-") }
+// cliFlagName turns a column name into a flag word.
+//
+// It kebab-cases both spellings a schema can carry, so the flag is the same
+// whichever WireCase is in force: created_at and createdAt both give
+// --created-at. A flag is not a wire format — it is a local affordance that maps
+// onto one — and holding it stable means switching WireCase does not rewrite
+// every documented command line (ADR-0036's amendment).
+func cliFlagName(column string) string {
+	var b strings.Builder
+	b.Grow(len(column) + 4)
+	for i := 0; i < len(column); i++ {
+		c := column[i]
+		switch {
+		case c == '_':
+			b.WriteByte('-')
+		case c >= 'A' && c <= 'Z':
+			if b.Len() > 0 {
+				b.WriteByte('-')
+			}
+			b.WriteByte(c - 'A' + 'a')
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
 
 // cliName is a table's local name as a command word.
 func cliName(local string) string { return strings.ReplaceAll(local, "_", "-") }

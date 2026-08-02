@@ -32,7 +32,10 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 			continue
 		}
 		params = append(params, &huma.Param{
-			Name:        col.Name,
+			// The wire spelling. This document is the contract a client is
+			// generated from, so the parameter has to be the string the client
+			// will actually send.
+			Name:        col.Wire,
 			In:          "query",
 			Description: filterDescription(col),
 			// Repeating a parameter conjoins its conditions, so the parameter
@@ -68,7 +71,7 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 
 	selectable := make([]any, 0, len(b.selectable))
 	for _, col := range b.selectable {
-		selectable = append(selectable, col.Name)
+		selectable = append(selectable, col.Wire)
 	}
 	params = append(params, &huma.Param{
 		Name: "select",
@@ -313,7 +316,9 @@ func capable(m *sqlb.Model, want func(*sqlb.ColumnInfo) bool) []string {
 	var out []string
 	for _, col := range m.Columns {
 		if !col.Hidden && want(col) {
-			out = append(out, col.Name)
+			// Wire, because every caller of this builds an enum a client is
+			// typed against or a message a caller reads.
+			out = append(out, col.Wire)
 		}
 	}
 	return out

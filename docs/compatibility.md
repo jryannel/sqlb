@@ -51,11 +51,13 @@ or deployed clients, not just call sites.
   has no spelling at all. Renaming a column is therefore an API change as well
   as a schema change; `RenamedFrom` makes the database half mechanical and the
   client half is a regeneration plus a compile error per call site
-  ([ADR-0036](adr/0036-the-wire-is-the-column-name.md)). That record carries an
-  **accepted amendment that has not shipped**: the spelling becomes a declared
-  function of the column name, `Verbatim` by default, so a deployment may choose
-  camelCase once for all five surfaces. Until it ships, this entry describes what
-  the code does — verbatim, with no way to configure a second spelling.
+  ([ADR-0036](adr/0036-the-wire-is-the-column-name.md)). More precisely: there is
+  **one spelling per deployment**, computed from the column name by the schema's
+  declared `WireCase` — `Verbatim` unless the schema says otherwise, so this
+  reads as "the column's own name" for every schema that has not chosen. What is
+  frozen is that there is exactly one and that it is derived, not which
+  derivation a deployment picked; changing a deployment's `WireCase` is a
+  breaking change for that deployment, exactly as renaming a column is.
 - **The list envelope** — `{items, page, per_page, has_more, next_cursor?,
   total?}`, one shape for every resource. `next_cursor` is absent when there is
   no next page and `total` only when `?count=exact` asked for it. The key names
