@@ -241,6 +241,22 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 		}
 		t.Check(c.Name, c.Expr)
 	}
+	for _, u := range cons.uniques {
+		if col, dependent := coversSkippedColumn(u.Columns, skipped); dependent {
+			rep.add(name, u.Name, "unique constraint covers "+col+
+				", which was not imported, so the constraint cannot be declared either", u.Name)
+			continue
+		}
+		// Pin the name only when it is not the one the convention derives, for
+		// the reason the primary key above is treated the same way: a pinned
+		// name that matches the convention is noise in the declaration, and a
+		// declaration that omits a name Postgres did not choose is a rename.
+		if u.Name == name+"_"+strings.Join(u.Columns, "_")+"_key" {
+			t.Unique(u.Columns...)
+		} else {
+			t.UniqueNamed(u.Name, u.Columns...)
+		}
+	}
 	for _, idx := range p.indexes {
 		if idx.Expression || len(idx.Columns) == 0 {
 			rep.add(name, idx.Name, "index is over an expression rather than plain columns, "+
@@ -335,6 +351,7 @@ type constraints struct {
 	enums       map[string][]string      // by column, recovered from a CHECK
 	enumName    map[string]string        // by column, the CHECK's own name
 	tableChecks []schema.Check
+	uniques     []schema.Unique // composite, table-level
 }
 
 // classify sorts a table's constraints, reporting the ones the DSL has no way
@@ -363,11 +380,14 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 			c.pk = &r
 		case "u":
 			if len(row.Columns) != 1 {
-				// UniqueIndex would produce CREATE UNIQUE INDEX, which is a
-				// different object from a unique constraint and would diff as
-				// one, so this is reported rather than approximated.
-				rep.add(table, row.Name, "composite unique constraint; the DSL can declare a "+
-					"composite unique index, which is a different object and would diff as one", row.Def)
+				// A composite UNIQUE is a table-level constraint, not a column
+				// one. It used to be reported, because approximating it with a
+				// unique index would have diffed as a drop and a rebuild — the
+				// index being a different object (issue #108).
+				c.uniques = append(c.uniques, schema.Unique{
+					Name:    row.Name,
+					Columns: row.Columns,
+				})
 				continue
 			}
 			c.unique[row.Columns[0]] = row

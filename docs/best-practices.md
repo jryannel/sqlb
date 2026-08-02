@@ -154,6 +154,29 @@ composite primary keys in 4 of 10 apps, including `agentdeploy`'s
 `(deployment_id, key)` configuration tables that no REST resource mounts. If you
 are arguing this to another team, argue the narrowing, not the refusal.
 
+## A natural key is a `UNIQUE` constraint, not a unique index — **Recommended**
+
+```go
+t.Unique("tenant_kind", "tenant_id", "name")     // UNIQUE (…)  — a constraint
+t.UniqueIndex("org_id", "code")                  // CREATE UNIQUE INDEX — an index
+```
+
+**Why, independent of sqlb.** Both enforce the same rule, and Postgres backs the
+constraint with an index anyway — so they look interchangeable and are not:
+
+- only a constraint can be the target of `FOREIGN KEY … REFERENCES t (a, b)`
+- only a constraint can be named in `ON CONFLICT ON CONSTRAINT`
+
+So a key another table references, or one the write path names as its conflict
+target, has to be the constraint. Reach for the index when the uniqueness is a
+rule you are enforcing rather than a key anything else refers to — and when you
+want a *partial* one (`WHERE deleted_at IS NULL`), which a constraint cannot be.
+
+sqlb declares the two separately and will not quietly substitute one for the
+other: since [#108](https://github.com/jryannel/sqlb/issues/108) the constraint
+imports as a constraint, named by Postgres's own `<table>_<cols>_key` convention
+so an adopted database diffs to nothing.
+
 ## A vector declares its dimension; the index is a separate decision — **Enforced**
 
 [ADR-0026](adr/0026-vectors-declare-their-index.md).
@@ -285,16 +308,16 @@ moment an engineer finds them.
 
 | gap | seen in |
 |---|---|
-| [#108](https://github.com/jryannel/sqlb/issues/108) composite `UNIQUE` has no table-level declaration | 8 of 10 apps, 5 valiro tables |
 | [#121](https://github.com/jryannel/sqlb/issues/121) `EXCLUDE` constraints | 1 app — no near-miss; dropping it loses an invariant |
 | [#114](https://github.com/jryannel/sqlb/issues/114) `smallint` / [#120](https://github.com/jryannel/sqlb/issues/120) `real` | 2 apps, 6 valiro columns |
 | [#115](https://github.com/jryannel/sqlb/issues/115) `Diff` renders no `CREATE EXTENSION` | every bootstrap |
 | identity and `serial` columns | both refused; [#119](https://github.com/jryannel/sqlb/issues/119) fixed only the *silent* half |
 
 **An unsupported column type costs more than one column.** The CHECKs and indexes
-over it cannot be declared either — three of the eight distinct skip messages
-across studio-apps were cascades of this kind, so those counts understate the
-cost.
+over it cannot be declared either — **four of the nine** distinct skip messages
+left across studio-apps are cascades of this kind rather than gaps in their own
+right, so the counts above understate the cost. With composite `UNIQUE` closed,
+cascades are now the largest single category of what remains.
 
 ---
 
