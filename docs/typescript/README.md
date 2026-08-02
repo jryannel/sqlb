@@ -19,22 +19,33 @@ codegen.Must(codegen.Generate(codegen.Options{
     Dir:      "blog",
     Package:  "blog",
 
-    // Relative to Dir. Two files land here; nothing is emitted without it.
+    // Relative to Dir. Three files land here; nothing is emitted without it.
     TSDir: "web/src/api",
 }))
 ```
 
-Two files, because the layers are usable separately:
+Three files, because the layers are usable separately:
 
 | | |
 |---|---|
-| `client.gen.ts` | Row types, request bodies, the typed parameter vocabulary, the URL encoder, one function per exposed operation, and the cache keys. **Imports nothing.** |
+| `runtime.gen.ts` | `Page`, `Collection`, `Problem`, `Transport` and the filter encoder — the part that depends on no schema. **Imports nothing.** |
+| `client.gen.ts` | Row types, request bodies, the typed parameter vocabulary, one function per exposed operation, and the cache keys. Imports the runtime, and re-exports it. |
 | `queries.gen.ts` | TanStack Query `queryOptions` and `infiniteQueryOptions`. Takes `@tanstack/react-query` as a peer dependency. Set `TSQueriesFile: "-"` to skip it. |
+
+The runtime is a file of its own so that an application with more than one
+generated module has one `Page` and wires one `Transport` rather than N
+([#110](https://github.com/jryannel/sqlb/issues/110)). Point two modules at one
+`TSDir` and they share it: nothing in it is schema-specific, so the second
+writer produces the same bytes and `check` stays meaningful for both.
+
+A project with one module need not notice. `client.gen.ts` re-exports
+everything the runtime holds, so `import type { Page } from './client.gen'`
+keeps compiling exactly as it did.
 
 The client is emitted into the repository that consumes it, the way
 `models_gen.go` is. There is no npm package to install and therefore no way for
 the client to be a version behind the server it talks to.
-`codegen.Check` covers both files, so the usual staleness gate catches a schema
+`codegen.Check` covers all three, so the usual staleness gate catches a schema
 change that was never regenerated.
 
 ## What the types know

@@ -1,11 +1,17 @@
 # Compatibility
 
-What `v0.1.0` promises, and what it deliberately does not.
+What a tagged release promises, and what it deliberately does not.
 
-sqlb is pre-1.0 and has one author, no tags before this one, and no observed
-consumers. That is the honest starting position, and it is the reason this
-document exists: an unreleased `main` reads as unknown risk, whereas a tag with
-a stated blast radius is something a reader can decide against.
+sqlb is pre-1.0 and has one author. It no longer has no consumers, and that is
+what has changed since this document was written at `v0.1.0`: the breaks below
+are not hypothetical any more. `v0.7.0` removed the default hook registry
+because the ambient one had switched a real adopter's tenant boundary off
+without a compile error, and the three unannounced breaks recorded at the
+bottom of this page all came out of consumer reports rather than a plan.
+
+That is the reason this document exists, and the reason it is maintained rather
+than archived: an unreleased `main` reads as unknown risk, whereas a tag with a
+stated blast radius is something a reader can decide against.
 
 Semantic versioning applies from `v1.0.0`. Until then a minor bump may break a
 surface listed under **Will move**, and each break is described in [the release
@@ -152,6 +158,15 @@ correct — row order.
 Anything under `introspect`, `migrate`, `codegen` or `pgtest` that is reached
 only from a build step or a test. These are tools, not a runtime surface, and
 they change with less ceremony.
+
+**The `sqlb` command's verb names** are in that category, and `v0.8.0` used it:
+`sqlb-survey` became `sqlb survey`, a second binary folded into the one command
+tree ([ADR-0032](adr/0032-sqlb-command.md)). A script that invoked it takes a
+one-word edit, and it fails loudly rather than quietly. What is *not* in this
+category is the set of files a generator writes into the repository, because
+those are checked in and reviewed: `v0.8.0` adds `runtime.gen.ts` and
+`runtime.gen.dart` beside the clients, which arrive on the next regeneration
+and want committing with it.
 
 ## The driver
 
