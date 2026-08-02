@@ -8,11 +8,12 @@
 // derivable from a schema — the same seam the server takes by mounting onto a
 // router the application built.
 //
-// Property names are the wire spelling, which is snake_case. Camel-casing
-// would need a runtime mapping layer between the response and the caller, and
-// the point of a generated client is that there is nothing there.
+// Property names are the wire spelling, which is the column's own name unless
+// the schema declared a WireCase. There is no mapping layer either way: the
+// spelling is computed once, at generation time, so there is nothing between
+// the response and the caller.
 //
-// ADR-0028.
+// ADR-0028, ADR-0036.
 
 // ------------------------------------------------------------------- runtime
 
