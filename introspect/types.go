@@ -142,6 +142,19 @@ var knownDefaults = map[string]func() *schema.Default{
 	"uuidv7()": schema.GenUUIDv7,
 }
 
+// isSequenceDefault reports whether a stored default draws from a sequence,
+// which is what a serial column is made of. Postgres expands serial into three
+// separate things — a plain integer column, a sequence it owns, and a nextval
+// default — and records none of them as an identity, so attidentity is empty
+// and the identity check in buildColumn does not see it.
+//
+// The cast here is regclass, not the column's own type, so stripCast leaves it
+// alone and the expression would otherwise survive as an ordinary raw default:
+// one naming a sequence that Diff never renders a CREATE for.
+func isSequenceDefault(expr string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(expr)), "nextval(")
+}
+
 // columnDefault maps a stored default expression back onto a schema.Default.
 //
 // Postgres attaches a cast to every literal it stores — 'draft' comes back as
