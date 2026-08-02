@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,12 +64,12 @@ func TestSurveyRefusesAFlagAfterTheDSNs(t *testing.T) {
 // Without that narrowing every survey would report four absent migration
 // runners as skipped constructs — a finding about this command's defaults
 // rather than about the schema.
-func TestIntersectKeepsOnlyWhatIsPresent(t *testing.T) {
-	got := intersect(defaultExcluded, []string{"goose_db_version", "invoices", "users"})
+func TestSelectExcludedKeepsOnlyWhatIsPresent(t *testing.T) {
+	got := selectExcluded(defaultExcluded, []string{"goose_db_version", "invoices", "users"})
 	if len(got) != 1 || got[0] != "goose_db_version" {
-		t.Errorf("intersect(defaults, [goose_db_version invoices users]) = %v, want [goose_db_version]", got)
+		t.Errorf("selectExcluded(defaults, [goose_db_version invoices users]) = %v, want [goose_db_version]", got)
 	}
-	if got := intersect(defaultExcluded, []string{"invoices"}); len(got) != 0 {
+	if got := selectExcluded(defaultExcluded, []string{"invoices"}); len(got) != 0 {
 		t.Errorf("a database on no known runner excluded %v, want nothing", got)
 	}
 }
@@ -77,7 +78,7 @@ func TestIntersectKeepsOnlyWhatIsPresent(t *testing.T) {
 // one named "user_billing" — a wrong split reads as a real result.
 func TestByModuleAssignsTheLongestPrefix(t *testing.T) {
 	var out strings.Builder
-	printByModule(report{&out}, "user,user_billing", []tableResult{
+	printByModule(report{&out}, "user,user_billing", "", []tableResult{
 		{Name: "user_billing_invoices"},
 		{Name: "user_accounts"},
 		{Name: "audit_log", Skips: []introspect.Skip{{Reason: "no"}}},
@@ -86,7 +87,7 @@ func TestByModuleAssignsTheLongestPrefix(t *testing.T) {
 	for _, want := range []string{
 		"| user | 1 | 1 | 0 | 0 | green |",
 		"| user_billing | 1 | 1 | 0 | 0 | green |",
-		"| _(no prefix)_ | 1 | 0 | 1 | 0 | **blocked** |",
+		"| _unmatched — NOT a module_ | 1 | 0 | 1 | 0 | **blocked** |",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the by-module table is missing %q:\n%s", want, got)
@@ -110,7 +111,7 @@ func TestByModuleAssignsTheLongestPrefix(t *testing.T) {
 // would make it look like the prefix was never passed.
 func TestByModuleKeepsAModuleWithNoTables(t *testing.T) {
 	var out strings.Builder
-	printByModule(report{&out}, "billing,catalog", []tableResult{{Name: "billing_invoices"}})
+	printByModule(report{&out}, "billing,catalog", "", []tableResult{{Name: "billing_invoices"}})
 	got := out.String()
 	if !strings.Contains(got, "| catalog | 0 | 0 | 0 | 0 | green |") {
 		t.Errorf("a module with no tables was dropped from the table:\n%s", got)
@@ -119,7 +120,7 @@ func TestByModuleKeepsAModuleWithNoTables(t *testing.T) {
 
 func TestByModuleSaysNothingWithoutPrefixes(t *testing.T) {
 	var out strings.Builder
-	printByModule(report{&out}, "  ", []tableResult{{Name: "invoices"}})
+	printByModule(report{&out}, "  ", "", []tableResult{{Name: "invoices"}})
 	if out.Len() != 0 {
 		t.Errorf("the by-module section was printed without -modules:\n%s", out.String())
 	}
@@ -143,6 +144,138 @@ func TestKindOfReducesACommentToItsVerb(t *testing.T) {
 	} {
 		if got := kindOf(tc.in); got != tc.want {
 			t.Errorf("kindOf(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The pattern grammar is one wildcard, and the cases below are the ones the
+// exclusion list is actually written against: an exact name, a suffix for a
+// goose-per-module monolith, and a prefix. A pattern that matched too widely
+// here would silently shrink the survey rather than fail it, which is the
+// failure mode worth a test (issue #123).
+func TestMatchPattern(t *testing.T) {
+	cases := []struct {
+		pattern, name string
+		want          bool
+	}{
+		// No wildcard is an exact name — what every caller before #123 wrote.
+		{"goose_db_version", "goose_db_version", true},
+		{"goose_db_version", "goose_db_version_old", false},
+		{"schema_migrations", "core_users_schema_migrations", false},
+
+		// The case the issue is about.
+		{"%_schema_migrations", "core_users_schema_migrations", true},
+		{"%_schema_migrations", "app_billing_schema_migrations", true},
+		{"%_schema_migrations", "schema_migrations", false},
+		{"%_schema_migrations", "migrations", false},
+
+		// Prefix and both-ends.
+		{"goose_%", "goose_db_version", true},
+		{"goose_%", "flyway_schema_history", false},
+		{"%migrations%", "core_migrations_v2", true},
+		{"%", "anything", true},
+
+		// A wildcard must not swallow the anchors around it.
+		{"a%z", "az", true},
+		{"a%z", "abz", true},
+		{"a%z", "abzq", false},
+		{"a%z", "qabz", false},
+	}
+	for _, c := range cases {
+		if got := matchPattern(c.pattern, c.name); got != c.want {
+			t.Errorf("matchPattern(%q, %q) = %v, want %v", c.pattern, c.name, got, c.want)
+		}
+	}
+}
+
+// selectExcluded both narrows and expands, and the narrowing is the half that
+// is easy to lose: introspect reports an Exclude name it cannot find, so a
+// default list naming five migration runners would otherwise arrive as four
+// findings about this command's defaults rather than about the schema.
+func TestSelectExcludedExpandsPatterns(t *testing.T) {
+	have := []string{
+		"app_billing_schema_migrations",
+		"core_users_schema_migrations",
+		"goose_db_version",
+		"invoices",
+		"users",
+	}
+	want := []string{
+		"goose_db_version",       // present, exact
+		"flyway_schema_history",  // absent — must be dropped, not reported
+		"atlas_schema_revisions", // absent
+		"%_schema_migrations",    // pattern, matches two
+	}
+	got := selectExcluded(want, have)
+	expect := []string{
+		"app_billing_schema_migrations",
+		"core_users_schema_migrations",
+		"goose_db_version",
+	}
+	if !reflect.DeepEqual(got, expect) {
+		t.Fatalf("selectExcluded\n got: %v\nwant: %v", got, expect)
+	}
+}
+
+// A table matching two patterns is excluded once. Duplicates would reach
+// introspect's Exclude list and read as two tables that are not there.
+func TestSelectExcludedDoesNotDuplicate(t *testing.T) {
+	got := selectExcluded(
+		[]string{"%_schema_migrations", "core_%", "core_users_schema_migrations"},
+		[]string{"core_users_schema_migrations", "orders"},
+	)
+	if want := []string{"core_users_schema_migrations"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("selectExcluded\n got: %v\nwant: %v", got, want)
+	}
+}
+
+// Nothing matching is an empty list rather than a nil-vs-empty distinction the
+// caller has to think about, and an empty database excludes nothing.
+func TestSelectExcludedEmptyCases(t *testing.T) {
+	if got := selectExcluded([]string{"goose_db_version"}, []string{"users"}); len(got) != 0 {
+		t.Errorf("nothing present should exclude nothing, got %v", got)
+	}
+	if got := selectExcluded(nil, []string{"users"}); len(got) != 0 {
+		t.Errorf("no patterns should exclude nothing, got %v", got)
+	}
+	if got := selectExcluded([]string{"%"}, nil); len(got) != 0 {
+		t.Errorf("no tables should exclude nothing, got %v", got)
+	}
+}
+
+func TestPercent(t *testing.T) {
+	cases := []struct {
+		n, total, want int
+	}{
+		{43, 68, 63},
+		{16, 30, 53},
+		{0, 30, 0},
+		{30, 30, 100},
+		// The guard that matters: an empty schema must not divide by zero.
+		{0, 0, 0},
+	}
+	for _, c := range cases {
+		if got := percent(c.n, c.total); got != c.want {
+			t.Errorf("percent(%d, %d) = %d, want %d", c.n, c.total, got, c.want)
+		}
+	}
+}
+
+// Both corpora that produced issue #122 sit above the threshold, which is the
+// point: the warning asks a question rather than answering one. If someone
+// later raises it past either, the warning stops firing on the two cases it was
+// built from.
+func TestUnmatchedWarnThresholdCoversBothCorpora(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		unmatched, all int
+	}{
+		{"a wrong -modules value", 43, 68},
+		{"permanently grandfathered bare names", 16, 30},
+	} {
+		if got := percent(c.unmatched, c.all); got < unmatchedWarnPercent {
+			t.Errorf("%s: %d of %d is %d%%, below the %d%% threshold, so the warning would not fire",
+				c.name, c.unmatched, c.all, got, unmatchedWarnPercent)
 		}
 	}
 }
