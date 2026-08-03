@@ -1,9 +1,9 @@
 # ADR-0048: The agent skill is generated where it can be gated, and static only where no check is possible
 
-- **Status:** Exploring — the static half is written
-  ([`skills/sqlb-queries`](../../skills/sqlb-queries/SKILL.md)); the emitter is
-  not. The emitter's shape is settled by the four that exist; what a skill has
-  to *say* to change an agent's output is not
+- **Status:** Exploring — both static skills are written
+  ([`skills/`](../../skills/README.md)); the emitter is not. The emitter's shape
+  is settled by the four that exist; what a skill has to *say* to change an
+  agent's output is not
 - **Confidence:** High that a static skill alone is the wrong answer for sqlb,
   because the thing an agent gets wrong is which capabilities a project
   declared and that is per-project by construction. Medium that generating into
@@ -190,3 +190,12 @@ expensive to get wrong later.
   earns a static skill its place is not the boundary table but the four failure
   modes that pass their tests, which suggests the emitter should carry structure
   and leave behaviour here.
+- 2026-08-03 — `skills/sqlb-adoption` written, completing the static half. It
+  turned out to need a section this record did not anticipate: **stop
+  conditions**. The adoption procedure's failure mode is not a wrong ratio but a
+  census run in the wrong order — routes before the database, when a blocked
+  table means the route census cannot be acted on at all — and an evaluation
+  that reports "sqlb replaces the API" rather than "the least novel third of
+  it". So the skill's load-bearing content is where it says *stop*, which is a
+  different shape from `sqlb-queries` and worth noting before a third static
+  skill is proposed on the assumption they are all the same kind of document.
