@@ -14,6 +14,173 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.9.0
+
+2026-08-03 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.9.0)
+
+The release that measured the agent-facing claim rather than asserting it. Two
+hand-written skills and one generated, gated the way every other emitted file
+is — and then sixty A/B runs which said the honest case for it is latency and
+not correctness, so the record says that instead of what it was built on. Beside
+it, three constructs and one false alarm, all found the way v0.8.0's were: a
+real database refusing to be described, or described wrongly.
+
+**Nothing breaks.** Everything here is additive, opt-in, or a build-step tool,
+and no name a program compiles against has moved.
+
+**The schema an agent reads is generated**, because a written-down one cannot be
+gated. `Options.SkillDir` emits `<SkillDir>/sqlb-schema/SKILL.md`: the mounted
+path and operations per resource, the four capability lists with an undeclared
+one named as *none* rather than omitted, the declared verbs and what they write,
+the inverse relations `?expand` knows, and the tables whose declaration obliges
+a hook.
+
+```go
+codegen.Options{ …, SkillDir: ".claude/skills" }
+```
+
+Capabilities are opt-in, so "can I filter on this column" has a different answer
+in every project and no static document can carry it. `example/tasks` commits a
+generated skill, so `generate-check` gates it in CI rather than a test asserting
+the property in the abstract — and it earned that on the first run, catching a
+real drift when the emitter changed after the file was written
+([ADR-0049](adr/0049-the-skill-is-generated.md)).
+
+What the document does not carry is prose. `introspect` reads `col_description`
+off a live database and calls `Field.Comment`, so a comment is not necessarily
+first-party text. Every other emitter passes those through safely because DDL
+and OpenAPI are read as data; a skill is read as instructions. This one carries
+names, types and capability flags and nothing else, guarded by a test that
+injects an instruction-shaped comment as both a table and a column comment and
+requires it absent.
+
+**Then the claim was measured, and it shrank.** Twenty runs per arm across three
+rounds, control given the schema declaration and treatment the same plus the
+skill. Both arms answered ten direct questions at 50/50. Both caught every trap
+in the final round — 80 trap-instances scored, zero misses on either side — and
+a 2-of-5 silent failure seen at n=5 did not replicate at n=20, having been an
+artefact of the prompt. What survived is cost: 3.5 tool calls and 47s against
+1.1 and 19s, with the control's real figure understated because two of its runs
+spawned research subagents that do not show up in the parent's counters. So the
+emitter is worth ~290 bytes per resource for round-trips, not for correctness,
+and ADR-0049 now says so and says the premise should not be restated without new
+evidence.
+
+**The two hand-written skills are the half no check can reach.** `sqlb-queries`
+carries four traps that compile, pass their tests and answer the request: an
+aggregate over an empty set scanning NULL into an `int64`, one bind parameter
+numbered twice across a projection and a `GROUP BY`, a day filter against
+`timestamptz` matching zero rows with no error, and `OnConflictDoNothing`
+turning a retried write into `ErrNotFound`. Every sample was compiled and
+rendered rather than written from memory, which caught three wrong idioms and
+one claim about this API that had rotted in four days — which is the argument
+for generating the other half, observed rather than reasoned. The second skill
+is the adoption census, and its load-bearing content turned out to be not the
+procedure but the two conditions that end an evaluation cheaply.
+
+**An auto-incrementing integer key is declarable**, in both of Postgres's
+spellings:
+
+```go
+schema.BigSerial("id").PrimaryKey()          // bigserial
+schema.BigInt("id").Identity().PrimaryKey()  // identity, by default
+schema.Int("attempt").IdentityAlways()       // identity, always
+```
+
+Neither was expressible before, so no auto-incrementing key was at all. Across
+the eleven applications that reported it — 80 modules, 184 tables — exactly one
+table was not describable and this construct is what it had; a drift gate is per
+registry, so that one column took its module out of the gate. The substitution
+was not the cheap one it looks like: all three tables using it used the serial
+as the tiebreak that makes `ORDER BY occurred_at DESC, id DESC` a *total* order,
+and the id is in a public interface, so widening it is an API change and sixteen
+bytes a row on the highest-volume tables in the system.
+
+Auto-ness is a property of the column and not a `Type`. A `bigserial` column
+*is* a `bigint`: that is what the catalog reports, what an `ALTER COLUMN TYPE`
+has to name, and what comes back when you read it. A type constant would have
+given `int64` two spellings and split the filter grammar from the sort
+machinery; the evidence the cut is right is that `scalarSQLType` did not change.
+The older spelling is not deprecated, either — every report came from a database
+that already has a serial, and a DSL that could only declare the modern one
+would propose rewriting the column on its first diff
+([ADR-0048](adr/0048-auto-incrementing-keys.md)).
+
+**An enum value is data**, so a dotted one names a Go constant instead of
+failing to parse. `task.assigned` produced `NotificationTypeTask.assigned` and
+generation refused its own output, which was right about the output and wrong
+about the value set, which had no declaration at all. Every run of characters
+that cannot appear in an identifier is a word boundary now, which is what `_`
+already was, so the value stays verbatim and the initialism table still reaches
+`api.key`. Dart derived its members the same broken way and is fixed in the same
+place; TypeScript was already correct, because a union is the raw strings. A
+collision is refused with both values and the column named rather than emitted
+as a duplicate const that fails in the consumer's package. This also reopens a
+door: a table whose `CHECK` introspects back as an enum column is adoptable.
+
+**Phase C stopped reporting a residual that was not one.** Postgres stores a
+`CHECK` over a `varchar` as a cast of the array on first application and as a
+cast of each element when fed that back, so the round trip is a fixpoint at two
+iterations and the probe compared after one — 26 of these across eleven
+applications, every one that shape, on schemas whose every table was clean. It
+iterates now, bounded at three rounds, and the verdict carries the round count,
+so a residual of 0 reached after two still says something was rewritten on the
+way in. The reading it invited was wrong in the expensive direction: *this
+schema will never be stable under sqlb*, about a schema that is stable, in the
+one phase an adopter trusts precisely when Phase B looked too good.
+
+**And the gate moved off the laptop.** Six packages across three modules each
+started a Postgres of their own through testcontainers, so one `mise run ci`
+brought up six servers and six worktrees testing at once brought up forty-two.
+They read a DSN now and start nothing; `compose.yaml` defines the three servers
+and `mise run pg-up` starts them, CI gets the same three as service containers,
+and no reaper removes another worktree's containers by label any more. `pgtest`'s
+`go.mod` goes from 50 modules to 6, `test-pg` from 49s to 12s, and 130 of its
+135 tests take `t.Parallel()` because each already created a database of its
+own. What runs before a push is `mise run preflight` — 17s, no containers —
+since CI is the gate and running it twice only starved the machine.
+
+Also, for anyone reading rather than importing: every library package's
+introduction is in `doc.go` now rather than in whichever file sorted first,
+moved verbatim, and `CLAUDE.md` is the map plus the four traps that are not
+visible from the code.
+
+**What it cost:**
+
+- The database-backed suites require `SQLB_TEST_POSTGRES`,
+  `SQLB_TEST_PGVECTOR` and `SQLB_TEST_PGBOUNCER`. There is no skip-when-absent
+  path and no fallback that starts a container: an unset variable is a fatal
+  error naming the task that fixes it, and `mise run pg-up` supplies all three.
+- A project that sets `SkillDir` gets a file that wants committing, and this is
+  the one emitter that writes into a directory sqlb does not own. Its path and
+  the document's shape are under [*Will move*](compatibility.md#will-move),
+  since the `SKILL.md` convention belongs to the agent tooling rather than to
+  sqlb. The asymmetry is worth stating in advance: if this emitter is ever
+  removed, the verb has to *delete* the file rather than stop writing it,
+  because a stale skill still loads.
+- That document is linear in exposed resources and uncapped. Measured over
+  twelve real applications: 12KB at 29 resources, 37KB at 127. Past about 40KB
+  the answer is an index with per-resource detail on demand rather than another
+  round of trimming.
+- Dropping the per-column table, which was 44-49% of it, cost the ability to
+  name a column an agent should *not* filter on. Two of 25 runs invented the
+  identifier while correctly saying no such filter exists. Probably still the
+  right trade, recorded as a real cost.
+- A column that becomes a serial on a table that already has rows starts its
+  sequence at 1. The change says so in its hazard and names the `setval` to run
+  first; it is not generated, because the row count is not in the schema and
+  getting it wrong is a duplicate key.
+- `sqlb survey`'s Phase C verdict names the round its fixpoint was reached on,
+  so anything reading that line reads one more field.
+
+**What is still owed is the trigger.** Inlining a skill assumes its description
+already caused it to load, and nothing here tested that — a skills directory
+that did not exist when a session started is not watched, so the emitted skill
+could not be invoked from the session that wrote it. ADR-0049 lists that as the
+live unknown rather than as a footnote, because if a schema skill is only ever
+read when someone names it, the frontmatter is doing nothing and this design
+reduces to a document with a pointer.
+
 ## v0.8.0
 
 2026-08-02 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.8.0)
