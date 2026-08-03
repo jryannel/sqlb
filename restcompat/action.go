@@ -58,7 +58,7 @@ func captureActions(t *schema.TableDef, path string) []ActionSnap {
 				Type:       string(d.Type),
 				Enum:       d.EnumValues,
 				Nullable:   d.Nullable,
-				HasDefault: d.Default != nil,
+				HasDefault: d.DatabaseSupplied(),
 			})
 		}
 		out = append(out, snap)

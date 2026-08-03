@@ -98,4 +98,3 @@ func rebuildAndDiff(t *testing.T, reg *schema.Registry) []migrate.Change {
 	}
 	return changes
 }
-
