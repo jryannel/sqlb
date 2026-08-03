@@ -56,6 +56,20 @@ func SqlbProject() codegen.Project {
 			// that runs it.
 			CLIDir:  "cli",
 			CLIName: "taskctl",
+
+			// The agent skill, into the directory an agent working in this
+			// module reads from. It says what these resources actually accept,
+			// which is the question a static document cannot answer: capabilities
+			// are opt-in, so the answer is different in every project.
+			//
+			// Committed and covered by `sqlb check`, which is the only reason
+			// writing instructions into a repository is safe — a skill that has
+			// drifted from the schema is confidently wrong about the one thing it
+			// exists to know. Note where it lands: example/tasks is its own
+			// module, so this is example/tasks/.claude, scoped to this subtree
+			// rather than claiming to describe the repository above it.
+			SkillDir:           ".claude/skills",
+			SkillSchemaPackage: "./taskschema",
 		},
 
 		MigrationsDir: "migrations",

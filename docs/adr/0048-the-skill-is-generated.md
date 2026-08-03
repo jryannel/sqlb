@@ -1,14 +1,16 @@
 # ADR-0048: The agent skill is generated where it can be gated, and static only where no check is possible
 
-- **Status:** Exploring — both static skills are written
-  ([`skills/`](../../skills/README.md)); the emitter is not. The emitter's shape
-  is settled by the four that exist; what a skill has to *say* to change an
-  agent's output is not
+- **Status:** Working — both static skills are written
+  ([`skills/`](../../skills/README.md)), and the emitter is
+  `Options.SkillDir`, covered by `sqlb check` and exercised by
+  `example/tasks`, whose emitted skill is committed
 - **Confidence:** High that a static skill alone is the wrong answer for sqlb,
   because the thing an agent gets wrong is which capabilities a project
-  declared and that is per-project by construction. Medium that generating into
-  `.claude/skills/` is worth owning a format sqlb does not control. Low on the
-  content — no measurement yet says a skill changes what an agent writes
+  declared and that is per-project by construction. High that the trust boundary
+  is drawn in the right place, because the guard that enforces it has failed on
+  purpose. Medium that generating into `.claude/skills/` is worth owning a format
+  sqlb does not control. Low on the content — no measurement yet says a skill
+  changes what an agent writes, which remains the first thing that would kill it
 - **Decided:** 2026-08-03
 - **Last reviewed:** 2026-08-03
 
@@ -199,3 +201,29 @@ expensive to get wrong later.
   it". So the skill's load-bearing content is where it says *stop*, which is a
   different shape from `sqlb-queries` and worth noting before a third static
   skill is proposed on the assumption they are all the same kind of document.
+- 2026-08-03 — The emitter landed as `Options.SkillDir`, and the record moves to
+  Working. Three things the design above got wrong or left open.
+
+  **Hidden columns are absent, not labelled.** This record originally said the
+  skill would carry which columns are `Hidden`. It does not, because the
+  manifest's reason for omitting them — a name is itself information — applies
+  more strongly to a file read as instructions, and building on
+  `BuildManifest()` makes the safe answer the default one. The skill says the
+  column lists are the wire surface rather than the table, and points at the
+  declaration.
+
+  **The trust boundary needed a guard, and it has one.** `TestSkillCarriesNoComments`
+  injects an instruction-shaped string as both a table and a column comment and
+  requires it to be absent while the column is still described — so it cannot
+  pass by dropping the table. Proven both ways per
+  [ADR-0016](0016-guards-proven-both-ways.md): with the comment carried through
+  on purpose, it failed and named the leak.
+
+  **The schema package cannot be derived, so it is configured.** The emitted
+  commands want the pattern `sqlb generate` takes, and the emitters are given a
+  registry rather than the argument that produced one. `SkillSchemaPackage` is
+  the override and `go generate ./...` is the fallback — a real command for any
+  project carrying the directive, rather than an invented path.
+
+  What has not changed is the thing to watch. The skill is committed, gated and
+  correct, and none of that is evidence that it changes what an agent writes.

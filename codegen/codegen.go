@@ -122,6 +122,36 @@ type Options struct {
 	// writes one pager or wires one transport across two modules (#110).
 	DartRuntimeFile string
 
+	// SkillDir emits the project-specific agent skill, into a directory
+	// relative to Dir — ".claude/skills" in a repository whose agents read from
+	// there. Empty means no skill is emitted, and that is the default on
+	// purpose: this is the one emitter that writes into a directory sqlb does
+	// not own, beside files a project wrote itself, so it is opted into rather
+	// than arrived at (ADR-0048).
+	//
+	// One file lands there, at <SkillDir>/sqlb-schema/SKILL.md. It describes
+	// what this schema exposes and what each resource accepts, which is the
+	// answer no static document can carry, because capabilities are opt-in and
+	// therefore per-project. Being covered by `sqlb check` is the load-bearing
+	// half: a skill that has drifted from the schema is worse than no skill,
+	// since it is confidently wrong about the one thing it exists to know.
+	//
+	// It carries structure — names, types, capability flags, paths — and not
+	// comments. See skill.go for why that is a trust boundary and not a style
+	// choice.
+	SkillDir string
+
+	// SkillSchemaPackage is how the emitted skill spells this project in the
+	// commands it tells an agent to run: "./taskschema", the same argument
+	// `sqlb generate` takes.
+	//
+	// Empty falls back to `go generate ./...`, which is correct for any project
+	// whose schema package carries the directive and is the reason this is not
+	// required. It cannot be derived here: the package pattern is an argument to
+	// cmd/sqlb, and the emitters are given a registry rather than the pattern
+	// that produced one.
+	SkillSchemaPackage string
+
 	// Types replaces the Go type emitted for the columns each override
 	// matches — the sqlc `overrides:` equivalent, and the reason a codebase
 	// whose ids are uuid.UUID rather than string can generate its models
@@ -489,6 +519,13 @@ func render(opts Options) (map[string][]byte, error) {
 				files[filepath.Join(dir, name)] = src
 			}
 		}
+	}
+	if opts.SkillDir != "" {
+		src, err := renderSkill(opts)
+		if err != nil {
+			return nil, err
+		}
+		files[filepath.Join(opts.SkillDir, skillName, "SKILL.md")] = src
 	}
 	if opts.CLIDir != "" {
 		if name := opts.cliFile(); name != "-" {
