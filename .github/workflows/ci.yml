@@ -11,6 +11,17 @@ on:
 permissions:
   contents: read
 
+# One run per branch. Pushing twice in a minute — which is what happens when an
+# agent amends a commit after CI has already started — otherwise leaves the
+# first run grinding through three jobs whose answer nobody will read.
+#
+# Not applied to main: a superseded run there is the record of whether that
+# commit was good, and cancelling it would leave a commit on the default branch
+# with no verdict at all.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -19,6 +30,23 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           experimental: true
+      # The critical path of the whole workflow is compilation, not testing.
+      # Measured on run 30768667155: vet 54s, lint 51s, test-race 62s — 167 of
+      # this job's 206 seconds, and all three were compiling the same four
+      # modules from scratch because nothing here preserved a build cache. The
+      # tests themselves take seconds, as `mise run test` locally shows.
+      #
+      # Keyed on the go.sum files, so a dependency change invalidates it and
+      # anything else reuses it; the restore-keys line means a change to one
+      # module still starts from the previous run's cache rather than empty.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.cache/golangci-lint
+          key: go-gate-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-gate-${{ runner.os }}-
       # Individually rather than via `mise run ci`, so a failure names the gate
       # that failed in the job summary instead of one opaque step.
       # No fmt-check step: formatting is reported by the gofmt formatter inside
@@ -59,6 +87,16 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           experimental: true
+      # A cache of its own rather than the gate's: this job builds the pgtest
+      # module and the two examples, which the gate never compiles, so sharing
+      # one key would have each job evicting the other's entries.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-postgres-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-postgres-${{ runner.os }}-
       - run: mise run test-pg
       - run: mise run test-demo
       # The fx example boots the whole application against Postgres, including
