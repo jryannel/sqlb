@@ -86,10 +86,13 @@ func TestPublishOnUpdate(t *testing.T) {
 	assertEvents(t, rec.events(), []rest.Event{{Table: "posts", Key: "p1", Op: rest.Updated}})
 }
 
-// A delete announces the table and no key: sqlb's AfterDelete hook is handed a
-// count, not the rows. A subscriber reads that as "invalidate the collection",
-// which a delete requires of it regardless.
-func TestPublishOnDeleteIsTableWide(t *testing.T) {
+// A delete announces the row it removed, key and all.
+//
+// It used to announce the table and nothing else, because sqlb's AfterDelete
+// hook is handed a count rather than the rows. AfterDeleteRows is what closed
+// that (#144): a subscriber keyed on the row now has something to key on, and a
+// tenant filter has a scope to compare.
+func TestPublishOnDeleteNamesTheRow(t *testing.T) {
 	db := newFakeDB(t, reply{cols: postCols(), rows: rowsOf(postRow("p1", "Hello"))})
 	api, rec := publishing(t, db, postOptions())
 
@@ -97,7 +100,33 @@ func TestPublishOnDeleteIsTableWide(t *testing.T) {
 	if resp.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204: %s", resp.Code, resp.Body)
 	}
-	assertEvents(t, rec.events(), []rest.Event{{Table: "posts", Op: rest.Deleted}})
+	assertEvents(t, rec.events(), []rest.Event{{Table: "posts", Key: "p1", Op: rest.Deleted}})
+}
+
+// And the statement that made that possible is the one that went to the
+// database: registering the row-taking hook is what puts RETURNING on a DELETE.
+//
+// Asserted here rather than only in the engine's tests because this is the path
+// that pays for it — a project mounting PublishChanges opts into the scan for
+// every delete of that model, and a regression that dropped the clause would
+// turn every delete event keyless again while every test above still passed on
+// the fake's canned reply.
+func TestPublishMakesADeleteReturnItsRows(t *testing.T) {
+	db := newFakeDB(t, reply{cols: postCols(), rows: rowsOf(postRow("p1", "Hello"))})
+	api, _ := publishing(t, db, postOptions())
+
+	if resp := api.Delete("/posts/p1"); resp.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", resp.Code, resp.Body)
+	}
+	var found bool
+	for _, q := range db.statements() {
+		if strings.HasPrefix(q, "DELETE") && strings.Contains(q, "RETURNING") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no DELETE … RETURNING was sent, so the event could not have named a row: %v", db.statements())
+	}
 }
 
 // The guard that makes the feed worth trusting: a write that rolls back

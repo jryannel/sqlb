@@ -583,6 +583,11 @@ type Delete[T any] struct {
 	where   []Pred
 	all     bool
 	err     error
+	// returning asks for the removed rows back. Not settable by a caller: it is
+	// set on the clone [Delete.Exec] runs, when an [Hooks.AfterDeleteRows] hook
+	// is registered for T and the rows therefore have somewhere to go. A delete
+	// whose rows nothing reads should not pay to scan them.
+	returning bool
 }
 
 // DeleteRows starts a DELETE.
@@ -615,6 +620,11 @@ func (d *Delete[T]) UseDialect(dl Dialect) *Delete[T] {
 }
 
 // SQL compiles the statement without running it.
+//
+// No RETURNING clause. Whether a delete carries one is decided by the hooks
+// registered for T against the executor it runs on, and this method has no
+// executor — so what it prints is what a delete with no row-taking hook sends.
+// See [Hooks.AfterDeleteRows].
 func (d *Delete[T]) SQL() (string, []any, error) {
 	if d.err != nil {
 		return "", nil, d.err
@@ -629,6 +639,9 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 	if len(d.where) > 0 {
 		c.write(" WHERE ")
 		c.predicates(d.where)
+	}
+	if d.returning {
+		writeReturning(c, d.model)
 	}
 	return c.result()
 }
@@ -646,22 +659,49 @@ func (d *Delete[T]) Clone() *Delete[T] {
 // The statement is cloned first, for the reason Update.Exec clones: a
 // BeforeDelete hook narrowing the statement must narrow one execution, not
 // every later one.
+//
+// It sends `DELETE … RETURNING` and scans what comes back only when an
+// [Hooks.AfterDeleteRows] hook is registered for T. Without one this is a bare
+// DELETE and the count is the command tag's, exactly as it always was.
 func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	hooks := hooksFor[T](db)
 	stmt := d.Clone()
 	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
 		return 0, err
 	}
+	// Decided after BeforeDelete, so that a hook registering on first use — which
+	// On[T] does — is visible to the statement it is about to affect.
+	stmt.returning = hooks.wantsDeletedRows()
 	query, args, err := stmt.SQL()
 	if err != nil {
 		return 0, err
 	}
-	tag, err := db.Exec(ctx, query, args...)
-	if err != nil {
-		return 0, wrapQueryErr(err, query)
+
+	var n int64
+	var deleted []T
+	if stmt.returning {
+		rows, err := runQuery(ctx, db, query, args...)
+		if err != nil {
+			return 0, err
+		}
+		if deleted, err = scanAllClose[T](rows, d.model); err != nil {
+			return 0, asConstraintErr(err)
+		}
+		// RETURNING yields one row per row removed, so this is the command tag's
+		// count arrived at by the other road rather than a second answer.
+		n = int64(len(deleted))
+	} else {
+		tag, err := db.Exec(ctx, query, args...)
+		if err != nil {
+			return 0, wrapQueryErr(err, query)
+		}
+		n = tag.RowsAffected()
 	}
-	n := tag.RowsAffected()
+
 	if err := hooks.runAfterDelete(ctx, n); err != nil {
+		return 0, err
+	}
+	if err := hooks.runAfterDeleteRows(ctx, deleted); err != nil {
 		return 0, err
 	}
 	return n, nil

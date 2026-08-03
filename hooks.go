@@ -42,6 +42,11 @@ type Hooks[T any] struct {
 	afterUpdate  []func(context.Context, []T) error
 	beforeDelete []func(context.Context, *Delete[T]) error
 	afterDelete  []func(context.Context, int64) error
+	// afterDeleteRows is the reason a delete may run RETURNING at all. Kept
+	// separate from afterDelete rather than replacing it so that the cost —
+	// materialising every row a bulk delete removed — is paid only by a program
+	// that asked for the rows.
+	afterDeleteRows []func(context.Context, []T) error
 }
 
 // Registry holds the hook sets for a set of models, keyed by type.
@@ -178,10 +183,47 @@ func (h *Hooks[T]) BeforeDelete(fn func(context.Context, *Delete[T]) error) *Hoo
 // AfterDelete receives the number of rows removed. Like AfterCreate it runs
 // inside the transaction; side effects the outside world can see belong in
 // [AfterCommit].
+//
+// Use [Hooks.AfterDeleteRows] when the hook needs to know *which* rows went.
 func (h *Hooks[T]) AfterDelete(fn func(context.Context, int64) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.afterDelete = append(h.afterDelete, fn)
+	return h
+}
+
+// AfterDeleteRows receives the rows a delete removed, as they were immediately
+// before it removed them.
+//
+// It is the delete's answer to [Hooks.AfterUpdate], and it exists because a
+// count is not enough for the thing hooks are most often registered to do. A
+// module that publishes a domain event on every mutation can say *how many*
+// posts were deleted from an [Hooks.AfterDelete] and not *which*, and an event
+// carrying no id is worse than no event: the subscriber invalidating a cache
+// keyed on the row has nothing to key on, and the feed looks wired up (#144).
+// The hook cannot recover the rows for itself either — a [Delete] is write-only
+// for predicates, so [Hooks.BeforeDelete] has no way to ask what a statement
+// addresses.
+//
+// # What it costs, and why it is a second name rather than a new signature
+//
+// The rows have to be materialised to be passed, so a delete with one of these
+// registered runs `DELETE … RETURNING` and scans everything it matched. On a
+// bulk delete that is real, and it is the whole reason [Hooks.AfterDelete]
+// keeps its count form: nothing is added to the statement unless a hook of this
+// kind is registered for T, so a program that only wants "did anything change"
+// pays nothing.
+//
+// Like AfterCreate it runs inside the transaction, so returning an error rolls
+// the delete back and side effects the outside world can see belong in
+// [AfterCommit] — which is where a published event should go, and what
+// [rest.PublishChanges] does with it.
+//
+// Both kinds run when both are registered, the count form first.
+func (h *Hooks[T]) AfterDeleteRows(fn func(context.Context, []T) error) *Hooks[T] {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.afterDeleteRows = append(h.afterDeleteRows, fn)
 	return h
 }
 
@@ -243,7 +285,7 @@ func (h *Hooks[T]) Reset() {
 	// so the slices are cleared individually.
 	h.beforeQuery, h.beforeCreate, h.afterCreate = nil, nil, nil
 	h.beforeUpdate, h.afterUpdate = nil, nil
-	h.beforeDelete, h.afterDelete = nil, nil
+	h.beforeDelete, h.afterDelete, h.afterDeleteRows = nil, nil, nil
 }
 
 func (h *Hooks[T]) runBeforeQuery(ctx context.Context, b *Builder[T]) error {
@@ -392,4 +434,29 @@ func (h *Hooks[T]) runAfterDelete(ctx context.Context, n int64) error {
 		}
 	}
 	return nil
+}
+
+func (h *Hooks[T]) runAfterDeleteRows(ctx context.Context, rows []T) error {
+	h.mu.RLock()
+	fns := h.afterDeleteRows
+	h.mu.RUnlock()
+	for _, fn := range fns {
+		if err := fn(ctx, rows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// wantsDeletedRows reports whether anything registered to receive the rows a
+// delete removes, which is what decides whether the statement carries RETURNING.
+//
+// Read once per Exec rather than per hook, and read *after* BeforeDelete has
+// run: a hook registered by a later goroutine mid-statement is a race the
+// registry does not promise to resolve either way, and this is the moment the
+// statement is compiled.
+func (h *Hooks[T]) wantsDeletedRows() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.afterDeleteRows) > 0
 }

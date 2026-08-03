@@ -47,16 +47,24 @@ import (
 // a filter has nothing to decide on, because an invalidation names a row and not
 // the tenant that owns it.
 //
-// A soft delete is an UPDATE, so it carries both the key and the scope. A hard
-// delete carries neither; see below.
+// A soft delete is an UPDATE, so it carries both the key and the scope. So now
+// does a hard one; see below.
 //
 // # What a delete announces
 //
-// A table, with no key. sqlb's AfterDelete hook receives the number of rows
-// removed rather than the rows themselves, so the key is not available to
-// publish. A subscriber reads the keyless event as "invalidate this
-// collection", which is what a delete requires of it regardless: the row is
-// gone and the list it was in has changed.
+// One event per removed row, each carrying that row's key and scope, through
+// [sqlb.Hooks.AfterDeleteRows].
+//
+// This used to be a single keyless event naming the table, because the count
+// hook it was registered against could not say which rows went. That was
+// tolerable for invalidation — the collection changed either way — and wrong for
+// a multi-tenant filter, which had no scope to compare and so had to let the
+// event through to every subscriber (#144).
+//
+// The cost is that a delete of a published model runs `DELETE … RETURNING` and
+// scans what it removed, which on a bulk delete is real. It is not avoidable
+// while the event names a row, and a feed that goes vague on exactly the
+// operation a client most needs to hear about is not worth the saving.
 //
 // # Which registry
 //
@@ -116,13 +124,29 @@ func publishChanges[T any](h *sqlb.Hooks[T], p Publisher) error {
 		return announce(ctx, p, events...)
 	})
 
-	h.AfterDelete(func(ctx context.Context, n int64) error {
+	// AfterDeleteRows rather than AfterDelete, which is what makes a delete event
+	// carry the key and the scope. The count form cannot: it says how many rows
+	// went and not which, so the event named a table and nothing else, and a
+	// subscriber keyed on the row had nothing to invalidate but the whole
+	// collection (#144). Registering this is also what makes the delete run
+	// RETURNING, which is the cost — paid here because a feed whose delete events
+	// name no row is the half of the feed that does not work.
+	h.AfterDeleteRows(func(ctx context.Context, rows []T) error {
 		// A delete that matched nothing changed nothing. Announcing it would
 		// have every subscriber refetch a collection that is identical.
-		if n == 0 {
+		if len(rows) == 0 {
 			return nil
 		}
-		return announce(ctx, p, Event{Table: table, Op: Deleted})
+		events := make([]Event, len(rows))
+		for i := range rows {
+			events[i] = Event{
+				Table: table,
+				Key:   keyOf(pk, &rows[i]),
+				Op:    Deleted,
+				Scope: keyOf(scope, &rows[i]),
+			}
+		}
+		return announce(ctx, p, events...)
 	})
 
 	return nil

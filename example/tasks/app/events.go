@@ -33,16 +33,22 @@ import (
 //
 // # Why deletes are not in the feed's blind spot here
 //
-// A hard DELETE publishes a table and no key, because sqlb's AfterDelete hook is
-// handed a count — which would also mean no scope, and an event this filter
-// could not attribute. It does not arise for the three models below: their
-// deletes are soft, and a soft delete is an UPDATE (see deletes.go), so it
-// carries the key and the workspace like any other change.
+// A hard DELETE used to publish a table and no key, because sqlb's AfterDelete
+// hook is handed a count — which also meant no scope, and an event this filter
+// could not attribute. It never arose for the three models below: their deletes
+// are soft, and a soft delete is an UPDATE (see deletes.go), so it carries the
+// key and the workspace like any other change.
 //
-// Memberships are the one hard delete in this application, and they are
-// deliberately not published. An event saying only "a membership somewhere
-// changed" would reach every workspace and tell each of them to refetch, which
-// is a cross-tenant wake-up in exchange for very little.
+// It no longer arises anywhere. rest.PublishChanges registers
+// sqlb.Hooks.AfterDeleteRows, so a hard delete returns the rows it removed and
+// publishes one attributable event each (#144). What that costs is a scan of
+// what the statement matched, on every delete of a published model.
+//
+// Memberships are the one hard delete in this application, and they stay
+// unpublished — but for a smaller reason than before. The old one was that the
+// event could not be attributed to a workspace at all; the remaining one is that
+// nothing in the client displays a membership list, so the fan-out would buy
+// nothing. Publishing them would now be correct, just not useful.
 
 // publishChanges wires the models whose changes a client displays.
 //

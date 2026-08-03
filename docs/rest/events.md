@@ -75,10 +75,17 @@ Two event types.
 `delete`. `key` is the row's primary key rendered the way the URL renders it, so
 it concatenates onto the resource path.
 
-`key` is **empty on a delete**. sqlb's `AfterDelete` hook receives the number of
-rows removed rather than the rows themselves, so the key is not available to
-publish. Read a keyless event as "invalidate this collection", which is what a
-delete asks of a client anyway: the row is gone and the list it was in changed.
+A delete carries its `key` like any other change, one event per removed row.
+That is `AfterDeleteRows` doing the work: `PublishChanges` registers it, so the
+delete runs `DELETE … RETURNING` and the publisher sees what went. The cost is a
+scan of everything the statement matched, paid on every delete of a published
+model — the alternative was an event naming no row, which a subscriber keyed on
+one cannot use and a tenant filter cannot attribute.
+
+`key` may still be **empty**, and a client has to handle it: a publisher written
+by hand against `AfterDelete` gets a count and can only name the table. Read a
+keyless event as "invalidate this collection", which is what a delete asks of a
+client anyway — the row is gone and the list it was in changed.
 
 **`reset`** carries `{reason}` and means the stream could not be resumed —
 refetch everything you display. It arrives when a reconnection's `Last-Event-ID`

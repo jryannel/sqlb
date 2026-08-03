@@ -140,10 +140,10 @@ WebSocket. Any delivery guarantee at all.
   The fix is a larger buffer, and if that is not enough, collapsing queued events
   per table before the buffer fills — which is sound precisely because the events
   are invalidations and two of them for the same table are one.
-- **Keyless deletes prove too coarse.** They are keyless because sqlb's
-  `AfterDelete` hook receives a count rather than the rows removed. Giving the
-  hook the deleted keys is a change to the hook signature, and worth it only if a
-  measured refetch cost says so.
+- ~~**Keyless deletes prove too coarse.**~~ Answered on 2026-08-03, and not by
+  the measurement this entry asked for — see the revision below. What settled it
+  was that a *scope* cannot be recovered from a count either, so the filter this
+  record added had to let every delete through to every tenant.
 
 ## Cost of change
 
@@ -173,3 +173,25 @@ unaffected by their removal.
   row, and a filter needs to know which tenant owned the row. Reading it from the
   model's declared scope column rather than from a new option means the same
   declaration that obliges the read hooks also makes the feed filterable.
+- 2026-08-03 — **A delete names its row.** `PublishChanges` registers
+  `sqlb.Hooks.AfterDeleteRows` — a second delete hook added for
+  [#144](https://github.com/jryannel/sqlb/issues/144) — and publishes one event
+  per removed row. The open question above asked for a measured refetch cost
+  before paying for this, and the thing that actually decided it was the
+  revision immediately above rather than any measurement: `Event.Scope` is read
+  off the changed row, so a keyless delete was also a *scopeless* one, and
+  `EventsOptions.Filter` had nothing to compare. A feed with a tenant filter that
+  cannot attribute its deletes is not a filtered feed for the operation a client
+  most needs to hear about.
+
+  The cost this entry was hedging against is real and now paid: a delete of a
+  published model runs `DELETE … RETURNING` and scans what it matched. It is
+  confined to published models, because the clause is added only where a
+  row-taking hook is registered.
+
+  Worth keeping as a lesson about how these entries are written. "Worth it only
+  if a measured refetch cost says so" named the wrong axis — the cost that
+  mattered was not what subscribers refetch but what the filter can decide, and
+  that was already knowable from the record's own previous revision. A *what
+  would change our mind* item that names one metric can hide the argument that
+  settles the question.
