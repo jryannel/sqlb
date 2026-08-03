@@ -1,7 +1,9 @@
 # ADR-0048: The agent skill is generated where it can be gated, and static only where no check is possible
 
-- **Status:** Exploring — nothing is built. The emitter's shape is settled by the
-  four that exist; what a skill has to *say* to change an agent's output is not
+- **Status:** Exploring — the static half is written
+  ([`skills/sqlb-queries`](../../skills/sqlb-queries/SKILL.md)); the emitter is
+  not. The emitter's shape is settled by the four that exist; what a skill has
+  to *say* to change an agent's output is not
 - **Confidence:** High that a static skill alone is the wrong answer for sqlb,
   because the thing an agent gets wrong is which capabilities a project
   declared and that is per-project by construction. Medium that generating into
@@ -177,3 +179,14 @@ expensive to get wrong later.
   failing check over a written-down rule is what *selects* which half is
   generated — it is the argument for the split, not an objection to be worked
   around.
+- 2026-08-03 — `skills/sqlb-queries` written, which tested the record's central
+  claim earlier than expected. Writing it required compiling every sample, and
+  that caught three wrong signatures and one stale census row — `Field.ContainsJSON`
+  has made jsonb containment first-class since `special-cases.md` was measured.
+  Two consequences for the unbuilt half. The argument that a drifting skill is
+  worse than none is now *observed* rather than reasoned: prose about an API
+  rots in four days, which is the case for generating the project-specific half
+  rather than writing it. And the traps turned out to be the payload — what
+  earns a static skill its place is not the boundary table but the four failure
+  modes that pass their tests, which suggests the emitter should carry structure
+  and leave behaviour here.
