@@ -137,11 +137,15 @@ tempt a project into deleting the file that carries them.
 
 ## What would change our mind
 
-- **Nothing loads it.** The generated skill's value is invisible from inside the
-  repository. If agents produce the same schema edits with and without it, it is
-  weight, and the honest response is to delete the emitter rather than improve
-  it. Still unmeasured — the 2026-08-03 corpus run below measured the artefact,
-  not the behaviour, and those are different claims.
+- **Nothing loads it.** Partly answered on 2026-08-03, and the answer narrowed
+  the claim rather than confirming it: the skill buys nothing on direct questions
+  and does appear to buy something on task-shaped work where checking is
+  optional. If a larger run shows the second effect is noise too, the emitter is
+  weight and should go.
+- **The trigger does not fire.** Untested, and now the load-bearing unknown. The
+  A/B below inlined the skill, which assumes the description already caused it to
+  load. If a schema skill is only read when someone names it, the frontmatter is
+  doing nothing and the whole design reduces to a document with a pointer.
 - **It is too large to load speculatively.** Measured once and acted on: the
   per-column table went, taking 62% of the document with it, and the cost is now
   ~290 bytes per resource. Still linear and still uncapped, so the condition
@@ -299,3 +303,33 @@ expensive to get wrong later.
   passing for the wrong reason — the exact failure
   [ADR-0016](0016-guards-proven-both-ways.md) is about, found by deleting the
   thing it was meant to be watching.
+- 2026-08-03 — **A/B'd against agents, and the result is narrower than the
+  premise.** Twenty runs on one model, ten per round, control given the 328-line
+  schema declaration and treatment given the same plus the skill inlined. Both
+  arms could read the schema; neither had any other sqlb context.
+
+  **Round 1, ten direct questions** — is `author_id` filterable on tasks, what
+  does `?search` cover on workspaces, how do you complete a task, and so on.
+  **Both arms scored 50/50.** No accuracy difference at all. What differed was
+  cost: the control averaged 4.0 tool calls and 59 s, the treatment 1.0 and 9 s.
+  So on a schema small enough to read, the skill buys a 6× round-trip saving and
+  nothing else — and this record's original premise, that an agent gets these
+  facts *wrong*, is simply not true for a capable model asked directly.
+
+  **Round 2, one task-shaped request** where the wrong answer is silently
+  plausible: list tasks *created by* a user, finished, newest first, with the list
+  expanded. `author_id` is not filterable, and nothing about the request says so.
+  **Two of five control runs emitted the unfilterable filter and reported
+  "NOTES: none".** Five of five treatment runs caught it. That is the failure the
+  emitter exists for, reproduced — but at n=5 per arm, 2/5 against 0/5 is
+  Fisher p ≈ 0.44, which establishes the failure mode and not its rate.
+
+  **The size decision cost something, and only this found it.** One treatment run
+  used *zero* tool calls, correctly reported that no filterable creator column
+  exists — and named it `created_by`, because it does not exist in the skill. The
+  document lists what is filterable, so it can say a column is not, but it can no
+  longer say what that column is *called*. That is a direct consequence of
+  dropping the per-column table one commit earlier. It is not obviously the wrong
+  trade — 96 KB → 37 KB for one wrong identifier in one run of five — but it is a
+  real cost and it should be re-examined if a cheaper way to carry non-filterable
+  column names appears.
