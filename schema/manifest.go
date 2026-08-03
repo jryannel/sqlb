@@ -248,7 +248,7 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 			Nullable:   d.Nullable,
 			Comment:    d.Comment,
 			Enum:       d.EnumValues,
-			HasDefault: d.Default != nil,
+			HasDefault: d.DatabaseSupplied(),
 			ReadOnly:   d.ReadOnly,
 			Immutable:  d.Immutable,
 			Scoped:     d.Scoped,

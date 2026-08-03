@@ -479,25 +479,25 @@ func buildColumn(table string, col columnRow, cons *constraints,
 		rep.add(table, col.Name, "generated column, which the DSL cannot declare", col.Type)
 		return nil, false
 	}
-	if col.Identity != "" {
-		rep.add(table, col.Name, "identity column, which the DSL cannot declare "+
-			"(a default is the nearest thing)", col.Type)
-		return nil, false
-	}
-	// A serial is an identity column in older clothing, and the check above
-	// misses it because attidentity is empty for one. Left alone it imports as
-	// an ordinary column whose default happens to name a sequence, so the table
-	// reports clean and the DDL it produces does not run — the sequence is a
-	// separate object and Diff renders no CREATE SEQUENCE.
+	// An auto-incrementing integer key, in either of the two spellings Postgres
+	// has for it: `attidentity` for a GENERATED … AS IDENTITY column, and a
+	// nextval default for a serial, which records no identity at all and so is
+	// invisible to the first check.
 	//
-	// The column goes rather than only its default: declaring the column
-	// without the default the database has would leave every Diff proposing to
-	// add one back, which is the permanently-red gate stripCast exists to avoid.
-	if isSequenceDefault(col.Default) {
-		rep.add(table, col.Name, "column draws its default from a sequence (a serial), "+
-			"which the DSL cannot declare — the sequence is a separate object, and a "+
-			"declaration without the default would diff against the real column forever",
-			col.Type)
+	// Both used to be refused, honestly — the DSL could declare neither, and
+	// importing a serial as an ordinary column whose default happens to name a
+	// sequence produced DDL that does not run, since Diff renders no CREATE
+	// SEQUENCE. The cost of that refusal was the whole construct: no
+	// auto-incrementing integer key was expressible, so a table with one and
+	// every module holding it stayed outside the gate (issue #132).
+	//
+	// The auto-ness is read here rather than left in the default, because a
+	// serial's nextval names a sequence *object* and a declaration that carried
+	// the expression verbatim would render a default binding to a sequence
+	// nothing creates.
+	auto, refused := columnAuto(col)
+	if refused != "" {
+		rep.add(table, col.Name, refused, col.Type)
 		return nil, false
 	}
 
@@ -528,8 +528,21 @@ func buildColumn(table string, col columnRow, cons *constraints,
 	if !col.NotNull {
 		f.Nullable()
 	}
-	if d := columnDefault(col.Default, col.Type, t); d != nil {
-		f.Default(d)
+	switch auto {
+	case schema.AutoSerial:
+		// The nextval default is the serial and is not read as a default of its
+		// own: a declaration carrying it would render a default naming a
+		// sequence nothing creates, where the serial spelling makes Postgres
+		// create it.
+		f.Serial()
+	case schema.AutoIdentity:
+		f.Identity()
+	case schema.AutoIdentityAlways:
+		f.IdentityAlways()
+	default:
+		if d := columnDefault(col.Default, col.Type, t); d != nil {
+			f.Default(d)
+		}
 	}
 	if col.Comment != "" {
 		f.Comment(col.Comment)

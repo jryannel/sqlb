@@ -37,6 +37,43 @@ func GoName(s string) string {
 	return b.String()
 }
 
+// EnumConst is the constant-name suffix for one enum value: the value with
+// every run of characters that cannot appear in a Go identifier treated as a
+// word boundary.
+//
+//	draft          → Draft
+//	task.assigned  → TaskAssigned
+//	image/png      → ImagePng
+//
+// The value itself is never touched — it stays verbatim on the right of the
+// `=`, because it is data and the constant name is not. Deriving the name by
+// title-casing the value whole emitted `NotificationTypeTask.assigned`, which
+// does not parse, so a value set spelled with the ordinary dotted namespacing
+// convention could not be declared at all (issue #138).
+//
+// `_` was already the word boundary, so this is GoName over a value normalised
+// to underscores: the initialism table still reaches api.key and the rule stays
+// one rule rather than two.
+//
+// A leading digit needs no escape here. The name is always emitted with the
+// enum's type name in front of it, so `2fa.enabled` becomes
+// NotificationType2faEnabled and starts with an N. An empty value has no word
+// in it at all, and takes a name rather than colliding with the bare type name.
+func EnumConst(value string) string {
+	var norm strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			norm.WriteRune(r)
+			continue
+		}
+		norm.WriteRune('_')
+	}
+	if name := GoName(norm.String()); name != "" {
+		return name
+	}
+	return "Empty"
+}
+
 // unexportedGoName is GoName with a lower-case first letter, for the private
 // column-set types. It avoids producing a Go keyword.
 func unexportedGoName(s string) string {

@@ -554,7 +554,7 @@ func Capture(r *schema.Registry) Snapshot {
 				Size:        d.Size,
 				Enum:        d.EnumValues,
 				Nullable:    d.Nullable,
-				HasDefault:  d.Default != nil,
+				HasDefault:  d.DatabaseSupplied(),
 				Hidden:      d.Hidden,
 				ReadOnly:    d.ReadOnly,
 				Immutable:   d.Immutable,
