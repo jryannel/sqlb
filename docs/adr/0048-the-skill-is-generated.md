@@ -140,8 +140,12 @@ tempt a project into deleting the file that carries them.
 - **Nothing loads it.** The generated skill's value is invisible from inside the
   repository. If agents produce the same schema edits with and without it, it is
   weight, and the honest response is to delete the emitter rather than improve
-  it. This is measurable: the second corpus is eleven schemas that can be edited
-  both ways.
+  it. Still unmeasured — the 2026-08-03 corpus run below measured the artefact,
+  not the behaviour, and those are different claims.
+- **It is too large to load speculatively.** Measured, and the live one. The
+  document is linear in exposed resources at roughly 800 bytes each with no cap,
+  so a 127-resource schema produces 96 KB. A skill that has to be loaded
+  deliberately has lost the trigger that was the point of generating it.
 - **The skill format churns.** If `SKILL.md`'s shape moves more than about once
   a year, generating into it is generating at a moving target, and a doc plus a
   pointer is the better trade.
@@ -227,3 +231,45 @@ expensive to get wrong later.
 
   What has not changed is the thing to watch. The skill is committed, gated and
   correct, and none of that is evidence that it changes what an agent writes.
+- 2026-08-03 — **Measured against the corpus, and it found a size problem.**
+  Twelve `studio_*` application databases, 565 tables, of which 404 are domain
+  tables once the 161 goose-per-module bookkeeping tables are excluded the way
+  `sqlb survey` excludes them. Each was introspected, every addressable table
+  exposed, and the skill rendered.
+
+  Two corrections to this record. The second corpus is **twelve applications of
+  a modular monolith**, not "eleven schemas" — the earlier wording conflated it
+  with `subject-go`, which is one application of 84 tables. And what was measured
+  is the *artefact*: whether it is fit to load at real scale. Whether it changes
+  what an agent writes is still untested, and no amount of this substitutes.
+
+  **The frontmatter guard holds.** The description stayed between 403 and 633
+  characters across schemas from 6 to 139 tables, so capping the name list at
+  twelve was the right call and is now evidence rather than caution.
+
+  **The document is too large, and that is the finding.** It is linear in exposed
+  resources at 760–870 bytes each with no cap: 7 KB at 6 resources, 25 KB at 29,
+  38 KB at 44, 96 KB at 127. It crosses the size of the *hand-written*
+  `sqlb-queries` skill at about twelve tables, and at the corpus median it is
+  three to four times larger. A 96 KB instruction file is not something a model
+  loads on the chance it is relevant, which was the entire premise of putting the
+  trigger in the frontmatter.
+
+  Where the bytes are, measured by section: the per-resource **column tables are
+  44–49%** of the document, the capability tables 27–31%, the resource index 9%.
+  So the column tables — added late, and the part that describes what a *response*
+  carries rather than what a *request* may name — are roughly half the cost of
+  the artefact and the least load-bearing half of its content. Dropping them
+  nearly halves it.
+
+  **A near-miss worth recording**, because it is the shape of error this kind of
+  measurement invites. The first pass reported that only 67% of tables keep a
+  primary key through introspect, with 161 lost to identity columns — which read
+  as a serious adoption finding against
+  [ADR-0034](0034-one-column-addresses-a-row.md)'s priorities. Checking what
+  those tables *were* showed all 161 are migration bookkeeping and none is a
+  domain table. Excluding them, 27 of 404 domain tables (6.7%) are not addressable
+  by a single column, which is ADR-0034's own estimate rather than a challenge to
+  it. The lesson is that a corpus count over a database includes tables no
+  adoption would ever declare, and a ratio that does not exclude them measures
+  the migration runner.
