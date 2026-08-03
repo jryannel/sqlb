@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/jryannel/sqlb/introspect"
@@ -308,94 +309,213 @@ func runSurvey(ctx context.Context, out report, src, dst *pgxpool.Pool, modules,
 		// errAll would replace two phases of report with one line on stderr.
 		return nil //nolint:nilerr // errAll is reported in the document, which is the output
 	}
-	applyFails, residual, complete := fixpoint(ctx, out, dst, regAll, excluded)
-	if !complete {
+	fp := fixpoint(ctx, out, dst, regAll, excluded)
+	if !fp.complete {
 		return nil
 	}
 
 	out.printf("## Verdict\n\n")
 	out.printf("- tables: %d — %d clean, %d partial, %d refused\n", len(all), len(clean), len(skipped), len(errored))
 	out.printf("- skipped constructs (whole schema): %d\n", lenSkips(repAll))
-	out.printf("- DDL apply failures: %d\n", len(applyFails))
-	out.printf("- fixpoint residual: %d\n", len(residual))
+	out.printf("- DDL apply failures: %d\n", len(fp.applyFails))
+	out.printf("- fixpoint residual: %d (reached after %s)\n", len(fp.residual), iterationCount(fp.iterations))
 	return nil
+}
+
+// iterationCount spells the loop count, since "1 iterations" in a verdict is
+// the kind of thing that gets read as a bug in the survey.
+func iterationCount(n int) string {
+	if n == 1 {
+		return "1 iteration"
+	}
+	return fmt.Sprintf("%d iterations", n)
+}
+
+// maxFixpointRounds bounds the loop below.
+//
+// Three, because two is the answer for everything found so far and a bound of
+// two could not tell "converged on the last round" from "still moving". A
+// construct that has not settled by the third round is one whose spelling
+// oscillates rather than one Postgres normalises, and that is a finding.
+const maxFixpointRounds = 3
+
+// fixpointResult is what Phase C found: whether the round trip settles, on
+// which round, and what was still moving when the loop gave up.
+type fixpointResult struct {
+	// applyFails is from the first round only. It answers "does the DDL
+	// rendered from this database apply", and every later round renders a
+	// declaration derived from a database rather than the adopter's own.
+	applyFails []string
+	// residual is what the last round could not account for: empty when the
+	// round trip settled.
+	residual []migrate.Change
+	// iterations is how many rounds it took to settle, or maxFixpointRounds
+	// when it did not.
+	iterations int
+	complete   bool
 }
 
 // fixpoint renders the modelled registry's DDL into the empty database and
 // re-introspects it: anything the round trip does not preserve is a construct
 // the gate would report as drift forever.
 //
+// It iterates, and the iteration is the phase's whole point rather than
+// belt-and-braces. Postgres normalises some expressions to a *different*
+// spelling on the second application than on the first — a CHECK over a varchar
+// is stored as a cast of the array, then, fed back verbatim, as a cast of each
+// element — so the round trip is a fixpoint at two iterations and comparing
+// after one reports a residual for a schema that is perfectly stable (#136).
+// The residual measured after one round says "this schema will never settle"
+// about a schema that settles on the next round, which is the more expensive of
+// the two possible errors: Phase C is the phase an adopter trusts precisely
+// when Phase B looked too good.
+//
+// So each round renders the *previous round's* declaration into an emptied
+// database and asks whether what comes back is the same declaration. That is
+// the literal reading of "is this a fixpoint", it needs no list of the
+// spellings Postgres rewrites, and it therefore also covers whatever else
+// normalises on second application that nobody has hit yet.
+//
 // It returns no error, and that is the design rather than an omission. Every
 // failure in here is one of the survey's *answers* — a diff that will not
 // compute against this database is exactly the kind of thing the report exists
 // to name, and turning it into a non-zero exit would throw away the two phases
 // already written. So a failed step is printed where it happened and the phase
-// stops; the bool says whether it got far enough for the verdict to have counts
+// stops; complete says whether it got far enough for the verdict to have counts
 // worth quoting.
 func fixpoint(
 	ctx context.Context, out report, dst *pgxpool.Pool,
 	regAll *schema.Registry, excluded []string,
-) (applyFails []string, residual []migrate.Change, complete bool) {
-	regEmpty, _, err := introspect.Registry(ctx, dst, introspect.Options{Exclude: excluded})
-	if err != nil {
-		out.printf("introspect dst: %s\n\n", oneline(err.Error()))
-		return nil, nil, false
-	}
-	create, err := migrate.Diff(regEmpty, regAll)
-	if err != nil {
-		out.printf("diff empty->all: %s\n\n", oneline(err.Error()))
-		return nil, nil, false
-	}
-	for _, c := range create {
-		if _, err := dst.Exec(ctx, c.Up); err != nil {
-			applyFails = append(applyFails, fmt.Sprintf("%s — %s", c.Comment, oneline(err.Error())))
-		}
-	}
-	out.printf("DDL statements: %d, apply failures: %d\n\n", len(create), len(applyFails))
-	for i, f := range applyFails {
-		if i >= 20 {
-			out.printf("  … and %d more\n", len(applyFails)-20)
-			break
-		}
-		out.printf("  FAIL %s\n", f)
-	}
-	if len(applyFails) > 0 {
-		out.printf("\n")
-	}
+) fixpointResult {
+	var res fixpointResult
+	reg := regAll
 
-	regBack, _, err := introspect.Registry(ctx, dst, introspect.Options{Exclude: excluded})
-	if err != nil {
-		out.printf("re-introspect dst: %s\n\n", oneline(err.Error()))
-		return nil, nil, false
+	for round := 1; round <= maxFixpointRounds; round++ {
+		if round > 1 {
+			// The previous round's tables go, so that this one renders from
+			// empty rather than diffing against what it already built.
+			// Extensions stay, which is why this drops tables by name rather
+			// than the schema they are in — Phase A told the adopter to create
+			// them here and doing it once should be enough.
+			if err := dropAll(ctx, dst, excluded); err != nil {
+				out.printf("reset dst before round %d: %s\n\n", round, oneline(err.Error()))
+				return res
+			}
+			out.printf("### Round %d\n\n", round)
+			out.printf("Round %d did not settle, so what it produced is rendered again: "+
+				"a declaration Postgres rewrote on the way in is fed back to find out "+
+				"whether the rewrite is stable or the spelling oscillates.\n\n", round-1)
+		}
+
+		regEmpty, _, err := introspect.Registry(ctx, dst, introspect.Options{Exclude: excluded})
+		if err != nil {
+			out.printf("introspect dst: %s\n\n", oneline(err.Error()))
+			return res
+		}
+		create, err := migrate.Diff(regEmpty, reg)
+		if err != nil {
+			out.printf("diff empty->all: %s\n\n", oneline(err.Error()))
+			return res
+		}
+		var fails []string
+		for _, c := range create {
+			if _, err := dst.Exec(ctx, c.Up); err != nil {
+				fails = append(fails, fmt.Sprintf("%s — %s", c.Comment, oneline(err.Error())))
+			}
+		}
+		if round == 1 {
+			res.applyFails = fails
+		}
+		out.printf("DDL statements: %d, apply failures: %d\n\n", len(create), len(fails))
+		for i, f := range fails {
+			if i >= 20 {
+				out.printf("  … and %d more\n", len(fails)-20)
+				break
+			}
+			out.printf("  FAIL %s\n", f)
+		}
+		if len(fails) > 0 {
+			out.printf("\n")
+		}
+
+		regBack, _, err := introspect.Registry(ctx, dst, introspect.Options{Exclude: excluded})
+		if err != nil {
+			out.printf("re-introspect dst: %s\n\n", oneline(err.Error()))
+			return res
+		}
+		residual, err := migrate.Diff(reg, regBack)
+		if err != nil {
+			out.printf("diff all->back: %s\n\n", oneline(err.Error()))
+			return res
+		}
+
+		res.residual, res.iterations, res.complete = residual, round, true
+		if len(residual) == 0 {
+			out.printf("round trip settled after %s: residual **0**\n\n", iterationCount(round))
+			return res
+		}
+
+		out.printf("round %d changed **%d** thing(s)", round, len(residual))
+		if round < maxFixpointRounds {
+			out.printf(" — not yet a fixpoint, so the loop continues\n\n")
+		} else {
+			out.printf(", and this was the last round: the residual below is what did **not** settle\n\n")
+		}
+		printResidual(out, residual)
+
+		// The next round asks about what the database actually has, not about
+		// what was declared to it. Comparing every round against regAll would
+		// never converge on a construct Postgres rewrites, because regAll
+		// keeps the spelling the source database happened to store.
+		reg = regBack
 	}
-	residual, err = migrate.Diff(regAll, regBack)
-	if err != nil {
-		out.printf("diff all->back: %s\n\n", oneline(err.Error()))
-		return nil, nil, false
-	}
-	out.printf("residual changes after round trip: **%d** (0 == fixpoint)\n\n", len(residual))
+	return res
+}
+
+// printResidual writes one round's unaccounted-for changes, counted by kind
+// and then listed.
+func printResidual(out report, residual []migrate.Change) {
 	byComment := map[string]int{}
 	for _, c := range residual {
 		byComment[kindOf(c.Comment)]++
 	}
-	if len(residual) > 0 {
-		kinds := keys(byComment)
-		sort.Strings(kinds)
-		out.printf("| residual kind | count |\n|---|---:|\n")
-		for _, k := range kinds {
-			out.printf("| %s | %d |\n", k, byComment[k])
-		}
-		out.printf("\n")
-		for i, c := range residual {
-			if i >= 30 {
-				out.printf("  … and %d more\n", len(residual)-30)
-				break
-			}
-			out.printf("  - %-45s %s\n", c.Comment, oneline(c.Up))
-		}
-		out.printf("\n")
+	kinds := keys(byComment)
+	sort.Strings(kinds)
+	out.printf("| residual kind | count |\n|---|---:|\n")
+	for _, k := range kinds {
+		out.printf("| %s | %d |\n", k, byComment[k])
 	}
-	return applyFails, residual, true
+	out.printf("\n")
+	for i, c := range residual {
+		if i >= 30 {
+			out.printf("  … and %d more\n", len(residual)-30)
+			break
+		}
+		out.printf("  - %-45s %s\n", c.Comment, oneline(c.Up))
+	}
+	out.printf("\n")
+}
+
+// dropAll empties the scratch database of the tables a round created, so the
+// next one renders into an empty schema.
+//
+// One statement with CASCADE, rather than a generated drop per table: the order
+// a foreign key requires is exactly what CASCADE exists to not have to compute,
+// and this is a scratch database whose entire contents this command wrote.
+func dropAll(ctx context.Context, db *pgxpool.Pool, excluded []string) error {
+	tables, err := listTables(ctx, db, excluded)
+	if err != nil {
+		return err
+	}
+	if len(tables) == 0 {
+		return nil
+	}
+	quoted := make([]string, len(tables))
+	for i, t := range tables {
+		quoted[i] = pgx.Identifier{t}.Sanitize()
+	}
+	_, err = db.Exec(ctx, "DROP TABLE IF EXISTS "+strings.Join(quoted, ", ")+" CASCADE")
+	return err
 }
 
 // printByModule regroups the per-table verdict by table-name prefix.
