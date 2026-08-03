@@ -55,6 +55,7 @@ func seedBlog(t *testing.T, db *pgxpool.Pool) (orgID, authorID string) {
 }
 
 func TestExpandRunsAndScansAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -96,6 +97,7 @@ func TestExpandRunsAndScansAgainstPostgres(t *testing.T) {
 // database's answer. That is a test passing for the wrong reason, and this file
 // exists to stop exactly that kind of thing.
 func TestHiddenColumnsDoNotSurviveTheJoin(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -128,6 +130,7 @@ func TestHiddenColumnsDoNotSurviveTheJoin(t *testing.T) {
 // this happen through its own DDL would be a different bug. What is under test
 // is what the query does when it happens.
 func TestAMissingTargetExpandsToNullNotAnEmptyObject(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -167,6 +170,7 @@ func TestAMissingTargetExpandsToNullNotAnEmptyObject(t *testing.T) {
 // an unqualified reference to any of them is ambiguous — which Postgres refuses
 // outright rather than resolving.
 func TestExpandComposesWithTheOtherQueryParameters(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -275,6 +279,7 @@ func seedAuthorPosts(t *testing.T, db *pgxpool.Pool, orgID, authorID string) {
 }
 
 func TestExpandCollectionRunsAndScansAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -322,6 +327,7 @@ func TestExpandCollectionRunsAndScansAgainstPostgres(t *testing.T) {
 // distinguishable, which is the same argument the forward direction makes about
 // NULL versus an object of nulls.
 func TestAnEmptyCollectionIsAnEmptyArray(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -371,6 +377,7 @@ func TestAnEmptyCollectionIsAnEmptyArray(t *testing.T) {
 // tags PasswordHash `json:"-"`, so a decoded struct would look clean whatever
 // the database returned.
 func TestHiddenColumnsDoNotSurviveACollection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -395,6 +402,7 @@ func TestHiddenColumnsDoNotSurviveACollection(t *testing.T) {
 // a subquery rather than a join. Three posts under one author still means one
 // author row, and the count is unchanged by the expansion.
 func TestACollectionDoesNotMultiplyTheBaseRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -425,6 +433,7 @@ func TestACollectionDoesNotMultiplyTheBaseRows(t *testing.T) {
 // created_at and updated_at, so an unqualified reference to any of them is
 // ambiguous — and the subquery adds a second scope in which that is true.
 func TestACollectionComposesWithTheOtherQueryParameters(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -463,6 +472,7 @@ func TestACollectionComposesWithTheOtherQueryParameters(t *testing.T) {
 // schema.Lint reports an unindexed one as a warning rather than as hygiene.
 // This asserts the index is actually used rather than trusting that it exists.
 func TestACollectionUsesTheForeignKeyIndex(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -516,6 +526,7 @@ func TestACollectionUsesTheForeignKeyIndex(t *testing.T) {
 // assert what the SQL says. What matters is which rows come back, and only
 // Postgres answers that.
 func TestExpandDoesNotCrossATenantBoundary(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())

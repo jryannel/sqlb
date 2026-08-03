@@ -19,6 +19,7 @@ import (
 // necessarily are.
 
 func TestAnUnnormalisedCheckIsExplainedRatherThanJustProposed(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 	applySchema(t, db, checked(declaredCheck))
 	current := importRegistry(t, db)
@@ -39,6 +40,7 @@ func TestAnUnnormalisedCheckIsExplainedRatherThanJustProposed(t *testing.T) {
 }
 
 func TestAnUnnormalisedPredicateIsExplainedRatherThanJustProposed(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 	applySchema(t, db, partial(declaredPredicate))
 	current := importRegistry(t, db)

@@ -20,6 +20,7 @@ import (
 // migration that was edited after it ran, or one that never applied cleanly,
 // shows up here rather than in the next generated migration.
 func TestTheHistoryProducesTheSchemaItClaimsTo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// A history with two migrations, because one proves nothing about order.
@@ -73,6 +74,7 @@ func TestTheHistoryProducesTheSchemaItClaimsTo(t *testing.T) {
 // needs no API of its own: the drift is the diff between what the history
 // builds and what the database actually holds.
 func TestShadowCatchesDrift(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	declared := schema.NewRegistry()
@@ -110,6 +112,7 @@ func TestShadowCatchesDrift(t *testing.T) {
 // against a state that never existed. Nothing downstream can detect that, which
 // is why it is refused here.
 func TestReplayRefusesANonEmptyDatabase(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	reg := schema.NewRegistry()
 	reg.Table("orgs", schema.UUIDv7("id").PrimaryKey())
@@ -135,6 +138,7 @@ func TestReplayRefusesANonEmptyDatabase(t *testing.T) {
 // transaction, so a shadow that ignored it would fail on exactly the files the
 // directive exists for.
 func TestReplayHandlesTheConcurrentIndexSplit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	base := schema.NewRegistry()
@@ -183,6 +187,7 @@ func TestReplayHandlesTheConcurrentIndexSplit(t *testing.T) {
 // left here is the limit that cannot be engineered away: replay reproduces the
 // history as written, not the database somebody uncommented it into.
 func TestADestructiveChangeIsNotReplayed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	base := schema.NewRegistry()

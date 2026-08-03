@@ -27,6 +27,7 @@ import (
 // schemas that generate identical CREATE TABLE statements are the same schema
 // for every purpose sqlb has.
 func TestAdoptionIsAClosedLoop(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 
 	declared := schema.NewRegistry()

@@ -81,6 +81,7 @@ func declare(r *schema.Registry) {
 }
 
 func TestGeneratedDDLAppliesAndReadsBackUnchanged(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 
 	target := schema.NewRegistry()
@@ -172,6 +173,7 @@ func droppedConstraint(c migrate.Change) (string, bool) {
 // itself forever, so every migration after adoption carries the same phantom
 // change. ADR-0014 calls this out as the decisive check for that reason.
 func TestImportIsAFixpoint(t *testing.T) {
+	t.Parallel()
 	first := freshDB(t)
 
 	target := schema.NewRegistry()
@@ -199,6 +201,7 @@ func TestImportIsAFixpoint(t *testing.T) {
 // or if applySchema quietly executed no statements. Each of those is a bug that
 // turns the suite green while verifying nothing.
 func TestTheRoundTripCanFail(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 
 	target := schema.NewRegistry()

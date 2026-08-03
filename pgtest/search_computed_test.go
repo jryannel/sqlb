@@ -47,6 +47,7 @@ func searchRegistry() *schema.Registry {
 }
 
 func TestSearchMatchesThroughAComputedColumn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	mustExec(t, raw, `CREATE SEQUENCE searchchats_id_seq`)

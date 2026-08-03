@@ -60,6 +60,7 @@ func dateRegistry() *schema.Registry {
 }
 
 func TestExpandingARelationWithADateColumnRoundTrips(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	mustExec(t, raw, `CREATE SEQUENCE dateprojects_id_seq`)
@@ -109,6 +110,7 @@ func TestExpandingARelationWithADateColumnRoundTrips(t *testing.T) {
 // each being checked against the test author's expectation. The point of the
 // fix is that they agree; that is worth asserting rather than assuming.
 func TestADateReadsTheSameDirectlyAndThroughAnExpansion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	mustExec(t, raw, `CREATE SEQUENCE dateprojects_id_seq`)

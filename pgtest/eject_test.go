@@ -156,6 +156,7 @@ func ejNormalise(v any) any {
 
 // The read path, request for request.
 func TestEjectedServesTheSameReads(t *testing.T) {
+	t.Parallel()
 	generated, exit, pool := ejectedServers(t)
 	_, authorID := seedForEject(t, pool)
 
@@ -196,6 +197,7 @@ func TestEjectedServesTheSameReads(t *testing.T) {
 // filterable in the exit either, and an id that matches nothing is a 404 in
 // both.
 func TestEjectedRefusesTheSameRequests(t *testing.T) {
+	t.Parallel()
 	generated, exit, pool := ejectedServers(t)
 	seedForEject(t, pool)
 
@@ -234,6 +236,7 @@ func TestEjectedRefusesTheSameRequests(t *testing.T) {
 // intact in both cases; the eject contract is "same requests, same refusals",
 // and these were the spots where it was not.
 func TestEjectedRefusesTheSameOversizedRequests(t *testing.T) {
+	t.Parallel()
 	generated, exit, pool := ejectedServers(t)
 	seedForEject(t, pool)
 
@@ -265,6 +268,7 @@ func TestEjectedRefusesTheSameOversizedRequests(t *testing.T) {
 // a 5 followed by a 0 followed by anything. A silent behaviour change between
 // the API and its replacement, on the one pattern path that was not escaped.
 func TestEjectedSearchEscapesItsWildcards(t *testing.T) {
+	t.Parallel()
 	generated, exit, pool := ejectedServers(t)
 	seedForEject(t, pool)
 
@@ -292,6 +296,7 @@ func TestEjectedSearchEscapesItsWildcards(t *testing.T) {
 // the exit honest: silence here would mean a client's ?expand quietly returning
 // less than it asked for.
 func TestEjectedRefusesWhatItDoesNotServe(t *testing.T) {
+	t.Parallel()
 	generated, exit, pool := ejectedServers(t)
 	seedForEject(t, pool)
 
@@ -331,6 +336,7 @@ func TestEjectedRefusesWhatItDoesNotServe(t *testing.T) {
 // generated resource is the strongest form of this comparison: the two agree
 // about the row, not merely about their own output.
 func TestEjectedWritesAreReadableByTheGeneratedResource(t *testing.T) {
+	t.Parallel()
 	generated, exit, pool := ejectedServers(t)
 	orgID, _ := seedForEject(t, pool)
 
@@ -395,6 +401,7 @@ func TestEjectedWritesAreReadableByTheGeneratedResource(t *testing.T) {
 // (#70). Status parity is the property clients branch on, so it is the property
 // asserted.
 func TestEjectedAnswersAConstraintViolationTheSameWay(t *testing.T) {
+	t.Parallel()
 	generated, exit, pool := ejectedServers(t)
 	orgID, _ := seedForEject(t, pool)
 
@@ -441,6 +448,7 @@ func TestEjectedAnswersAConstraintViolationTheSameWay(t *testing.T) {
 // delete refuses to register without the hook that confines it — ADR-0030,
 // with the machinery removed and the property kept.
 func TestEjectedRefusesToMountWithoutItsHook(t *testing.T) {
+	t.Parallel()
 	err := ejected.Register(http.NewServeMux(), nil, ejected.Options{})
 	if err == nil {
 		t.Fatal("registering a soft-deleting resource with no Confine should fail")

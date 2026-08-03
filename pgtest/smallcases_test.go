@@ -62,6 +62,7 @@ func paymentsDB(t *testing.T) *sqlb.DB {
 // branch — but proving that needs the contention harness in census_test.go, and
 // it is a different question from the one this test answers.
 func TestIdempotencyKeyMakesASecondCallReturnTheFirstCallsRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := paymentsDB(t)
 
@@ -132,6 +133,7 @@ func (Doc) TableName() string { return "docs" }
 // them, and inventing one in a test would be proposing a design rather than
 // recording a behaviour.
 func TestOptimisticConcurrencyRefusesTheStaleWriter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshStockDB(t)
 	mustExec(t, raw, `
@@ -232,6 +234,7 @@ func samplesDB(t *testing.T) *sqlb.DB {
 // arithmetic, and a timing number would rot against hardware without saying
 // anything the cliff does not.
 func TestBulkInsertIsOneStatementWithAParameterCeiling(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := samplesDB(t)
 
@@ -300,6 +303,7 @@ func TestBulkInsertIsOneStatementWithAParameterCeiling(t *testing.T) {
 // the builder at all is the open question; this only shows what the escape
 // hatch costs today.
 func TestDistinctOnIsReachableOnlyThroughRawSel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := samplesDB(t)
 
@@ -362,6 +366,7 @@ func TestDistinctOnIsReachableOnlyThroughRawSel(t *testing.T) {
 // would make "no rows" and "rows summing to zero" indistinguishable, which is
 // a real distinction in a ledger.
 func TestAggregateOverAnEmptyRangeNeedsCoalesce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := samplesDB(t)
 
@@ -440,6 +445,7 @@ func (Batched) TableName() string { return "batched" }
 // per-position DEFAULT in a multi-row VALUES stops being something read in a
 // manual.
 func TestMixedBatchTakesTheDefaultPerRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := freshStockDB(t)
 	mustExec(t, db, `

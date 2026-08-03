@@ -20,6 +20,7 @@ import (
 // shim installed cannot tell the two spellings apart.
 
 func TestMinPostgres18AppliesToAStockPostgres(t *testing.T) {
+	t.Parallel()
 	db := freshStockDB(t)
 
 	target := schema.NewRegistry()
@@ -49,6 +50,7 @@ func TestMinPostgres18AppliesToAStockPostgres(t *testing.T) {
 // failure is what proves the gap is real — and it documents, executably, what a
 // project that has not set the option is depending on.
 func TestTheDefaultTargetStillNeedsTheExtension(t *testing.T) {
+	t.Parallel()
 	db := freshStockDB(t)
 
 	target := schema.NewRegistry()
@@ -86,6 +88,7 @@ func TestTheDefaultTargetStillNeedsTheExtension(t *testing.T) {
 // UUIDv7 column. Forever. That is exactly the failure ADR-0014 calls decisive,
 // and it would not show up in any test that used only the default target.
 func TestMinPostgres18RoundTripsAndIsAFixpoint(t *testing.T) {
+	t.Parallel()
 	first := freshStockDB(t)
 
 	target := schema.NewRegistry()

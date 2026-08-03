@@ -108,6 +108,7 @@ func drift(t *testing.T, pool *pgxpool.Pool, declared *schema.Registry) []migrat
 // nothing — which is the whole of what a drift gate needs, and what none of the
 // four issues allowed before.
 func TestDriftGateIsQuietWhenTheSchemaMatches(t *testing.T) {
+	t.Parallel()
 	pool := freshStockDB(t)
 	mustExec(t, pool, driftSchema)
 
@@ -123,6 +124,7 @@ func TestDriftGateIsQuietWhenTheSchemaMatches(t *testing.T) {
 // The gate is not quiet because it is blind: a column added to the database
 // behind the schema's back is reported.
 func TestDriftGateSeesAColumnTheSchemaDoesNotHave(t *testing.T) {
+	t.Parallel()
 	pool := freshStockDB(t)
 	mustExec(t, pool, driftSchema)
 	mustExec(t, pool, `ALTER TABLE projects ADD COLUMN hotfix text`)
@@ -138,6 +140,7 @@ func TestDriftGateSeesAColumnTheSchemaDoesNotHave(t *testing.T) {
 
 // And a column the schema declares that the database has lost.
 func TestDriftGateSeesAMissingColumn(t *testing.T) {
+	t.Parallel()
 	pool := freshStockDB(t)
 	mustExec(t, pool, driftSchema)
 	mustExec(t, pool, `ALTER TABLE projects DROP COLUMN status`)
@@ -157,6 +160,7 @@ func TestDriftGateSeesAMissingColumn(t *testing.T) {
 // The unmodelable corner: one tsvector column and a GIN index over it used to
 // abort the whole read, so no gate could be built for the other tables at all.
 func TestDriftGateSurvivesAnUnmodelableColumn(t *testing.T) {
+	t.Parallel()
 	pool := freshStockDB(t)
 	mustExec(t, pool, driftSchema)
 
@@ -186,6 +190,7 @@ func TestDriftGateSurvivesAnUnmodelableColumn(t *testing.T) {
 // preserved rather than proposed for deletion, which is the difference between
 // a usable gate and one that says DROP CONSTRAINT forever (issue #55).
 func TestDriftGateKeepsAForeignKeyIntoAnUndeclaredTable(t *testing.T) {
+	t.Parallel()
 	pool := freshStockDB(t)
 	mustExec(t, pool, driftSchema)
 
@@ -210,6 +215,7 @@ func TestDriftGateKeepsAForeignKeyIntoAnUndeclaredTable(t *testing.T) {
 // than against another registry: both spellings are the same default, and the
 // declared names are the ones Postgres has (issues #56 and #57).
 func TestDriftGateAgreesAboutDefaultsAndIndexNames(t *testing.T) {
+	t.Parallel()
 	pool := freshStockDB(t)
 	mustExec(t, pool, driftSchema)
 

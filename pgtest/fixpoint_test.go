@@ -238,6 +238,7 @@ func applyRegistry(t *testing.T, pool *pgxpool.Pool, reg *schema.Registry) {
 
 // The whole loop.
 func TestRoundTripIsAFixpoint(t *testing.T) {
+	t.Parallel()
 	// The pgvector image, because the fixture's whole point is the types and
 	// the index that were breaking the loop.
 	source := vectorDB(t)
@@ -284,6 +285,7 @@ func TestRoundTripIsAFixpoint(t *testing.T) {
 // the distance function, and pgvector has no default — so an index emitted
 // without one is rejected outright.
 func TestVectorIndexKeepsItsOperatorClassAndParameters(t *testing.T) {
+	t.Parallel()
 	source := vectorDB(t)
 	mustExec(t, source, awkwardSchema)
 
@@ -376,6 +378,7 @@ func renderChanges(label string, changes []migrate.Change) string {
 // against production proposes dropping and re-adding a constraint forever
 // (issue #53's fourth finding).
 func TestRebuiltDatabaseMatchesTheOriginal(t *testing.T) {
+	t.Parallel()
 	source := vectorDB(t)
 	mustExec(t, source, awkwardSchema)
 

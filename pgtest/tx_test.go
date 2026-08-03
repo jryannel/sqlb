@@ -44,6 +44,7 @@ func countAccounts(t *testing.T, db *sqlb.DB) int64 {
 // the right order. Only a real Postgres proves the rollback actually discards
 // the rows — that the unit of work is atomic rather than merely well-narrated.
 func TestWithTxRollbackDiscardsWrites(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := accountsDB(t)
 
@@ -69,6 +70,7 @@ func TestWithTxRollbackDiscardsWrites(t *testing.T) {
 }
 
 func TestWithTxCommitPersistsWrites(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := accountsDB(t)
 
@@ -93,6 +95,7 @@ func TestWithTxCommitPersistsWrites(t *testing.T) {
 // for. Without it the second statement can take a different pooled connection,
 // and a constraint the first depends on has not been applied yet.
 func TestWithTxKeepsBothLegsOnOneConnection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := accountsDB(t)
 
@@ -134,6 +137,7 @@ func TestWithTxKeepsBothLegsOnOneConnection(t *testing.T) {
 // registry could not express, because a hook had no way to learn it was inside
 // a transaction at all.
 func TestHookReadsUncommittedRowsThroughTxFrom(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := accountsDB(t)
 
@@ -177,6 +181,7 @@ func TestHookReadsUncommittedRowsThroughTxFrom(t *testing.T) {
 // the rows are actually there, and does not run when a constraint the database
 // enforces has thrown the whole unit of work away.
 func TestAfterCommitFiresOnlyForDurableWrites(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := accountsDB(t)
 	// The handle is an Executor, so DDL goes through it like anything else.
@@ -243,6 +248,7 @@ func TestAfterCommitFiresOnlyForDurableWrites(t *testing.T) {
 // failing. Confusing the two would have a caller retry a write that is already
 // durable.
 func TestAfterCommitFailureLeavesTheWriteDurable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := accountsDB(t)
 
@@ -266,6 +272,7 @@ func TestAfterCommitFailureLeavesTheWriteDurable(t *testing.T) {
 // that had already succeeded. This is what makes BeforeCreate usable as a
 // guard rather than as advice.
 func TestHookErrorRollsBackTheUnitOfWork(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := accountsDB(t)
 

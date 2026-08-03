@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/schema"
+	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -101,6 +102,7 @@ func vectorDB(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("parsing the connection string: %v", err)
 	}
 	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+	cfg.MaxConns = poolSize
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("opening %s: %v", name, err)
@@ -131,6 +133,9 @@ func startVectorPostgres() {
 		postgres.WithUsername("sqlb"),
 		postgres.WithPassword("sqlb"),
 		postgres.BasicWaitStrategies(),
+		// For the reason main_test.go raises it on the other container: the
+		// tests reaching this one run in parallel too.
+		testcontainers.WithCmdArgs("-c", "max_connections=200"),
 	)
 	if err != nil {
 		vectorErr = fmt.Errorf("starting %s: %w", pgvectorImage, err)
@@ -236,6 +241,7 @@ func seedForcedCorpus(t *testing.T, pool *pgxpool.Pool) {
 // for, in the right order, with nothing to say anything is missing. That is a
 // difference no test asserting on rows can see, and no user can either.
 func TestFilteredANNSearchSilentlyReturnsLessThanItWasAsked(t *testing.T) {
+	t.Parallel()
 	pool := vectorDB(t)
 	seedForcedCorpus(t, pool)
 	mustExecPool(t, pool, `CREATE INDEX docs_hnsw ON docs USING hnsw (embedding vector_cosine_ops)`)
@@ -297,6 +303,7 @@ func TestFilteredANNSearchSilentlyReturnsLessThanItWasAsked(t *testing.T) {
 // correct, because on some data it is and on other data it is not, and the
 // difference is not visible from the schema.
 func TestIterativeScanIsADataDependentMitigation(t *testing.T) {
+	t.Parallel()
 	pool := vectorDB(t)
 	seedForcedCorpus(t, pool)
 	mustExecPool(t, pool, `CREATE INDEX docs_hnsw ON docs USING hnsw (embedding vector_cosine_ops)`)
@@ -325,6 +332,7 @@ func TestIterativeScanIsADataDependentMitigation(t *testing.T) {
 // stable. It reports, so that a reader of the log can see which regime was in
 // force when the numbers above were produced.
 func TestThePlannerMayDeclineTheANNIndex(t *testing.T) {
+	t.Parallel()
 	pool := vectorDB(t)
 	seedForcedCorpus(t, pool)
 	mustExecPool(t, pool, `CREATE INDEX docs_hnsw ON docs USING hnsw (embedding vector_cosine_ops)`)
@@ -354,6 +362,7 @@ func TestThePlannerMayDeclineTheANNIndex(t *testing.T) {
 // Unlike the first claim this one is exact and stable: it is a property of the
 // operator classes, not of the data.
 func TestAMismatchedOpclassFallsBackToASequentialScan(t *testing.T) {
+	t.Parallel()
 	pool := vectorDB(t)
 	seedForcedCorpus(t, pool)
 	mustExecPool(t, pool, `CREATE INDEX docs_hnsw ON docs USING hnsw (embedding vector_cosine_ops)`)
@@ -396,6 +405,7 @@ func TestAMismatchedOpclassFallsBackToASequentialScan(t *testing.T) {
 // migration runner could turn into a refusal, which is a cheaper answer than
 // anything in the DSL — and every runner this project knows of discards notices.
 func TestIVFFlatOnAnEmptyTableWarnsAtBuildTime(t *testing.T) {
+	t.Parallel()
 	pool := vectorDB(t)
 	ctx := context.Background()
 	mustExecPool(t, pool, fmt.Sprintf(`
@@ -614,6 +624,7 @@ func codecPool(t *testing.T, base *pgxpool.Pool) *pgxpool.Pool {
 // extension statement runs first, the dimension reaches the column, and
 // Postgres accepts the whole thing.
 func TestVectorSchemaAppliesAndRoundTrips(t *testing.T) {
+	t.Parallel()
 	base := vectorDB(t)
 	// The extension is created by the migration rather than by the harness, so
 	// what runs here is what a project's first migration would run.
@@ -662,6 +673,7 @@ func TestVectorSchemaAppliesAndRoundTrips(t *testing.T) {
 // exactly representable, a negative, a zero — because "it round-trips" over
 // [1,2,3] would pass with a codec that silently went through float64.
 func TestVectorValuesRoundTripThroughTheCodec(t *testing.T) {
+	t.Parallel()
 	base := vectorDB(t)
 	mustExecPool(t, base, `DROP EXTENSION IF EXISTS vector`)
 	applySchema(t, base, embeddedSchema())
@@ -698,6 +710,7 @@ func TestVectorValuesRoundTripThroughTheCodec(t *testing.T) {
 // computed another is the failure the handle exists to make impossible, and it
 // is invisible in any test that checks only which rows came back.
 func TestNearSearchesAgainstARealDatabase(t *testing.T) {
+	t.Parallel()
 	base := vectorDB(t)
 	mustExecPool(t, base, `DROP EXTENSION IF EXISTS vector`)
 	applySchema(t, base, embeddedSchema())
@@ -767,6 +780,7 @@ func TestNearSearchesAgainstARealDatabase(t *testing.T) {
 // is part of the type, so a model swap that changes the width fails loudly on
 // the first write instead of storing vectors that mean nothing.
 func TestAWrongWidthVectorIsRefused(t *testing.T) {
+	t.Parallel()
 	base := vectorDB(t)
 	mustExecPool(t, base, `DROP EXTENSION IF EXISTS vector`)
 	applySchema(t, base, embeddedSchema())

@@ -122,6 +122,7 @@ func pooler(t *testing.T) (pooledDSN, directDSN string) {
 //
 // ADR-0019 records this as its open question. This is the answer.
 func TestTheQueryPathWorksThroughThePooler(t *testing.T) {
+	t.Parallel()
 	pooledDSN, directDSN := pooler(t)
 
 	direct, err := pgxpool.New(context.Background(), directDSN)
@@ -230,6 +231,7 @@ func maxPreparedStatements(t *testing.T, pooledDSN string) int {
 // the direct half is what makes the pooled half meaningful — without it, a
 // timeout could just as easily mean the notification was never sent.
 func TestListenNeedsADirectConnection(t *testing.T) {
+	t.Parallel()
 	pooledDSN, directDSN := pooler(t)
 	ctx := context.Background()
 
@@ -303,6 +305,7 @@ func TestListenNeedsADirectConnection(t *testing.T) {
 // connection too, every mutation would need one and ADR-0012's outbox trigger
 // could not fire from a pooled writer at all.
 func TestNotifyWorksThroughThePooler(t *testing.T) {
+	t.Parallel()
 	pooledDSN, directDSN := pooler(t)
 	ctx := context.Background()
 

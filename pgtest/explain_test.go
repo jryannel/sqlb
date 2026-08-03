@@ -61,6 +61,7 @@ func listShapes[T any](t *testing.T, name string, queries []url.Values) map[stri
 }
 
 func TestEveryPostQueryShapePlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := blogDB(t)
 
@@ -101,6 +102,7 @@ func TestEveryPostQueryShapePlans(t *testing.T) {
 }
 
 func TestEveryAuthorQueryShapePlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := blogDB(t)
 
@@ -126,6 +128,7 @@ func TestEveryAuthorQueryShapePlans(t *testing.T) {
 }
 
 func TestEveryOrgQueryShapePlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := blogDB(t)
 
@@ -146,6 +149,7 @@ func TestEveryOrgQueryShapePlans(t *testing.T) {
 // it is the one a resource would break silently: a list that plans and a count
 // that does not still returns rows, with a wrong total.
 func TestPaginationCountPlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := blogDB(t)
 
@@ -166,6 +170,7 @@ func TestPaginationCountPlans(t *testing.T) {
 // check pointed at a column that does not exist, proving the ones above would
 // have caught it.
 func TestExplainRejectsAColumnThatDoesNotExist(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := blogDB(t)
 
@@ -182,6 +187,7 @@ func TestExplainRejectsAColumnThatDoesNotExist(t *testing.T) {
 // regardless, so this asserts the diagnostic surface works rather than
 // asserting a particular plan.
 func TestPlanDiagnosticsAreReadable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := blogDB(t)
 

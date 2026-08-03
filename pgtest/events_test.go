@@ -84,6 +84,7 @@ func notesServer(t *testing.T) (*httptest.Server, *rest.Broker) {
 // is the one the database generated, and that a rolled-back write reaches no
 // subscriber at all.
 func TestChangeFeedFromAGeneratedWrite(t *testing.T) {
+	t.Parallel()
 	ts, broker := notesServer(t)
 
 	events := openEventStream(t, ts.URL+"/events")
@@ -117,6 +118,7 @@ func TestChangeFeedFromAGeneratedWrite(t *testing.T) {
 // handed a count rather than the rows. Against real Postgres because the
 // keyless event has to survive the same commit boundary as the keyed one.
 func TestChangeFeedOnDelete(t *testing.T) {
+	t.Parallel()
 	ts, broker := notesServer(t)
 
 	status, body := postJSON(t, ts.URL+"/notes", map[string]any{"body": "doomed"})
@@ -163,6 +165,7 @@ func TestChangeFeedOnDelete(t *testing.T) {
 // not catch it, because the phantom event would occupy exactly the position the
 // third write's event is expected at.
 func TestChangeFeedIsSilentWhenTheCommitFails(t *testing.T) {
+	t.Parallel()
 	ts, broker := notesServer(t)
 
 	events := openEventStream(t, ts.URL+"/events")

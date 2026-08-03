@@ -87,6 +87,7 @@ func metersDB(t *testing.T) *sqlb.DB {
 // the row that is not. The raw-SQL workaround this test used to carry is gone,
 // because leaving the builder is no longer the price of an atomic counter.
 func TestUpsertIncrementNeedsAnExpression(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := metersDB(t)
 
@@ -168,6 +169,7 @@ func TestUpsertIncrementNeedsAnExpression(t *testing.T) {
 // complaint about rollups is that there is no aggregate response shape at all,
 // and that is an example's job, not a test's.
 func TestDateTruncBucketNeedsALiteralUnit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := metersDB(t)
 
@@ -242,6 +244,7 @@ func TestDateTruncBucketNeedsALiteralUnit(t *testing.T) {
 // in the builder is open; what is settled here is that neither exists and what
 // the absence costs.
 func TestRelativeTimeWindowNeedsRawOrAGoComputedInstant(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := metersDB(t)
 
@@ -298,6 +301,7 @@ func TestRelativeTimeWindowNeedsRawOrAGoComputedInstant(t *testing.T) {
 // that choice is the design question; what is settled here is that today's
 // answer is wrong rather than merely absent.
 func TestADayFilterAgainstTimestamptzSilentlyMatchesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := metersDB(t)
 
@@ -368,6 +372,7 @@ func TestADayFilterAgainstTimestamptzSilentlyMatchesNothing(t *testing.T) {
 // Deliberately not: a GIN index, or an argument about jsonb containment
 // performance. The question here is expressibility.
 func TestJSONBIsStoredAndOnlyFilteredThroughRaw(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := metersDB(t)
 
@@ -430,6 +435,7 @@ func (Job) TableName() string { return "jobs" }
 // the rest of the proposed example and they are about a design for a change
 // feed, not about whether the lock holds.
 func TestClaimHandsEachRowToExactlyOneWorker(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshStockDB(t)
 	mustExec(t, raw, `
@@ -557,6 +563,7 @@ func (Invitation) TableName() string { return "invitations" }
 // design question; this settles what the runtime already gives that design to
 // build on.
 func TestAnInvariantInAPartialIndexArrivesAsANamedConstraint(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshStockDB(t)
 	mustExec(t, raw, `
@@ -620,6 +627,7 @@ func TestAnInvariantInAPartialIndexArrivesAsANamedConstraint(t *testing.T) {
 // says ADR-0034 already concedes the refusal is wider than its argument; this
 // pins the behaviour so a decision to narrow it fails here first.
 func TestCompositePrimaryKeyIsRefusedAndNamesItsWorkaround(t *testing.T) {
+	t.Parallel()
 	r := schema.NewRegistry()
 	r.Table("memberships",
 		schema.UUID("user_id").PrimaryKey(),
@@ -676,6 +684,7 @@ func TestCompositePrimaryKeyIsRefusedAndNamesItsWorkaround(t *testing.T) {
 // non-goal, and a tree that cannot be declared has a more basic problem than
 // one that cannot be walked.
 func TestSelfReferenceIsAPlainColumnWithoutAForeignKey(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 
 	r := schema.NewRegistry()

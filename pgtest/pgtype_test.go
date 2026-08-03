@@ -94,6 +94,7 @@ func sqlcPostTable(t *testing.T) *sqlb.DB {
 }
 
 func TestPgtypeColumnsRoundTripThroughTheBridge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := sqlcPostTable(t)
 
@@ -159,6 +160,7 @@ func TestPgtypeColumnsRoundTripThroughTheBridge(t *testing.T) {
 // plain Go types is that it carries NULL, and a codec that quietly turned an
 // absent value into a zero one would pass every assertion above.
 func TestPgtypeNullsRoundTripThroughTheBridge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := sqlcPostTable(t)
 
