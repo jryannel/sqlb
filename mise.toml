@@ -203,6 +203,37 @@ fi
 exit 0
 '''
 
+[tasks.preflight]
+description = "What to run before pushing. NOT the gate — `ci` is, and it runs on GitHub. This heals what the tooling can fix on its own, then proves the tree compiles and its database-free tests pass. Seconds, no Docker, no race detector, no Node, no Dart."
+run = '''
+set -e
+# The gate moved to CI deliberately. `mise run ci` on a laptop is the same
+# fourteen stages GitHub already runs in three parallel jobs, and running it
+# locally buys nothing but a slower loop — measured at 90s warm on an idle
+# machine, seven containers of its own, and considerably worse when several
+# worktrees do it at once. What is left here is only the part whose answer is
+# worth having *before* a push rather than three minutes after it.
+#
+# `heal` first, because the most common way this repository turns CI red is
+# drift a fixer would have silenced: unformatted code, a lint finding with an
+# autofix, an untidied go.mod, generated output that no longer matches its
+# source. Each of those costs a full CI round-trip to learn and one second to
+# fix, so it is fixed here.
+mise run heal
+
+# Then the two questions worth a local answer: does it build, and do the tests
+# that need nothing but Go still pass. Every module, because `heal` regenerates
+# code the examples compile against and a break there is invisible from the root.
+echo
+for mod in . pgtest example/tasks example/fxapp; do
+  (cd "$MISE_PROJECT_ROOT/$mod" && go build ./...)
+done
+go test ./...
+
+echo
+echo "preflight: ok — CI is the gate, and it runs on the PR"
+'''
+
 [tasks.tidy]
 description = "go mod tidy"
 run = "go mod tidy"
@@ -480,7 +511,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate, run locally. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs it on the PR, in three parallel jobs, and running it locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet
