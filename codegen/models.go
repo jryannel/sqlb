@@ -91,11 +91,15 @@ func renderModels(opts Options) ([]byte, error) {
 				continue
 			}
 			enum := typeName + GoName(d.Name)
+			consts, err := enumConsts(t.Name(), d)
+			if err != nil {
+				return nil, err
+			}
 			fmt.Fprintf(b, "\n// %s is the %s.%s column's value set.\n", enum, t.Name(), d.Name)
 			fmt.Fprintf(b, "type %s string\n\n", enum)
 			fmt.Fprintln(b, "const (")
-			for _, v := range d.EnumValues {
-				fmt.Fprintf(b, "\t%s%s %s = %q\n", enum, GoName(v), enum, v)
+			for i, v := range d.EnumValues {
+				fmt.Fprintf(b, "\t%s%s %s = %q\n", enum, consts[i], enum, v)
 			}
 			fmt.Fprintln(b, ")")
 		}
@@ -351,6 +355,29 @@ func expandableRelations(reg *schema.Registry, t *schema.TableDef) []string {
 		}
 	}
 	return out
+}
+
+// enumConsts is the constant-name suffix for each of a column's enum values,
+// in declaration order.
+//
+// The collision is refused rather than emitted. task.assigned and
+// task_assigned both spell TaskAssigned, and a duplicate const is a compile
+// error in the consumer's package with nothing in it naming which two values
+// caused it — where this says both, and says which column they are on.
+func enumConsts(table string, d *schema.FieldDesc) ([]string, error) {
+	out := make([]string, len(d.EnumValues))
+	from := map[string]string{}
+	for i, v := range d.EnumValues {
+		name := EnumConst(v)
+		if prev, taken := from[name]; taken {
+			return nil, fmt.Errorf(
+				"codegen: table %s: column %s has two values, %q and %q, that both spell the Go constant name %s; "+
+					"rename one, or drop back to Text plus a Check", table, d.Name, prev, v, name)
+		}
+		from[name] = v
+		out[i] = name
+	}
+	return out, nil
 }
 
 // goType is the Go type for a column, using the generated enum type where the

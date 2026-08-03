@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/jryannel/sqlb/schema"
 )
@@ -1255,12 +1256,17 @@ func dartRowType(t *schema.TableDef) string {
 }
 
 // dartPascal converts a snake_case SQL identifier to PascalCase.
+//
+// Every run of characters that cannot appear in a Dart identifier is a word
+// boundary, exactly as `_` is. Column names are checked identifiers and never
+// contain one, so that rule is invisible here — it is for the enum values,
+// which are arbitrary strings, and where `task.assigned` otherwise produced a
+// member named task.assigned (issue #138).
 func dartPascal(s string) string {
 	var b strings.Builder
-	for _, part := range strings.Split(s, "_") {
-		if part == "" {
-			continue
-		}
+	for _, part := range strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
 		r := []rune(part)
 		b.WriteString(strings.ToUpper(string(r[0])))
 		b.WriteString(string(r[1:]))
