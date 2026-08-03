@@ -42,23 +42,105 @@ run = "go test ./..."
 description = "Run all tests with the race detector. Worth running before touching anything that caches per-type state — the model cache, the hook registry, or Describe, which publishes a fresh copy of a cached model rather than writing the one already handed out. concurrency_test.go and rest/concurrency_test.go are the tests that make this gate mean something: nothing else in the suite runs two requests at once."
 run = "go test -race ./..."
 
+# ---- The test databases ----
+#
+# The suites take a DSN and start nothing. compose.yaml provides the servers
+# locally; .github/workflows/ci.yml provides the same three as service
+# containers, on the ports the runner maps. These defaults match compose.yaml,
+# and CI overrides them.
+[env]
+SQLB_TEST_POSTGRES = "postgres://sqlb:sqlb@localhost:15432/postgres?sslmode=disable"
+SQLB_TEST_PGVECTOR = "postgres://sqlb:sqlb@localhost:15433/postgres?sslmode=disable"
+SQLB_TEST_PGBOUNCER = "postgres://sqlb:sqlb@localhost:16432/postgres?sslmode=disable"
+
+[tasks.pg-up]
+# bash explicitly, because the probe below uses /dev/tcp, which is a bash
+# feature and not POSIX. mise runs task scripts under `sh`, and on macOS that
+# is bash in posix mode — where /dev/tcp works — while on Ubuntu it is dash,
+# where it does not. The first version of this task omitted this line, passed
+# every local run, and failed in CI by falling through the probe and trying to
+# bind ports the service containers already held.
+shell = "bash -c"
+description = "Make sure the Postgres, pgvector and PgBouncer the database-backed suites run against are listening. Starts compose.yaml if they are not; does nothing if they are. `mise run pg-down` stops them."
+run = '''
+# A probe before a start, which is what makes this safe to hang off every
+# database-backed task with `depends`. Two callers need that:
+#
+#   - the inner loop, where `mise run test-pg` twice in a row should cost one
+#     docker call rather than two;
+#   - CI, where the servers are service containers on these same ports and
+#     `docker compose up` would try to bind ports already taken and fail the
+#     job. Probing first means the workflow needs no special case, and no
+#     CI-only guard that could drift out of step with reality.
+listening() {
+  (echo > "/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+if listening 15432 && listening 15433 && listening 16432; then
+  echo "pg-up: already listening on 15432, 15433, 16432"
+  exit 0
+fi
+
+# Anything already holding one of the three, without holding all three, is a
+# situation compose cannot resolve and should not paper over — a half-started
+# stack, or a service container plus a missing one. Say which, rather than
+# letting docker report a port collision several lines later.
+for port in 15432 15433 16432; do
+  if listening "$port"; then
+    echo "pg-up: $port is in use but the other servers are not up." >&2
+    echo "       Something else is holding it; run 'mise run pg-down' or free it." >&2
+    exit 1
+  fi
+done
+
+docker compose up -d --wait
+
+# PgBouncer has no health check of its own — the image ships nothing worth
+# trusting as one — so --wait returns before it is necessarily accepting
+# connections. Waited for here rather than left as the flake that shows up
+# only on a loaded machine.
+for _ in $(seq 1 60); do
+  listening 16432 && break
+  sleep 1
+done
+if ! listening 16432; then
+  echo "pg-up: pgbouncer never came up on 16432" >&2
+  exit 1
+fi
+
+echo "pg-up: ready. the suites find them via SQLB_TEST_* - see [env] above"
+'''
+
+[tasks.pg-down]
+description = "Stop the test databases and discard their data. Nothing is persisted, so this loses only what a test left behind."
+run = "docker compose down -v --remove-orphans"
+
 [tasks.test-pg]
-description = "Run the round-trip and connection-path tests against a real Postgres and a real PgBouncer, in containers. Needs Docker. Deliberately NOT part of `test`: the engine's suite is database-free and that is worth keeping as the inner loop. This is what answers whether the generated SQL is *valid* rather than merely *expected* — see pgtest/doc.go for why it is a module of its own."
+description = "Run the round-trip and connection-path tests against a real Postgres and a real PgBouncer. Starts them first via pg-up. Deliberately NOT part of `test`: the engine's suite is database-free and that is worth keeping as the inner loop. This is what answers whether the generated SQL is *valid* rather than merely *expected* — see pgtest/doc.go."
 dir = "pgtest"
-run = "go test ./..."
+depends = ["pg-up"]
+# -parallel 8 rather than the default, which is the core count. The suite runs
+# in parallel and each test's pool caps at 8, so the connection ceiling is the
+# product of the two: 64, which fits a stock server's 100 with room. Left to
+# default it would scale with whatever machine it runs on and eventually walk
+# into max_connections on somebody's laptop and nowhere else.
+run = "go test -parallel 8 ./..."
 
 [tasks.bench-pg]
+depends = ["pg-up"]
 description = "Measure what sqlb costs over pgx, against a real Postgres. Deliberately NOT part of `ci`: benchmark numbers from a shared runner are noise, and a gate that fails on them trains people to ignore it. It exists because ADR-0040 argued partly on performance, and ADR-0019 is the precedent for what happens when a record in this repo reasons from documentation instead of measuring — two of its three claims came back different. Now that the flip has landed, both arms run on pgx and what is left is the builder and the reflective scan."
 dir = "pgtest"
 run = "go test -run '^$' -bench . -benchmem ./..."
 
 [tasks.test-demo]
-description = "Run the task-manager example's suite against a real Postgres in a container. Needs Docker. Separate from `test` for the same reason `test-pg` is: the engine's inner loop stays database-free. This is the example that proves the pieces compose — schema to migration to DDL Postgres accepts, a JWT workspace boundary that holds across tenants, and a transaction that leaves nothing behind when it aborts. It also carries the drift gate `generate-check` cannot be: migrations/drift_test.go replays the checked-in history and requires it to build what taskschema declares, so editing schema.go without adding a migration fails here rather than in production."
+depends = ["pg-up"]
+description = "Run the task-manager example's suite against a real Postgres. Starts it first via pg-up. Separate from `test` for the same reason `test-pg` is: the engine's inner loop stays database-free. This is the example that proves the pieces compose — schema to migration to DDL Postgres accepts, a JWT workspace boundary that holds across tenants, and a transaction that leaves nothing behind when it aborts. It also carries the drift gate `generate-check` cannot be: migrations/drift_test.go replays the checked-in history and requires it to build what taskschema declares, so editing schema.go without adding a migration fails here rather than in production."
 dir = "example/tasks"
 run = "go test ./..."
 
 [tasks.test-fx]
-description = "Run the fx example, including the fxkit glue it assembles itself from. The kit's own tests need no Docker — graph validation constructs nothing, and the rest exercise the assembly seams directly. The example needs Docker for all but one of its tests: everything else boots the whole application against a real Postgres because the claims are about a boot — that the migrations apply, that provisioning survives a restart, that the space boundary holds between two callers. It also carries the one assertion the other examples cannot make: with the notes module removed from the list, the server must refuse to start rather than serve unscoped rows (ADR-0030)."
+depends = ["pg-up"]
+description = "Run the fx example, including the fxkit glue it assembles itself from. The kit's own tests need no database — graph validation constructs nothing, and the rest exercise the assembly seams directly. The example needs a database for all but one of its tests: everything else boots the whole application against a real Postgres because the claims are about a boot — that the migrations apply, that provisioning survives a restart, that the space boundary holds between two callers. It also carries the one assertion the other examples cannot make: with the notes module removed from the list, the server must refuse to start rather than serve unscoped rows (ADR-0030)."
 run = '''
 set -e
 cd "$MISE_PROJECT_ROOT/example/fxapp" && go test ./...
@@ -364,10 +446,10 @@ if ! third_party github.com/jryannel/sqlb/rest | unexpected | grep -q '^github.c
 fi
 
 # The hole the package-level check above cannot cover: `go list -deps` does not
-# report test-only imports. A test file in this module importing testcontainers
-# would leave every assertion above passing while go.mod grew a docker client —
-# success reported by a check that had stopped covering anything, which is the
-# ADR-0016 failure mode.
+# report test-only imports. A test file in this module importing a container
+# runtime, an assertion library, or anything else convenient would leave every
+# assertion above passing while go.mod grew — success reported by a check that
+# had stopped covering anything, which is the ADR-0016 failure mode.
 #
 # So the root module's direct requirements are pinned by name. This is what
 # keeps the pgtest module honest: moving those tests back in here fails loudly
@@ -511,7 +593,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs Docker, for test-pg. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs it on the PR, in three parallel jobs, and running it locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs the test databases, which test-pg starts. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs it on the PR, in three parallel jobs, and running it locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet

@@ -6,7 +6,7 @@ a server; this one shows what the same machinery looks like once an application
 has a real shape.
 
 It is a module of its own, like `pgtest`, so its dependencies — a Postgres
-driver, goose, testcontainers — cost the engine nothing. `mise run deps-check`
+driver and goose — cost the engine nothing. `mise run deps-check`
 still reports **standard library only**, because a nested module is invisible to
 the root module's package list by construction rather than by exemption.
 
@@ -351,7 +351,7 @@ files it is about to write.
 ## Testing
 
 ```bash
-mise run test-demo             # needs Docker
+mise run test-demo             # starts the test databases if they are not up
 ```
 
 ```bash

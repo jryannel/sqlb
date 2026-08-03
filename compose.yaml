@@ -1,0 +1,119 @@
+# The databases the test suites run against.
+#
+# They used to start their own, one container per package, through
+# testcontainers — six servers for one `mise run ci`, plus a reaper that reaps
+# by label and therefore removed long-lived containers belonging to other work.
+# The suites now take a DSN and start nothing; this is what provides it locally,
+# and .github/workflows/ci.yml provides the same three as service containers.
+#
+#   mise run pg-up     start these and wait for them
+#   mise run pg-down   stop them and discard the data
+#
+# Nothing here is persisted. There are no volumes on purpose: a test database
+# that survives a restart is a test database that can carry one run's mess into
+# the next, and every suite creates and drops its own databases anyway.
+
+name: sqlb-test
+
+# The published ports sit below 49152 on purpose. macOS starts its ephemeral
+# range there (net.inet.ip.portrange.first), so a host port chosen above it is
+# one an outbound connection can be holding at the moment Docker tries to bind
+# — which fails the whole stack, intermittently, with "address already in use"
+# and nothing listening when you look. The first version of this file used
+# 55432 and hit exactly that.
+
+services:
+  # The plain server, and plain is the point. pgtest's freshStockDB asserts that
+  # the DDL sqlb generates applies to Postgres exactly as it ships, which is a
+  # claim that stops being exact the moment an extension is available. That is
+  # why pgvector is a second server below rather than this image with more in it.
+  #
+  # Pinned rather than tracking latest, because a test that measures what
+  # Postgres does is only meaningful if it says which Postgres. 18 is the
+  # version ADR-0014's measurements were taken against, and the version
+  # migrate.MinPostgres(18) targets.
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: sqlb
+      POSTGRES_PASSWORD: sqlb
+      POSTGRES_DB: sqlb
+    ports: ["15432:5432"]
+    # max_connections above the default 100 because the suites run in parallel.
+    # The harnesses cap themselves well below this (pool of 8, -parallel 8), so
+    # the headroom is for running two suites at once, which is what happens when
+    # more than one worktree is testing.
+    #
+    # fsync off because this data is discarded at the end of the run. Measured
+    # at no material difference on macOS, where the VM absorbs the syncs anyway,
+    # and kept because on Linux it is real and it costs nothing to say.
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - synchronous_commit=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sqlb"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  # A second server, with the extension, for the tests that measure what
+  # pgvector does. Separate rather than shared, so that the claim the first one
+  # makes about a stock Postgres stays literally true.
+  pgvector:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: sqlb
+      POSTGRES_PASSWORD: sqlb
+      POSTGRES_DB: sqlb
+    ports: ["15433:5432"]
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - fsync=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sqlb"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  # PgBouncer in transaction pooling, in front of the plain server. This is the
+  # deployed topology ADR-0019 reasons about, and pgtest/pgbouncer_test.go turns
+  # each of that record's citations into a measurement against it.
+  #
+  # The three settings that make those measurements mean anything:
+  #   POOL_MODE transaction  — the mode the ADR is about
+  #   DB_NAME "*"            — a wildcard entry, so one pooler serves the
+  #                            database each test creates for itself
+  #   MAX_DB_CONNECTIONS 2   — small, so consecutive statements from one client
+  #                            really are multiplexed over a shared server
+  #                            connection rather than each quietly getting a
+  #                            backend of its own, which would mask the very
+  #                            behaviour those tests exist to observe
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: sqlb
+      DB_PASSWORD: sqlb
+      DB_NAME: "*"
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      # So a test can ask the pooler about its own configuration rather than a
+      # comment asserting what it probably is.
+      ADMIN_USERS: sqlb
+      MAX_DB_CONNECTIONS: "2"
+      DEFAULT_POOL_SIZE: "2"
+    ports: ["16432:5432"]
+    depends_on:
+      postgres:
+        condition: service_healthy
