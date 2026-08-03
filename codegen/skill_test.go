@@ -115,8 +115,46 @@ func TestSkillOmitsHiddenColumns(t *testing.T) {
 	if strings.Contains(skill, "secret") {
 		t.Errorf("a hidden column appeared in the skill:\n%s", skill)
 	}
-	if !contains(skill, "| `title` |") {
+	// Named against a specific row rather than against "`title` appears
+	// somewhere": `title` occurs in three capability lists, so a loose assertion
+	// here would pass on a document that had dropped everything else.
+	if !contains(skill, "| Searchable | `title` |") {
 		t.Errorf("omitting the hidden column dropped the visible ones:\n%s", skill)
+	}
+}
+
+// The size decision, guarded. Measured against twelve real schemas, the
+// per-column table was 44–49% of the document and described what a response
+// carries rather than what a request may name. It is gone, and a regression that
+// reintroduces it doubles every generated skill in every project.
+func TestSkillCarriesNoColumnTable(t *testing.T) {
+	skill, _, _ := renderSkillInto(t, fixture(), "./s")
+	for _, unwanted := range []string{
+		"| Column | Type | Notes |",
+		"Columns a response carries",
+	} {
+		if contains(skill, unwanted) {
+			t.Errorf("the per-column table is back, which doubles the document: %q\n%s", unwanted, skill)
+		}
+	}
+	// And the one fact it carried that a request does have to get right survives.
+	if !contains(skill, "Values: `status` is one of `draft` `published`.") {
+		t.Errorf("enum values did not survive dropping the column table:\n%s", skill)
+	}
+}
+
+// A resource with no constrained column gets no Values line, rather than an empty
+// one that reads as a rendering fault.
+func TestSkillOmitsValuesWhenNoEnum(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("plain",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("label").Filterable(),
+	).Expose(schema.REST{Ops: schema.OpList})
+
+	skill, _, _ := renderSkillInto(t, r, "./s")
+	if strings.Contains(skill, "Values:") {
+		t.Errorf("a resource with no enum should carry no Values line:\n%s", skill)
 	}
 }
 

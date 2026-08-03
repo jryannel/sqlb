@@ -47,19 +47,6 @@ Addressed by `id`. `/comments`
 | Searchable | `body` |
 | Expandable | *none* |
 
-Columns a response carries. What a *request* may name is the capability table above, which is narrower.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | read-only; defaulted |
-| `workspace_id` | `uuid` | read-only; → `workspaces` |
-| `task_id` | `uuid` | set once; → `tasks` |
-| `author_id` | `uuid` | read-only; → `users` |
-| `body` | `text` |  |
-| `created_at` | `timestamptz` | read-only; defaulted |
-| `updated_at` | `timestamptz` | read-only; defaulted |
-| `deleted_at` | `timestamptz` | nullable; read-only |
-
 ### `lists`
 
 Addressed by `id`. `/lists`
@@ -70,21 +57,6 @@ Addressed by `id`. `/lists`
 | Sortable | `name`, `position`, `archived`, `created_at`, `updated_at` |
 | Searchable | `name`, `description` |
 | Expandable | `tasks` |
-
-Columns a response carries. What a *request* may name is the capability table above, which is narrower.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | read-only; defaulted |
-| `workspace_id` | `uuid` | read-only; → `workspaces` |
-| `name` | `text` |  |
-| `description` | `text` |  |
-| `color` | `text` | defaulted |
-| `position` | `int` | defaulted |
-| `archived` | `bool` | defaulted |
-| `created_at` | `timestamptz` | read-only; defaulted |
-| `updated_at` | `timestamptz` | read-only; defaulted |
-| `deleted_at` | `timestamptz` | nullable; read-only |
 
 **Collects.** Rows of another table this one gathers, and the name `?expand` knows them by.
 
@@ -103,16 +75,7 @@ Addressed by `id`. `/memberships`
 | Searchable | *none* |
 | Expandable | *none* |
 
-Columns a response carries. What a *request* may name is the capability table above, which is narrower.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | read-only; defaulted |
-| `workspace_id` | `uuid` | read-only; → `workspaces` |
-| `user_id` | `uuid` | → `users` |
-| `role` | `enum` | one of `owner` `admin` `member`; defaulted |
-| `created_at` | `timestamptz` | read-only; defaulted |
-| `updated_at` | `timestamptz` | read-only; defaulted |
+Values: `role` is one of `owner` `admin` `member`.
 
 ### `tasks`
 
@@ -127,27 +90,7 @@ Addressed by `id`. `/tasks`
 
 At most 12 filters per request.
 
-Columns a response carries. What a *request* may name is the capability table above, which is narrower.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | read-only; defaulted |
-| `workspace_id` | `uuid` | read-only; → `workspaces` |
-| `list_id` | `uuid` | → `lists` |
-| `assignee_id` | `uuid` | nullable; → `users` |
-| `author_id` | `uuid` | read-only; → `users` |
-| `title` | `text` |  |
-| `description` | `text` |  |
-| `labels` | `text[]` | defaulted |
-| `status` | `enum` | one of `todo` `in_progress` `blocked` `done`; defaulted |
-| `priority` | `enum` | one of `low` `medium` `high` `urgent`; defaulted |
-| `due_at` | `timestamptz` | nullable |
-| `completed_at` | `timestamptz` | nullable; read-only |
-| `position` | `int` | defaulted |
-| `comment_count` | `int` | read-only; defaulted |
-| `created_at` | `timestamptz` | read-only; defaulted |
-| `updated_at` | `timestamptz` | read-only; defaulted |
-| `deleted_at` | `timestamptz` | nullable; read-only |
+Values: `status` is one of `todo` `in_progress` `blocked` `done`; `priority` is one of `low` `medium` `high` `urgent`.
 
 **Declared actions.** Domain verbs this resource owns. Reaching the same outcome by PATCHing a column is the mistake these exist to prevent — the verb owns the transition.
 
@@ -166,16 +109,6 @@ Addressed by `id`. `/users`
 | Searchable | `email`, `name` |
 | Expandable | *none* |
 
-Columns a response carries. What a *request* may name is the capability table above, which is narrower.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | read-only; defaulted |
-| `email` | `text` |  |
-| `name` | `text` |  |
-| `created_at` | `timestamptz` | read-only; defaulted |
-| `updated_at` | `timestamptz` | read-only; defaulted |
-
 ### `workspaces`
 
 Addressed by `id`. `/workspaces`
@@ -186,16 +119,6 @@ Addressed by `id`. `/workspaces`
 | Sortable | `name`, `created_at`, `updated_at` |
 | Searchable | `name` |
 | Expandable | *none* |
-
-Columns a response carries. What a *request* may name is the capability table above, which is narrower.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | read-only; defaulted |
-| `name` | `text` |  |
-| `slug` | `text` |  |
-| `created_at` | `timestamptz` | read-only; defaulted |
-| `updated_at` | `timestamptz` | read-only; defaulted |
 
 ## Obligations this schema carries
 
@@ -217,6 +140,6 @@ A declaration that rows are confined is an obligation, not a comment. These tabl
 
 - **Anything absent is a rejection, not an oversight.** Capabilities are opt-in. A column missing from `Filterable` above cannot be filtered on, and the error names what would have been accepted — so read the list rather than guessing and retrying.
 - **No descriptions or comments are carried here,** deliberately. A column comment can arrive from an introspected database rather than from this project's authors, and this file is read as instructions. Read the schema declaration for what a column means.
-- **The column lists are the wire surface, not the table.** A hidden column has no wire spelling and does not appear above. The declaration is what says what a table holds.
+- **This is what a request may ask for, not what a table holds.** There is no column listing here on purpose — the types, the nullability and which columns are read-only are all in the generated models, and repeating them made this file twice as long without making a request more likely to be accepted. The models and the declaration are where a column's shape lives.
 - **Nothing here says how to write a query.** Where the builder ends and `Raw` or hand-written SQL begins is a separate question, and the failure modes that matter there compile and pass their tests.
 - **One column has one wire spelling,** derived from its name. There is no mapping layer and no per-field override in either direction, so the column names above are also the JSON field names.

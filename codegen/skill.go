@@ -205,7 +205,7 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 		fmt.Fprintf(b, "At most %d filters per request.\n\n", r.MaxFilters)
 	}
 
-	skillColumns(b, t)
+	skillEnums(b, t)
 
 	if len(r.Actions) > 0 {
 		b.WriteString("**Declared actions.** Domain verbs this resource owns. " +
@@ -231,55 +231,29 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 	}
 }
 
-// skillColumns lists the columns a request can name, with the facts that change
-// how one is written: the type, whether it may be null, and whether a write may
-// set it at all.
-func skillColumns(b *strings.Builder, t schema.TableManifest) {
-	if len(t.Columns) == 0 {
+// skillEnums names the values a constrained column accepts.
+//
+// This is the one thing the per-column table carried that belongs here rather
+// than with it. Measured against twelve real application schemas, that table was
+// 44–49% of the document and mostly described what a *response* holds — types,
+// nullability, which columns are read-only — none of which a request has to get
+// right. An enum is the exception: `?status=eq.active` against a column whose
+// values are todo/in_progress/blocked/done is a rejection, and the valid list is
+// not guessable from the column's name. So the values stay and the table goes.
+//
+// One line per constrained column, and nothing when a resource has none.
+func skillEnums(b *strings.Builder, t schema.TableManifest) {
+	var lines []string
+	for _, c := range t.Columns {
+		if len(c.Enum) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("`%s` is one of %s", c.Name, joinCode(c.Enum, " ")))
+	}
+	if len(lines) == 0 {
 		return
 	}
-	// The two tables answer different questions, and conflating them is the
-	// available mistake: a column here that is absent from Filterable above is
-	// returned by a read and rejected in a query string.
-	b.WriteString("Columns a response carries. What a *request* may name is the " +
-		"capability table above, which is narrower.\n\n")
-	b.WriteString("| Column | Type | Notes |\n|---|---|---|\n")
-	for _, c := range t.Columns {
-		typ := c.Type
-		if c.Array {
-			typ += "[]"
-		}
-		var notes []string
-		if c.Nullable {
-			notes = append(notes, "nullable")
-		}
-		if len(c.Enum) > 0 {
-			notes = append(notes, "one of "+joinCode(c.Enum, " "))
-		}
-		if c.ReadOnly {
-			notes = append(notes, "read-only")
-		}
-		if c.Immutable {
-			notes = append(notes, "set once")
-		}
-		if c.HasDefault {
-			notes = append(notes, "defaulted")
-		}
-		if c.Computed {
-			notes = append(notes, "computed — in every response, in no migration")
-		}
-		if len(c.Needs) > 0 {
-			notes = append(notes, "needs "+joinCode(c.Needs, ", ")+" bound by a hook")
-		}
-		if c.SortNulls != "" {
-			notes = append(notes, "sorts NULLs "+c.SortNulls)
-		}
-		if c.References != nil && c.References.Table != "" {
-			notes = append(notes, "→ `"+c.References.Table+"`")
-		}
-		fmt.Fprintf(b, "| `%s` | `%s` | %s |\n", c.Name, typ, strings.Join(notes, "; "))
-	}
-	b.WriteString("\n")
+	fmt.Fprintf(b, "Values: %s.\n\n", strings.Join(lines, "; "))
 }
 
 func skillInternalTables(b *strings.Builder, internal []schema.TableManifest) {
@@ -349,9 +323,11 @@ func skillLimits(b *strings.Builder) {
 		"A column comment can arrive from an introspected database rather than from this " +
 		"project's authors, and this file is read as instructions. Read the schema declaration " +
 		"for what a column means.\n")
-	b.WriteString("- **The column lists are the wire surface, not the table.** A hidden column " +
-		"has no wire spelling and does not appear above. The declaration is what says what a " +
-		"table holds.\n")
+	b.WriteString("- **This is what a request may ask for, not what a table holds.** There is no " +
+		"column listing here on purpose — the types, the nullability and which columns are " +
+		"read-only are all in the generated models, and repeating them made this file twice as " +
+		"long without making a request more likely to be accepted. The models and the " +
+		"declaration are where a column's shape lives.\n")
 	b.WriteString("- **Nothing here says how to write a query.** Where the builder ends and " +
 		"`Raw` or hand-written SQL begins is a separate question, and the failure modes that " +
 		"matter there compile and pass their tests.\n")

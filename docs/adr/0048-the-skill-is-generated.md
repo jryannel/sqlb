@@ -142,10 +142,12 @@ tempt a project into deleting the file that carries them.
   weight, and the honest response is to delete the emitter rather than improve
   it. Still unmeasured — the 2026-08-03 corpus run below measured the artefact,
   not the behaviour, and those are different claims.
-- **It is too large to load speculatively.** Measured, and the live one. The
-  document is linear in exposed resources at roughly 800 bytes each with no cap,
-  so a 127-resource schema produces 96 KB. A skill that has to be loaded
-  deliberately has lost the trigger that was the point of generating it.
+- **It is too large to load speculatively.** Measured once and acted on: the
+  per-column table went, taking 62% of the document with it, and the cost is now
+  ~290 bytes per resource. Still linear and still uncapped, so the condition
+  stands rather than closes — if a schema arrives that puts this back over about
+  40 KB, the answer is an index with per-resource detail on demand rather than
+  another round of trimming.
 - **The skill format churns.** If `SKILL.md`'s shape moves more than about once
   a year, generating into it is generating at a moving target, and a doc plus a
   pointer is the better trade.
@@ -273,3 +275,27 @@ expensive to get wrong later.
   it. The lesson is that a corpus count over a database includes tables no
   adoption would ever declare, and a ratio that does not exclude them measures
   the migration runner.
+- 2026-08-03 — **The per-column table is gone, and the measurement is why.** Re-run
+  over the same twelve applications: 96 KB → 37 KB at 127 resources, 38 KB → 15 KB
+  at 44, 25 KB → 12 KB at 29. A 62% reduction at the top end rather than the ~50%
+  predicted, because a table has more columns than it has capability entries, so
+  the section being removed grew faster than the ones kept. The cost is now ~290
+  bytes per resource, and the document crosses the hand-written `sqlb-queries`
+  skill at about 22 resources rather than 12.
+
+  **Enum values stayed**, and that is the one line of the old table worth keeping.
+  Everything else it carried — types, nullability, which columns are read-only —
+  describes what a *response* holds, is already in the generated models, and does
+  not change whether a request is accepted. An enum does: `?status=eq.active`
+  against `todo|in_progress|blocked|done` is a rejection, and the valid list is
+  not guessable from the column name. So one `Values:` line per resource, and
+  none at all where nothing is constrained.
+
+  Two guards came out of this rather than the feature. `TestSkillCarriesNoColumnTable`
+  exists because a regression that reinstates that table doubles every generated
+  skill in every project, which is not the kind of thing a reviewer notices in a
+  diff. And `TestSkillOmitsHiddenColumns` was strengthened: with the column table
+  gone its old assertion matched a capability row instead, so it had started
+  passing for the wrong reason — the exact failure
+  [ADR-0016](0016-guards-proven-both-ways.md) is about, found by deleting the
+  thing it was meant to be watching.
