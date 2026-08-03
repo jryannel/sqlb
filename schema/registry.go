@@ -240,6 +240,9 @@ func (r *Registry) Validate() error {
 			if d.Type == TypeVector {
 				r.validateVector(t, d, report)
 			}
+			if d.Auto != NotAuto {
+				r.validateAuto(t, d, report)
+			}
 			if d.Type == TypeEnum && len(d.EnumValues) == 0 {
 				report(t.name, d.Name, "Enum declares no values")
 			}
@@ -492,6 +495,43 @@ const maxIdentBytes = 63
 // authors, so a derived reverse would call both of them "posts" and an author's
 // posts are not the posts an author reviewed. Two references claiming one name
 // on one target is therefore an error rather than a last-writer-wins. ADR-0022.
+// validateAuto checks what Postgres would refuse about a serial or an identity
+// column, here rather than as rejected DDL halfway through a migration.
+//
+// Every one of these is a combination Postgres has no reading for, not a taste
+// this package is expressing. A serial over a uuid is not a narrower serial, it
+// is an error; a nullable identity is not an identity whose value may be
+// omitted, it is an error.
+func (r *Registry) validateAuto(t *TableDef, d *FieldDesc, report func(string, string, string, ...any)) {
+	what := "an identity column"
+	if d.Auto == AutoSerial {
+		what = "a serial column"
+	}
+	switch d.Type {
+	case TypeSmallInt, TypeInt, TypeBigInt:
+	default:
+		report(t.name, d.Name, "%s must be smallint, int or bigint, got %s: a sequence counts, and there is nothing to count in a %s",
+			what, describeType(d), d.Type)
+	}
+	if d.Array {
+		report(t.name, d.Name, "%s cannot be an Array: a sequence supplies one value, not a list", what)
+	}
+	if d.Nullable {
+		report(t.name, d.Name, "%s cannot be Nullable: the sequence always has a next value, and Postgres makes the column NOT NULL either way", what)
+	}
+	if d.Default != nil {
+		report(t.name, d.Name, "%s cannot also have a Default: the sequence is the default, and Postgres refuses a column with both", what)
+	}
+	if d.Computed() {
+		report(t.name, d.Name, "%s cannot be Computed: an expression is derived from the row, and a sequence is not", what)
+	}
+	if d.Auto == AutoIdentityAlways && !d.ReadOnly {
+		// IdentityAlways sets ReadOnly itself, so reaching this means something
+		// cleared it. Saying so beats an INSERT that Postgres refuses.
+		report(t.name, d.Name, "a GENERATED ALWAYS identity column is ReadOnly: an INSERT naming it is an error rather than an override, so nothing may offer it to a caller")
+	}
+}
+
 // validateArray checks the refusals ADR-0033 starts an array column from.
 //
 // Each of them is the cheap direction to be wrong in: allowing one of these

@@ -29,13 +29,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/jryannel/sqlb/introspect"
 	"github.com/jryannel/sqlb/migrate"
@@ -47,10 +47,11 @@ import (
 	_ "github.com/jryannel/sqlb/example/tasks/taskschema"
 )
 
-// image is pinned to 18 for the reason app/main_test.go gives: the history was
-// generated with migrate.MinPostgres(18), so it uses the built-in uuidv7() and
-// would fail on 17 at the first CREATE TABLE.
-const image = "postgres:18-alpine"
+// pgEnv names the Postgres this package runs against, for the reason
+// app/main_test.go gives — provisioning lives outside the test binary now. It
+// must be 18: the history was generated with migrate.MinPostgres(18), so it
+// uses the built-in uuidv7() and would fail on 17 at the first CREATE TABLE.
+const pgEnv = "SQLB_TEST_POSTGRES"
 
 var dsn string
 
@@ -65,28 +66,50 @@ func TestMain(m *testing.M) {
 func run(m *testing.M) (int, error) {
 	ctx := context.Background()
 
-	container, err := postgres.Run(ctx, image,
-		postgres.WithDatabase("tasks"),
-		postgres.WithUsername("tasks"),
-		postgres.WithPassword("tasks"),
-		postgres.BasicWaitStrategies(),
-	)
+	base := os.Getenv(pgEnv)
+	if base == "" {
+		return 0, fmt.Errorf(
+			"%s is not set.\n"+
+				"These tests need a Postgres; they no longer start one.\n"+
+				"  locally: mise run pg-up   (then mise run test-demo)\n"+
+				"  CI:      the service containers in .github/workflows/ci.yml",
+			pgEnv)
+	}
+	u, err := url.Parse(base)
 	if err != nil {
-		return 0, fmt.Errorf("starting %s: %w", image, err)
+		return 0, fmt.Errorf("%s is not a valid URL: %w", pgEnv, err)
+	}
+	withDatabase := func(database string) string {
+		v := *u
+		v.Path = "/" + database
+		return v.String()
+	}
+
+	admin, err := pgxpool.New(ctx, withDatabase("postgres"))
+	if err != nil {
+		return 0, fmt.Errorf("opening the admin connection: %w", err)
+	}
+	defer admin.Close()
+
+	// A database of this package's own. It used to be the only one on a
+	// container of its own, which made "written to by nothing else" free;
+	// on a shared server it has to be asked for, and it still matters for the
+	// same reason: shadow.Build refuses a database that already has tables.
+	name := fmt.Sprintf("t_drift_%d", time.Now().UnixNano()%1e9)
+	if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`); err != nil {
+		return 0, fmt.Errorf("dropping %s: %w", name, err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+quoteIdent(name)); err != nil {
+		return 0, fmt.Errorf("creating %s: %w", name, err)
 	}
 	defer func() {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			log.Printf("migrations: terminating container: %v", err)
+		if _, err := admin.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`); err != nil {
+			log.Printf("migrations: dropping %s: %v", name, err)
 		}
 	}()
 
-	// One database, used once, and never written to by anything else — which
-	// matters more here than elsewhere, because shadow.Build refuses a database
-	// that already has tables in it.
-	dsn, err = container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		return 0, fmt.Errorf("container connection string: %w", err)
-	}
+	dsn = withDatabase(name)
 	return m.Run(), nil
 }
 

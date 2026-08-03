@@ -143,6 +143,63 @@ var knownDefaults = map[string]func() *schema.Default{
 	"uuidv7()": schema.GenUUIDv7,
 }
 
+// columnAuto reads how the database supplies a column's value: as an identity,
+// as a serial, or not at all.
+//
+// Postgres records the two spellings in unrelated places. An identity column
+// sets attidentity to 'a' or 'd'; a serial sets nothing at all — it is a plain
+// integer column, a sequence, and a nextval default, and only the default says
+// so. Both arrive here, so that the difference between them stays where it
+// belongs, in what the DDL renders.
+//
+// The second return is the reason the column cannot be declared, empty when it
+// can. Both refusals are arrangements Postgres permits and the DSL has no
+// reading for, and they are reported here rather than left to Validate — which
+// fails the whole import, where this loses one column and names it.
+func columnAuto(col columnRow) (schema.Auto, string) {
+	var auto schema.Auto
+	switch {
+	case col.Identity == "a":
+		auto = schema.AutoIdentityAlways
+	case col.Identity == "d":
+		auto = schema.AutoIdentity
+	case isSequenceDefault(col.Default):
+		// A serial is a counter, and a nextval default under a text column is
+		// somebody's deliberate arrangement rather than an auto-incrementing
+		// key. Postgres enforces the same rule for an identity itself —
+		// "identity column type must be smallint, integer, or bigint" — so
+		// only the serial spelling can arrive wrong.
+		if !isIntegerType(col.Type) {
+			return schema.NotAuto, "column draws its default from a sequence but is a " + col.Type +
+				", which the DSL has no reading for: a serial counts, and only smallint, int and bigint do"
+		}
+		auto = schema.AutoSerial
+	default:
+		return schema.NotAuto, ""
+	}
+	// Postgres creates both spellings NOT NULL and lets the constraint be
+	// dropped afterwards, so a nullable one is rare but reachable. The DSL
+	// cannot say it: a sequence always has a next value, so "nullable" is a
+	// statement about a column nothing writes NULL to.
+	if !col.NotNull {
+		return schema.NotAuto, "column is supplied by a sequence and is also nullable, which the DSL " +
+			"cannot declare: it renders the column NOT NULL, and a declaration that quietly " +
+			"required a column the database allows NULL in would be a migration nobody asked for"
+	}
+	return auto, ""
+}
+
+// isIntegerType reports whether a Postgres type name is one of the three the
+// DSL counts with. Spelled against the catalog's names rather than against
+// schema.Type, because it is asked before the type has been mapped.
+func isIntegerType(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "smallint", "int2", "integer", "int", "int4", "bigint", "int8":
+		return true
+	}
+	return false
+}
+
 // isSequenceDefault reports whether a stored default draws from a sequence,
 // which is what a serial column is made of. Postgres expands serial into three
 // separate things — a plain integer column, a sequence it owns, and a nextval

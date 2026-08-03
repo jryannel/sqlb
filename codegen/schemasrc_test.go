@@ -213,3 +213,40 @@ func TestRenderSchemaRejectsMissingInputs(t *testing.T) {
 		t.Error("a missing package name should be refused")
 	}
 }
+
+// The bootstrap turns a database into declarations to review, so a construct it
+// can read and cannot write back leaves the port stuck at exactly the table it
+// was there to unblock (issue #53's shape, #132's construct).
+func TestAutoColumnsRenderBack(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("audit_log",
+		schema.BigSerial("id").PrimaryKey(),
+		schema.SmallSerial("bucket"),
+		schema.Serial("n"),
+	)
+	r.Table("steps",
+		schema.BigInt("seq").Identity().PrimaryKey(),
+		schema.Int("attempt").IdentityAlways(),
+	)
+
+	src := render(t, r)
+	for _, want := range []string{
+		// A serial is its own constructor, the way UUIDv7 is.
+		`schema.BigSerial("id").PrimaryKey()`,
+		`schema.SmallSerial("bucket")`,
+		`schema.Serial("n")`,
+		// An identity is a modifier, because that is how SQL spells it.
+		`schema.BigInt("seq").Identity().PrimaryKey()`,
+		`schema.Int("attempt").IdentityAlways()`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q in:\n%s", want, src)
+		}
+	}
+	// The nextval a serial carries in the database is the serial, not a default
+	// of its own — rendering it would produce a declaration binding to a
+	// sequence nothing creates.
+	if strings.Contains(src, "nextval") {
+		t.Errorf("a serial rendered its sequence as a default:\n%s", src)
+	}
+}

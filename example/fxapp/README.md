@@ -172,7 +172,7 @@ deployment pipeline asserts.
 ## Testing
 
 ```bash
-mise run test-fx               # needs Docker, except for the graph validation
+mise run test-fx               # starts the test databases; graph validation needs none
 ```
 
 Against a real Postgres in a container, one database per test, given to the

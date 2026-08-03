@@ -18,7 +18,7 @@ Read in this order, and stop as soon as you have what you need:
    Go way instead, as `// Command sqlb …` at the head of `cmd/sqlb/main.go`.
 2. **[docs/architecture.md](docs/architecture.md)** for how the pieces fit and
    why the seams are where they are.
-3. **[docs/adr/](docs/adr/)** — 49 records, and they are *load-bearing rather
+3. **[docs/adr/](docs/adr/)** — 50 records, and they are *load-bearing rather
    than historical*. A decision here is usually the answer to "why is this not
    simpler", and reversing one without reading it is the most common way to
    spend an afternoon rediscovering a rejected alternative. Each carries a
@@ -49,7 +49,11 @@ mise run heal   # everything the tooling can fix on its own
 mise run ci     # the gate: never rewrites, only fails
 ```
 
-`mise run ci` mirrors `.github/workflows/ci.yml` and needs Docker. Individual
+`mise run preflight` is the push path: heal, build, database-free tests, about
+fifteen seconds. `mise run ci` mirrors `.github/workflows/ci.yml` in full and is
+for reproducing a CI failure rather than for routine use — CI is the gate. The
+database-backed suites read a DSN and start nothing; `mise run pg-up` provides
+it from `compose.yaml`, and the tasks that need it depend on that. Individual
 steps — `vet`, `lint`, `generate-check`, `impact-check`, `eject-check`,
 `test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on their own
 and `mise tasks` describes all 28.

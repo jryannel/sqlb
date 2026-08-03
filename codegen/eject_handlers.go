@@ -209,7 +209,7 @@ func ejectInsertDefaults(b *bytes.Buffer, t *schema.TableDef, lower string) bool
 	var defs []def
 	for _, f := range t.StoredFields() {
 		d := f.Desc()
-		if d.Nullable || d.Default != nil || d.PrimaryKey {
+		if d.Nullable || d.DatabaseSupplied() || d.PrimaryKey {
 			continue
 		}
 		// A column the body can carry is the caller's to supply, and a missing

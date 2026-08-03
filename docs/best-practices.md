@@ -234,14 +234,25 @@ In valiro this was 30 columns, and removing it dropped a dependency.
 Prefer **UUIDv7** for keys you generate: time-ordered, so inserts land at the end
 of the index instead of scattering across it.
 
-## Prefer identity over `serial` — **Recommended**, and sqlb imports neither
+## Prefer identity over `serial` — **Recommended**, and sqlb declares both
 
 `GENERATED … AS IDENTITY` is the SQL-standard spelling. `serial` is a legacy
 pseudo-type that silently expands into three objects — a column, a sequence, and
 a default — leaving you owning a sequence you did not write.
 
-Be straight about this one when arguing it: **sqlb refuses both.** It is listed
-here as a practice, not as a capability. See [Gaps](#gaps-not-opinions).
+```go
+schema.BigInt("id").Identity().PrimaryKey()  // recommended
+schema.BigSerial("id").PrimaryKey()          // what your database probably has
+```
+
+Both are declarable ([ADR-0048](adr/0048-auto-incrementing-keys.md)), and that
+is deliberate rather than indecision: the recommendation is for a column you are
+writing now, and the serial exists because moving an existing column between the
+two is a migration rather than a rename. Declaring what the database actually
+has is what keeps the first diff after an adoption empty.
+
+Neither is a type. A `bigserial` column *is* a `bigint`, so the Go type, the
+filter operators and the sort machinery are the plain integer's.
 
 ---
 
@@ -311,7 +322,6 @@ moment an engineer finds them.
 | [#121](https://github.com/jryannel/sqlb/issues/121) `EXCLUDE` constraints | 1 app — no near-miss; dropping it loses an invariant |
 | [#114](https://github.com/jryannel/sqlb/issues/114) `smallint` / [#120](https://github.com/jryannel/sqlb/issues/120) `real` | 2 apps, 6 valiro columns |
 | [#115](https://github.com/jryannel/sqlb/issues/115) `Diff` renders no `CREATE EXTENSION` | every bootstrap |
-| identity and `serial` columns | both refused; [#119](https://github.com/jryannel/sqlb/issues/119) fixed only the *silent* half |
 
 **An unsupported column type costs more than one column.** The CHECKs and indexes
 over it cannot be declared either — **four of the nine** distinct skip messages

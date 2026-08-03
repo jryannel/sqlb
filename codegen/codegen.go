@@ -127,7 +127,7 @@ type Options struct {
 	// there. Empty means no skill is emitted, and that is the default on
 	// purpose: this is the one emitter that writes into a directory sqlb does
 	// not own, beside files a project wrote itself, so it is opted into rather
-	// than arrived at (ADR-0048).
+	// than arrived at (ADR-0049).
 	//
 	// One file lands there, at <SkillDir>/sqlb-schema/SKILL.md. It describes
 	// what this schema exposes and what each resource accepts, which is the

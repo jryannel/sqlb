@@ -214,10 +214,10 @@ func enumTag(d *schema.FieldDesc) string {
 }
 
 // optionalOnCreate reports whether a create body may omit the column: a
-// nullable column is absent as NULL, and a defaulted one is absent so the
-// database fills it.
+// nullable column is absent as NULL, and one the database supplies — a default,
+// a sequence or an identity — is absent so the database fills it.
 func optionalOnCreate(d *schema.FieldDesc) bool {
-	return d.Nullable || d.Default != nil
+	return d.Nullable || d.DatabaseSupplied()
 }
 
 func renderCreateBody(b *bytes.Buffer, t *schema.TableDef, ov *overrides) {

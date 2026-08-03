@@ -5,7 +5,7 @@ package codegen
 //
 // Every other emitter here produces something a program consumes — Go, Dart,
 // TypeScript, JSON. This one produces instructions, and that difference is the
-// whole of why it is written the way it is (ADR-0048).
+// whole of why it is written the way it is (ADR-0049).
 //
 // # Why this is generated rather than written
 //

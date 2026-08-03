@@ -250,8 +250,12 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 		"expression",
 		"money",
 		"generated column",
-		"identity column",
+		// The identity and serial columns above are declarable now (#132), so
+		// what remains unrepresentable about this one is that it is *also*
+		// nullable — an arrangement Postgres permits by dropping the NOT NULL
+		// it created, and one the DSL has no spelling for.
 		"sequence",
+		"nullable",
 	} {
 		if !strings.Contains(rep.String(), want) {
 			t.Errorf("report should mention %q:\n%s", want, rep)
@@ -267,10 +271,15 @@ func TestBuildReportsWhatItCannotRepresent(t *testing.T) {
 // stripCast had no reason to touch, and the column arrived as an ordinary bigint
 // whose default named a sequence. The table then reported clean while the DDL it
 // produced failed to apply — "relation t_ser_seq does not exist" — and the
-// table's indexes failed behind it. Found by sqlb survey on a second corpus
-// (issue #119); it was the only defect in either corpus that produced DDL which
-// does not run.
-func TestSerialColumnIsReportedRatherThanImportedSilently(t *testing.T) {
+// table's indexes failed behind it (issue #119).
+//
+// Reporting it was the right first answer and the wrong last one: it left no
+// auto-incrementing integer key expressible at all (issue #132). So the column
+// is imported now, as a serial — and the assertion that matters is still the one
+// #119 added, that the nextval default does not come with it. A declaration
+// carrying that expression renders DDL binding to a sequence nothing creates;
+// the serial spelling is what makes Postgres create it.
+func TestSerialColumnImportsAsASerialWithoutItsDefault(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		def  string
@@ -293,20 +302,91 @@ func TestSerialColumnIsReportedRatherThanImportedSilently(t *testing.T) {
 			if err != nil {
 				t.Fatalf("build: %v", err)
 			}
-			if !strings.Contains(rep.String(), "sequence") {
-				t.Errorf("report should name the sequence:\n%s", rep)
+			if !rep.Empty() {
+				t.Errorf("a serial is declarable and should no longer be reported:\n%s", rep)
 			}
-			// The column must not arrive carrying the nextval default, or the
-			// rendered DDL references a sequence nothing creates.
-			if f := r.Get("t").Field("ser"); f != nil {
-				t.Errorf("serial column should be refused, not imported: %+v", f.Desc())
+			f := r.Get("t").Field("ser")
+			if f == nil {
+				t.Fatal("the serial column was not imported")
 			}
-			// The rest of the table still imports — refusing one column is not
-			// a reason to lose the others.
-			if f := r.Get("t").Field("id"); f == nil {
-				t.Error("the table's other columns should survive")
+			d := f.Desc()
+			if d.Auto != schema.AutoSerial {
+				t.Errorf("Auto = %q, want %q", d.Auto, schema.AutoSerial)
+			}
+			// bigint, not "bigserial": the storage type is what a later type
+			// change has to compare against, and the serial is how it is
+			// rendered rather than what it is.
+			if d.Type != schema.TypeBigInt {
+				t.Errorf("Type = %q, want %q", d.Type, schema.TypeBigInt)
+			}
+			if d.Default != nil {
+				t.Errorf("the nextval default came with the column: %+v", d.Default)
 			}
 		})
+	}
+}
+
+// The two identity spellings, which Postgres records in attidentity rather than
+// in the default — and which differ in whether an INSERT may name the column.
+func TestIdentityColumnsImport(t *testing.T) {
+	for _, tc := range []struct {
+		attidentity string
+		want        schema.Auto
+		readOnly    bool
+	}{
+		{"d", schema.AutoIdentity, false},
+		{"a", schema.AutoIdentityAlways, true},
+	} {
+		t.Run(tc.attidentity, func(t *testing.T) {
+			cat := &catalog{
+				tables: []tableRow{{Name: "t"}},
+				columns: []columnRow{
+					{Table: "t", Name: "id", Type: "bigint", NotNull: true, Identity: tc.attidentity},
+				},
+			}
+			r, rep, err := build(cat, Options{})
+			if err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			if !rep.Empty() {
+				t.Errorf("an identity column is declarable and should no longer be reported:\n%s", rep)
+			}
+			d := r.Get("t").Field("id").Desc()
+			if d.Auto != tc.want {
+				t.Errorf("Auto = %q, want %q", d.Auto, tc.want)
+			}
+			// GENERATED ALWAYS refuses an INSERT that names it, so nothing may
+			// offer the column to a caller.
+			if d.ReadOnly != tc.readOnly {
+				t.Errorf("ReadOnly = %v, want %v", d.ReadOnly, tc.readOnly)
+			}
+		})
+	}
+}
+
+// A sequence under something that is not an integer is legal Postgres and has
+// no reading here. It loses one column and names it, rather than failing the
+// import — which is what letting it through to Validate would do.
+func TestSequenceOverANonIntegerIsReported(t *testing.T) {
+	cat := &catalog{
+		tables: []tableRow{{Name: "t"}},
+		columns: []columnRow{
+			{Table: "t", Name: "id", Type: "uuid", NotNull: true},
+			{Table: "t", Name: "code", Type: "text", NotNull: true, Default: "nextval('t_code_seq'::regclass)"},
+		},
+	}
+	r, rep, err := build(cat, Options{})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if !strings.Contains(rep.String(), "sequence") {
+		t.Errorf("report should name the sequence:\n%s", rep)
+	}
+	if f := r.Get("t").Field("code"); f != nil {
+		t.Errorf("a text column drawing from a sequence should be refused: %+v", f.Desc())
+	}
+	if f := r.Get("t").Field("id"); f == nil {
+		t.Error("the table's other columns should survive")
 	}
 }
 

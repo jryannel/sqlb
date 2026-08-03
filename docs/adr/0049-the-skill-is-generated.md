@@ -1,4 +1,4 @@
-# ADR-0048: The agent skill is generated where it can be gated, and static only where no check is possible
+# ADR-0049: The agent skill is generated where it can be gated, and static only where no check is possible
 
 - **Status:** Working — both static skills are written
   ([`skills/`](../../skills/README.md)), and the emitter is
@@ -283,6 +283,14 @@ expensive to get wrong later.
   it. The lesson is that a corpus count over a database includes tables no
   adoption would ever declare, and a ratio that does not exclude them measures
   the migration runner.
+
+  **That 67% is superseded and kept only for the lesson.** Re-measured against the
+  same twelve databases after
+  [ADR-0048](0048-auto-incrementing-keys.md) landed: **542 of 542 tables with a
+  single-column primary key now keep it through introspect**, up from 377. Making
+  an auto-incrementing key declarable closed the whole gap, bookkeeping tables
+  included. What survives from the paragraph above is the methodological point,
+  not the number.
 - 2026-08-03 — **The per-column table is gone, and the measurement is why.** Re-run
   over the same twelve applications: 96 KB → 37 KB at 127 resources, 38 KB → 15 KB
   at 44, 25 KB → 12 KB at 29. A 62% reduction at the top end rather than the ~50%

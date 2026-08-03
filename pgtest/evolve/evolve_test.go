@@ -26,13 +26,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/jryannel/sqlb/migrate"
 	"github.com/jryannel/sqlb/schema"
@@ -43,10 +43,12 @@ import (
 	_ "github.com/jryannel/sqlb/example/evolve/evolveschema"
 )
 
-// image is pinned to 18 because the history was generated with
-// migrate.MinPostgres(18), so it uses the built-in uuidv7() and would fail on
-// 17 at the first CREATE TABLE.
-const image = "postgres:18-alpine"
+// pgEnv names the Postgres this package runs against. Provisioning happens
+// outside the module — see pgtest/main_test.go for why — and the version is
+// pinned where the server is started. It must still be 18: the history was
+// generated with migrate.MinPostgres(18), so it uses the built-in uuidv7() and
+// would fail on 17 at the first CREATE TABLE.
+const pgEnv = "SQLB_TEST_POSTGRES"
 
 // dir is the migration history, relative to this package.
 const dir = "../../example/evolve/migrations"
@@ -64,28 +66,58 @@ func TestMain(m *testing.M) {
 func run(m *testing.M) (int, error) {
 	ctx := context.Background()
 
-	container, err := postgres.Run(ctx, image,
-		postgres.WithDatabase("evolve"),
-		postgres.WithUsername("evolve"),
-		postgres.WithPassword("evolve"),
-		postgres.BasicWaitStrategies(),
-	)
+	base := os.Getenv(pgEnv)
+	if base == "" {
+		return 0, fmt.Errorf(
+			"%s is not set.\n"+
+				"These tests need a Postgres; they no longer start one.\n"+
+				"  locally: mise run pg-up   (then mise run test-pg)\n"+
+				"  CI:      the service containers in .github/workflows/ci.yml",
+			pgEnv)
+	}
+	u, err := url.Parse(base)
 	if err != nil {
-		return 0, fmt.Errorf("starting %s: %w", image, err)
+		return 0, fmt.Errorf("%s is not a valid URL: %w", pgEnv, err)
+	}
+
+	admin, err := pgxpool.New(ctx, withDatabase(u, "postgres"))
+	if err != nil {
+		return 0, fmt.Errorf("opening the admin connection: %w", err)
+	}
+	defer admin.Close()
+
+	// A database of this package's own, rather than whichever one the DSN
+	// happened to name. Both tests below call shadow.Build, which refuses a
+	// database that already has tables in it, and on a shared server the DSN's
+	// default database is exactly where another suite's leftovers would be.
+	name := fmt.Sprintf("t_evolve_%d", time.Now().UnixNano()%1e9)
+	if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`); err != nil {
+		return 0, fmt.Errorf("dropping %s: %w", name, err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+quoteIdent(name)); err != nil {
+		return 0, fmt.Errorf("creating %s: %w", name, err)
 	}
 	defer func() {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			log.Printf("evolve: terminating container: %v", err)
+		if _, err := admin.Exec(context.Background(),
+			`DROP DATABASE IF EXISTS `+quoteIdent(name)+` WITH (FORCE)`); err != nil {
+			log.Printf("evolve: dropping %s: %v", name, err)
 		}
 	}()
 
-	// One database, used once, and written to by nothing else: shadow.Build
-	// refuses a database that already has tables in it.
-	dsn, err = container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		return 0, fmt.Errorf("container connection string: %w", err)
-	}
+	dsn = withDatabase(u, name)
 	return m.Run(), nil
+}
+
+// withDatabase points a base DSN at another database on the same server,
+// leaving every other parameter as the caller wrote it.
+func withDatabase(u *url.URL, database string) string {
+	v := *u
+	v.Path = "/" + database
+	return v.String()
+}
+
+func quoteIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
 func TestTheHistoryStillBuildsTheDeclaredSchema(t *testing.T) {

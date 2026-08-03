@@ -11,7 +11,7 @@ resource may be filtered, sorted, searched and expanded on, the declared verbs,
 and the obligations the schema carries. `sqlb check` names it when it has
 drifted, which is the only reason writing instructions into a repository is
 safe. [`example/tasks`](../example/tasks/.claude/skills/sqlb-schema/SKILL.md) has
-one committed. [ADR-0048](../docs/adr/0048-the-skill-is-generated.md) is the
+one committed. [ADR-0049](../docs/adr/0049-the-skill-is-generated.md) is the
 argument.
 
 | Skill | Covers |

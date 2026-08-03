@@ -14,8 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/schema"
-	testcontainers "github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // The three physical claims ADR-0026 rests on, asked of pgvector rather than of
@@ -54,9 +52,16 @@ import (
 // is real and invisible. It does not need a recall figure, and this is not a
 // place one could honestly be produced.
 
-// pgvectorImage is pinned for the reason the Postgres image is: a test that
-// measures what an extension does is only meaningful if it says which version.
-const pgvectorImage = "pgvector/pgvector:pg18"
+// vectorEnv names the pgvector-enabled Postgres these tests run against, kept
+// separate from SQLB_TEST_POSTGRES for the reason vectorDB gives below: the
+// rest of this module asserts against a server as it ships, and that claim is
+// only exact if the server really has no extension available to it.
+//
+// The image is still pinned, in compose.yaml and in the workflow, for the
+// reason it always was: a test that measures what an extension does is only
+// meaningful if it says which version. It is pinned there rather than here
+// because that is now where the server is started.
+const vectorEnv = "SQLB_TEST_PGVECTOR"
 
 var (
 	vectorOnce sync.Once
@@ -128,42 +133,19 @@ func vectorDB(t *testing.T) *pgxpool.Pool {
 
 func startVectorPostgres() {
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, pgvectorImage,
-		postgres.WithDatabase("sqlb"),
-		postgres.WithUsername("sqlb"),
-		postgres.WithPassword("sqlb"),
-		postgres.BasicWaitStrategies(),
-		// For the reason main_test.go raises it on the other container: the
-		// tests reaching this one run in parallel too.
-		testcontainers.WithCmdArgs("-c", "max_connections=200"),
-	)
-	if err != nil {
-		vectorErr = fmt.Errorf("starting %s: %w", pgvectorImage, err)
+
+	if vectorDSN, vectorErr = dsnRenderer(vectorEnv); vectorErr != nil {
 		return
 	}
-	// No explicit termination. This is started once for the run, and the only
-	// place that could tear it down is TestMain, which cannot reach a container
-	// started lazily by whichever test needed it first. testcontainers' reaper
-	// removes it when the session ends, which is what that reaper is for.
-	host, err := container.Host(ctx)
-	if err != nil {
-		vectorErr = fmt.Errorf("pgvector container host: %w", err)
+	if vectorPool, vectorErr = pgxpool.New(ctx, vectorDSN("postgres")); vectorErr != nil {
+		vectorErr = fmt.Errorf("opening the pgvector admin connection: %w", vectorErr)
 		return
 	}
-	port, err := container.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		vectorErr = fmt.Errorf("pgvector container port: %w", err)
+	if err := vectorPool.Ping(ctx); err != nil {
+		vectorErr = fmt.Errorf("%s is set but nothing answered: %w", vectorEnv, err)
 		return
 	}
-	vectorDSN = func(database string) string {
-		return fmt.Sprintf("postgres://sqlb:sqlb@%s:%s/%s?sslmode=disable",
-			host, port.Port(), database)
-	}
-	if vectorPool, err = pgxpool.New(ctx, vectorDSN("sqlb")); err != nil {
-		vectorErr = fmt.Errorf("opening the pgvector admin connection: %w", err)
-		return
-	}
-	log.Printf("pgtest: %s is up", pgvectorImage)
+	log.Printf("pgtest: pgvector is up")
 }
 
 // vectorDim is small because nothing here depends on the width. A real embedding

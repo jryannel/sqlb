@@ -4,38 +4,37 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-// image is pinned rather than tracking latest, because a test that measures
-// what Postgres does is only meaningful if it says which Postgres. 18 is the
-// version ADR-0014's manual measurements were taken against.
-const image = "postgres:18-alpine"
+// pgEnv names the Postgres these tests run against. Provisioning is the
+// caller's job — `mise run pg-up` locally, a service container in CI — and this
+// module no longer starts one itself.
+//
+// That is a deliberate reversal of how this suite began, and the reason is in
+// doc.go: testcontainers brought docker/docker and forty modules behind it, and
+// its reaper reaps by label, which means a test run could and did remove
+// long-lived containers somebody else was using. A DSN has neither problem.
+const pgEnv = "SQLB_TEST_POSTGRES"
 
-// admin is the connection to the container's default database. Tests do not
+// admin is the connection to the server's maintenance database. Tests do not
 // use it directly; freshDB creates a database of its own through it, which is
-// far cheaper than a container each and keeps tests independent anyway.
+// far cheaper than a server each and keeps tests independent anyway.
 var admin *pgxpool.Pool
 
-// dsn renders a connection string for a database in the running container,
-// reachable from the host.
+// dsn renders a connection string for a database on the same server.
 var dsn func(database string) string
-
-// pgContainer is the running Postgres, kept so that a second container — the
-// pooler — can be pointed at it by container address rather than host port.
-var pgContainer *postgres.PostgresContainer
 
 func TestMain(m *testing.M) {
 	// Failing loudly beats skipping. See the package doc: the whole reason
 	// this module exists is to stop a gate from claiming coverage it lacks,
-	// and "no Docker, so everything passed" is that same failure wearing a
+	// and "no database, so everything passed" is that same failure wearing a
 	// different hat.
 	code, err := run(m)
 	if err != nil {
@@ -47,59 +46,53 @@ func TestMain(m *testing.M) {
 func run(m *testing.M) (int, error) {
 	ctx := context.Background()
 
-	container, err := postgres.Run(ctx, image,
-		postgres.WithDatabase("sqlb"),
-		postgres.WithUsername("sqlb"),
-		postgres.WithPassword("sqlb"),
-		postgres.BasicWaitStrategies(),
-		// Raised from the default 100 because the tests run in parallel now, and
-		// the ceiling is the product of two numbers neither of which this file
-		// controls: how many tests `go test` runs at once (GOMAXPROCS, so the
-		// machine's core count) and how many connections each one's pool opens.
-		// freshStockDB caps the second at poolSize; 200 leaves that safe well
-		// past any core count a developer or a runner is likely to have.
-		//
-		// Cheap, too: an unused connection slot is a few hundred bytes of shared
-		// memory, not a backend.
-		testcontainers.WithCmdArgs("-c", "max_connections=200"),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("starting %s: %w", image, err)
-	}
-	pgContainer = container
-	defer func() {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			log.Printf("pgtest: terminating container: %v", err)
-		}
-	}()
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("container host: %w", err)
-	}
-	port, err := container.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		return 0, fmt.Errorf("container port: %w", err)
+	var err error
+	if dsn, err = dsnRenderer(pgEnv); err != nil {
+		return 0, err
 	}
 
-	dsn = func(database string) string {
-		return fmt.Sprintf("postgres://sqlb:sqlb@%s:%s/%s?sslmode=disable",
-			host, port.Port(), database)
-	}
-
-	admin, err = pgxpool.New(ctx, dsn("sqlb"))
+	admin, err = pgxpool.New(ctx, dsn("postgres"))
 	if err != nil {
-		return 0, fmt.Errorf("opening admin connection: %w", err)
+		return 0, fmt.Errorf("opening the admin connection: %w", err)
 	}
 	defer admin.Close()
-
-	stopPooler, err := startPooler(ctx, container)
-	if err != nil {
-		return 0, fmt.Errorf("starting the pooler: %w", err)
+	if err := admin.Ping(ctx); err != nil {
+		return 0, fmt.Errorf("%s is set but nothing answered: %w", pgEnv, err)
 	}
-	defer stopPooler()
 
 	return m.Run(), nil
+}
+
+// dsnRenderer reads a base DSN from the environment and returns a function that
+// points it at any database on the same server.
+//
+// A URL rather than the keyword form, because swapping the database means
+// replacing one path segment and leaving every other parameter — sslmode, an
+// application_name, a channel binding requirement — exactly as the caller wrote
+// it. Rebuilding a DSN out of parsed components would silently drop whatever
+// this file had not thought of.
+func dsnRenderer(env string) (func(string) string, error) {
+	base := os.Getenv(env)
+	if base == "" {
+		return nil, fmt.Errorf(
+			"%s is not set.\n"+
+				"These tests need a Postgres; they no longer start one.\n"+
+				"  locally: mise run pg-up   (then mise run test-pg)\n"+
+				"  CI:      the service containers in .github/workflows/ci.yml",
+			env)
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not a valid URL: %w", env, err)
+	}
+	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+		return nil, fmt.Errorf("%s must be a postgres:// URL, got scheme %q", env, u.Scheme)
+	}
+	return func(database string) string {
+		v := *u
+		v.Path = "/" + database
+		return v.String()
+	}, nil
 }
 
 // poolSize caps what one test's pool may open. pgxpool's default is the core
@@ -107,16 +100,21 @@ func run(m *testing.M) (int, error) {
 // that number squared, and on a large machine it walks into max_connections
 // while every one of those connections sits idle.
 //
-// Eight rather than four, which would also fit every test today: census's
-// queue test runs four workers competing for the tail of the same queue, and a
-// pool sized exactly to the workers deadlocks the moment anything else in that
-// test wants a connection at the same time.
+// Eight rather than four, which would also fit every test today: census's queue
+// test runs four workers competing for the tail of the same queue, and a pool
+// sized exactly to the workers deadlocks the moment anything else in that test
+// wants a connection at the same time.
+//
+// It pairs with the -parallel cap in mise.toml's test-pg. Eight connections by
+// eight concurrent tests is 64, which fits inside a stock server's 100 without
+// the harness having to configure the server at all — and it cannot configure
+// it any more, now that provisioning lives outside this module.
 const poolSize = 8
 
 // freshDB creates an empty database with the uuid_generate_v7() shim installed,
 // and returns a connection to it, dropped when the test ends. A database per
-// test rather than a container per test: container startup dominates, and
-// CREATE DATABASE is milliseconds.
+// test rather than a server per test: CREATE DATABASE is milliseconds, and the
+// server is already running before `go test` starts.
 //
 // It is also what lets the suite run in parallel. Tests here share a Postgres
 // but not a database, so they were already independent by construction — the

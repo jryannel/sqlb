@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -11,8 +12,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/jryannel/sqlb/example/tasks/migrations"
 )
@@ -24,14 +23,19 @@ import (
 // keys reject a cross-workspace reference, that the completed_at trigger fires,
 // that a rolled-back transaction leaves no comment behind.
 //
-// There is deliberately no skip-when-Docker-is-absent path. A suite that passes
-// silently when it cannot reach a database reports coverage it does not have.
+// There is deliberately no skip-when-the-database-is-absent path. A suite that
+// passes silently when it cannot reach one reports coverage it does not have.
 
-// image is pinned, and pinned to 18 specifically: cmd/migrate passes
-// migrate.MinPostgres(18), so the DDL uses the built-in uuidv7() and needs no
-// extension. Running these against 17 would fail at the first CREATE TABLE,
-// which is a true statement about the demo rather than a broken test.
-const image = "postgres:18-alpine"
+// pgEnv names the Postgres these tests run against. They do not start one:
+// provisioning is `mise run pg-up` locally and a service container in CI, which
+// is what lets six suites share one server instead of starting six.
+//
+// It must be Postgres 18. cmd/migrate passes migrate.MinPostgres(18), so the
+// DDL uses the built-in uuidv7() and needs no extension; against 17 it would
+// fail at the first CREATE TABLE, which is a true statement about the demo
+// rather than a broken test. The version is pinned in compose.yaml and in the
+// workflow, where the server is started.
+const pgEnv = "SQLB_TEST_POSTGRES"
 
 var (
 	admin *pgxpool.Pool
@@ -49,39 +53,36 @@ func TestMain(m *testing.M) {
 func run(m *testing.M) (int, error) {
 	ctx := context.Background()
 
-	container, err := postgres.Run(ctx, image,
-		postgres.WithDatabase("tasks"),
-		postgres.WithUsername("tasks"),
-		postgres.WithPassword("tasks"),
-		postgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("starting %s: %w", image, err)
+	base := os.Getenv(pgEnv)
+	if base == "" {
+		return 0, fmt.Errorf(
+			"%s is not set.\n"+
+				"These tests need a Postgres; they no longer start one.\n"+
+				"  locally: mise run pg-up   (then mise run test-demo)\n"+
+				"  CI:      the service containers in .github/workflows/ci.yml",
+			pgEnv)
 	}
-	defer func() {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			log.Printf("tasks: terminating container: %v", err)
-		}
-	}()
-
-	host, err := container.Host(ctx)
+	u, err := url.Parse(base)
 	if err != nil {
-		return 0, fmt.Errorf("container host: %w", err)
+		return 0, fmt.Errorf("%s is not a valid URL: %w", pgEnv, err)
 	}
-	port, err := container.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		return 0, fmt.Errorf("container port: %w", err)
-	}
+	// Swapping one path segment, rather than rebuilding the DSN from parsed
+	// components: everything else the caller wrote — sslmode, an
+	// application_name — should survive untouched.
 	dsn = func(database string) string {
-		return fmt.Sprintf("postgres://tasks:tasks@%s:%s/%s?sslmode=disable",
-			host, port.Port(), database)
+		v := *u
+		v.Path = "/" + database
+		return v.String()
 	}
 
-	admin, err = pgxpool.New(ctx, dsn("tasks"))
+	admin, err = pgxpool.New(ctx, dsn("postgres"))
 	if err != nil {
 		return 0, fmt.Errorf("opening the admin connection: %w", err)
 	}
 	defer admin.Close()
+	if err := admin.Ping(ctx); err != nil {
+		return 0, fmt.Errorf("%s is set but nothing answered: %w", pgEnv, err)
+	}
 
 	return m.Run(), nil
 }

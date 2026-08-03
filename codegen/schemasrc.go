@@ -425,6 +425,14 @@ func renderField(d *schema.FieldDesc, names map[string]string) (string, error) {
 
 	// A reference is a uuid column whose name, type and default are decided by
 	// Ref itself, so only the modifiers below apply to both kinds.
+	// Before PrimaryKey, so a key column reads as what it is and then as what
+	// it does — schema.BigInt("id").Identity().PrimaryKey().
+	switch d.Auto {
+	case schema.AutoIdentity:
+		b.WriteString(".Identity()")
+	case schema.AutoIdentityAlways:
+		b.WriteString(".IdentityAlways()")
+	}
 	if d.PrimaryKey {
 		b.WriteString(".PrimaryKey()")
 	}
@@ -555,6 +563,22 @@ func typeConstant(t schema.Type) (string, error) {
 
 func fieldConstructor(d *schema.FieldDesc) (string, error) {
 	name := strconv.Quote(d.Name)
+	// A serial is its own constructor, the way UUIDv7 is: the auto-ness is part
+	// of what the column *is*, and rendering the plain integer plus a modifier
+	// would read as an afterthought where the database has one word for it.
+	// An identity is a modifier, which is what renderField adds — the two are
+	// spelled differently here because they are spelled differently in SQL.
+	if d.Auto == schema.AutoSerial {
+		switch d.Type {
+		case schema.TypeSmallInt:
+			return "schema.SmallSerial(" + name + ")", nil
+		case schema.TypeInt:
+			return "schema.Serial(" + name + ")", nil
+		case schema.TypeBigInt:
+			return "schema.BigSerial(" + name + ")", nil
+		}
+		return "", fmt.Errorf("column %q is a serial over %q, which has no serial spelling", d.Name, d.Type)
+	}
 	switch d.Type {
 	case schema.TypeText:
 		return "schema.Text(" + name + ")", nil

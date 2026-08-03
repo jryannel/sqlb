@@ -731,6 +731,10 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 		})
 	}
 
+	if cd.Auto != td.Auto {
+		d.alterColumns = append(d.alterColumns, autoChanges(t.Name(), cd, td)...)
+	}
+
 	if cd.Comment != td.Comment {
 		d.alterColumns = append(d.alterColumns, Change{
 			Comment: "describe " + t.Name() + "." + td.Name,
@@ -739,6 +743,90 @@ func (d *differ) columnAltered(t *schema.TableDef, cd, td *schema.FieldDesc) err
 		})
 	}
 	return nil
+}
+
+// autoChanges is the DDL for a column that starts or stops being supplied by a
+// sequence, or that swaps one spelling of that for the other.
+//
+// The two spellings are not symmetric and the asymmetry is Postgres's. An
+// identity is an attribute of the column, so it is added and dropped with one
+// ALTER each and rolls back exactly. A serial is three objects wearing one
+// name, and only the CREATE TABLE spelling assembles them — so building one on
+// a column that already exists means creating the sequence, pointing the column
+// at it, and giving it to the column to own, which is what the statements below
+// do in that order.
+//
+// What none of this does is set the sequence past the rows already there.
+// Nothing here knows how many that is, and a generated `setval` reading the
+// column's own max is a full scan written into a migration by a tool that
+// cannot see the table's size. It is named in the hazard instead, because
+// getting it wrong is not a slow migration but a duplicate key on the first
+// insert after it.
+func autoChanges(table string, cd, td *schema.FieldDesc) []Change {
+	var out []Change
+	col := table + "." + td.Name
+
+	// The old arrangement goes first, so a serial→identity swap does not leave
+	// a nextval default sitting under an identity Postgres would refuse.
+	switch {
+	case cd.Auto.Identity():
+		out = append(out, Change{
+			Comment: "drop identity on " + col,
+			Up:      alterColumn(table, td.Name, "DROP IDENTITY"),
+			Down:    alterColumn(table, td.Name, "ADD "+identityClause(cd.Auto)),
+		})
+	case cd.Auto == schema.AutoSerial:
+		out = append(out, Change{
+			Comment: "stop " + col + " drawing from its sequence",
+			Up:      alterColumn(table, td.Name, "DROP DEFAULT"),
+			Down:    alterColumn(table, td.Name, "SET DEFAULT nextval("+sqlString(sequenceName(table, td.Name))+")"),
+			Hazard: "the sequence " + sequenceName(table, td.Name) + " is left behind rather than dropped. " +
+				"It is owned by the column, so it goes when the column does — drop it by hand if this column is staying",
+		})
+	}
+
+	switch {
+	case td.Auto.Identity():
+		out = append(out, Change{
+			Comment: "make " + col + " an identity column",
+			Up:      alterColumn(table, td.Name, "ADD "+identityClause(td.Auto)),
+			Down:    alterColumn(table, td.Name, "DROP IDENTITY"),
+			Hazard: "the identity starts at 1. On a table that already has rows, set it past the " +
+				"highest value first — ALTER TABLE " + table + " ALTER COLUMN " + td.Name +
+				" RESTART WITH <max+1> — or the first insert collides with a row already there",
+		})
+	case td.Auto == schema.AutoSerial:
+		seq := sequenceName(table, td.Name)
+		out = append(out,
+			Change{
+				Comment: "create the sequence behind " + col,
+				Up:      "CREATE SEQUENCE " + quoteIdent(seq) + " OWNED BY " + quoteIdent(table) + "." + quoteIdent(td.Name) + ";",
+				Down:    "DROP SEQUENCE IF EXISTS " + quoteIdent(seq) + ";",
+			},
+			Change{
+				Comment: "draw " + col + " from " + seq,
+				Up:      alterColumn(table, td.Name, "SET DEFAULT nextval("+sqlString(seq)+")"),
+				Down:    alterColumn(table, td.Name, "DROP DEFAULT"),
+				Hazard: "the sequence starts at 1. On a table that already has rows, SELECT setval(" +
+					sqlString(seq) + ", max(" + quoteIdent(td.Name) + ")) FROM " + quoteIdent(table) +
+					" first, or the first insert collides with a row already there",
+			},
+		)
+	}
+	return out
+}
+
+// sequenceName is what Postgres would have called the sequence had the column
+// been declared `bigserial` in the first place.
+//
+// The name is derived rather than declared, and that is a real limit worth
+// stating: a database whose sequence is called something else round-trips as a
+// serial — the declaration records that a sequence supplies the column, not
+// which one — so a schema rebuilt from scratch gets this name instead. Nothing
+// diffs against it, so no gate goes red over it; what changes is the name in a
+// database built by `Diff` rather than by the original migration.
+func sequenceName(table, column string) string {
+	return table + "_" + column + "_seq"
 }
 
 func (d *differ) tableComment(cur, tgt *schema.TableDef) {

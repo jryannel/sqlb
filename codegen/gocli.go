@@ -942,7 +942,7 @@ func cliWriteUsage(d *schema.FieldDesc, kind bodyKind) string {
 		}
 	case d.Nullable:
 		b.WriteString("Optional; left out, the column is null.")
-	case d.Default != nil:
+	case d.DatabaseSupplied():
 		b.WriteString("Optional; left out, the database supplies its default.")
 	default:
 		b.WriteString("Required.")
