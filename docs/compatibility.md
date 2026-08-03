@@ -136,6 +136,23 @@ Named in advance, so the break is a documented plan rather than a surprise.
   reason for a separate binary, and any verb still on the wrong side of that
   moves the same way this one did.
 
+- **The emitted agent skill** — its path, and everything about the document's
+  shape. `Options.SkillDir` writes `<SkillDir>/sqlb-schema/SKILL.md`, and both
+  halves of that are expected to move: the `SKILL.md` frontmatter and directory
+  convention belong to the agent tooling rather than to sqlb, so a change there
+  is a change to this output with no deprecation window sqlb is in a position to
+  offer ([ADR-0049](adr/0049-the-skill-is-generated.md)).
+
+  This is the cheapest kind of break to own, and that is the reason it is
+  allowed to be here at all: the file is generated, so the mechanical edit is
+  `sqlb generate`, and `sqlb check` names the file when it has drifted. The
+  emitter is also opt-in — a project that never sets `SkillDir` has no exposure.
+  What would *not* be cheap is the reverse, so it is stated here rather than
+  discovered: if this emitter is ever removed, the verb has to delete the file
+  rather than stop writing it. A stale skill still loads, and an instruction file
+  that is confidently wrong about a schema it no longer describes is worse than
+  an absent one.
+
 ### Three that broke without being listed here first
 
 `v0.6.0` broke three surfaces that were not under *Will move*, and the honest

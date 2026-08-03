@@ -155,6 +155,7 @@ the section it bears on, and move on.
 | [0046](0046-a-negation-is-sqls.md) | A negation is SQL's, and the alternative is a second vocabulary rather than a redefinition | Working | High |
 | [0047](0047-no-default-hook-registry.md) | There is no default hook registry, and the short name takes the registry | Working | High |
 | [0048](0048-auto-incrementing-keys.md) | An auto-incrementing key is a property of the column, and both of Postgres's spellings are declarable | Working | High |
+| [0049](0049-the-skill-is-generated.md) | The agent skill is generated where it can be gated, and static only where no check is possible | Working | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.
