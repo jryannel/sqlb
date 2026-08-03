@@ -129,9 +129,10 @@ type Options struct {
 	// not own, beside files a project wrote itself, so it is opted into rather
 	// than arrived at (ADR-0049).
 	//
-	// One file lands there, at <SkillDir>/sqlb-schema/SKILL.md. It describes
-	// what this schema exposes and what each resource accepts, which is the
-	// answer no static document can carry, because capabilities are opt-in and
+	// One file lands there, at <SkillDir>/<SkillName>/SKILL.md — so
+	// ".claude/skills/sqlb-schema/SKILL.md" unless SkillName says otherwise. It
+	// describes what this schema exposes and what each resource accepts, which is
+	// the answer no static document can carry, because capabilities are opt-in and
 	// therefore per-project. Being covered by `sqlb check` is the load-bearing
 	// half: a skill that has drifted from the schema is worse than no skill,
 	// since it is confidently wrong about the one thing it exists to know.
@@ -146,21 +147,56 @@ type Options struct {
 	// single-module project, because that is a *project* skill and the tooling
 	// reads those when the session starts.
 	//
-	// Two consequences worth knowing before wiring this up, neither of them
-	// sqlb's to fix:
+	// **A repository with more than one registry wants one SkillDir per
+	// registry**, and module-local placement is how to get it: point each
+	// module's SkillDir at a `.claude/skills` beside that module. The skill
+	// answers per-registry questions — which columns are filterable *here* — so a
+	// module-local one is the right scope as well as the safe one, and a nested
+	// `.claude/skills` is directory-scoped by the tooling, meaning sixteen skills
+	// all named `sqlb-schema` are sixteen correctly-scoped skills rather than
+	// sixteen collisions.
 	//
-	// A skills directory that did not exist when the session started is not
-	// watched, so the first `sqlb generate` that creates one emits a skill that
-	// will not be offered until the session is restarted. After that, edits to it
-	// are picked up live — which is what makes the `sqlb check` gate worth having.
+	// Pointing two registries at one SkillDir under one SkillName is
+	// last-writer-wins, and it is order-dependent: whichever module generated
+	// second is current and the other's `sqlb check` is red, with "run: sqlb
+	// generate" as advice that cannot work, because running it reddens the first
+	// (#142). SkillName is the way to share a directory deliberately.
 	//
-	// A nested module is the awkward case, and example/tasks is one: a
-	// `.claude/skills` below the repository root is discovered only once a file
-	// in that subtree has been read, rather than at startup. It still works; it
-	// arrives late. A project that wants the skill offered from the first turn
-	// should point SkillDir at the repository root's `.claude/skills` even when
-	// the schema lives in a nested module.
+	// One consequence worth knowing before wiring this up, and it is not sqlb's
+	// to fix: a skills directory that did not exist when the session started may
+	// not be watched, so the first `sqlb generate` that creates one can emit a
+	// skill that is not offered until the session restarts. Observed once to be
+	// picked up immediately, so treat it as a possibility rather than a rule.
+	// After the directory exists, edits to it are picked up live — which is what
+	// makes the `sqlb check` gate worth having.
+	//
+	// A nested module is discovered later than the root: a `.claude/skills` below
+	// the repository root is read once a file in that subtree has been, rather
+	// than at startup. It works; it arrives late. A **single-registry** project
+	// that wants the skill offered from the first turn can point SkillDir at the
+	// repository root's `.claude/skills` even when the schema lives in a nested
+	// module. With more than one registry that placement is the clobber above,
+	// and it needs a distinct SkillName per registry.
 	SkillDir string
+
+	// SkillName is the skill's directory and the name in its frontmatter,
+	// defaulting to "sqlb-schema". It is the second half of
+	// <SkillDir>/<SkillName>/SKILL.md.
+	//
+	// It exists so that a repository with several registries can share one
+	// SkillDir — "sqlb-schema-waitlist" and "sqlb-schema-tenants" under the
+	// repository root, which is what makes root placement available to a
+	// multi-module repository at all (#142). A project whose skills are
+	// module-local wants the default: the directory already distinguishes them,
+	// and one name across sixteen modules is a name a reader learns once.
+	//
+	// Keep the `sqlb-` prefix on anything you set. This file lands in a directory
+	// sqlb does not own, beside skills the project wrote itself and skills it
+	// installed, and a collision there is a silently shadowed instruction.
+	// Refused if it is not a single lowercase kebab-case path segment, because
+	// the agent tooling names a skill by its directory and an unloadable skill
+	// fails by being quietly absent rather than by erroring.
+	SkillName string
 
 	// SkillSchemaPackage is how the emitted skill spells this project in the
 	// commands it tells an agent to run: "./taskschema", the same argument
@@ -191,6 +227,8 @@ func (o Options) modelsFile() string   { return orDefault(o.ModelsFile, "models_
 func (o Options) columnsFile() string  { return orDefault(o.ColumnsFile, "columns_gen.go") }
 func (o Options) manifestFile() string { return orDefault(o.ManifestFile, "sqlb.json") }
 func (o Options) restFile() string     { return orDefault(o.RestFile, "rest_gen.go") }
+
+func (o Options) skillName() string { return orDefault(o.SkillName, defaultSkillName) }
 
 func (o Options) tsClientFile() string  { return orDefault(o.TSClientFile, "client.gen.ts") }
 func (o Options) tsQueriesFile() string { return orDefault(o.TSQueriesFile, "queries.gen.ts") }
@@ -374,7 +412,52 @@ func (o Options) validate() error {
 			"codegen: Options.CLIDir %q gives the package name %q, which is not a Go identifier; set Options.CLIPackage",
 			o.CLIDir, o.cliPackage())
 	}
+	// Checked whenever it is set, rather than only when a skill is emitted: a
+	// SkillName with no SkillDir is a project that meant to opt in, and telling
+	// it the name is unusable is more useful than silently writing nothing.
+	if o.SkillName != "" && !isSkillName(o.SkillName) {
+		return fmt.Errorf(
+			"codegen: Options.SkillName is %q, which is not a usable skill directory; it must be "+
+				"one path segment of lowercase letters, digits and hyphens, starting with a letter "+
+				"or digit — the agent tooling names a skill by its directory, and one it cannot "+
+				"load is quietly absent rather than an error. Try %q",
+			o.SkillName, defaultSkillName+"-something")
+	}
 	return nil
+}
+
+// defaultSkillName is where the skill lands when a project does not say. The
+// sqlb- prefix is deliberate: this file is written into a directory sqlb does
+// not own, beside skills a project wrote itself and skills it installed, and a
+// collision there is a silently shadowed instruction.
+const defaultSkillName = "sqlb-schema"
+
+// isSkillName reports whether s can be a skill directory.
+//
+// One segment, so nothing here can climb out of SkillDir or nest a skill where
+// the tooling would not look for one. Lowercase kebab-case because that is the
+// convention every skill in the ecosystem follows, and a name that only *mostly*
+// follows it fails by not being offered — which looks exactly like a skill the
+// model chose not to load.
+func isSkillName(s string) bool {
+	if s == "" || strings.HasPrefix(s, "-") || strings.HasSuffix(s, "-") {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == '-':
+			// Doubled hyphens read as a typo and would survive round-tripping
+			// through a directory name, so they are refused with the rest.
+			if s[i-1] == '-' {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Generate writes the generated files and returns their paths.
@@ -546,7 +629,7 @@ func render(opts Options) (map[string][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		files[filepath.Join(opts.SkillDir, skillName, "SKILL.md")] = src
+		files[filepath.Join(opts.SkillDir, opts.skillName(), "SKILL.md")] = src
 	}
 	if opts.CLIDir != "" {
 		if name := opts.cliFile(); name != "-" {

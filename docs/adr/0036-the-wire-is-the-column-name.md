@@ -264,6 +264,24 @@ it.
 
 ## Revisions
 
+- 2026-08-03 — **The amendment missed a surface, and it was the one read as
+  instructions.** `BuildManifest` reported the column's own name in the REST
+  section — the capability lists and the worked example requests — so a
+  camelCase schema emitted `GET /notifications?org_id=eq.VALUE`, a copy-pasteable
+  request that 400s, and the generated agent skill printed it and then asserted
+  in prose that those were the JSON field names
+  ([#143](https://github.com/jryannel/sqlb/issues/143)).
+
+  "One setting, five surfaces" was tested as five surfaces. The manifest is a
+  sixth, and it is the one with a consumer that cannot check its own work: a
+  TypeScript client that spelled a parameter wrong fails at `tsc`, and a document
+  that spells one wrong is believed. `Manifest.WireCase` and
+  `ColumnManifest.Wire` are new, so a consumer holding only the document can tell
+  the two spellings apart instead of assuming they coincide.
+
+  What this does not change is the decision. There is still exactly one spelling,
+  still derived, still no per-field override — the manifest was simply reporting
+  the wrong one of the two names the derivation relates.
 - 2026-08-02 — **Amended, and implemented the same day.** The "port stalls on
   the rename" trigger fired ([#116](https://github.com/jryannel/sqlb/issues/116)).
   The spelling becomes a declared function of the column name, `Verbatim` by

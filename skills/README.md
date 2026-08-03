@@ -14,6 +14,13 @@ safe. [`example/tasks`](../example/tasks/.claude/skills/sqlb-schema/SKILL.md) ha
 one committed. [ADR-0049](../docs/adr/0049-the-skill-is-generated.md) is the
 argument.
 
+A repository with several registries wants one `SkillDir` per registry, placed
+beside the module it describes: a nested `.claude/skills` is directory-scoped, so
+sixteen skills all named `sqlb-schema` are sixteen correctly-scoped skills rather
+than a collision. To share one directory instead — the repository root, so every
+skill is offered from the first turn — give each registry its own
+`Options.SkillName`.
+
 | Skill | Covers |
 |---|---|
 | [`sqlb-queries`](sqlb-queries/SKILL.md) | Where the builder ends and `Raw`, sqlc or hand-written SQL begins — plus four failure modes that compile, pass their tests, and are wrong at runtime |

@@ -18,7 +18,7 @@ read, and forgetting it once is a cross-tenant data leak.
 ## Decision
 
 Register hooks per model: `BeforeQuery`, `Before`/`AfterCreate`,
-`Before`/`AfterUpdate`, `Before`/`AfterDelete`.
+`Before`/`AfterUpdate`, `Before`/`AfterDelete`, and `AfterDeleteRows`.
 
 `BeforeQuery` is the load-bearing one. It receives the `*Builder` and may amend
 it, so one registration constrains every read of that model, including reads
@@ -78,3 +78,19 @@ signatures.
 - 2026-07-28 — Narrowed again: "fails closed" was about a hook's body, not its
   absence. ADR-0030 closes the absence where handlers are generated.
 - 2026-07-30 — Condensed.
+- 2026-08-03 — Added `AfterDeleteRows`, a sixth hook rather than a new signature
+  for `AfterDelete` ([#144](https://github.com/jryannel/sqlb/issues/144)). The
+  asymmetry it closes is that `AfterUpdate` receives the rows and `AfterDelete`
+  received a count, so a module publishing a domain event per mutation could port
+  its creates and updates and not its deletes — and no hook could recover the
+  rows, because a `Delete` is write-only for predicates and `BeforeDelete`
+  therefore cannot ask what a statement addresses.
+
+  Two names for one concept is the cost, and what buys it is that the rows are
+  not free: they arrive via `DELETE … RETURNING`, so a bulk delete would pay to
+  materialise everything it removed. The clause is added only when a hook of the
+  rows kind is registered for the model, which makes the cost visible at the
+  registration rather than charged to every delete in the process. Changing the
+  existing signature instead would have been caught by the compiler at every call
+  site, and is still the tidier end state if the count form turns out to have no
+  users.

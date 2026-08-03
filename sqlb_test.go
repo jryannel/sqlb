@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -653,6 +654,102 @@ func TestMutationHooksDoNotAccumulate(t *testing.T) {
 	}
 	if second := h.lastQuery(); second != firstDel {
 		t.Errorf("running the delete twice changed the SQL\nfirst:  %s\nsecond: %s", firstDel, second)
+	}
+}
+
+// deleteDoc is the model the AfterDeleteRows tests remove rows of.
+type deleteDoc struct {
+	ID    string `db:"id" sqlb:"pk"`
+	OrgID string `db:"org_id"`
+}
+
+// AfterDeleteRows receives the rows, which is the whole of #144: a module
+// publishing a deletion event needs the identity of what went, and a count
+// cannot supply it.
+func TestAfterDeleteRowsReceivesTheRows(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	var got []deleteDoc
+	var count int64
+	sqlb.On[deleteDoc](reg).
+		AfterDelete(func(_ context.Context, n int64) error { count = n; return nil }).
+		AfterDeleteRows(func(_ context.Context, rows []deleteDoc) error { got = rows; return nil })
+
+	h := newHarness(t, []string{"id", "org_id"}, [][]any{{"d1", "acme"}, {"d2", "acme"}})
+	defer h.close()
+
+	n, err := sqlb.DeleteRows[deleteDoc]().
+		Where(sqlb.F("org_id").Eq("acme")).Exec(context.Background(), h.handle(reg))
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// The statement asked for them back, which is what makes the rest possible.
+	if !strings.Contains(h.lastQuery(), "RETURNING") {
+		t.Errorf("a registered AfterDeleteRows did not put RETURNING on the delete: %s", h.lastQuery())
+	}
+	if len(got) != 2 || got[0].ID != "d1" || got[1].ID != "d2" {
+		t.Errorf("rows = %+v, want both removed rows", got)
+	}
+	// And both kinds ran, agreeing about how many rows went. RETURNING yields one
+	// row per row removed, so the count is the same number by the other road —
+	// a disagreement here would mean the count came from somewhere else.
+	if n != 2 || count != 2 {
+		t.Errorf("Exec returned %d and AfterDelete saw %d, want 2 and 2", n, count)
+	}
+}
+
+// The other half, and the reason this is a second hook rather than a new
+// signature for the first: nothing is added to the statement unless a hook asked
+// for the rows, so a bulk delete is not silently made to materialise everything
+// it removed.
+//
+// Proven both ways against the test above: same model, same statement, and the
+// only difference is which hook is registered.
+func TestADeleteWithNoRowHookDoesNotReturnRows(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	var count int64
+	sqlb.On[deleteDoc](reg).AfterDelete(func(_ context.Context, n int64) error { count = n; return nil })
+
+	h := newHarness(t, []string{"id", "org_id"}, [][]any{{"d1", "acme"}})
+	defer h.close()
+
+	if _, err := sqlb.DeleteRows[deleteDoc]().
+		Where(sqlb.F("org_id").Eq("acme")).Exec(context.Background(), h.handle(reg)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if strings.Contains(h.lastQuery(), "RETURNING") {
+		t.Errorf("a delete nothing reads the rows of paid to scan them: %s", h.lastQuery())
+	}
+	if count != 1 {
+		t.Errorf("AfterDelete saw %d rows, want the command tag's 1", count)
+	}
+
+	// SQL() has no executor and therefore no hooks, so it prints the statement a
+	// delete sends when nothing wants the rows — under either registration.
+	stmt, _, err := sqlb.DeleteRows[deleteDoc]().Where(sqlb.F("id").Eq("d1")).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(stmt, "RETURNING") {
+		t.Errorf("SQL() invented a RETURNING it cannot know about: %s", stmt)
+	}
+}
+
+// A row hook that fails aborts the delete, the same way AfterCreate does. It
+// runs inside the caller's transaction, so this is what makes it usable for a
+// validation and unusable for announcing anything the outside world can see.
+func TestAfterDeleteRowsCanAbort(t *testing.T) {
+	sentinel := errors.New("that row may not be removed")
+	reg := sqlb.NewRegistry()
+	sqlb.On[deleteDoc](reg).
+		AfterDeleteRows(func(context.Context, []deleteDoc) error { return sentinel })
+
+	h := newHarness(t, []string{"id", "org_id"}, [][]any{{"d1", "acme"}})
+	defer h.close()
+
+	if _, err := sqlb.DeleteRows[deleteDoc]().
+		Where(sqlb.F("id").Eq("d1")).Exec(context.Background(), h.handle(reg)); !errors.Is(err, sentinel) {
+		t.Errorf("err = %v, want the hook's error", err)
 	}
 }
 

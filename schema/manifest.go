@@ -24,8 +24,22 @@ const ManifestVersion = "1"
 // with worked example requests. Emit it next to the generated code and point
 // tooling at it.
 type Manifest struct {
-	Version   string          `json:"version"`
-	Module    string          `json:"module,omitempty"`
+	Version string `json:"version"`
+	Module  string `json:"module,omitempty"`
+
+	// WireCase is the schema's declared [WireCase], absent when the schema is
+	// Verbatim and a column's wire name is its own name.
+	//
+	// It is here so that a consumer holding only this document can *compute* a
+	// spelling rather than assume one. Every wire name the manifest reports is
+	// already converted — the REST capability lists, the examples, and
+	// [ColumnManifest.Wire] — so nothing has to call [WireCase.WireName] to read
+	// the manifest correctly. What this field buys is the sentence a renderer
+	// writing prose about the mapping needs: "there is no mapping layer" is true
+	// under Verbatim and false under Camel, and a renderer with no way to tell
+	// them apart writes the wrong one (#143).
+	WireCase string `json:"wireCase,omitempty"`
+
 	Tables    []TableManifest `json:"tables"`
 	Operators []OperatorDoc   `json:"filterOperators"`
 	Params    []ParamDoc      `json:"reservedParams"`
@@ -75,6 +89,18 @@ type InverseManifest struct {
 // itself information.
 type ColumnManifest struct {
 	Name string `json:"name"`
+
+	// Wire is how this column is spelled on the wire, present only when the
+	// schema's WireCase makes it differ from Name. Absent means the two are the
+	// same, which is every column of a Verbatim schema.
+	//
+	// Name is the database's spelling and is what a migration, an index and a
+	// hand-written query name. Wire is what a request sends and a response
+	// carries. They coincide by default, and ADR-0036's amendment is that they
+	// are one *derived* spelling rather than one literal one — so a consumer
+	// that needs the request-side name reads this and falls back to Name.
+	Wire string `json:"wire,omitempty"`
+
 	// Type names the element type of an array column, with Array set beside
 	// it — the same split the declaration uses, so a consumer reading the
 	// manifest sees the enum values and the varchar length attached to the
@@ -149,6 +175,15 @@ type RESTManifest struct {
 	MaxPageSize     int      `json:"maxPageSize"`
 	MaxFilters      int      `json:"maxFilters,omitempty"`
 
+	// Filterable, Sortable and Searchable name the columns a request may reach,
+	// in their **wire** spelling rather than the database's.
+	//
+	// Everything else in this struct is already the wire's: Path is a route,
+	// Operations are methods, Examples are requests that can be pasted. A
+	// capability list is read the same way — `?orgId=eq.…` is what the endpoint
+	// accepts for a Camel schema, and reporting `org_id` here made this document
+	// describe a request that 400s (#143). [ColumnManifest] carries both
+	// spellings for a reader who needs the column instead.
 	Filterable []string `json:"filterable"`
 	Sortable   []string `json:"sortable"`
 	Searchable []string `json:"searchable"`
@@ -211,14 +246,16 @@ type ParamDoc struct {
 
 // BuildManifest describes every table in the registry.
 func (r *Registry) BuildManifest() *Manifest {
+	wire := r.Wire()
 	m := &Manifest{
 		Version:   ManifestVersion,
 		Module:    r.module,
+		WireCase:  string(wire),
 		Operators: operatorDocs(),
 		Params:    paramDocs(),
 	}
 	for _, t := range r.Tables() {
-		m.Tables = append(m.Tables, t.manifest(r.Inverses(t)))
+		m.Tables = append(m.Tables, t.manifest(r.Inverses(t), wire))
 	}
 	return m
 }
@@ -226,7 +263,7 @@ func (r *Registry) BuildManifest() *Manifest {
 // BuildManifest describes the default registry.
 func BuildManifest() *Manifest { return defaultRegistry.BuildManifest() }
 
-func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
+func (t *TableDef) manifest(inverses []InverseRelation, wire WireCase) TableManifest {
 	tm := TableManifest{Name: t.name, Comment: t.comment}
 	if t.module != "" {
 		tm.Module, tm.LocalName = t.module, t.local
@@ -242,6 +279,7 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 		}
 		cm := ColumnManifest{
 			Name:       d.Name,
+			Wire:       differingWire(wire, d.Name),
 			Type:       string(d.Type),
 			Array:      d.Array,
 			GoType:     d.GoType(),
@@ -313,12 +351,22 @@ func (t *TableDef) manifest(inverses []InverseRelation) TableManifest {
 	}
 
 	if t.rest != nil {
-		tm.REST = t.restManifest(inverses)
+		tm.REST = t.restManifest(inverses, wire)
 	}
 	return tm
 }
 
-func (t *TableDef) restManifest(inverses []InverseRelation) *RESTManifest {
+// differingWire is the wire spelling of a column, or empty when it is the
+// column's own name. Empty rather than repeated, so that a Verbatim schema's
+// manifest is byte-identical to the one it emitted before this field existed.
+func differingWire(c WireCase, column string) string {
+	if w := c.WireName(column); w != column {
+		return w
+	}
+	return ""
+}
+
+func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *RESTManifest {
 	rm := &RESTManifest{
 		Path:            t.rest.Path,
 		Operations:      strings.Split(t.rest.Ops.String(), "|"),
@@ -334,14 +382,17 @@ func (t *TableDef) restManifest(inverses []InverseRelation) *RESTManifest {
 		if d.Hidden {
 			continue
 		}
+		// The wire spelling, not the column's own: this section describes what a
+		// request may send, and under a non-default WireCase the two differ.
+		name := wire.WireName(d.Name)
 		if d.Filterable {
-			rm.Filterable = append(rm.Filterable, d.Name)
+			rm.Filterable = append(rm.Filterable, name)
 		}
 		if d.Sortable {
-			rm.Sortable = append(rm.Sortable, d.Name)
+			rm.Sortable = append(rm.Sortable, name)
 		}
 		if d.Searchable {
-			rm.Searchable = append(rm.Searchable, d.Name)
+			rm.Searchable = append(rm.Searchable, name)
 		}
 		// The relation name, not the column: ?expand names the relation, and a
 		// caller reading this should not have to strip an "_id" to guess it.

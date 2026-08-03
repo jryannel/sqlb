@@ -417,3 +417,56 @@ expensive to get wrong later.
   without being noticed. The measurement was looking at what agents did with the
   document's *body*; nothing had yet checked the field that decides whether the
   body is ever read. That asymmetry is the lesson worth keeping.
+- 2026-08-03 — **A 16-registry adoption found two more, and one of them is the
+  failure mode this record names as the reason the file is gated at all.**
+  Reported as [#142](https://github.com/jryannel/sqlb/issues/142) and
+  [#143](https://github.com/jryannel/sqlb/issues/143) against a repository of 80
+  modules and 184 tables.
+
+  **The skill was confidently wrong under a declared `WireCase`, and the gate
+  could not catch it.** A camelCase registry got a capability table listing
+  `org_id`, closing with a sentence asserting that the column names above *are*
+  the JSON field names — so an agent doing exactly what the file said wrote
+  `?org_id=eq.…` and got a 400, having consulted the document that told it this
+  would be accepted. Worse than guessing, since guessing from the camelCase model
+  would have been right. `generate-check` was green throughout, because the file
+  was a faithful render of a manifest that was itself wrong: `BuildManifest`
+  reported the *column* name in the REST section, including in the worked example
+  requests. Fixed in the manifest, so anything else reading it for a wire
+  contract is fixed with it, and `Manifest.WireCase` plus `ColumnManifest.Wire`
+  now carry the mapping for a renderer that needs the other spelling. The closing
+  sentence is conditional: it is doing real work — it is what tells an agent not
+  to go looking for a mapping layer — so it is kept and made true rather than
+  deleted.
+
+  This is the first bug in the emitter that the gate structurally could not have
+  found, and it is worth stating plainly next to the claim above: **being gated
+  proves the file matches the schema, not that it is right about it.** Every
+  guard on this emitter until now was of the first kind.
+
+  **`SkillDir` had no per-registry component**, so every registry pointed at one
+  directory wrote the same path. That is fine for one module and silent
+  last-writer-wins for several — and the doc comment recommended the repository
+  root, which is the placement that does it. The failure is order-dependent:
+  which module's `sqlb check` is red is a function of iteration order, and the
+  message it prints, "run: sqlb generate", is advice that reddens the other one.
+  `Options.SkillName` is the fix, defaulting to `sqlb-schema`, and the doc
+  comment now says "one registry" out loud. Detecting the collision inside one
+  invocation was rejected as the primary fix: `sqlb generate` resolves exactly
+  one package, so the two writers are always two invocations.
+
+  **Module-local placement is better than a workaround**, which is the part of
+  the report worth keeping rather than the bug. A nested `.claude/skills` is
+  directory-scoped by the harness, so sixteen skills all named `sqlb-schema` are
+  sixteen correctly-scoped skills — and that is the right semantics anyway, since
+  "which columns are filterable" is a per-registry question a merged root-level
+  skill would answer for the wrong module. Confirmed from this repository while
+  writing the fix: `example/tasks/.claude/skills` was announced as newly
+  available and scoped to `example/tasks/`.
+
+  **And one data point against the open question above.** The 2026-08-03 note
+  says a skills directory that did not exist when a session started is not
+  watched. The reporter observed the opposite — `sqlb generate` created one
+  mid-session and the harness picked it up immediately — and so did the session
+  above. One harness and one version each, so the doc comment now describes it as
+  a possibility rather than a rule, and the question stays open.

@@ -52,12 +52,16 @@ type Event struct {
 	// Key is the primary key of the row, rendered as a string the way the URL
 	// renders it, so that it concatenates onto the resource path.
 	//
-	// It is empty when the change was not attributable to one row, which today
-	// means every delete: sqlb's AfterDelete hook receives a count rather than
-	// the rows it removed. An empty Key means "something in this table
-	// changed" — invalidate the collection. That is not a degradation for a
-	// delete, because a delete changes the collection whether or not the
-	// client held the row.
+	// It is empty when the change was not attributable to one row, which an
+	// empty Key means "something in this table changed" — invalidate the
+	// collection.
+	//
+	// A delete used to be exactly that case, because sqlb's AfterDelete hook
+	// receives a count rather than the rows it removed. It no longer is:
+	// [PublishChanges] registers [sqlb.Hooks.AfterDeleteRows] and publishes one
+	// event per removed row, key and all (#144). A hand-written publisher on the
+	// count hook still produces the keyless form, and a subscriber has to keep
+	// handling it.
 	Key string `json:"key,omitempty" doc:"Primary key of the row, or empty when the whole table is invalidated"`
 
 	// Op is what happened.
@@ -73,11 +77,15 @@ type Event struct {
 	// id, and putting it on the wire would enlarge a contract ADR-0045 records
 	// as the expensive half to change.
 	//
-	// It is empty when the model declares no scope, and empty on a delete,
-	// which carries no row to read it from. A Filter comparing scopes has to
-	// decide what an empty one means; the safe reading is that such an event
-	// identifies nothing and may go to everyone, since it names neither a row
-	// nor a tenant.
+	// It is empty when the model declares no scope. It used to be empty on every
+	// delete as well, which meant a tenant filter had to let deletes through to
+	// everyone; [PublishChanges] now reads the removed rows and a delete carries
+	// its scope like any other change (#144).
+	//
+	// A Filter comparing scopes still has to decide what an empty one means,
+	// because a hand-written publisher may produce one. The safe reading is that
+	// such an event identifies nothing and may go to everyone, since it names
+	// neither a row nor a tenant.
 	Scope string `json:"-"`
 }
 

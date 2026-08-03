@@ -75,6 +75,20 @@ what it can overwrite by id.
 | `AfterUpdate` | `[]T` | Validation |
 | `BeforeDelete` | `*Delete[T]` | Narrowing, or refusing |
 | `AfterDelete` | `int64` | Validation |
+| `AfterDeleteRows` | `[]T`, as they were | Anything needing the row's identity |
+
+`AfterDelete` and `AfterDeleteRows` are two hooks rather than one because the
+rows are not free. A `Delete` is write-only for predicates, so a `BeforeDelete`
+cannot ask what a statement addresses and the rows have to come back from the
+statement itself — which means `DELETE … RETURNING` and a scan of everything it
+matched. sqlb adds that clause only when an `AfterDeleteRows` hook is registered
+for the model, so a delete whose rows nobody reads still costs one command tag.
+
+Register the rows form when a count is not enough, which in practice means
+publishing anything: an event that says *how many* posts were deleted and not
+*which* is worse than no event, because the subscriber invalidating a cache
+keyed on the row has nothing to key on and the feed looks wired up.
+[`rest.PublishChanges`](../rest/events.md) uses it for exactly that.
 
 All of these run **inside** the caller's transaction. That is right for
 validation — an error rolls the write back — and wrong for anything the outside

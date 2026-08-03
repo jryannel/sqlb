@@ -114,9 +114,10 @@ func TestChangeFeedFromAGeneratedWrite(t *testing.T) {
 	}
 }
 
-// A delete announces the table with no key, because sqlb's AfterDelete hook is
-// handed a count rather than the rows. Against real Postgres because the
-// keyless event has to survive the same commit boundary as the keyed one.
+// A delete announces the row it removed, key included — which needs real
+// Postgres, because the key is one the database returned from a DELETE …
+// RETURNING that only exists because the publisher registered a row-taking hook
+// (#144), and it has to survive the same commit boundary as the created event.
 func TestChangeFeedOnDelete(t *testing.T) {
 	t.Parallel()
 	ts, broker := notesServer(t)
@@ -147,7 +148,7 @@ func TestChangeFeedOnDelete(t *testing.T) {
 	}
 
 	got := events.nextChange(t)
-	if want := (rest.Event{Table: "notes", Op: rest.Deleted}); got != want {
+	if want := (rest.Event{Table: "notes", Key: itoa(created.ID), Op: rest.Deleted}); got != want {
 		t.Errorf("event = %+v, want %+v", got, want)
 	}
 }

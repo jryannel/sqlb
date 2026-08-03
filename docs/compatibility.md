@@ -137,11 +137,12 @@ Named in advance, so the break is a documented plan rather than a surprise.
   moves the same way this one did.
 
 - **The emitted agent skill** — its path, and everything about the document's
-  shape. `Options.SkillDir` writes `<SkillDir>/sqlb-schema/SKILL.md`, and both
-  halves of that are expected to move: the `SKILL.md` frontmatter and directory
-  convention belong to the agent tooling rather than to sqlb, so a change there
-  is a change to this output with no deprecation window sqlb is in a position to
-  offer ([ADR-0049](adr/0049-the-skill-is-generated.md)).
+  shape. `Options.SkillDir` writes `<SkillDir>/<SkillName>/SKILL.md`, defaulting
+  to `sqlb-schema`, and both halves of that are expected to move: the `SKILL.md`
+  frontmatter and directory convention belong to the agent tooling rather than to
+  sqlb, so a change there is a change to this output with no deprecation window
+  sqlb is in a position to offer
+  ([ADR-0049](adr/0049-the-skill-is-generated.md)).
 
   This is the cheapest kind of break to own, and that is the reason it is
   allowed to be here at all: the file is generated, so the mechanical edit is

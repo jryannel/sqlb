@@ -175,6 +175,131 @@ func TestSkillIsOptIn(t *testing.T) {
 	}
 }
 
+// Two registries pointed at one SkillDir do not overwrite each other, which is
+// the whole of #142.
+//
+// Proven both ways in one test: with the default name they *do* collide, and
+// that collision is asserted here as the reason SkillName exists rather than
+// left as a claim in a doc comment. The failure it causes is worse than a lost
+// file — each module's `sqlb check` calls the other's output drift, so which
+// module is red is a function of generation order, and "run: sqlb generate" is
+// advice that reddens the other one.
+func TestTwoRegistriesShareOneSkillDir(t *testing.T) {
+	waitlist := schema.NewRegistry()
+	waitlist.Table("signups", schema.UUIDv7("id").PrimaryKey(), schema.Text("email").Filterable()).
+		Expose(schema.REST{Path: "/signups", Ops: schema.Reads})
+
+	tenants := schema.NewRegistry()
+	tenants.Table("members", schema.UUIDv7("id").PrimaryKey(), schema.Text("role").Filterable()).
+		Expose(schema.REST{Path: "/members", Ops: schema.Reads})
+
+	// The reported layout: two modules under one repository root, each generating
+	// into its own directory and both reaching up to the root's .claude/skills —
+	// the placement the doc comment recommends for a skill that should be offered
+	// from the first turn.
+	root := t.TempDir()
+	opts := func(r *schema.Registry, name string) codegen.Options {
+		return codegen.Options{
+			Registry: r, Dir: filepath.Join(root, name, name+"data"), Package: "gen",
+			SkillDir:  filepath.Join("..", "..", ".claude", "skills"),
+			SkillName: "sqlb-schema-" + name,
+		}
+	}
+
+	for _, o := range []codegen.Options{opts(waitlist, "waitlist"), opts(tenants, "tenants")} {
+		if _, err := codegen.Generate(o); err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+	}
+
+	// Both survive, each describing its own tables, and each names itself in the
+	// frontmatter — the tooling keys on that, so two files with one name is the
+	// same collision one directory later.
+	for _, c := range []struct{ name, want string }{{"waitlist", "signups"}, {"tenants", "members"}} {
+		name, want := c.name, c.want
+		skill := readFile(t, filepath.Join(root, ".claude", "skills", "sqlb-schema-"+name, "SKILL.md"))
+		if !contains(skill, want) {
+			t.Errorf("the %s skill does not describe its own tables:\n%s", name, skill)
+		}
+		if !contains(skill, "name: sqlb-schema-"+name) {
+			t.Errorf("the %s skill does not name itself:\n%s", name, skill)
+		}
+	}
+
+	// And neither check is red, which is the property the clobber destroyed.
+	for _, o := range []codegen.Options{opts(waitlist, "waitlist"), opts(tenants, "tenants")} {
+		stale, err := codegen.Check(o)
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		if len(stale) != 0 {
+			t.Errorf("a freshly generated tree is not current: %v", stale)
+		}
+	}
+
+	// The other way: default names, one directory, and the second write takes the
+	// file. Asserted so that removing SkillName cannot pass this file silently.
+	clobber := t.TempDir()
+	for _, r := range []*schema.Registry{waitlist, tenants} {
+		if _, err := codegen.Generate(codegen.Options{
+			Registry: r, Dir: clobber, Package: "gen", SkillDir: ".claude/skills",
+		}); err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+	}
+	only := readFile(t, filepath.Join(clobber, ".claude", "skills", skillPath))
+	if contains(only, "signups") {
+		t.Error("the default name stopped being last-writer-wins, so SkillName may no longer be needed")
+	}
+}
+
+// A name the agent tooling could not load is refused at generate time rather
+// than written and quietly never offered.
+func TestSkillNameIsRefusedWhenUnusable(t *testing.T) {
+	for _, name := range []string{
+		"sqlb schema",  // a space is not a directory name anyone meant
+		"sqlb/schema",  // a segment, so nothing climbs out of SkillDir
+		"../escape",    // the same, pointed the other way
+		"sqlb_schema",  // underscores are not the ecosystem's convention
+		"sqlb-Schema",  // nor is capitalisation
+		"-sqlb",        // a leading hyphen reads as a flag
+		"sqlb-",        // and a trailing one as a typo
+		"sqlb--schema", // as does a doubled one
+		"sqlb.schema",  // a dot would make a hidden directory of a prefix
+	} {
+		_, err := codegen.Generate(codegen.Options{
+			Registry: fixture(), Dir: t.TempDir(), Package: "gen",
+			SkillDir: ".claude/skills", SkillName: name,
+		})
+		if err == nil {
+			t.Errorf("SkillName %q was accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "SkillName") {
+			t.Errorf("the error for %q does not name the option to fix: %v", name, err)
+		}
+	}
+
+	// And the names a project would actually pick are accepted.
+	for _, name := range []string{"sqlb-schema", "sqlb-schema-waitlist", "sqlb-schema-v2"} {
+		if _, err := codegen.Generate(codegen.Options{
+			Registry: fixture(), Dir: t.TempDir(), Package: "gen",
+			SkillDir: ".claude/skills", SkillName: name,
+		}); err != nil {
+			t.Errorf("SkillName %q was refused: %v", name, err)
+		}
+	}
+}
+
+func readFile(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("reading %s: %v", name, err)
+	}
+	return string(b)
+}
+
 // The gate, and the point of generating this rather than writing it. A skill that
 // has drifted from the schema is worse than no skill, so `check` has to fail on
 // it exactly as it fails on stale Go.
