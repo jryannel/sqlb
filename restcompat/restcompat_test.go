@@ -1,6 +1,7 @@
 package restcompat_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -26,6 +27,10 @@ type opts struct {
 	publishedNullsLast bool      // declare NULLS LAST on published_at (#88)
 	statusValues       []string  // enum values; nil keeps the baseline three
 	ops                schema.Op // 0 keeps the baseline op set
+
+	// wire declares the schema's wire spelling. The zero value is Verbatim,
+	// which is also what it means, so the baseline blog needs no case at all.
+	wire schema.WireCase
 }
 
 const baseOps = schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList
@@ -33,7 +38,7 @@ const baseOps = schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpLis
 // blog builds a registry holding the blog's posts table (and an unexposed
 // authors table for the reference to point at), edited per o.
 func blog(o opts) *schema.Registry {
-	r := schema.NewRegistry()
+	r := schema.NewRegistry().WireCase(o.wire)
 
 	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey())
 
@@ -340,5 +345,80 @@ func TestNullPlacementChangeIsNotReportedAsACapabilityDelta(t *testing.T) {
 	breaks := restcompat.Diff(blog(opts{}), blog(opts{publishedNullsLast: true}))
 	if mentions(breaks, "sort key added") || mentions(breaks, "sort key removed") {
 		t.Errorf("a placement change was reported as a capability change:\n%s", render(breaks))
+	}
+}
+
+// A WireCase flip renames every field on the wire at once while renaming no
+// column, so the field-level comparison — which matches columns by column name
+// — sees nothing. This is the wire break with the widest blast radius and the
+// emptiest migration, and it is exactly a rename (ADR-0036's amendment, and
+// compatibility.md's Frozen entry) at schema scale.
+func TestWireCaseFlipIsAWireBreak(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{wire: schema.Camel}))
+	assertBreaking(t, breaks, restcompat.FacetWire, "")
+
+	// Both spellings named, because "the wire case changed" is not actionable
+	// without them, and one column that actually moves.
+	if !mentions(breaks, "verbatim") || !mentions(breaks, "camel") {
+		t.Errorf("the break should name both spellings:\n%s", render(breaks))
+	}
+	// The first column whose spelling actually moves: id is spelled the same in
+	// both cases and is not the example a reader learns anything from.
+	if !mentions(breaks, "author_id is now authorId") {
+		t.Errorf("the break should show a column that moves:\n%s", render(breaks))
+	}
+}
+
+// One finding, not one per column. Nine columns respelled is one edit, and nine
+// lines would bury it.
+func TestWireCaseFlipIsOneFindingNotOnePerColumn(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{wire: schema.Camel}))
+	if n := len(breaks); n != 1 {
+		t.Errorf("want exactly one finding for a wire case flip, got %d:\n%s", n, render(breaks))
+	}
+	if mentions(breaks, "renamed from") {
+		t.Errorf("no column was renamed; only the spelling of all of them was:\n%s", render(breaks))
+	}
+}
+
+// Back the other way, so the guard is not a one-directional check that happens
+// to catch the direction the test was written for.
+func TestWireCaseFlipBreaksInBothDirections(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{wire: schema.Camel}), blog(opts{}))
+	assertBreaking(t, breaks, restcompat.FacetWire, "")
+	if !mentions(breaks, "from camel to verbatim") {
+		t.Errorf("the break should read in the direction it happened:\n%s", render(breaks))
+	}
+}
+
+// Declaring a case is not itself a break: a schema that was camel and stayed
+// camel changed nothing, and every column comparison under it still works,
+// because the snapshot records columns by column name in either case.
+func TestUnchangedWireCaseIsNotABreak(t *testing.T) {
+	if got := restcompat.Diff(blog(opts{wire: schema.Camel}), blog(opts{wire: schema.Camel})); len(got) != 0 {
+		t.Fatalf("a camel schema compared with itself should diff empty, got:\n%s", render(got))
+	}
+}
+
+// The compatibility constraint on the snapshot format itself: a Verbatim schema
+// records no wire case at all, so every restcontract.json committed before this
+// field existed stays byte-identical and no baseline needs re-recording. The
+// second half holds the field to being present when there is something to say,
+// so the first half cannot be satisfied by never writing it.
+func TestVerbatimSnapshotIsUnchangedByTheWireCaseField(t *testing.T) {
+	verbatim, err := json.MarshalIndent(restcompat.Capture(blog(opts{})), "", "  ")
+	if err != nil {
+		t.Fatalf("capture is not encodable: %v", err)
+	}
+	if strings.Contains(string(verbatim), "wire_case") {
+		t.Errorf("a Verbatim snapshot must record no wire case, or every committed baseline moves:\n%s", verbatim)
+	}
+
+	camel, err := json.MarshalIndent(restcompat.Capture(blog(opts{wire: schema.Camel})), "", "  ")
+	if err != nil {
+		t.Fatalf("capture is not encodable: %v", err)
+	}
+	if !strings.Contains(string(camel), `"wire_case": "camel"`) {
+		t.Errorf("a Camel snapshot must record its wire case:\n%s", camel)
 	}
 }

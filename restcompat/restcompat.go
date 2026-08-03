@@ -44,10 +44,12 @@ func (l Level) String() string {
 }
 
 // Facet names the part of the contract a break sits in. Facets are ordered so
-// that a resource-level break sorts above the field-level breaks under it.
+// that a resource-level break sorts above the field-level breaks under it, and
+// the schema-level one above every resource.
 type Facet string
 
 const (
+	FacetWire     Facet = "wire"        // how every column is spelled on the wire
 	FacetResource Facet = "resource"    // the endpoint set as a whole
 	FacetOps      Facet = "ops"         // which operations exist
 	FacetResponse Facet = "response"    // the fields a read returns
@@ -60,26 +62,30 @@ const (
 )
 
 var facetOrder = map[Facet]int{
-	FacetResource: 0, FacetOps: 1, FacetResponse: 2, FacetFilter: 3,
-	FacetSort: 4, FacetExpand: 5, FacetCreate: 6, FacetPatch: 7,
-	FacetAction: 8,
+	FacetWire: 0, FacetResource: 1, FacetOps: 2, FacetResponse: 3,
+	FacetFilter: 4, FacetSort: 5, FacetExpand: 6, FacetCreate: 7,
+	FacetPatch: 8, FacetAction: 9,
 }
 
 // Break is one classified delta between two generated contracts.
 type Break struct {
-	Level    Level
-	Resource string // the collection path, e.g. "/posts"
+	Level Level
+	// Resource is the collection path, e.g. "/posts". It is empty for a
+	// schema-level break, which belongs to no one resource because it belongs
+	// to all of them.
+	Resource string
 	Facet    Facet
 	Field    string // column or relation name; empty for resource- and ops-level
 	Summary  string // one line, in the allow-list voice: what changed, for whom
 }
 
 func (b Break) String() string {
-	loc := b.Resource
+	loc := string(b.Facet)
 	if b.Field != "" {
-		loc += " " + string(b.Facet) + "." + b.Field
-	} else {
-		loc += " " + string(b.Facet)
+		loc += "." + b.Field
+	}
+	if b.Resource != "" {
+		loc = b.Resource + " " + loc
 	}
 	return fmt.Sprintf("%-8s %-28s %s", b.Level, loc, b.Summary)
 }
@@ -105,6 +111,8 @@ func DiffSnapshots(old, new Snapshot) []Break {
 
 	var breaks []Break
 	add := func(b Break) { breaks = append(breaks, b) }
+
+	diffWireCase(old, new, add)
 
 	for _, path := range union(oldR, newR) {
 		o, inOld := oldR[path]
@@ -145,6 +153,50 @@ func Breaking(breaks []Break) []Break {
 		}
 	}
 	return out
+}
+
+// diffWireCase reports a change to the schema's declared wire spelling.
+//
+// It is the break with the widest blast radius and the smallest diff: flipping
+// Verbatim to Camel renames *every* field of *every* resource on the wire at
+// once, while every column keeps its name, so the field-level comparison below
+// — which matches columns by column name — is silent by construction and would
+// pass a schema whose entire API was respelled.
+//
+// One finding rather than one per column. The per-column report would be
+// accurate and useless: N lines of "renamed from" with the one edit that caused
+// them nowhere in the output. So the finding names the setting, both spellings,
+// and one column that moves, which is the shape of the rename.
+//
+// ADR-0036's amendment is what makes this breaking rather than neutral: what is
+// frozen is that there is exactly one spelling and that it is derived, not which
+// derivation a deployment chose — "changing a deployment's WireCase is a
+// breaking change for that deployment, exactly as renaming a column is"
+// (docs/compatibility.md, under Frozen).
+func diffWireCase(old, new Snapshot, add func(Break)) {
+	if old.WireCase == new.WireCase {
+		return
+	}
+	o, n := schema.WireCase(old.WireCase), schema.WireCase(new.WireCase)
+	add(Break{LevelBreaking, "", FacetWire, "", fmt.Sprintf(
+		"wire case changed from %s to %s; every field of every resource is respelled at once%s, "+
+			"so a deployed client reads and sends names the API no longer has",
+		wirePhrase(o), wirePhrase(n), wireExample(new, o, n))})
+}
+
+// wireExample names one column whose spelling actually moves under the change,
+// so the report shows the rename and not only the setting behind it. It is
+// empty when no captured column spells differently in the two cases — a schema
+// of single-word columns, where the flip is real and invisible.
+func wireExample(s Snapshot, o, n schema.WireCase) string {
+	for _, rs := range s.Resources {
+		for _, fs := range rs.Fields {
+			if was, now := o.WireName(fs.Name), n.WireName(fs.Name); was != now {
+				return fmt.Sprintf(" (%s is now %s)", was, now)
+			}
+		}
+	}
+	return ""
 }
 
 // diffResource compares two contracts for the same path.
@@ -475,7 +527,20 @@ const SnapshotVersion = 1
 // about storage. It is what `sqlb impact -write` records and what a later run
 // diffs against.
 type Snapshot struct {
-	Version   int            `json:"version"`
+	Version int `json:"version"`
+	// WireCase is the schema's declared wire spelling (ADR-0036), recorded once
+	// for the whole snapshot because that is what it is a property of. It is
+	// absent when the schema is Verbatim, so a baseline recorded before this
+	// field existed is byte-identical to one recorded after it, and every
+	// committed restcontract.json stays valid without re-recording.
+	//
+	// Absent therefore reads as Verbatim rather than as "not recorded". That
+	// costs a schema which *already* declared Camel one spurious break the first
+	// time it is checked, and a re-record clears it. It is the safe direction:
+	// reading absence as unknown would suppress the Verbatim -> Camel finding
+	// against exactly the baselines that predate this check, which is the state
+	// this field exists to stop being silent.
+	WireCase  string         `json:"wire_case,omitempty"`
 	Resources []ResourceSnap `json:"resources"`
 }
 
@@ -530,6 +595,7 @@ func Capture(r *schema.Registry) Snapshot {
 	if r == nil {
 		return s
 	}
+	s.WireCase = string(r.Wire())
 	for _, t := range r.Tables() {
 		rest := t.Rest()
 		if rest == nil {
@@ -766,6 +832,20 @@ func quote(vs []string) string {
 		q[i] = fmt.Sprintf("%q", v)
 	}
 	return strings.Join(q, ", ")
+}
+
+// wirePhrase names a wire case for a diff line, including the default one. The
+// zero value is the empty string, and a break reading "changed from  to camel"
+// is a break the reader has to decode, so Verbatim gets a word too.
+func wirePhrase(c schema.WireCase) string {
+	switch c {
+	case schema.Verbatim:
+		return "verbatim"
+	case schema.Camel:
+		return "camel"
+	default:
+		return string(c)
+	}
 }
 
 // placementPhrase names a null placement for a diff line, including the default

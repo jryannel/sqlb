@@ -24,12 +24,18 @@ all:
 | Add a nullable filterable column | safe | additive — a new optional parameter and field |
 | `NULL` → `NOT NULL` on an exposed column | a lock hazard | readers unaffected; the **create body now requires it** |
 | Drop a column | destructive, commented out | breaking — the field and its filter vanish |
+| Change the schema's `WireCase` | no DDL at all | **breaks** every field of every resource at once |
 
 The cleanest migration sqlb can emit — a declared rename — is a hard wire break,
-because the wire spelling of a column *is* the column's name
+because the wire spelling of a column is derived from the column's name
 ([ADR-0036](../adr/0036-the-wire-is-the-column-name.md)). That is the case that
 makes `impact` a check of its own rather than something the migration gate could
 have told you.
+
+The last row is the same break with no column renamed at all. `WireCase` is the
+schema's one wire spelling, so flipping it respells every field everywhere while
+the database is untouched — a rename with an empty migration and the widest blast
+radius sqlb can produce.
 
 ## The three commands
 
@@ -60,6 +66,16 @@ breaking /posts filter.headline    renamed from "title"; ?title=… now 400s
 breaking /posts filter.status      filter removed; a request using it now 400s
 sqlb: 3 contract change(s), 3 breaking
 ```
+
+A change to the schema's wire spelling belongs to no single resource, so it is
+reported once, without one, above everything else:
+
+```
+breaking wire                      wire case changed from verbatim to camel; every field of every resource is respelled at once (author_id is now authorId), so a deployed client reads and sends names the API no longer has
+```
+
+One line rather than one per column. Every field did change, but a report that
+said so N times would bury the single edit that caused it.
 
 ## What the levels mean
 

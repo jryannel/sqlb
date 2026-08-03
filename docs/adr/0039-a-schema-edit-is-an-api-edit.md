@@ -8,7 +8,7 @@
   is the right default; lower on the type-and-nullable classification, which is
   where a lazy answer claims coverage it does not have
 - **Decided:** 2026-07-30
-- **Last reviewed:** 2026-07-30
+- **Last reviewed:** 2026-08-03
 
 ## Context
 
@@ -132,6 +132,20 @@ move slowly, because a client may have been versioned on the old answer.
 
 ## Revisions
 
+- 2026-08-03 — **The contract has a schema-level property, and the walk had no
+  place to put one.** This record describes the diff as a walk "for each exposed
+  model", and the implementation followed it exactly: every `Break` carried a
+  resource path, and every comparison matched columns by column name. Then
+  [ADR-0036](0036-the-wire-is-the-column-name.md)'s amendment added `WireCase`,
+  which belongs to the schema rather than to any resource and respells every
+  field of every one of them — and passed straight through, because both
+  snapshots recorded the same column names.
+
+  The fix is small and the shape is the point: a `Break` may now have an empty
+  resource, and the snapshot records the schema's wire case beside its
+  resources. What generalises is the question to ask of the next contract
+  property — *whose* is it — because a per-resource walk cannot report a
+  property that is not per resource, and will be silent rather than wrong.
 - 2026-07-30 — Written before implementation, prompted by the question of whether
   REST backward compatibility is in scope at all. It is, bounded to the generated
   surface, and the check is a sibling of `migrate.Diff` rather than derived from
