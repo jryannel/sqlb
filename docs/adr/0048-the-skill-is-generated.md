@@ -137,11 +137,13 @@ tempt a project into deleting the file that carries them.
 
 ## What would change our mind
 
-- **Nothing loads it.** Partly answered on 2026-08-03, and the answer narrowed
-  the claim rather than confirming it: the skill buys nothing on direct questions
-  and does appear to buy something on task-shaped work where checking is
-  optional. If a larger run shows the second effect is noise too, the emitter is
-  weight and should go.
+- **Nothing loads it.** Answered on 2026-08-03, and the answer is **no accuracy
+  effect anywhere it has been looked for**: 100 direct questions and 80
+  task-shaped ones across 60 runs, with the control arm at ceiling in every
+  round. What survives is a cost effect — roughly 3× fewer tool calls and 2–6×
+  less wall clock. That is a real benefit and a much smaller claim than this
+  record was built on. The emitter stays because it is cheap, gated, and buys
+  latency; if the latency stops mattering, it should go.
 - **The trigger does not fire.** Untested, and now the load-bearing unknown. The
   A/B below inlined the skill, which assumes the description already caused it to
   load. If a schema skill is only read when someone names it, the frontmatter is
@@ -333,3 +335,39 @@ expensive to get wrong later.
   trade — 96 KB → 37 KB for one wrong identifier in one run of five — but it is a
   real cost and it should be re-examined if a cheaper way to carry non-filterable
   column names appears.
+- 2026-08-03 — **Powered up to 20 per arm with a second trap, and the round-2
+  effect did not replicate.** Same model, same isolation, one prompt carrying two
+  traps of different kinds: a column that is not `Filterable` (`author_id` on
+  tasks) and an *operation* that is not exposed (no delete on comments). The
+  second was added because the first only tested capabilities, and an absent
+  operation fails by a different mechanism.
+
+  **Control caught both traps in 20 of 20 runs. Treatment caught both in 20 of
+  20.** Zero misses on either side, 80 trap-instances scored. The 2-of-5 silent
+  failure measured the day before was an artefact of the prompt, not of the
+  missing skill: asking for one request with one NOTES line lets an agent skip
+  the check, and asking for two requests with two NOTES lines primes it to look.
+  A Wilson 95% interval on 0/20 puts the control's true miss rate below about
+  16%, so a small effect cannot be excluded — but the effect this record was
+  built on is not there.
+
+  **What is left is cost, and it is consistent.** Control averaged 3.5 tool calls
+  and 47 s; treatment 1.1 and 19 s — 3.2× and 2.4×. Round 1's ratios were larger
+  (4.0 vs 1.0 calls, 59 s vs 9 s). The control's real cost is *understated*: two
+  control runs spawned research subagents of their own, one of them burning 22
+  tool calls and two minutes, and that work does not appear in the parent's
+  counters.
+
+  **The naming cost recurred at a measurable rate.** Two of 25 treatment runs
+  across both days named the creator column `created_by` — correctly reporting
+  that no such filter exists while inventing the identifier — because the skill
+  lists filterable columns and therefore cannot name an unfilterable one. About
+  8%, and the cleanest argument yet for finding a cheap way to carry
+  non-filterable column names.
+
+  **What this changes.** The honest case for the emitter is now latency and
+  round-trips, not correctness. That is worth ~290 bytes per resource of a gated,
+  generated file, and it is a weaker claim than "an agent gets this wrong" — which
+  three rounds of measurement have failed to reproduce against a model that can
+  read the declaration. The premise should not be restated in this record or
+  anywhere else without new evidence.
