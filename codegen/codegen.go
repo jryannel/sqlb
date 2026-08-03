@@ -139,6 +139,27 @@ type Options struct {
 	// It carries structure — names, types, capability flags, paths — and not
 	// comments. See skill.go for why that is a trust boundary and not a style
 	// choice.
+	//
+	// # Where to point it, and what the agent tooling does with it
+	//
+	// ".claude/skills" relative to the module root is the answer for an ordinary
+	// single-module project, because that is a *project* skill and the tooling
+	// reads those when the session starts.
+	//
+	// Two consequences worth knowing before wiring this up, neither of them
+	// sqlb's to fix:
+	//
+	// A skills directory that did not exist when the session started is not
+	// watched, so the first `sqlb generate` that creates one emits a skill that
+	// will not be offered until the session is restarted. After that, edits to it
+	// are picked up live — which is what makes the `sqlb check` gate worth having.
+	//
+	// A nested module is the awkward case, and example/tasks is one: a
+	// `.claude/skills` below the repository root is discovered only once a file
+	// in that subtree has been read, rather than at startup. It still works; it
+	// arrives late. A project that wants the skill offered from the first turn
+	// should point SkillDir at the repository root's `.claude/skills` even when
+	// the schema lives in a nested module.
 	SkillDir string
 
 	// SkillSchemaPackage is how the emitted skill spells this project in the

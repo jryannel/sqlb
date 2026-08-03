@@ -144,10 +144,12 @@ tempt a project into deleting the file that carries them.
   less wall clock. That is a real benefit and a much smaller claim than this
   record was built on. The emitter stays because it is cheap, gated, and buys
   latency; if the latency stops mattering, it should go.
-- **The trigger does not fire.** Untested, and now the load-bearing unknown. The
-  A/B below inlined the skill, which assumes the description already caused it to
-  load. If a schema skill is only read when someone names it, the frontmatter is
-  doing nothing and the whole design reduces to a document with a pointer.
+- **The trigger does not fire.** Still open, and only partly investigable from
+  here — see the 2026-08-03 note. What is now known is that the mechanism exists
+  and the emitted path participates in it; what is not known is whether a model
+  chooses to load this skill in competition with everything else installed. The
+  listing has a context budget and descriptions of lesser-used skills get dropped
+  to stay inside it, which is a trigger failure sqlb cannot fix from the emitter.
 - **It is too large to load speculatively.** Measured once and acted on: the
   per-column table went, taking 62% of the document with it, and the cost is now
   ~290 bytes per resource. Still linear and still uncapped, so the condition
@@ -371,3 +373,39 @@ expensive to get wrong later.
   three rounds of measurement have failed to reproduce against a model that can
   read the declaration. The premise should not be restated in this record or
   anywhere else without new evidence.
+- 2026-08-03 — **Went after the trigger, and found two bugs in this emitter
+  instead.** The honest headline first: whether a model *chooses* to load this
+  skill could not be tested from the session that wrote it, because a skills
+  directory that did not exist when the session started is not watched. Invoking
+  the emitted skill by name — plain and directory-qualified — failed in both
+  forms. That is the documented behaviour rather than a broken path, but it means
+  the answer needs a fresh session and is still owed.
+
+  What the investigation did settle is worth more than the question it failed to
+  answer.
+
+  **The path is right for the ordinary case and late for the nested one.** A
+  `.claude/skills` at the module root is a project skill, read at session start.
+  A nested module's — `example/tasks/.claude/skills`, which is what this
+  repository's own example emits — is discovered only after a file in that subtree
+  has been read. It works; it arrives late. `Options.SkillDir` now says so, and
+  says to point at the repository root when the skill should be offered from the
+  first turn.
+
+  **The description has a real ceiling, and the emitter was over it.** The
+  trigger text is truncated past a documented limit, so an overrun is silent.
+  Capping the table-name list at twelve was not enough: twelve module-qualified
+  names blow the budget on their own, which a guard written against the real
+  limit caught immediately. The bound is now characters as well as count.
+
+  **And a doubled conjunction was shipping.** The truncation appended "and N
+  more" as a *list member*, so the list-joining "and" doubled up:
+  `…table_name_11 and and 28 more`. Invisible to a length check, invisible in
+  review, and in the one field a model reads on every turn. It has its own
+  assertion now, proven both ways, because the length guard demonstrably does not
+  catch it.
+
+  Both bugs existed for six commits and three rounds of behavioural measurement
+  without being noticed. The measurement was looking at what agents did with the
+  document's *body*; nothing had yet checked the field that decides whether the
+  body is ever read. That asymmetry is the lesson worth keeping.

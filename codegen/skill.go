@@ -97,7 +97,7 @@ func skillFrontmatter(b *strings.Builder, m *schema.Manifest, exposed []schema.T
 			"request against its tables: %s. Says which columns each resource actually accepts — "+
 			"capabilities are opt-in, so anything not listed here is rejected at runtime — "+
 			"and the commands to run after a schema edit. Generated from the schema declaration.",
-		andList(truncateList(subjects, 12)))))
+		skillSubjects(subjects))))
 	b.WriteString("---\n\n")
 }
 
@@ -389,15 +389,37 @@ func count(n int, noun string) string {
 
 func plainCount(n int) string { return fmt.Sprintf("%d", n) }
 
-// truncateList caps a list and says so, rather than printing an unbounded one.
-// The frontmatter description is a trigger read on every turn, and a schema with
-// 200 tables would otherwise put all 200 names in it.
-func truncateList(items []string, max int) []string {
-	if len(items) <= max {
-		return items
+// skillSubjects renders the table-name list the description triggers on, bounded
+// by characters as well as by count.
+//
+// Both bounds are load-bearing and the second was missing until a guard found it.
+// The agent tooling truncates a description past a documented ceiling and simply
+// does not see the tail, so a budget overrun is silent — and counting names is not
+// enough, because twelve names of a module-qualified length overrun it on their
+// own. maxChars leaves the surrounding sentence room inside the ceiling.
+func skillSubjects(names []string) string {
+	const maxNames = 12
+	const maxChars = 480
+
+	var kept []string
+	used := 0
+	for _, n := range names {
+		if len(kept) >= maxNames || used+len(n)+2 > maxChars {
+			break
+		}
+		kept = append(kept, n)
+		used += len(n) + 2
 	}
-	out := append([]string(nil), items[:max]...)
-	return append(out, fmt.Sprintf("and %d more", len(items)-max))
+	switch {
+	case len(kept) == 0:
+		return "none"
+	case len(kept) == len(names):
+		return andList(kept)
+	}
+	// "a, b and 28 more" would read as though 28 more were a table. The comma
+	// form is the one that does not — and it is a separate branch because
+	// andList's final "and" would otherwise double up with this one.
+	return fmt.Sprintf("%s, and %d more", strings.Join(kept, ", "), len(names)-len(kept))
 }
 
 // andList renders a human list: "a, b and c".

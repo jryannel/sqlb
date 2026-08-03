@@ -1,8 +1,10 @@
 package codegen_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -255,6 +257,65 @@ func TestSkillFallsBackToGoGenerate(t *testing.T) {
 	// putting a package path nobody configured into a block meant to be run.
 	if strings.Contains(skill, "```bash\nsqlb generate") {
 		t.Errorf("emitted a runnable command with no package configured:\n%s", skill)
+	}
+}
+
+// The frontmatter description is the trigger, and the agent tooling truncates it
+// — the documented ceiling is 1,536 characters for description plus when_to_use,
+// after which the tail is simply not seen. Capping the table-name list bounds it,
+// but the names themselves are the project's, so a schema of long names is the
+// case that would blow the budget silently.
+//
+// 1,024 is the assertion rather than 1,536: the margin is there because the
+// budget is shared with a when_to_use this emitter does not currently write, and
+// a guard at exactly the documented limit would pass right up to the moment the
+// limit is reached.
+func TestSkillDescriptionStaysWithinTheTriggerBudget(t *testing.T) {
+	const maxDescription = 1024
+
+	r := schema.NewRegistry()
+	// Forty tables with names far longer than anything reasonable, to put the
+	// cap under real pressure rather than asserting against the fixture.
+	for i := range 40 {
+		name := fmt.Sprintf("exceptionally_long_module_qualified_table_name_number_%02d", i)
+		r.Table(name,
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.Text("label").Filterable(),
+		).Expose(schema.REST{Ops: schema.OpList})
+	}
+
+	skill, _, _ := renderSkillInto(t, r, "./s")
+
+	var desc string
+	for _, line := range strings.Split(skill, "\n") {
+		if rest, ok := strings.CutPrefix(line, "description: "); ok {
+			desc = rest
+			break
+		}
+	}
+	if desc == "" {
+		t.Fatalf("no frontmatter description:\n%s", skill)
+	}
+	if len(desc) > maxDescription {
+		t.Errorf("description is %d chars, over the %d budget — the trigger would be truncated:\n%s",
+			len(desc), maxDescription, desc)
+	}
+	// And it is one line, because a YAML value that wraps is a different
+	// document than the one intended.
+	if strings.Contains(desc, "\n") {
+		t.Errorf("description spans lines: %q", desc)
+	}
+	// The truncation reads as prose. Appending "and N more" as a list member
+	// makes andList join it with a second "and" — "table_11 and and 28 more" —
+	// which shipped once and is invisible to a length check, so it gets its own
+	// assertion rather than relying on the budget above to notice.
+	if strings.Contains(desc, "and and") {
+		t.Errorf("doubled conjunction in the description: %q", desc)
+	}
+	// The remainder count is not hardcoded: which bound bites first — twelve
+	// names or 480 characters — is exactly what this test exists to leave free.
+	if !regexp.MustCompile(`, and \d+ more\.`).MatchString(desc) {
+		t.Errorf("expected a comma-form truncation naming the remainder: %q", desc)
 	}
 }
 
