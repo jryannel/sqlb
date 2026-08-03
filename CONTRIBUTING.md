@@ -26,10 +26,20 @@ on every save.
 mise run ci
 ```
 
-The full gate, identical to `.github/workflows/ci.yml`. Needs Docker, for the
-Postgres and PgBouncer jobs. Run it before opening a pull request; a green run
-locally and a green run in CI use the same Go and the same linter, because
-`mise.toml` pins both.
+The full gate, identical to `.github/workflows/ci.yml`. It is here to reproduce
+a CI failure, not to run before every push — CI runs the same fourteen stages in
+three parallel jobs, and running them on a laptop is the same work done serially.
+Before pushing, run `mise run preflight` instead: heal, build, and the
+database-free tests, in about fifteen seconds.
+
+```bash
+mise run preflight
+```
+
+The database-backed suites need Postgres, pgvector and PgBouncer. They no longer
+start their own — `compose.yaml` defines all three, `mise run pg-up` starts them,
+and every task that needs them depends on it, so `mise run test-pg` just works.
+`mise run pg-down` stops them again.
 
 ```bash
 mise run heal

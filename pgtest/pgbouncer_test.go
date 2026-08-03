@@ -4,17 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // These tests measure the claims ADR-0019 makes from documentation rather than
@@ -26,84 +23,50 @@ import (
 // of Postgres, with a direct connection alongside for the components ADR-0019
 // carves out.
 
-const pgbouncerImage = "edoburu/pgbouncer:v1.24.1-p1"
+// poolerEnv names the PgBouncer these tests run through. Like the Postgres in
+// main_test.go it is provisioned outside this module, which is what lets the
+// two be wired to each other by whoever starts them — compose.yaml locally, the
+// service containers in CI — instead of this file reading one container's
+// address to configure another.
+//
+// What it must be: transaction pooling, a wildcard [databases] entry so that
+// one pooler serves the database each test creates for itself, and a small pool
+// so that consecutive statements from one client really are multiplexed over a
+// shared server connection rather than each quietly getting a backend of its
+// own — which would mask the very behaviour these tests exist to observe.
+// compose.yaml is the reference for all three.
+const poolerEnv = "SQLB_TEST_PGBOUNCER"
 
 // pooledDSNFor renders a connection string to a database through the shared
 // pooler, which is configured with a wildcard [databases] entry so that any
 // database name is forwarded.
 var pooledDSNFor func(database string) string
 
-// startPooler brings up one PgBouncer for the whole run.
+var poolerOnce sync.Once
+var poolerErr error
+
+// requirePooler resolves the pooler's address on first use.
 //
-// One rather than one per test, because a container per test spent most of the
-// suite's wall clock on startup and made the Docker API the least reliable thing
-// in it — the first version of this file failed that way. Tests still get a
-// database each; only the pooler is shared.
-func startPooler(ctx context.Context, pg *postgres.PostgresContainer) (func(), error) {
-	// PgBouncer reaches Postgres inside the Docker network, so it needs the
-	// container address rather than the host-mapped port the tests use.
-	pgHost, err := pg.ContainerIP(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("postgres container IP: %w", err)
-	}
-
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        pgbouncerImage,
-			ExposedPorts: []string{"5432/tcp"},
-			Env: map[string]string{
-				"DB_HOST":     pgHost,
-				"DB_PORT":     "5432",
-				"DB_USER":     "sqlb",
-				"DB_PASSWORD": "sqlb",
-				// A wildcard entry, so one pooler serves the database each test
-				// creates for itself.
-				"DB_NAME":   "*",
-				"POOL_MODE": "transaction",
-				"AUTH_TYPE": "scram-sha-256",
-				// So a test can ask the pooler about its own configuration
-				// rather than a comment asserting what it probably is.
-				"ADMIN_USERS": "sqlb",
-				// A small pool, so that consecutive statements from one client
-				// really are multiplexed over a shared server connection rather
-				// than each quietly getting a backend of its own — which would
-				// mask the very behaviour these tests exist to observe.
-				"MAX_DB_CONNECTIONS": "2",
-				"DEFAULT_POOL_SIZE":  "2",
-			},
-			WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(2 * time.Minute),
-		},
-		Started: true,
+// Lazily, so that the twenty-nine tests in this module that never speak to a
+// pooler do not fail when only Postgres is up. That is a weaker demand than
+// TestMain making it mandatory, and deliberately so: the pooler is one
+// component of one ADR's topology, and needing docker compose in full to run
+// an unrelated test was friction with nothing behind it.
+func requirePooler(t *testing.T) {
+	t.Helper()
+	poolerOnce.Do(func() {
+		pooledDSNFor, poolerErr = dsnRenderer(poolerEnv)
 	})
-	if err != nil {
-		return nil, err
+	if poolerErr != nil {
+		t.Fatalf("pgtest: %v", poolerErr)
 	}
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("pgbouncer host: %w", err)
-	}
-	port, err := container.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		return nil, fmt.Errorf("pgbouncer port: %w", err)
-	}
-
-	pooledDSNFor = func(database string) string {
-		return fmt.Sprintf("postgres://sqlb:sqlb@%s:%s/%s?sslmode=disable",
-			host, port.Port(), database)
-	}
-
-	return func() {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			log.Printf("pgtest: terminating pgbouncer: %v", err)
-		}
-	}, nil
 }
 
 // pooler creates a database and returns DSNs to it through the pooler and
 // around it.
 func pooler(t *testing.T) (pooledDSN, directDSN string) {
 	t.Helper()
+	requirePooler(t)
 
 	name := databaseName(t)
 	mustExec(t, admin, `CREATE DATABASE `+quoteIdent(name))

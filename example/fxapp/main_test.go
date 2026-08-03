@@ -3,7 +3,7 @@ package fxapp_test
 import (
 	"context"
 	"fmt"
-	"log"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // The tests that exercise the server run against a real Postgres, for the
@@ -22,35 +20,32 @@ import (
 // migrations apply, that the boot-time provisioning is idempotent, that a
 // space boundary held by query hooks actually holds.
 //
-// There is no skip-when-Docker-is-absent path: a suite that passes silently
-// when it cannot reach a database reports coverage it does not have.
+// There is no skip-when-the-database-is-absent path: a suite that passes
+// silently when it cannot reach one reports coverage it does not have.
 //
-// The container is started on first use rather than in TestMain, so that the
+// The connection is resolved on first use rather than in TestMain, so that the
 // tests which need no database — the graph validation, which constructs
-// nothing — run on a machine with no Docker. That is not the same thing as
-// skipping: a test that needs Postgres and cannot have it still fails.
+// nothing — run without one configured. That is not the same thing as skipping:
+// a test that needs Postgres and cannot have it still fails.
 
-// image is pinned to 18 specifically: cmd/migrate passes migrate.MinPostgres(18),
-// so the DDL uses the built-in uuidv7() and needs no extension. Running these
-// against 17 fails at the first CREATE TABLE, which is a true statement about
-// the example rather than a broken test.
-const image = "postgres:18-alpine"
+// pgEnv names the Postgres these tests run against. They do not start one:
+// provisioning is `mise run pg-up` locally and a service container in CI.
+//
+// It must be Postgres 18. cmd/migrate passes migrate.MinPostgres(18), so the
+// DDL uses the built-in uuidv7() and needs no extension; against 17 it fails at
+// the first CREATE TABLE, which is a true statement about the example rather
+// than a broken test. The version is pinned where the server is started.
+const pgEnv = "SQLB_TEST_POSTGRES"
 
 var (
-	once      sync.Once
-	container testcontainers.Container
-	admin     *pgxpool.Pool
-	dsnFor    func(database string) string
-	startErr  error
+	once     sync.Once
+	admin    *pgxpool.Pool
+	dsnFor   func(database string) string
+	startErr error
 )
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if container != nil {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			log.Printf("fxapp: terminating container: %v", err)
-		}
-	}
 	if admin != nil {
 		admin.Close()
 	}
@@ -60,35 +55,33 @@ func TestMain(m *testing.M) {
 func startPostgres() {
 	ctx := context.Background()
 
-	pg, err := postgres.Run(ctx, image,
-		postgres.WithDatabase("fxapp"),
-		postgres.WithUsername("fxapp"),
-		postgres.WithPassword("fxapp"),
-		postgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		startErr = fmt.Errorf("starting %s: %w", image, err)
+	base := os.Getenv(pgEnv)
+	if base == "" {
+		startErr = fmt.Errorf(
+			"%s is not set.\n"+
+				"These tests need a Postgres; they no longer start one.\n"+
+				"  locally: mise run pg-up   (then mise run test-fx)\n"+
+				"  CI:      the service containers in .github/workflows/ci.yml",
+			pgEnv)
 		return
 	}
-	container = pg
-
-	host, err := pg.Host(ctx)
+	u, err := url.Parse(base)
 	if err != nil {
-		startErr = fmt.Errorf("container host: %w", err)
-		return
-	}
-	port, err := pg.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		startErr = fmt.Errorf("container port: %w", err)
+		startErr = fmt.Errorf("%s is not a valid URL: %w", pgEnv, err)
 		return
 	}
 	dsnFor = func(database string) string {
-		return fmt.Sprintf("postgres://fxapp:fxapp@%s:%s/%s?sslmode=disable",
-			host, port.Port(), database)
+		v := *u
+		v.Path = "/" + database
+		return v.String()
 	}
 
-	if admin, err = pgxpool.New(ctx, dsnFor("fxapp")); err != nil {
+	if admin, err = pgxpool.New(ctx, dsnFor("postgres")); err != nil {
 		startErr = fmt.Errorf("opening the admin connection: %w", err)
+		return
+	}
+	if err := admin.Ping(ctx); err != nil {
+		startErr = fmt.Errorf("%s is set but nothing answered: %w", pgEnv, err)
 	}
 }
 
@@ -98,9 +91,9 @@ func startPostgres() {
 // migrated first would be testing a different program than the one that ships.
 // Every boot in this file therefore also asserts that the migrations apply.
 //
-// A database per test rather than a container per test: starting Postgres
-// dominates, CREATE DATABASE is milliseconds, and a test that shares tables
-// with another eventually depends on the order they run in.
+// A database per test rather than a server per test: CREATE DATABASE is
+// milliseconds, and a test that shares tables with another eventually depends
+// on the order they run in.
 func freshDatabase(t *testing.T) string {
 	t.Helper()
 

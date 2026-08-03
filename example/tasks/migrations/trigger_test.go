@@ -220,7 +220,7 @@ func freshDatabase(t *testing.T, name string) *pgxpool.Pool {
 
 	admin, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		t.Fatalf("opening the container's database: %v", err)
+		t.Fatalf("opening the admin database: %v", err)
 	}
 	defer admin.Close()
 
@@ -235,7 +235,7 @@ func freshDatabase(t *testing.T, name string) *pgxpool.Pool {
 
 	u, err := url.Parse(dsn)
 	if err != nil {
-		t.Fatalf("parsing the container's connection string: %v", err)
+		t.Fatalf("parsing the connection string: %v", err)
 	}
 	u.Path = "/" + name
 

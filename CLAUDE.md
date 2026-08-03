@@ -49,7 +49,11 @@ mise run heal   # everything the tooling can fix on its own
 mise run ci     # the gate: never rewrites, only fails
 ```
 
-`mise run ci` mirrors `.github/workflows/ci.yml` and needs Docker. Individual
+`mise run preflight` is the push path: heal, build, database-free tests, about
+fifteen seconds. `mise run ci` mirrors `.github/workflows/ci.yml` in full and is
+for reproducing a CI failure rather than for routine use — CI is the gate. The
+database-backed suites read a DSN and start nothing; `mise run pg-up` provides
+it from `compose.yaml`, and the tasks that need it depend on that. Individual
 steps — `vet`, `lint`, `generate-check`, `impact-check`, `eject-check`,
 `test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on their own
 and `mise tasks` describes all 28.

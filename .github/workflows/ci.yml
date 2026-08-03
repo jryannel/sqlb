@@ -79,9 +79,64 @@ jobs:
     # A job of its own rather than a step in `gate`, so that "the SQL is not
     # valid against a real Postgres" is distinguishable at a glance from "the
     # engine's unit tests fail" — they have completely different causes.
-    #
-    # It is also the only job needing Docker, which ubuntu-latest provides.
     runs-on: ubuntu-latest
+
+    # The same three servers compose.yaml starts locally, on the same host
+    # ports, so mise.toml's [env] defaults are correct here with nothing to
+    # override. The suites read SQLB_TEST_* and start nothing themselves.
+    #
+    # Service containers rather than testcontainers: they come up in parallel
+    # with checkout and mise setup instead of inside the test binary, there is
+    # no reaper, and pgtest's go.mod drops from about fifty modules to six —
+    # which is the reason that module exists at all. See pgtest/doc.go.
+    #
+    # No `command:` here, so max_connections is the stock 100. That is what the
+    # -parallel 8 cap in mise.toml's test-pg is sized against: eight concurrent
+    # tests holding a pool of eight is 64.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: sqlb
+          POSTGRES_PASSWORD: sqlb
+          POSTGRES_DB: sqlb
+        ports: ["15432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sqlb"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+      pgvector:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: sqlb
+          POSTGRES_PASSWORD: sqlb
+          POSTGRES_DB: sqlb
+        ports: ["15433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sqlb"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+      pgbouncer:
+        image: edoburu/pgbouncer:v1.24.1-p1
+        env:
+          # By service name: GitHub puts a job's service containers on one
+          # network, so the pooler reaches Postgres the same way compose.yaml
+          # wires it. This is the piece the old harness could only do by
+          # reading one container's IP to configure another.
+          DB_HOST: postgres
+          DB_PORT: "5432"
+          DB_USER: sqlb
+          DB_PASSWORD: sqlb
+          DB_NAME: "*"
+          POOL_MODE: transaction
+          AUTH_TYPE: scram-sha-256
+          ADMIN_USERS: sqlb
+          MAX_DB_CONNECTIONS: "2"
+          DEFAULT_POOL_SIZE: "2"
+        ports: ["16432:5432"]
+
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -97,6 +152,19 @@ jobs:
             ~/go/pkg/mod
           key: go-postgres-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
           restore-keys: go-postgres-${{ runner.os }}-
+      # Postgres and pgvector are gated by their own health checks, which hold
+      # the job until they answer. PgBouncer has none — the image ships neither
+      # pg_isready nor a shell health probe worth trusting — so it is waited for
+      # here rather than left to be the flake that only appears under load.
+      - name: wait for pgbouncer
+        run: |
+          for i in $(seq 1 60); do
+            if (echo > /dev/tcp/127.0.0.1/16432) 2>/dev/null; then
+              echo "pgbouncer is listening"; exit 0
+            fi
+            sleep 1
+          done
+          echo "pgbouncer never came up on 16432"; exit 1
       - run: mise run test-pg
       - run: mise run test-demo
       # The fx example boots the whole application against Postgres, including
