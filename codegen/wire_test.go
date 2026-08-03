@@ -128,6 +128,80 @@ func TestCLIFlagsAreStableAcrossWireCases(t *testing.T) {
 	}
 }
 
+// The emitted skill is read as instructions, so a wrong spelling there is worse
+// than a wrong spelling anywhere else this setting reaches: an agent that does
+// exactly what the file says sends `?created_at=eq.…` and gets a 400, and the
+// capability list it consulted is what told it that would be accepted (#143).
+//
+// Everything under an exposed resource is checked here, because the bug was not
+// one table — the manifest reported column names for the whole REST section and
+// the skill printed them faithfully.
+func TestSkillSpellsTheWireNotTheColumn(t *testing.T) {
+	skill := skillOf(t, wireFixture(schema.Camel))
+
+	for _, want := range []string{
+		"| Filterable | `id`, `title`, `createdAt` |",
+		"| Sortable | `title`, `createdAt` |",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the skill's capability table is missing %q:\n%s", want, skill)
+		}
+	}
+	// The sharper half of the bug: the table could be read as "these are columns,
+	// translate them yourself", and this sentence explicitly forecloses that.
+	if strings.Contains(skill, "the column names above are also the JSON field names") {
+		t.Error("the skill asserts a mapping-free wire under a declared WireCase")
+	}
+	if !strings.Contains(skill, "WireCase(schema.Camel)") {
+		t.Errorf("the skill does not name the case a reader has to apply:\n%s", skill)
+	}
+	// No database spelling anywhere a request is being described. Checked over
+	// the whole document up to the honesty section rather than over the one table
+	// asserted above, because a resource block that got the capability rows right
+	// and the enum line or the key wrong is exactly the failure this watches for.
+	// The honesty section is excluded on purpose: it *quotes* both spellings to
+	// explain the mapping, which is the one place the column name belongs.
+	surface, _, ok := strings.Cut(skill, "## What this file does not say")
+	if !ok {
+		t.Fatalf("the skill has no honesty section, so this guard is checking the wrong thing:\n%s", skill)
+	}
+	if strings.Contains(surface, "created_at") {
+		t.Errorf("the skill carries the database spelling of a column:\n%s", surface)
+	}
+}
+
+// And the default is unchanged, sentence included. The claim is stronger there —
+// there is genuinely no mapping — so it should still be made.
+func TestSkillKeepsTheMappingFreeSentenceUnderVerbatim(t *testing.T) {
+	skill := skillOf(t, wireFixture(schema.Verbatim))
+
+	if !strings.Contains(skill, "| Filterable | `id`, `title`, `created_at` |") {
+		t.Errorf("Verbatim's capability table moved:\n%s", skill)
+	}
+	if !strings.Contains(skill, "the column names above are also the JSON field names") {
+		t.Errorf("the default lost the sentence that says not to look for a mapping:\n%s", skill)
+	}
+	if strings.Contains(skill, "WireCase(") {
+		t.Error("Verbatim's skill talks about a setting the schema did not make")
+	}
+}
+
+// skillOf generates r's skill and returns it.
+func skillOf(t *testing.T, r *schema.Registry) string {
+	t.Helper()
+	dir := t.TempDir()
+	if _, err := codegen.Generate(codegen.Options{
+		Registry: r, Dir: dir, Package: "gen", SkillDir: ".claude/skills",
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, ".claude", "skills", "sqlb-schema", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("reading emitted skill: %v", err)
+	}
+	return string(b)
+}
+
 func wireKeysOf(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

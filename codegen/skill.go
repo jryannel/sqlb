@@ -45,11 +45,9 @@ import (
 	"github.com/jryannel/sqlb/schema"
 )
 
-// skillName is the directory the skill lands in, and the name in its
-// frontmatter. The sqlb- prefix is deliberate: this file is written into a
-// directory sqlb does not own, beside skills a project wrote itself and skills
-// it installed, and a collision there is a silently shadowed instruction.
-const skillName = "sqlb-schema"
+// The directory the skill lands in is also the name in its frontmatter, and it
+// comes from Options.skillName — see [Options.SkillName] for the default and for
+// why a repository with more than one registry may need to set it.
 
 // renderSkill writes the project-specific agent skill.
 func renderSkill(opts Options) ([]byte, error) {
@@ -68,13 +66,13 @@ func renderSkill(opts Options) ([]byte, error) {
 	}
 
 	var b strings.Builder
-	skillFrontmatter(&b, m, exposed)
+	skillFrontmatter(&b, opts.skillName(), m)
 	skillHeading(&b, m, exposed, internal)
 	skillCommands(&b, opts)
 	skillWireSurface(&b, exposed)
 	skillInternalTables(&b, internal)
 	skillObligations(&b, m)
-	skillLimits(&b)
+	skillLimits(&b, m)
 	return []byte(b.String()), nil
 }
 
@@ -83,9 +81,9 @@ func renderSkill(opts Options) ([]byte, error) {
 // sentence, and "use this when working with sqlb" does not fire on "add a due
 // date to invoices", which is the sentence that actually arrives. So it names
 // the project's real tables.
-func skillFrontmatter(b *strings.Builder, m *schema.Manifest, exposed []schema.TableManifest) {
+func skillFrontmatter(b *strings.Builder, name string, m *schema.Manifest) {
 	b.WriteString("---\n")
-	fmt.Fprintf(b, "name: %s\n", skillName)
+	fmt.Fprintf(b, "name: %s\n", name)
 
 	subjects := make([]string, 0, len(m.Tables))
 	for _, t := range m.Tables {
@@ -179,7 +177,10 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 	fmt.Fprintf(b, "### `%s`\n\n", t.Name)
 
 	if t.PrimaryKey != "" {
-		fmt.Fprintf(b, "Addressed by `%s`. ", t.PrimaryKey)
+		// Wire, like everything else under an exposed resource: the item path is
+		// `{id}` whatever the key is called, so the only place this name is
+		// actually written is a filter or a response field.
+		fmt.Fprintf(b, "Addressed by `%s`. ", wireOfColumn(t, t.PrimaryKey))
 	}
 	fmt.Fprintf(b, "`%s`\n\n", r.Path)
 
@@ -248,7 +249,11 @@ func skillEnums(b *strings.Builder, t schema.TableManifest) {
 		if len(c.Enum) == 0 {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("`%s` is one of %s", c.Name, joinCode(c.Enum, " ")))
+		// The wire spelling, because the sentence this line exists to prevent is
+		// `?status=eq.active` against a column whose values are something else —
+		// and naming the column its database name there would be the same bug
+		// the capability tables had (#143).
+		lines = append(lines, fmt.Sprintf("`%s` is one of %s", wireOf(c), joinCode(c.Enum, " ")))
 	}
 	if len(lines) == 0 {
 		return
@@ -313,7 +318,7 @@ func skillObligations(b *strings.Builder, m *schema.Manifest) {
 // skillLimits is the honesty section. A generated document that reads as
 // complete is worse than one that reads as partial, because the reader stops
 // looking at exactly the wrong moment.
-func skillLimits(b *strings.Builder) {
+func skillLimits(b *strings.Builder, m *schema.Manifest) {
 	b.WriteString("## What this file does not say\n\n")
 	b.WriteString("- **Anything absent is a rejection, not an oversight.** Capabilities are " +
 		"opt-in. A column missing from `Filterable` above cannot be filtered on, and the error " +
@@ -331,14 +336,83 @@ func skillLimits(b *strings.Builder) {
 	b.WriteString("- **Nothing here says how to write a query.** Where the builder ends and " +
 		"`Raw` or hand-written SQL begins is a separate question, and the failure modes that " +
 		"matter there compile and pass their tests.\n")
-	b.WriteString("- **One column has one wire spelling,** derived from its name. There is no " +
-		"mapping layer and no per-field override in either direction, so the column names " +
-		"above are also the JSON field names.\n")
+	skillWireSpelling(b, m)
+}
+
+// skillWireSpelling is the sentence that tells an agent not to go looking for a
+// mapping layer, and it has to be two sentences because the schema decides which
+// one is true.
+//
+// Under the default the names above are the column names and the JSON field
+// names at once, which is what makes "there is no mapping" the whole story.
+// Under a declared WireCase they are still one spelling — ADR-0036 is unchanged —
+// but that spelling is a *function* of the column name rather than the column
+// name, and a file that says otherwise sends an agent to write `?org_id=eq.…`
+// against an endpoint that accepts `orgId` (#143). The lists above are already
+// the wire's, so what is left to say is what the column behind one is called.
+func skillWireSpelling(b *strings.Builder, m *schema.Manifest) {
+	if m.WireCase == "" {
+		b.WriteString("- **One column has one wire spelling,** derived from its name. There is no " +
+			"mapping layer and no per-field override in either direction, so the column names " +
+			"above are also the JSON field names.\n")
+		return
+	}
+	fmt.Fprintf(b, "- **One column has one wire spelling,** and this schema declares "+
+		"`WireCase(%s)`: %s. Every name above is already spelled that way, and so are the "+
+		"JSON field names and the filter parameters — there is no mapping layer and no "+
+		"per-field override, so a request never sends a column's database spelling. The "+
+		"declaration and the migrations use the database spelling; `sqlb.json` carries both "+
+		"per column.\n", wireCaseName(m.WireCase), wireCaseExample(m.WireCase))
+}
+
+// wireCaseName spells a WireCase the way the declaration does, so the sentence
+// above names something a reader can grep for.
+func wireCaseName(c string) string {
+	if c == string(schema.Camel) {
+		return "schema.Camel"
+	}
+	// Unreachable for the cases that exist today, and a literal rather than a
+	// panic: a WireCase added later should degrade to naming itself rather than
+	// break every project's generate on the day it lands.
+	return fmt.Sprintf("%q", c)
+}
+
+// wireCaseExample shows the transformation on a column every schema has.
+func wireCaseExample(c string) string {
+	if c == string(schema.Camel) {
+		return "`created_at` is `createdAt` on the wire"
+	}
+	return fmt.Sprintf("column names are spelled %q on the wire", c)
 }
 
 // Helpers. Each keeps a formatting decision in one place so that two sections
 // cannot spell the same thing two ways — the generated file is compared byte for
 // byte by `sqlb check`, so consistency here is correctness rather than taste.
+
+// wireOf is a column's spelling on the wire. The manifest carries Wire only
+// where it differs, so an absent one means the two names are the same.
+func wireOf(c schema.ColumnManifest) string {
+	if c.Wire != "" {
+		return c.Wire
+	}
+	return c.Name
+}
+
+// wireOfColumn is wireOf reached by name, for the one place that holds a column
+// name rather than the column: TableManifest.PrimaryKey.
+//
+// A name with no matching column falls back to itself rather than to empty. The
+// manifest omits hidden columns, and a hidden primary key is a schema this
+// emitter should still describe as best it can rather than one it renders a
+// blank for.
+func wireOfColumn(t schema.TableManifest, column string) string {
+	for _, c := range t.Columns {
+		if c.Name == column {
+			return wireOf(c)
+		}
+	}
+	return column
+}
 
 // pageSize renders the declared ceilings, and says nothing about the ones a
 // schema left to the runtime. A zero in the manifest means undeclared, and
