@@ -52,6 +52,16 @@ func run(m *testing.M) (int, error) {
 		postgres.WithUsername("sqlb"),
 		postgres.WithPassword("sqlb"),
 		postgres.BasicWaitStrategies(),
+		// Raised from the default 100 because the tests run in parallel now, and
+		// the ceiling is the product of two numbers neither of which this file
+		// controls: how many tests `go test` runs at once (GOMAXPROCS, so the
+		// machine's core count) and how many connections each one's pool opens.
+		// freshStockDB caps the second at poolSize; 200 leaves that safe well
+		// past any core count a developer or a runner is likely to have.
+		//
+		// Cheap, too: an unused connection slot is a few hundred bytes of shared
+		// memory, not a backend.
+		testcontainers.WithCmdArgs("-c", "max_connections=200"),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("starting %s: %w", image, err)
@@ -92,10 +102,31 @@ func run(m *testing.M) (int, error) {
 	return m.Run(), nil
 }
 
+// poolSize caps what one test's pool may open. pgxpool's default is the core
+// count, which is the wrong basis here: with the suite parallel, the total is
+// that number squared, and on a large machine it walks into max_connections
+// while every one of those connections sits idle.
+//
+// Eight rather than four, which would also fit every test today: census's
+// queue test runs four workers competing for the tail of the same queue, and a
+// pool sized exactly to the workers deadlocks the moment anything else in that
+// test wants a connection at the same time.
+const poolSize = 8
+
 // freshDB creates an empty database with the uuid_generate_v7() shim installed,
 // and returns a connection to it, dropped when the test ends. A database per
 // test rather than a container per test: container startup dominates, and
 // CREATE DATABASE is milliseconds.
+//
+// It is also what lets the suite run in parallel. Tests here share a Postgres
+// but not a database, so they were already independent by construction — the
+// serial run was leaving that on the table. Adding t.Parallel() to the tests
+// that could take it cut the module from 49s to about 12s, and the per-test
+// database is the whole reason that was safe rather than a rewrite.
+//
+// Two tests do not take it, and the compiler will not tell you why: t.Chdir and
+// t.Setenv panic under t.Parallel, because they mutate process-wide state. Those
+// are in drift_test.go and sqlbmigrate_test.go and they stay serial.
 func freshDB(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	db := freshStockDB(t)
@@ -117,7 +148,12 @@ func freshStockDB(t testing.TB) *pgxpool.Pool {
 	mustExec(t, admin, `DROP DATABASE IF EXISTS `+quoteIdent(name))
 	mustExec(t, admin, `CREATE DATABASE `+quoteIdent(name))
 
-	pool, err := pgxpool.New(context.Background(), dsn(name))
+	cfg, err := pgxpool.ParseConfig(dsn(name))
+	if err != nil {
+		t.Fatalf("parsing the connection string for %s: %v", name, err)
+	}
+	cfg.MaxConns = poolSize
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("opening %s: %v", name, err)
 	}

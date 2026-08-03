@@ -37,6 +37,7 @@ const declaredCheck = "status <> 'done' OR completed_at IS NOT NULL"
 // The property that was broken: a schema declaring a check, applied and read
 // back, diffs to nothing.
 func TestADeclaredCheckRoundTripsToNoChange(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 	reg := checked(declaredCheck)
 
@@ -71,6 +72,7 @@ func TestADeclaredCheckRoundTripsToNoChange(t *testing.T) {
 // changed produces no migration at all: a silent wrong answer, where the churn
 // it replaces was merely loud. So this asserts that a real edit still shows up.
 func TestAChangedCheckIsStillReportedAsChanged(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 
 	applySchema(t, db, checked(declaredCheck))
@@ -103,6 +105,7 @@ func TestAChangedCheckIsStillReportedAsChanged(t *testing.T) {
 // expressions are already in Postgres's spelling. Without this the function
 // could not safely be applied to both sides of a comparison.
 func TestNormalizeIsIdempotent(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 	applySchema(t, db, checked(declaredCheck))
 	reg := importRegistry(t, db)
@@ -129,6 +132,7 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 // fail the run. Everything after it must still be normalised, which is what the
 // per-probe savepoint is for: Postgres aborts a transaction on any error.
 func TestAnUnprobeableCheckIsReportedAndDoesNotStopTheRest(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 	applySchema(t, db, checked(declaredCheck))
 
@@ -198,6 +202,7 @@ func partial(expr string) *schema.Registry {
 const declaredPredicate = "latitude IS NOT NULL"
 
 func TestADeclaredPartialIndexRoundTripsToNoChange(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 	reg := partial(declaredPredicate)
 
@@ -248,6 +253,7 @@ func TestADeclaredPartialIndexRoundTripsToNoChange(t *testing.T) {
 // no migration at all, which is a silent wrong answer where the churn it
 // replaces was merely loud.
 func TestAChangedPartialIndexPredicateIsStillReportedAsChanged(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 
 	applySchema(t, db, partial(declaredPredicate))

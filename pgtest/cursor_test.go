@@ -121,6 +121,7 @@ func straight(t *testing.T, ctx context.Context, db sqlb.Executor, order []sqlb.
 }
 
 func TestCursorWalkVisitsEveryRowExactlyOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -178,6 +179,7 @@ func TestCursorWalkVisitsEveryRowExactlyOnce(t *testing.T) {
 // behind it is not read again. This is the property offset paging cannot have,
 // and the reason to prefer cursors for anything that walks a whole set.
 func TestConcurrentInsertsDoNotShiftAPagedWalk(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -239,6 +241,7 @@ func TestConcurrentInsertsDoNotShiftAPagedWalk(t *testing.T) {
 // predicate *can* drive an index seek, which is the property being claimed —
 // not of what the planner does at this table size, which is not.
 func TestRowComparisonSeekBecomesAnIndexCondition(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())
@@ -322,6 +325,7 @@ func explainText(t *testing.T, db *pgxpool.Pool, stmt string, args []any) string
 // duplicate is what addressing a page by its distance from the start means when
 // the start can move.
 func TestOffsetPagingRepeatsARowUnderConcurrentInserts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, schema.DefaultRegistry())

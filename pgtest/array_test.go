@@ -56,6 +56,7 @@ type LabelRow struct {
 func (LabelRow) TableName() string { return "label_rows" }
 
 func TestNamedSliceElementsRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	mustExec(t, raw, `
@@ -98,6 +99,7 @@ func arrayTable(t *testing.T) *sqlb.DB {
 // The values that break a naive codec: quoting, escaping, embedded separators,
 // the empty string, and the word NULL written as a string.
 func TestArrayValuesSurviveTheRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := arrayTable(t)
 
@@ -145,6 +147,7 @@ func TestArrayValuesSurviveTheRoundTrip(t *testing.T) {
 // An empty array, a NULL column and an absent value are three different things,
 // and the Go side has to keep them apart or a UI cannot.
 func TestEmptyArrayIsNotNull(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := arrayTable(t)
 
@@ -183,6 +186,7 @@ func TestEmptyArrayIsNotNull(t *testing.T) {
 // binds the element and the other two bind an array, so this is also where the
 // encoding half of the codec is exercised on the query path.
 func TestArrayOperatorsAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := arrayTable(t)
 
@@ -256,6 +260,7 @@ func TestArrayOperatorsAgainstPostgres(t *testing.T) {
 // This is proven against Postgres rather than asserted from the rendered SQL,
 // because the whole claim is about how Postgres evaluates three-valued logic.
 func TestNegatedArrayOperatorsAreThreeValued(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := arrayTable(t)
 
@@ -308,6 +313,7 @@ func TestNegatedArrayOperatorsAreThreeValued(t *testing.T) {
 // operator too, not only through the column — the encoder is the same one, and
 // this is the case that would fail silently by matching the wrong rows.
 func TestArrayOperandQuoting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := arrayTable(t)
 
@@ -340,6 +346,7 @@ func TestArrayOperandQuoting(t *testing.T) {
 // here. An enum array demoted to plain text[] renders as the same SQL type, so
 // only its CHECK would differ — and check churn is allowed noise there.
 func TestArrayColumnsSurviveIntrospection(t *testing.T) {
+	t.Parallel()
 	db := freshDB(t)
 
 	target := schema.NewRegistry()

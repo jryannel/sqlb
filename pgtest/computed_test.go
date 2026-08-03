@@ -130,6 +130,7 @@ func computedDB(t *testing.T) *pgxpool.Pool {
 var compValues = []string{"progress", "star_count", "is_starred"}
 
 func TestComputedColumnsRunAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := computedDB(t)
 	seedComputedRows(t, raw)
@@ -170,6 +171,7 @@ func TestComputedColumnsRunAgainstPostgres(t *testing.T) {
 // The same expression in a WHERE and an ORDER BY, which are different
 // grammatical slots from the projection.
 func TestComputedFilterAndSortRunAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := computedDB(t)
 	seedComputedRows(t, raw)
@@ -204,6 +206,7 @@ func TestComputedFilterAndSortRunAgainstPostgres(t *testing.T) {
 // A per-viewer predicate is one bind however many places the expression
 // appears, and the answer changes with the viewer.
 func TestComputedBindRunsAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := computedDB(t)
 	seedComputedRows(t, raw)
@@ -238,6 +241,7 @@ func TestComputedBindRunsAgainstPostgres(t *testing.T) {
 // RETURNING carries an expression over the row just written. If Postgres
 // refused it, the whole INSERT would fail rather than the derived field.
 func TestComputedInReturningRunsAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := computedDB(t)
 

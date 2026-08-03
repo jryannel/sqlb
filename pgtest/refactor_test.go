@@ -185,6 +185,7 @@ var refactorScenarios = []struct {
 }
 
 func TestEveryStageReturnsTheSameRows(t *testing.T) {
+	t.Parallel()
 	f := refactorFixture(t)
 	orgID := f.orgOf(t, "Ada writes")
 
@@ -251,6 +252,7 @@ func TestEveryStageReturnsTheSameRows(t *testing.T) {
 // body matches starts appearing. That is the declaration doing what it says,
 // not a bug, but it is a behaviour change and a release note.
 func TestSearchIsTheOneBehaviourThatChanges(t *testing.T) {
+	t.Parallel()
 	f := refactorFixture(t)
 	orgID := f.orgOf(t, "Ada writes")
 	ctx := withsqlc.WithOrg(context.Background(), orgID)

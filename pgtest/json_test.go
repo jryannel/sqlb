@@ -93,6 +93,7 @@ func jsonDocsQuery(t *testing.T, query string) *sqlb.Builder[JSONDoc] {
 }
 
 func TestJSONContainmentRunsAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, jsonDocsRegistry())
@@ -117,6 +118,7 @@ func TestJSONContainmentRunsAgainstPostgres(t *testing.T) {
 // only useful if what comes back can be read as JSON rather than as whatever
 // the driver decided a jsonb column was.
 func TestJSONColumnScansAsADocument(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, jsonDocsRegistry())
@@ -149,6 +151,7 @@ func TestJSONColumnScansAsADocument(t *testing.T) {
 // index *can* serve the operator, which is the part that would break, rather
 // than of what the planner picks at a size this test does not have.
 func TestJSONContainmentCanUseTheGINIndex(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, jsonDocsRegistry())
@@ -236,6 +239,7 @@ func nullableJSONDocsRegistry() *schema.Registry {
 // coverage of a NULL document, not a regression test for the pointer;
 // TestNullableJSONModelMatchesCodegen below is the one that fails without it.
 func TestNullableJSONScansWhenTheColumnIsNull(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, nullableJSONDocsRegistry())
@@ -286,6 +290,7 @@ func TestNullableJSONScansWhenTheColumnIsNull(t *testing.T) {
 // together: the Go type the schema says it will generate for the column has to
 // be the type the struct that scans it actually uses.
 func TestNullableJSONModelMatchesCodegen(t *testing.T) {
+	t.Parallel()
 	r := nullableJSONDocsRegistry()
 	declared := r.Tables()[0].Field("metadata").Desc().GoType()
 
@@ -303,6 +308,7 @@ func TestNullableJSONModelMatchesCodegen(t *testing.T) {
 // (isJSONColumn dereferences), and this is what says so against a real server
 // rather than against a reflect test.
 func TestNullableJSONIsStillFilterable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	applySchema(t, raw, nullableJSONDocsRegistry())
@@ -393,6 +399,7 @@ func containedIDs(t *testing.T, db *sqlb.DB, pred sqlb.Pred) []int64 {
 }
 
 func TestJSONContainmentOperatorsAgainstPostgres(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := jsonContainTable(t)
 
@@ -497,6 +504,7 @@ func TestJSONContainmentOperatorsAgainstPostgres(t *testing.T) {
 // Proven against Postgres rather than asserted from the rendered SQL, because
 // the claim is entirely about how Postgres evaluates three-valued logic.
 func TestNegatedJSONContainmentIsThreeValued(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := jsonContainTable(t)
 

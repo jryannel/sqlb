@@ -52,6 +52,7 @@ func secretDB(t *testing.T) *sqlb.DB {
 // The accumulate case, twice, because once cannot distinguish the stored row
 // from the proposed one: on the first insert they hold the same value.
 func TestUpsertAccumulatesFromTheStoredRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := secretDB(t)
 
@@ -95,6 +96,7 @@ func TestUpsertAccumulatesFromTheStoredRow(t *testing.T) {
 // The case the issue opened with: the timestamp comes from the database rather
 // than from the process, so it agrees with every other timestamp on the row.
 func TestUpsertTakesTheTimestampFromTheDatabaseClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := secretDB(t)
 

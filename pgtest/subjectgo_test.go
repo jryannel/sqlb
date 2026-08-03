@@ -90,6 +90,7 @@ func (subjectSubmission) TableName() string { return "submissions" }
 // second org in it for exactly that reason: a query that forgets the tenant
 // gets a bigger number here rather than the same one.
 func TestAFilteredCountCountsWhatItSays(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	createSubjectEvents(t, raw)
@@ -146,6 +147,7 @@ func TestAFilteredCountCountsWhatItSays(t *testing.T) {
 // the trap reachable from live data rather than from an edge case. Coalesce is
 // the fix that exists; this is Postgres confirming which half needs it.
 func TestAFilteredSumOverNoMatchingRowsIsNullUntilItIsCoalesced(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	createSubjectEvents(t, raw)
@@ -200,6 +202,7 @@ func TestAFilteredSumOverNoMatchingRowsIsNullUntilItIsCoalesced(t *testing.T) {
 // Refusing in sqlb, naming rows and columns and the maximum, is the ADR-0011
 // answer, is two lines, and is the same answer under every driver.
 func TestBulkInsertIsRefusedInTermsOfParametersRatherThanRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	mustExec(t, raw, `
@@ -271,6 +274,7 @@ func TestBulkInsertIsRefusedInTermsOfParametersRatherThanRows(t *testing.T) {
 // matched row and there is no `UpdateFrom`. The cost of writing it row by row is not only N
 // round trips: it is N round trips *while holding the lock the SELECT took*.
 func TestABulkRepositionIsOneStatementUnderOneLock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	createSubjectTasks(t, raw)
@@ -360,6 +364,7 @@ func TestABulkRepositionIsOneStatementUnderOneLock(t *testing.T) {
 // something immutable (the key, a creation time), or accept that a reorder
 // invalidates outstanding cursors and say so at the API.
 func TestAReorderUnderACursorCanRepeatARow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	createSubjectTasks(t, raw)
@@ -458,6 +463,7 @@ func TestAReorderUnderACursorCanRepeatARow(t *testing.T) {
 // working spelling; the ordering agreeing with the grouping is the caller's
 // job, which is the argument for a combinator that renders both from one term.
 func TestDistinctOnPicksTheFirstRowPerGroup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	createSubjectEvents(t, raw)
@@ -513,6 +519,7 @@ func TestDistinctOnPicksTheFirstRowPerGroup(t *testing.T) {
 // the key a bind parameter, and a test that already passes is the cheapest way
 // to notice if it stops.
 func TestAJSONKeyFilterReachesPostgresAsData(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
 	mustExec(t, raw, `
