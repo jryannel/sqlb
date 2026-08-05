@@ -202,8 +202,22 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 	}
 	b.WriteString("\n")
 
+	// The declared ceilings, and only those. A budget the schema left to the
+	// runtime is one this document has no number for, and inventing the
+	// package default here would state as a contract what the next release is
+	// free to move.
 	if r.MaxFilters > 0 {
 		fmt.Fprintf(b, "At most %d filters per request.\n\n", r.MaxFilters)
+	}
+	if r.MaxSortTerms > 0 {
+		fmt.Fprintf(b, "At most %d sort terms per request.\n\n", r.MaxSortTerms)
+	}
+	if r.MaxOffset > 0 {
+		// The one budget a caller meets mid-task rather than on a malformed
+		// request: paging until the rows run out walks into it, and the answer
+		// is a different parameter rather than a smaller number.
+		fmt.Fprintf(b, "Offset paging stops at %d rows. Use `?cursor=` to read deeper — "+
+			"it costs the same at any depth.\n\n", r.MaxOffset)
 	}
 
 	skillEnums(b, t)

@@ -249,6 +249,24 @@ func (r *Registry) Validate() error {
 			if d.Hidden && d.Filterable {
 				report(t.name, d.Name, "column is both Hidden and Filterable, which leaks its contents through filter probing")
 			}
+			// LookupKey only ever *keeps* a facade entry Hidden would have
+			// removed. On a visible column the entry is there either way, so
+			// the word would read as a declaration and mean nothing — and the
+			// generated comment saying which kind of secret a column is would
+			// be saying it about one that is not a secret at all.
+			if !d.UniqueDeferrable.Valid() {
+				report(t.name, d.Name, "unknown Deferrable %q", d.UniqueDeferrable)
+			}
+			// Deferral is a property of a constraint, and this one has none of
+			// its own to defer. A primary key is not it either: PRIMARY KEY is
+			// rendered from the table's key columns, and deferring it is not
+			// something this DSL can say.
+			if d.UniqueDeferrable != NotDeferrable && !d.Unique {
+				report(t.name, d.Name, "Deferred applies to a column's own unique constraint; add Unique(), or declare the constraint with AddUnique")
+			}
+			if d.LookupKey && !d.Hidden {
+				report(t.name, d.Name, "LookupKey applies to a Hidden column; the typed column is already there without it")
+			}
 			if d.Ref != nil && d.Ref.External {
 				if d.Expandable {
 					report(t.name, d.Name, "a reference across a module boundary cannot be Expandable: expanding it would join a table this module does not own")
@@ -367,6 +385,9 @@ func (r *Registry) Validate() error {
 				report(t.name, "", "unique constraint name %q is %d bytes; Postgres truncates at %d, "+
 					"so give it a shorter name with UniqueNamed", u.Name, len(u.Name), maxIdentBytes)
 			}
+			if !u.Deferrable.Valid() {
+				report(t.name, "", "unique constraint %q has an unknown Deferrable %q", u.Name, u.Deferrable)
+			}
 		}
 
 		if t.rest != nil && len(t.pkCols) > 0 {
@@ -398,6 +419,14 @@ func (r *Registry) Validate() error {
 			}
 			if t.rest.MaxPageSize > 0 && t.rest.DefaultPageSize > t.rest.MaxPageSize {
 				report(t.name, "", "DefaultPageSize %d exceeds MaxPageSize %d", t.rest.DefaultPageSize, t.rest.MaxPageSize)
+			}
+			// Negative is refused rather than resolved. Every ceiling treats a
+			// non-positive value as "take the package default", so a negative
+			// one is a declaration that reads as a tighter bound and behaves
+			// as the loosest available — which is the one direction a cost
+			// ceiling must not fail in.
+			if t.rest.MaxFilters < 0 || t.rest.MaxSortTerms < 0 || t.rest.MaxOffset < 0 {
+				report(t.name, "", "request ceilings must not be negative; leave one zero to take the package default")
 			}
 			// A declared soft delete and a generated hard DELETE are a
 			// contradiction the runtime cannot resolve: nothing reads

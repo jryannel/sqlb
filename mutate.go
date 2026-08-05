@@ -533,6 +533,11 @@ func (u *Update[T]) fail(format string, args ...any) *Update[T] {
 }
 
 // SQL compiles the statement without running it.
+//
+// What it renders is what this statement holds. A BeforeUpdate hook — the
+// updated_at stamp, the predicate that narrows the affected rows — amends a
+// clone on the exec path and is absent here; [Update.Resolved] applies them
+// (#153).
 func (u *Update[T]) SQL() (string, []any, error) {
 	if u.err != nil {
 		return "", nil, u.err
@@ -575,6 +580,29 @@ func (u *Update[T]) Clone() *Update[T] {
 	return &c
 }
 
+// Resolved returns a copy of the statement with the BeforeUpdate hooks
+// registered for T against db applied — the statement that will actually run,
+// which [Update.SQL] on its own is not. It is [Builder.Resolved] for a write,
+// and the reason is the same: a hook that stamps a column or narrows the
+// affected rows is invisible in the rendered text (#153).
+//
+// The receiver is untouched, as it is in Exec.
+func (u *Update[T]) Resolved(ctx context.Context, db Executor) (*Update[T], error) {
+	stmt := u.Clone()
+	if err := hooksFor[T](db).runBeforeUpdate(ctx, stmt); err != nil {
+		return nil, err
+	}
+	return stmt, nil
+}
+
+func (u *Update[T]) resolvedSQL(ctx context.Context, db Executor) (string, []any, error) {
+	stmt, err := u.Resolved(ctx, db)
+	if err != nil {
+		return "", nil, err
+	}
+	return stmt.SQL()
+}
+
 // Exec runs the update and returns the updated rows.
 //
 // The statement is cloned first, for the reason Builder.All clones: a
@@ -583,8 +611,8 @@ func (u *Update[T]) Clone() *Update[T] {
 // Exec assign updated_at twice and narrow a scoping predicate twice.
 func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	hooks := hooksFor[T](db)
-	stmt := u.Clone()
-	if err := hooks.runBeforeUpdate(ctx, stmt); err != nil {
+	stmt, err := u.Resolved(ctx, db)
+	if err != nil {
 		return nil, err
 	}
 	query, args, err := stmt.SQL()
@@ -674,10 +702,11 @@ func (d *Delete[T]) UseDialect(dl Dialect) *Delete[T] {
 
 // SQL compiles the statement without running it.
 //
-// No RETURNING clause. Whether a delete carries one is decided by the hooks
-// registered for T against the executor it runs on, and this method has no
-// executor — so what it prints is what a delete with no row-taking hook sends.
-// See [Hooks.AfterDeleteRows].
+// No RETURNING clause, and no BeforeDelete predicate. Both are decided by the
+// hooks registered for T against the executor it runs on, and this method has no
+// executor — so what it prints is what a delete with no hooks at all sends.
+// [Delete.Resolved] takes one and renders the statement that will run. See
+// [Hooks.AfterDeleteRows].
 func (d *Delete[T]) SQL() (string, []any, error) {
 	if d.err != nil {
 		return "", nil, d.err
@@ -707,6 +736,35 @@ func (d *Delete[T]) Clone() *Delete[T] {
 	return &c
 }
 
+// Resolved returns a copy of the statement with the BeforeDelete hooks
+// registered for T against db applied, and with RETURNING decided — the
+// statement that will actually run, which [Delete.SQL] on its own is not. It is
+// [Builder.Resolved] for a delete (#153).
+//
+// The receiver is untouched, as it is in Exec.
+func (d *Delete[T]) Resolved(ctx context.Context, db Executor) (*Delete[T], error) {
+	hooks := hooksFor[T](db)
+	stmt := d.Clone()
+	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
+		return nil, err
+	}
+	// Decided after BeforeDelete, so that a hook registering on first use — which
+	// On[T] does — is visible to the statement it is about to affect. It is part
+	// of resolving rather than of executing because RETURNING is the difference
+	// between a bare DELETE and one that scans every row it removed, which is a
+	// difference an inspection exists to show.
+	stmt.returning = hooks.wantsDeletedRows()
+	return stmt, nil
+}
+
+func (d *Delete[T]) resolvedSQL(ctx context.Context, db Executor) (string, []any, error) {
+	stmt, err := d.Resolved(ctx, db)
+	if err != nil {
+		return "", nil, err
+	}
+	return stmt.SQL()
+}
+
 // Exec runs the delete and returns the number of rows removed.
 //
 // The statement is cloned first, for the reason Update.Exec clones: a
@@ -718,13 +776,10 @@ func (d *Delete[T]) Clone() *Delete[T] {
 // DELETE and the count is the command tag's, exactly as it always was.
 func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	hooks := hooksFor[T](db)
-	stmt := d.Clone()
-	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
+	stmt, err := d.Resolved(ctx, db)
+	if err != nil {
 		return 0, err
 	}
-	// Decided after BeforeDelete, so that a hook registering on first use — which
-	// On[T] does — is visible to the statement it is about to affect.
-	stmt.returning = hooks.wantsDeletedRows()
 	query, args, err := stmt.SQL()
 	if err != nil {
 		return 0, err

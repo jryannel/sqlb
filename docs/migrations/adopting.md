@@ -120,8 +120,8 @@ db' == db
 
 `pgtest/fixpoint_test.go` asserts exactly that against Postgres, over a schema
 chosen to be awkward: a `vector` column with an HNSW index whose operator class
-is its meaning, storage parameters, a partial index, a composite unique, an
-array, nullable `jsonb`, an enum-shaped check and a real one.
+is its meaning, storage parameters, a partial index, a composite unique, a
+deferred unique, an array, nullable `jsonb`, an enum-shaped check and a real one.
 
 The comparison is between the two **databases**, through `pg_catalog`, rather
 than between the two registries — and that is the load-bearing part. Two
@@ -129,6 +129,15 @@ registries agree about everything they both dropped, which is how an enum's
 constraint name went missing for as long as it did: both sides lost it
 identically, so every registry-level check passed while the rebuilt database
 called the constraint something else and the next diff proposed dropping it.
+
+A constraint's deferrability was the same shape and was found the same way
+([#154](https://github.com/jryannel/sqlb/issues/154)): the declaration could not
+say it, the introspector did not read it, and the differ had no field to compare
+— so a hand-written `DEFERRABLE INITIALLY DEFERRED` survived every gate by being
+invisible to all of them, and a migration that recreated the constraint without
+it would have too. It is declarable on `UNIQUE` now and reported on every other
+constraint kind, and the fixture carries one so the property is asserted rather
+than assumed.
 
 ## Adopting one table at a time
 

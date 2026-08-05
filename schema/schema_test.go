@@ -284,6 +284,38 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			},
 			want: "so give it a shorter name with UniqueNamed",
 		},
+		{
+			// Non-positive means "take the package default" everywhere a
+			// ceiling is read, so a negative one reads as a tighter bound and
+			// behaves as the loosest available.
+			name: "a negative cost ceiling",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey()).
+					Expose(schema.REST{Ops: schema.OpList, MaxOffset: -1})
+			},
+			want: "request ceilings must not be negative",
+		},
+		{
+			// Deferral is a property of a constraint, and a column with no
+			// unique constraint has none of its own to defer.
+			name: "Deferred without a unique constraint",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(),
+					schema.Int("position").Deferred())
+			},
+			want: "Deferred applies to a column's own unique constraint",
+		},
+		{
+			// A typed string is open, and the alternative to refusing an
+			// unknown value here is DDL Postgres rejects halfway through a
+			// migration.
+			name: "an unknown deferrability",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(), schema.Text("slug")).
+					AddUnique(schema.Unique{Columns: []string{"slug"}, Deferrable: "maybe"})
+			},
+			want: `has an unknown Deferrable "maybe"`,
+		},
 	}
 
 	for _, tt := range tests {

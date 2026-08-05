@@ -450,6 +450,47 @@ names an index. Two conventions, deliberately: an index sqlb declares is one
 sqlb named, while a constraint is usually one that already exists under a name
 the application may be matching on.
 
+### When a unique constraint is checked
+
+By default, at the end of each statement. `Deferrable` moves it to `COMMIT`:
+
+```go
+AddUnique(schema.Unique{
+    Columns:    []string{"product_id", "option_signature"},
+    Deferrable: schema.DeferredCheck,
+})
+```
+
+The case is a rule about the **committed** state that no single statement can
+satisfy. A product variant is identified by the combination of its option
+values; the values live in a child table and reference the variant, so the
+variant row is written first and passes through a state where its denormalised
+signature is still the default — and two variants of one product collide on that
+default at `INSERT` time. `INITIALLY DEFERRED` says exactly what is meant, and
+the alternatives weaken the rule (a partial index excluding the placeholder) or
+move it into application code, where two concurrent writers interleave between
+the check and the insert.
+
+`schema.DeferrableCheck` is the third setting: deferrable, but immediate unless a
+transaction says `SET CONSTRAINTS … DEFERRED`. `Field.Deferred()` is the
+column-level spelling of `DeferredCheck` for a single-column constraint.
+
+Deferral is declarable on `UNIQUE` and nothing else. On the other constraint
+kinds it is **read and reported** rather than silently dropped: introspection
+lists a deferred foreign key, primary key, check or exclusion as a construct the
+declaration cannot express, with its definition attached, so an adoption knows to
+keep the hand-written migration that put it there. That reporting is the point of
+[#154] — before it, a deferred constraint was invisible to both sides of the
+round trip, so the fixpoint held because the declaration and the database were
+blind to the same property, and a migration that recreated the constraint without
+its clause would have passed the drift gate on its way to breaking every write.
+
+[ADR-0051](../adr/0051-a-gap-in-the-declaration-is-reported.md) is the general
+rule that came out of it: where a layer below the declaration can say something
+the declaration cannot, the gap is reported rather than left to be found.
+
+[#154]: https://github.com/jryannel/sqlb/issues/154
+
 `AddIndex` takes a fully specified `Index` for what the shorthands do not cover
 — GIN indexes, partial indexes via `Where`, and per-column sort order via
 `Orders`. A partial unique index is often the cleanest way to state a domain
@@ -523,6 +564,8 @@ Expose(schema.REST{
     DefaultPageSize: 20,
     MaxPageSize:     100,
     MaxFilters:      12,
+    MaxSortTerms:    4,
+    MaxOffset:       10_000,
 })
 ```
 
@@ -530,9 +573,13 @@ Expose(schema.REST{
 because a table can be readable by id without being listable. Leaving an
 operation out means the endpoint does not exist — not that it answers 405.
 
-`MaxPageSize` is a hard ceiling rather than a hint, and `MaxFilters` bounds how
-many predicates one request may carry, which bounds the cost of a single query.
-Both are worth setting per resource; see [Pagination](../rest/pagination.md).
+The last five are the per-request cost ceilings, and each is worth setting per
+resource: they are the bounds on what one request may ask the database to do,
+and the numbers that justify them — the row count, the width of the table — are
+known here. `MaxPageSize` is a hard ceiling rather than a hint; `MaxFilters` and
+`MaxSortTerms` bound how many predicates and sort terms one request may carry;
+`MaxOffset` bounds how deep `?page=` may reach. A zero takes the package default.
+See [Pagination](../rest/pagination.md).
 
 ## Modules
 

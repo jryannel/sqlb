@@ -280,9 +280,20 @@ func buildTable(r *schema.Registry, name, local string, p *tableParts,
 		// the reason the primary key above is treated the same way: a pinned
 		// name that matches the convention is noise in the declaration, and a
 		// declaration that omits a name Postgres did not choose is a rename.
-		if u.Name == name+"_"+strings.Join(u.Columns, "_")+"_key" {
+		switch {
+		case u.Deferrable != schema.NotDeferrable:
+			// The whole-struct form, because neither shorthand carries the
+			// clause — and a constraint imported without it diffs to nothing
+			// against a database that has it, which is the blindness this
+			// field exists to end (issue #154). AddUnique derives the name
+			// when it is the conventional one, so the rule above still holds.
+			if u.Name == name+"_"+strings.Join(u.Columns, "_")+"_key" {
+				u.Name = ""
+			}
+			t.AddUnique(u)
+		case u.Name == name+"_"+strings.Join(u.Columns, "_")+"_key":
 			t.Unique(u.Columns...)
-		} else {
+		default:
 			t.UniqueNamed(u.Name, u.Columns...)
 		}
 	}
@@ -403,6 +414,7 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 		case "p":
 			r := row
 			c.pk = &r
+			reportDeferral(table, row, rep, "a primary key")
 		case "u":
 			if len(row.Columns) != 1 {
 				// A composite UNIQUE is a table-level constraint, not a column
@@ -410,8 +422,9 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 				// unique index would have diffed as a drop and a rebuild — the
 				// index being a different object (issue #108).
 				c.uniques = append(c.uniques, schema.Unique{
-					Name:    row.Name,
-					Columns: row.Columns,
+					Name:       row.Name,
+					Columns:    row.Columns,
+					Deferrable: deferralOf(row),
 				})
 				continue
 			}
@@ -423,6 +436,7 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 				continue
 			}
 			c.foreign[row.Columns[0]] = row
+			reportDeferral(table, row, rep, "a foreign key")
 		case "x":
 			e, ok := schema.ParseExclusion(row.Def)
 			if !ok {
@@ -432,14 +446,55 @@ func classify(table string, rows []constraintRow, rep *Report) *constraints {
 			}
 			e.Name = row.Name
 			c.exclusions = append(c.exclusions, e)
+			reportDeferral(table, row, rep, "an exclusion")
 		case "c":
 			c.check(table, row, rep)
+			reportDeferral(table, row, rep, "a check")
 		default:
 			rep.add(table, row.Name, "constraint of a kind the DSL cannot declare (contype "+
 				row.Type+")", row.Def)
 		}
 	}
 	return c
+}
+
+// deferralOf reads a constraint's check timing back into the declaration's
+// vocabulary.
+func deferralOf(row constraintRow) schema.Deferrable {
+	switch {
+	case row.Deferred:
+		return schema.DeferredCheck
+	case row.Deferrable:
+		return schema.DeferrableCheck
+	}
+	return schema.NotDeferrable
+}
+
+// reportDeferral records a constraint whose check timing the DSL cannot say,
+// which is every kind but UNIQUE.
+//
+// The consequence of not reporting it is narrower than dropping a constraint and
+// points the same way: a migration that recreated a deferred constraint without
+// its clause would break every write that relies on the deferral, and the drift
+// gate — the thing that exists to catch precisely that — would stay green,
+// because the declaration and the database were blind to the same property
+// (issue #154). That is ADR-0016's failure mode stated about a field rather than
+// about an object.
+//
+// It is a Skip rather than a Note: the registry genuinely does not describe the
+// database, and reconciling it means keeping the hand-written migration that put
+// the clause there.
+func reportDeferral(table string, row constraintRow, rep *Report, kind string) {
+	if !row.Deferrable {
+		return
+	}
+	when := "deferrable"
+	if row.Deferred {
+		when = "deferrable and deferred by default"
+	}
+	rep.add(table, row.Name, kind+" that is "+when+
+		"; the DSL declares deferral on UNIQUE constraints only, so this one has to stay "+
+		"in a hand-written migration", row.Def)
 }
 
 // check decides whether a CHECK is an enum in disguise or a check in its own
@@ -555,6 +610,21 @@ func buildColumn(table string, col columnRow, cons *constraints,
 		// happens to agree about.
 		if u.Name != table+"_"+col.Name+"_key" {
 			f.ConstraintNamed(u.Name)
+		}
+		switch deferralOf(u) {
+		case schema.DeferredCheck:
+			f.Deferred()
+		case schema.DeferrableCheck:
+			// The column form says "deferred" and not "deferrable but not
+			// deferred", which is the setting that only matters to a
+			// transaction issuing SET CONSTRAINTS. Reported rather than
+			// rounded to either neighbour: importing it as deferred would
+			// change when every other writer's statement is checked, and
+			// importing it as not deferrable would take the option away.
+			// AddUnique can say it, at the cost of naming the column twice.
+			rep.add(table, u.Name, "a unique constraint that is deferrable and initially immediate; "+
+				"Field.Deferred declares the initially-deferred form, so this one wants "+
+				"AddUnique or a hand-written migration", u.Def)
 		}
 	}
 	// Only a single-column key marks its column. A composite one is declared on

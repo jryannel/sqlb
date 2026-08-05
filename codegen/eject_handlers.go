@@ -268,8 +268,8 @@ func ejectZeroLiteral(d *schema.FieldDesc) string {
 func ejectLimits(b *bytes.Buffer, t *schema.TableDef, lower string) {
 	r := t.Rest()
 	fmt.Fprintf(b, "\n// %sLimits are the ceilings %s declared.\n", lower, t.Name())
-	fmt.Fprintf(b, "var %sLimits = Limits{DefaultPageSize: %d, MaxPageSize: %d, MaxFilters: %d, MaxSortTerms: %d}\n",
-		lower, r.DefaultPageSize, r.MaxPageSize, r.MaxFilters, 0)
+	fmt.Fprintf(b, "var %sLimits = Limits{DefaultPageSize: %d, MaxPageSize: %d, MaxFilters: %d, MaxSortTerms: %d, MaxOffset: %d}\n",
+		lower, r.DefaultPageSize, r.MaxPageSize, r.MaxFilters, r.MaxSortTerms, r.MaxOffset)
 }
 
 // ejectBodyDecoder emits the JSON decoder for a create or patch body.

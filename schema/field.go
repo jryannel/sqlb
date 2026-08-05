@@ -47,6 +47,11 @@ type FieldDesc struct {
 	Default    *Default
 	EnumValues []string
 
+	// UniqueDeferrable is when the column's own unique constraint is checked.
+	// The zero value is NOT DEFERRABLE. See [Field.Deferred] and, for the
+	// table-level constraint this mirrors, [Unique.Deferrable].
+	UniqueDeferrable Deferrable
+
 	// Auto makes the database supply the column's value: a sequence, or an
 	// identity. Only an integer column may carry one, and never beside a
 	// Default — see [Auto], and [Serial] and [Field.Identity] for the two
@@ -74,6 +79,16 @@ type FieldDesc struct {
 	ReadOnly  bool // never settable through REST
 	Immutable bool // settable at create, rejected on update
 	Hidden    bool // never serialised into a REST response
+
+	// LookupKey says a Hidden column is found by its own value, and so keeps
+	// its entry in the generated typed-column facade.
+	//
+	// It changes nothing about the REST surface and nothing at runtime — it is
+	// not in [FieldDesc.Capabilities], because there is nothing for the engine
+	// to read: `sqlb.F("token_hash")` has always worked. What it changes is
+	// whether the compiler helps, and what the generated file says about which
+	// kind of secret this column is. See [Field.LookupKey].
+	LookupKey bool
 
 	// Obligations. Neither of these changes a query. They are read once, at
 	// startup, where rest refuses to mount a resource whose declarations have
@@ -781,6 +796,21 @@ func (f *Field) Unique() *Field {
 	return f
 }
 
+// Deferred makes the column's unique constraint DEFERRABLE INITIALLY DEFERRED,
+// so it holds over the committed state rather than at each statement.
+//
+//	schema.Int("position").Unique().Deferred()
+//
+// The case is a set of rows rewritten together — reordering a list by shifting
+// every position — where each intermediate state violates a rule the final one
+// satisfies. It is refused without [Field.Unique], since there is no other
+// constraint on the column for it to defer. For the table-level form, and for
+// the argument about what deferral buys, see [Unique.Deferrable].
+func (f *Field) Deferred() *Field {
+	f.d.UniqueDeferrable = DeferredCheck
+	return f
+}
+
 // Default sets the column default.
 func (f *Field) Default(d *Default) *Field {
 	f.d.Default = d
@@ -976,8 +1006,46 @@ func (f *Field) Immutable() *Field {
 
 // Hidden omits the column from every REST response. Use it for password
 // hashes and similar values that must never leave the process.
+//
+// It also removes the column from the generated typed-column facade, so
+// `SessionCols.TokenHash` does not exist and a predicate against a hidden column
+// does not compile. That is the right default — for a password hash,
+// `WHERE password_hash = $1` is a sign something has gone wrong — but it is a
+// second property, and for the other members of "and similar values" the two
+// come apart. Declare [Field.LookupKey] beside it for a credential that is found
+// *by* its stored value.
 func (f *Field) Hidden() *Field {
 	f.d.Hidden = true
+	return f
+}
+
+// LookupKey keeps a [Field.Hidden] column in the generated typed-column facade,
+// for a secret whose stored form is the thing you look the row up by.
+//
+//	schema.Text("token_hash").Hidden().LookupKey()
+//
+// Hidden names one property — the value must never be serialised — and the
+// facade's omission asserts a second: it must never be predicated on. For a
+// password hash the two coincide, since a user is found by email and the hash is
+// compared in Go. For session tokens, API keys, password-reset and verification
+// tokens, webhook secrets keyed by fingerprint and idempotency keys they do not:
+// the presented secret is hashed and the hash *is* the lookup key. Every one of
+// those must never leave the process, and every one is found by equality on the
+// stored value, so Hidden alone took away the operation the column exists for
+// (#155).
+//
+// Nothing about the REST surface changes, and that is the point of it being a
+// separate word. A hidden column has no capability, so the filter grammar still
+// refuses `?token_hash=eq.…` with a 400 naming what would have been accepted —
+// a client that can probe a credential column by equality has an oracle, and
+// that refusal is what capabilities exist for. This is a declaration about Go,
+// on the writer's side of the boundary, where `sqlb.F` already grants the same
+// reach untyped.
+//
+// It is refused on a column that is not Hidden, where the facade carries the
+// column anyway and the word would be a claim with no effect.
+func (f *Field) LookupKey() *Field {
+	f.d.LookupKey = true
 	return f
 }
 

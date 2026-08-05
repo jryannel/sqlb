@@ -404,6 +404,12 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 		if r.MaxFilters > 0 {
 			fmt.Fprintf(b, "\t\tMaxFilters: %d,\n", r.MaxFilters)
 		}
+		if r.MaxSortTerms > 0 {
+			fmt.Fprintf(b, "\t\tMaxSortTerms: %d,\n", r.MaxSortTerms)
+		}
+		if r.MaxOffset > 0 {
+			fmt.Fprintf(b, "\t\tMaxOffset: %d,\n", r.MaxOffset)
+		}
 		// Expandable comes from the columns rather than from REST, because
 		// .Expandable() is already the opt-in and a second one on the resource
 		// would only be a way to disagree with the first.

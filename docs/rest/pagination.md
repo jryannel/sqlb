@@ -47,6 +47,41 @@ that no longer exists. Drop the cursor when the sort changes.
 **`?cursor=` cannot be combined with `?page=` or `?offset=`** — they are two
 answers to where the page starts — and the rejection says which to drop.
 
+## How deep offset paging may reach
+
+`MaxOffset` bounds it, and a request past the bound is a 400 pointing at
+`?cursor=`. Offset is the one dimension of a request whose cost grows with the
+number the client sent — `?page=50000000` asks Postgres to produce and discard
+ten billion rows before returning a page of twenty-five — and unlike a filter or
+a sort term, it costs that whether or not anything matches.
+
+Declare it beside the table, with the other four ceilings:
+
+```go
+Expose(schema.REST{
+    Path:            "/products",
+    Ops:             schema.Reads,
+    DefaultPageSize: 25,
+    MaxPageSize:     100,
+    MaxFilters:      12,
+    MaxSortTerms:    4,
+    MaxOffset:       10_000,
+})
+```
+
+The package default is 100,000, and it is deliberately loose: it has to be safe
+for a table nobody described, which puts it two to four orders of magnitude above
+what any particular resource wants. A catalog of ten thousand products has no
+legitimate offset past ten thousand — every one above it is a guaranteed empty
+page that still costs a scan to the end — and the row count that decides the
+right number is known where the table is declared and nowhere else.
+
+Leave it at zero to take the default. All five ceilings read a zero that way, so
+none of them can be turned *off*; a negative one is refused at validation rather
+than silently resolving to the loosest available bound ([#151]).
+
+[#151]: https://github.com/jryannel/sqlb/issues/151
+
 ## Every list is ordered deterministically
 
 Whichever paging is used, `filter.Apply` appends the primary key unless the sort

@@ -31,6 +31,12 @@ run them.
 Returning an error is how "no tenant in this context" becomes impossible to
 forget rather than merely documented — no statement runs at all.
 
+The hook amends a clone, on the exec path, so `q.SQL()` on the builder you built
+does not show what it added. `q.Resolved(ctx, db)` does — reach for it when the
+predicate has to be read as *text*, for a raw statement that must count the same
+rows or for a test asserting the scope is in force. See
+[Inspecting](inspecting.md#resolved-which-renders-the-statement-that-runs).
+
 ## Say it in the schema, so the missing hook is the one that is caught
 
 The hook above cannot be forgotten at a call site. It can be forgotten

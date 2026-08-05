@@ -81,4 +81,11 @@ var Post = schema.Table("posts",
 		DefaultPageSize: 20,
 		MaxPageSize:     100,
 		MaxFilters:      12,
+		MaxSortTerms:    4,
+		// A blog has thousands of posts, not a hundred thousand, so every offset
+		// past this one is a guaranteed empty page that still costs a scan to
+		// the end. The package default is two orders of magnitude looser because
+		// it has to be safe for a table nobody described; this is the number the
+		// row count actually justifies (#151).
+		MaxOffset: 5000,
 	})

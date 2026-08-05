@@ -124,6 +124,16 @@ type constraintRow struct {
 	OnUpdate string // confupdtype
 	Expr     string // pg_get_expr of a CHECK
 	Def      string // pg_get_constraintdef, for reporting what was skipped
+
+	// Deferrable and Deferred are condeferrable and condeferred: whether the
+	// constraint may be deferred, and whether it is by default.
+	//
+	// Read for every constraint kind, not only the ones the DSL can declare it
+	// on. A property nothing reads is a property the round trip is a fixpoint
+	// *about* — both sides blind to the same thing — and that is the failure
+	// mode ADR-0014 exists to refuse (issue #154).
+	Deferrable bool
+	Deferred   bool
 }
 
 type indexRow struct {
@@ -206,7 +216,8 @@ SELECT c.relname, con.conname, con.contype::text,
        COALESCE(k.cols, ''), COALESCE(ft.relname, ''), COALESCE(fk.cols, ''),
        con.confdeltype::text, con.confupdtype::text,
        COALESCE(pg_get_expr(con.conbin, con.conrelid), ''),
-       pg_get_constraintdef(con.oid)
+       pg_get_constraintdef(con.oid),
+       con.condeferrable, con.condeferred
 FROM pg_constraint con
 JOIN pg_class c ON c.oid = con.conrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -297,7 +308,8 @@ func read(ctx context.Context, db sqlb.Executor, nspname string) (*catalog, erro
 		var r constraintRow
 		var cols, refCols string
 		if err := rows.Scan(&r.Table, &r.Name, &r.Type, &cols, &r.RefTable, &refCols,
-			&r.OnDelete, &r.OnUpdate, &r.Expr, &r.Def); err != nil {
+			&r.OnDelete, &r.OnUpdate, &r.Expr, &r.Def,
+			&r.Deferrable, &r.Deferred); err != nil {
 			return err
 		}
 		r.Columns, r.RefCols = splitList(cols), splitList(refCols)

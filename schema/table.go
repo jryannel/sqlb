@@ -63,6 +63,20 @@ type REST struct {
 	// MaxFilters caps how many filter predicates one request may carry, which
 	// bounds the cost of a single query. Zero means the package default.
 	MaxFilters int
+	// MaxSortTerms caps how many columns one ?sort may name. Zero means the
+	// package default.
+	MaxSortTerms int
+	// MaxOffset bounds how deep ?page= and ?offset= may reach into the result
+	// set, and a request past it is refused with a message pointing at
+	// ?cursor=. Zero means the package default.
+	//
+	// The default has to be safe for a table nobody described, which puts it
+	// orders of magnitude above what any particular resource wants: a catalog
+	// of ten thousand products has no legitimate offset past ten thousand, and
+	// every one above it is a guaranteed empty page that still costs a scan to
+	// the end. The right number is a function of the row count, which is known
+	// here and nowhere else (#151).
+	MaxOffset int
 	// Tag groups the resource's operations in the OpenAPI document. Defaults
 	// to the table name.
 	Tag string
@@ -190,6 +204,67 @@ type Check struct {
 type Unique struct {
 	Name    string
 	Columns []string
+
+	// Deferrable is when Postgres checks the constraint. The zero value is
+	// NOT DEFERRABLE, which is checked at the statement and is what almost
+	// every unique constraint wants.
+	//
+	// [DeferredCheck] is the one that is not merely a tuning knob. A rule about
+	// the *committed* state cannot be enforced per statement when the rows that
+	// satisfy it are written in more than one statement: a variant identified by
+	// its option values is inserted before the option values that identify it,
+	// so every new variant passes through a state where its denormalised
+	// signature is still the default and two variants of one product collide on
+	// it (issue #154). The alternatives weaken the rule — a partial index
+	// excluding the placeholder — or move it into application code, where two
+	// concurrent writers interleave between the check and the insert.
+	Deferrable Deferrable
+}
+
+// Deferrable is when Postgres checks a constraint: at the statement, or at
+// COMMIT. The zero value is NOT DEFERRABLE.
+//
+// Structured rather than written SQL, and normalised by [Deferrable.Suffix] for
+// the reason [IndexOrder] is: the diff fingerprints the rendered clause, so two
+// spellings of the same answer have to render the same or every run proposes
+// replacing a constraint that has not changed.
+type Deferrable string
+
+const (
+	// NotDeferrable checks at the end of each statement. The default, and the
+	// only setting under which a constraint violation names the statement that
+	// caused it rather than the COMMIT that found it.
+	NotDeferrable Deferrable = ""
+	// DeferrableCheck may be deferred, and is not unless a transaction says
+	// SET CONSTRAINTS ... DEFERRED. It is the setting for a rule that is
+	// per-statement in general and per-transaction for one caller.
+	DeferrableCheck Deferrable = "immediate"
+	// DeferredCheck is deferred by default: the constraint holds over the
+	// committed state and says nothing about the middle of a transaction.
+	DeferredCheck Deferrable = "deferred"
+)
+
+// Valid reports whether the value is one of the three Postgres has. A typed
+// string is open, and the alternative to checking it here is emitting DDL that
+// Postgres refuses halfway through a migration.
+func (d Deferrable) Valid() bool {
+	switch d {
+	case NotDeferrable, DeferrableCheck, DeferredCheck:
+		return true
+	}
+	return false
+}
+
+// Suffix renders the clause that follows a constraint definition, empty for the
+// default. It is what the DDL emits and what the diff compares.
+func (d Deferrable) Suffix() string {
+	switch d {
+	case DeferrableCheck:
+		return " DEFERRABLE INITIALLY IMMEDIATE"
+	case DeferredCheck:
+		return " DEFERRABLE INITIALLY DEFERRED"
+	}
+	return ""
 }
 
 // Exclusion is an EXCLUDE constraint: no two rows may hold values that are
@@ -624,6 +699,26 @@ func (t *TableDef) Unique(columns ...string) *TableDef {
 // rather than the one the convention would derive. See [TableDef.Unique].
 func (t *TableDef) UniqueNamed(name string, columns ...string) *TableDef {
 	t.uniques = append(t.uniques, Unique{Name: name, Columns: columns})
+	return t
+}
+
+// AddUnique adds a composite UNIQUE constraint given whole, which is the form
+// that reaches the fields the two shorthands above do not — currently
+// [Unique.Deferrable].
+//
+//	AddUnique(schema.Unique{
+//	    Name:       "variants_product_option_combination_key",
+//	    Columns:    []string{"product_id", "option_signature"},
+//	    Deferrable: schema.DeferredCheck,
+//	})
+//
+// An empty Name takes the one the convention derives, so the constraint is
+// still recognised in a database that has it under Postgres's own spelling.
+func (t *TableDef) AddUnique(u Unique) *TableDef {
+	if u.Name == "" {
+		u.Name = uniqueConstraintName(t.name, u.Columns)
+	}
+	t.uniques = append(t.uniques, u)
 	return t
 }
 
