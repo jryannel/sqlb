@@ -523,6 +523,8 @@ Expose(schema.REST{
     DefaultPageSize: 20,
     MaxPageSize:     100,
     MaxFilters:      12,
+    MaxSortTerms:    4,
+    MaxOffset:       10_000,
 })
 ```
 
@@ -530,9 +532,13 @@ Expose(schema.REST{
 because a table can be readable by id without being listable. Leaving an
 operation out means the endpoint does not exist — not that it answers 405.
 
-`MaxPageSize` is a hard ceiling rather than a hint, and `MaxFilters` bounds how
-many predicates one request may carry, which bounds the cost of a single query.
-Both are worth setting per resource; see [Pagination](../rest/pagination.md).
+The last five are the per-request cost ceilings, and each is worth setting per
+resource: they are the bounds on what one request may ask the database to do,
+and the numbers that justify them — the row count, the width of the table — are
+known here. `MaxPageSize` is a hard ceiling rather than a hint; `MaxFilters` and
+`MaxSortTerms` bound how many predicates and sort terms one request may carry;
+`MaxOffset` bounds how deep `?page=` may reach. A zero takes the package default.
+See [Pagination](../rest/pagination.md).
 
 ## Modules
 

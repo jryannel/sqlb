@@ -174,6 +174,8 @@ type RESTManifest struct {
 	DefaultPageSize int      `json:"defaultPageSize"`
 	MaxPageSize     int      `json:"maxPageSize"`
 	MaxFilters      int      `json:"maxFilters,omitempty"`
+	MaxSortTerms    int      `json:"maxSortTerms,omitempty"`
+	MaxOffset       int      `json:"maxOffset,omitempty"`
 
 	// Filterable, Sortable and Searchable name the columns a request may reach,
 	// in their **wire** spelling rather than the database's.
@@ -378,6 +380,8 @@ func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *REST
 		DefaultPageSize: t.rest.DefaultPageSize,
 		MaxPageSize:     t.rest.MaxPageSize,
 		MaxFilters:      t.rest.MaxFilters,
+		MaxSortTerms:    t.rest.MaxSortTerms,
+		MaxOffset:       t.rest.MaxOffset,
 		Filterable:      []string{},
 		Sortable:        []string{},
 		Searchable:      []string{},

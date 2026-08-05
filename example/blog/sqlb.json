@@ -378,6 +378,8 @@
         "defaultPageSize": 20,
         "maxPageSize": 100,
         "maxFilters": 12,
+        "maxSortTerms": 4,
+        "maxOffset": 5000,
         "filterable": [
           "id",
           "author_id",

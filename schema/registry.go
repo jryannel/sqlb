@@ -399,6 +399,14 @@ func (r *Registry) Validate() error {
 			if t.rest.MaxPageSize > 0 && t.rest.DefaultPageSize > t.rest.MaxPageSize {
 				report(t.name, "", "DefaultPageSize %d exceeds MaxPageSize %d", t.rest.DefaultPageSize, t.rest.MaxPageSize)
 			}
+			// Negative is refused rather than resolved. Every ceiling treats a
+			// non-positive value as "take the package default", so a negative
+			// one is a declaration that reads as a tighter bound and behaves
+			// as the loosest available — which is the one direction a cost
+			// ceiling must not fail in.
+			if t.rest.MaxFilters < 0 || t.rest.MaxSortTerms < 0 || t.rest.MaxOffset < 0 {
+				report(t.name, "", "request ceilings must not be negative; leave one zero to take the package default")
+			}
 			// A declared soft delete and a generated hard DELETE are a
 			// contradiction the runtime cannot resolve: nothing reads
 			// deleted_at, so the generated handler removes the row and the

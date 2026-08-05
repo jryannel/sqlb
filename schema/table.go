@@ -63,6 +63,20 @@ type REST struct {
 	// MaxFilters caps how many filter predicates one request may carry, which
 	// bounds the cost of a single query. Zero means the package default.
 	MaxFilters int
+	// MaxSortTerms caps how many columns one ?sort may name. Zero means the
+	// package default.
+	MaxSortTerms int
+	// MaxOffset bounds how deep ?page= and ?offset= may reach into the result
+	// set, and a request past it is refused with a message pointing at
+	// ?cursor=. Zero means the package default.
+	//
+	// The default has to be safe for a table nobody described, which puts it
+	// orders of magnitude above what any particular resource wants: a catalog
+	// of ten thousand products has no legitimate offset past ten thousand, and
+	// every one above it is a guaranteed empty page that still costs a scan to
+	// the end. The right number is a function of the row count, which is known
+	// here and nowhere else (#151).
+	MaxOffset int
 	// Tag groups the resource's operations in the OpenAPI document. Defaults
 	// to the table name.
 	Tag string

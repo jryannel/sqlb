@@ -164,6 +164,12 @@ type Limits struct {
 	MaxPageSize     int
 	MaxFilters      int
 	MaxSortTerms    int
+	// MaxOffset bounds how deep ?page may reach. Offset paging is the one
+	// dimension of a request whose cost grows with the number the client sent,
+	// and it is the dimension the exit is least able to soften: ?cursor did not
+	// come out, so a client walking a large collection has no cheaper spelling
+	// to be redirected to.
+	MaxOffset int
 }
 
 // ListRequest is a parsed list query.
@@ -376,10 +382,11 @@ var notEjected = map[string]string{
 // defaults, copied rather than referenced, so the exit refuses the same
 // oversized requests the API did.
 const (
-	defaultPageSize = 25
-	defaultMaxPage  = 200
-	defaultFilters  = 24
-	defaultSorts    = 4
+	defaultPageSize  = 25
+	defaultMaxPage   = 200
+	defaultFilters   = 24
+	defaultSorts     = 4
+	defaultMaxOffset = 100000
 	// A list is one condition against MaxFilters however long it is, and a
 	// value is a lever on how much work a scan does. Without these two, the
 	// filter budget above is bypassed by writing ?id=in.1,2,3,… — one
@@ -403,6 +410,9 @@ func (l Limits) resolved() Limits {
 	}
 	if l.MaxSortTerms <= 0 {
 		l.MaxSortTerms = defaultSorts
+	}
+	if l.MaxOffset <= 0 {
+		l.MaxOffset = defaultMaxOffset
 	}
 	return l
 }
@@ -494,11 +504,20 @@ func ParseList(values url.Values, cols []Column, lim Limits) (ListRequest, error
 	}
 	page := 1
 	if raw := values.Get("page"); raw != "" {
-		n, err := strconv.Atoi(raw)
+		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || n < 1 {
 			return out, badRequest("query.page", "page must be 1 or more", nil)
 		}
-		page = n
+		// The offset budget. Without it ?page=50000000 is a request for ten
+		// billion discarded rows, and a page number near the top of int64
+		// overflows (n-1)*perPage into a negative offset that fails at the
+		// database rather than at validation. Compared in int64, before
+		// anything narrows.
+		if n-1 > int64(lim.MaxOffset)/int64(perPage) {
+			return out, badRequest("query.page",
+				fmt.Sprintf("starts past the offset budget of %d rows", lim.MaxOffset), nil)
+		}
+		page = int(n)
 	}
 
 	switch count := values.Get("count"); count {
