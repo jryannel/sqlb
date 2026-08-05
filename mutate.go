@@ -47,6 +47,13 @@ type conflictSet struct {
 	value  Expr
 }
 
+// skipsRows reports whether the clause renders DO NOTHING, which is the one
+// shape where a row can be absent from RETURNING. The condition is the same one
+// SQL renders on, and it is read from the same fields, so the two cannot drift.
+func (c *conflictClause) skipsRows() bool {
+	return c != nil && len(c.doUpdate) == 0 && len(c.sets) == 0
+}
+
 // InsertRows starts an INSERT for one or more rows. The rows are pointers so
 // that hooks and returned database values can be written back into them.
 func InsertRows[T any](rows ...*T) *Insert[T] {
@@ -112,7 +119,14 @@ func (i *Insert[T]) checkColumns(method string, columns []string) {
 // Because a skipped row cannot be told apart from its neighbours in what
 // comes back, a statement that skips any row leaves every caller struct
 // untouched — the returned slice is then the only account of what was
-// written. See Exec.
+// written. So the terminal is [Insert.Exec], whose empty slice and nil error
+// are what "it was already there" looks like.
+//
+// [Insert.One] is refused after this call rather than answering ErrNotFound on
+// the conflict, which is the case an idempotent insert exists to serve (#146).
+// If the row itself is wanted whether or not this call created it, the spelling
+// is OnConflictUpdate with the target as its own update column — a write that
+// changes nothing is still a written row, and a written row is a returned one.
 func (i *Insert[T]) OnConflictDoNothing(target ...string) *Insert[T] {
 	i.conflict = &conflictClause{target: target}
 	return i
@@ -383,17 +397,56 @@ func (i *Insert[T]) writeBack(stored []T) {
 }
 
 // One inserts a single row and returns it.
+//
+// It is refused over ON CONFLICT DO NOTHING. "Give me exactly one row" and "do
+// not produce a row on conflict" are a contradiction, and the way it used to
+// resolve was the worst available: the conflict — the case the clause was added
+// to allow — came back as ErrNotFound, through the same `if err != nil` as
+// everything else, from a call whose job was to make the row exist. The failure
+// also inverts with state, so a test that inserts into a clean database passes
+// and only the second call fails (#146).
 func (i *Insert[T]) One(ctx context.Context, db Executor) (T, error) {
 	var zero T
+	if err := i.refuseSkippingTerminal(); err != nil {
+		return zero, err
+	}
 	stored, err := i.Exec(ctx, db)
 	if err != nil {
 		return zero, err
 	}
 	if len(stored) == 0 {
-		// Reachable via ON CONFLICT DO NOTHING.
+		// Unreachable now that DO NOTHING is refused above, and kept because
+		// One's contract is "one row or an error" and a silent index panic is
+		// not the way to discover a statement that returned none.
 		return zero, ErrNotFound
 	}
 	return stored[0], nil
+}
+
+// refuseSkippingTerminal rejects One over a clause that can return no row.
+//
+// Refused at the terminal rather than at OnConflictDoNothing, because the
+// clause is fine and it is the pairing that is not — and the terminal is the
+// call the author is about to get wrong.
+func (i *Insert[T]) refuseSkippingTerminal() error {
+	if !i.conflict.skipsRows() {
+		return nil
+	}
+	alt := "OnConflictUpdate with the conflict target as its own update column"
+	if t := i.conflict.target; len(t) > 0 {
+		quoted := make([]string, len(t))
+		for n, name := range t {
+			quoted[n] = fmt.Sprintf("%q", name)
+		}
+		list := strings.Join(quoted, ", ")
+		alt = fmt.Sprintf("OnConflictUpdate([]string{%s}, %s)", list, list)
+	}
+	return fmt.Errorf(
+		"sqlb: One after OnConflictDoNothing on %s: a skipped insert returns no row, "+
+			"so a conflict would answer ErrNotFound — the case the clause exists to allow;\n"+
+			"  call Exec instead, whose empty slice and nil error are what \"it was already there\" looks like,\n"+
+			"  or %s if the row is wanted whether or not this call created it",
+		i.model.Table, alt)
 }
 
 // Update is an UPDATE statement over model T.

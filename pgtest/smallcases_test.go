@@ -47,15 +47,17 @@ func paymentsDB(t *testing.T) *sqlb.DB {
 // RETURNING.
 //
 // The finding is that the obvious spelling does not do it. OnConflictDoNothing
-// skips the row, and a skipped row is *absent* from RETURNING — so One reports
-// ErrNotFound and the caller's struct is left at its zero value, which is the
-// deliberate choice Insert.writeBack documents. A retried payment arriving as
-// "not found" is the opposite of idempotent.
+// skips the row, and a skipped row is *absent* from RETURNING — so One used to
+// report ErrNotFound with the caller's struct at its zero value, which is a
+// retried payment arriving as "not found". Since #146 the pairing is refused
+// outright, at the terminal, before the statement runs; this test now pins the
+// refusal, because what the caller needs is a message rather than a sentinel
+// that reads as a real database answer.
 //
 // What does do it is OnConflictUpdate with the conflict target as its own
 // update column. `DO UPDATE SET key = EXCLUDED.key` is a write that changes
 // nothing, and a written row is a returned row. That is the whole trick, and it
-// is written down nowhere else in the repository.
+// is what the refusal now names.
 //
 // Deliberately not: a claim about concurrent retries of the *same* key. Two
 // simultaneous inserts on one index serialise, and the loser takes the update
@@ -75,14 +77,27 @@ func TestIdempotencyKeyMakesASecondCallReturnTheFirstCallsRow(t *testing.T) {
 		t.Fatal("first call returned no generated id")
 	}
 
-	// The spelling that looks right and is not.
+	// The spelling that looks right and is not — now refused rather than
+	// answered.
 	retry := Payment{Key: "charge-7", Amount: 250}
 	_, err = sqlb.InsertRows(&retry).OnConflictDoNothing("key").One(ctx, db)
-	if !errors.Is(err, sqlb.ErrNotFound) {
-		t.Errorf("do-nothing retry: err = %v, want ErrNotFound", err)
+	switch {
+	case err == nil:
+		t.Error("do-nothing retry was accepted; it answers ErrNotFound on the idempotent path")
+	case errors.Is(err, sqlb.ErrNotFound):
+		t.Errorf("do-nothing retry still reports a missing row: %v", err)
+	case !strings.Contains(err.Error(), "OnConflictUpdate"):
+		t.Errorf("the refusal should name the spelling that works, got: %v", err)
 	}
 	if retry.ID != 0 {
-		t.Errorf("do-nothing retry wrote back id %d; a skipped row must leave the caller's struct alone", retry.ID)
+		t.Errorf("do-nothing retry wrote back id %d; a refused statement must not run", retry.ID)
+	}
+
+	// And it is refused before the statement runs, so the row count is
+	// untouched — the assertion at the end of this test would pass either way,
+	// since DO NOTHING inserts nothing anyway.
+	if _, _, err := sqlb.InsertRows(&retry).OnConflictDoNothing("key").SQL(); err != nil {
+		t.Errorf("the clause itself is fine and only the pairing is refused; SQL() = %v", err)
 	}
 
 	// The spelling that is.

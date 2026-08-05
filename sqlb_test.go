@@ -512,6 +512,55 @@ func TestInsertDoesNotWriteBackWhenAConflictSkippedARow(t *testing.T) {
 	}
 }
 
+// One after OnConflictDoNothing is refused, because the alternative is that the
+// conflict — the case the clause exists to allow — arrives as ErrNotFound from
+// a call whose job was to make the row exist (#146).
+//
+// The harness returns no rows, which is what the database does on the second
+// call: with the refusal removed this test does not merely fail, it fails with
+// the ErrNotFound the issue reported.
+func TestOneIsRefusedAfterOnConflictDoNothing(t *testing.T) {
+	h := newHarness(t, storedUserColumns, nil)
+	defer h.close()
+
+	u := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
+	_, err := sqlb.InsertRows(u).OnConflictDoNothing("email").One(context.Background(), h.db)
+	if err == nil {
+		t.Fatal("One after OnConflictDoNothing was accepted; it answers ErrNotFound on the idempotent path")
+	}
+	if errors.Is(err, sqlb.ErrNotFound) {
+		t.Errorf("the refusal must not be ErrNotFound, which is the confusion it exists to remove: %v", err)
+	}
+	// ADR-0011: a rejection names what would have been accepted. Both routes
+	// out are here, because which one is right depends on whether the caller
+	// wants the row or only wants it to exist.
+	for _, want := range []string{"Exec", `OnConflictUpdate([]string{"email"}, "email")`} {
+		if !contains(err.Error(), want) {
+			t.Errorf("the error should name %s, got: %v", want, err)
+		}
+	}
+}
+
+// The refusal is about DO NOTHING specifically. A conflict clause that updates
+// something returns a row on every path, so One over it is exactly right — and
+// it is the spelling the refusal recommends, so breaking it would leave the
+// error pointing at a call that does not work.
+func TestOneIsAllowedAfterOnConflictUpdate(t *testing.T) {
+	h := newHarness(t, storedUserColumns, [][]any{storedUser("gen-ada", "ada@example.com")})
+	defer h.close()
+
+	u := &User{Email: "ada@example.com", Name: "Ada", OrgID: "acme"}
+	got, err := sqlb.InsertRows(u).
+		OnConflictUpdate([]string{"email"}, "email").
+		One(context.Background(), h.db)
+	if err != nil {
+		t.Fatalf("One after OnConflictUpdate: %v", err)
+	}
+	if got.ID != "gen-ada" {
+		t.Errorf("returned id = %q, want gen-ada", got.ID)
+	}
+}
+
 // storedUserColumns is the RETURNING order writeReturning emits for User.
 var storedUserColumns = []string{"id", "email", "name", "age", "org_id", "password_hash", "created_at"}
 
