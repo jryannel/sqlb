@@ -301,3 +301,24 @@ reversible, a filter grammar is not.
   made a computed column opt-in per reader, which removed the cost argument for
   keeping derived work out of SQL. The taxonomy keeps four rows because a record
   that quietly drops the option it rejected is not a record of the decision.
+
+- 2026-08-05 — **Nullability inverted.** A computed column is now nullable
+  unless the declaration writes `NotNull()`, where a stored one stays not-null
+  unless it writes `Nullable()`. The record never stated a default, and the one
+  it inherited was the one an expression cannot honour: a correlated subquery
+  matching nothing is `NULL`, which for the reporting application was not an
+  edge case but every row with no project plus every row pointing at a deleted
+  one — a cross-module reference having no foreign key to prevent the second
+  ([#147](https://github.com/jryannel/sqlb/issues/147)).
+
+  What made it expensive is where it landed. A stored column reads its
+  nullability off `NOT NULL` and the round trip checks it; a computed column has
+  no DDL, so `generate` had no opinion and `Diff` correctly ignored a column that
+  is not in the database. Both gates were green and the failure was a 500 at scan
+  time — `cannot scan NULL into *string`, naming the generated model rather than
+  the declaration that produced it — on data a fixture is unlikely to contain.
+
+  Inference over the expression was considered and rejected for the reason the
+  report gave: it is wrong in the unsafe direction wherever it is incomplete.
+  `NotNull()` is a claim rather than a check, and it fails the other way, which
+  is the direction this record already prefers everywhere else.

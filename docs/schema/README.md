@@ -173,6 +173,27 @@ declaration reaches the projection, `?filter=is_overdue.eq.true` and
 `?sort=-progress` at once. The projection aliases it back to the column name,
 which is what lets the row scan into the field.
 
+**A computed column is nullable unless it says otherwise**, which is the
+opposite of a stored one and the same as SQL. A correlated subquery that matches
+nothing is `NULL`, arithmetic over a nullable column is `NULL`, and a comparison
+against one is `NULL` — and there is no `NOT NULL` in any DDL for the generator
+to read the answer off, because there is no DDL. So the three declarations above
+generate `*bool`, `*int32` and `*bool`, and `NotNull()` is how an expression
+that cannot produce one says so:
+
+```go
+schema.Computed("total_tasks", schema.TypeInt,
+    schema.FromSQL("(SELECT count(*) FROM tasks t WHERE t.project_id = projects.id)")).
+    NotNull(),                            // count(*) is 0, never NULL
+```
+
+It is a claim rather than a check — nothing parses the SQL — so it belongs on
+the `count(*)`, the `EXISTS`, and the comparison already guarded against its own
+nulls. The default runs the other way because that is the direction that fails
+safely: a pointer scans a non-null value fine, and the reverse is a 500 saying
+`cannot scan NULL into *string`, on rows a fixture is unlikely to contain
+([#147](https://github.com/jryannel/sqlb/issues/147)).
+
 **A subquery is projection-only unless you say otherwise.** Writing
 `Filterable()` on one is the acknowledgement that a subquery in a `WHERE` runs
 once per candidate row. `Searchable()` says the same thing about `?search`, and

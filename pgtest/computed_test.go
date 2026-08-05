@@ -262,3 +262,84 @@ func TestComputedInReturningRunsAgainstPostgres(t *testing.T) {
 		t.Error("is_starred should not be answered by a write")
 	}
 }
+
+// A correlated subquery that matches nothing is NULL, which is why a computed
+// column declared through the schema DSL is nullable unless it says otherwise
+// (#147).
+//
+// The two models below project the same expression into a pointer and into a
+// plain string. Both are legal Go and only one of them survives the row with
+// nothing to match — and which rows those are is not visible from the
+// declaration, so the report that produced this arrived as a 500 in production
+// rather than as anything `sqlb generate` or the drift gate could have said.
+type CompLookup struct {
+	ID    int64   `db:"id" sqlb:"pk,default"`
+	Name  string  `db:"name"`
+	Owner *string `db:"owner_name" sqlb:"readonly"`
+}
+
+func (CompLookup) TableName() string { return "compprojects" }
+
+func (CompLookup) ComputedColumns() []sqlb.Computed {
+	return []sqlb.Computed{{Name: "owner_name", Expr: compLookupExpr}}
+}
+
+// CompLookupNotNull is the same projection typed the way the old default
+// generated it.
+type CompLookupNotNull struct {
+	ID    int64  `db:"id" sqlb:"pk,default"`
+	Name  string `db:"name"`
+	Owner string `db:"owner_name" sqlb:"readonly"`
+}
+
+func (CompLookupNotNull) TableName() string { return "compprojects" }
+
+func (CompLookupNotNull) ComputedColumns() []sqlb.Computed {
+	return []sqlb.Computed{{Name: "owner_name", Expr: compLookupExpr}}
+}
+
+// LIMIT 1 because a scalar subquery returning two rows is an error of its own,
+// and that is not the failure under test.
+const compLookupExpr = `(SELECT s.member_id::text FROM compstars s
+	WHERE s.project_id = compprojects.id LIMIT 1)`
+
+func TestAComputedLookupThatMatchesNothingIsNull(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw := computedDB(t)
+	seedComputedRows(t, raw)
+
+	rows, err := sqlb.Query[CompLookup]().
+		WithComputed("owner_name").
+		OrderBy(sqlb.F("name").Asc()).
+		All(ctx, sqlb.New(raw))
+	if err != nil {
+		t.Fatalf("the nullable projection did not run: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+	// apollo is the only starred row; the other two correlate to nothing.
+	if rows[0].Owner == nil || *rows[0].Owner != "7" {
+		t.Errorf("apollo owner = %v, want 7", rows[0].Owner)
+	}
+	for _, row := range rows[1:] {
+		if row.Owner != nil {
+			t.Errorf("%s owner = %q, want NULL — no row matched the subquery", row.Name, *row.Owner)
+		}
+	}
+
+	// And the same read against the non-null spelling, which is the failure the
+	// default now avoids. Asserted rather than assumed: without it this test
+	// would pass on a fixture where every row happens to match, which is
+	// exactly how the bug survived.
+	_, err = sqlb.Query[CompLookupNotNull]().
+		WithComputed("owner_name").
+		All(ctx, sqlb.New(raw))
+	if err == nil {
+		t.Fatal("scanning NULL into a non-pointer string succeeded; the whole reason for the nullable default is that it does not")
+	}
+	if !strings.Contains(err.Error(), "NULL") {
+		t.Errorf("the scan failure should name the NULL, got: %v", err)
+	}
+}
