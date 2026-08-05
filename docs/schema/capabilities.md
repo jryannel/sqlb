@@ -40,6 +40,10 @@ Go code going through the query engine directly is trusted and bypasses
 `ReadOnly` and `Immutable`; they are enforced at the REST boundary. `Hidden` is
 enforced at the projection, so `filter.Apply` cannot select one even by mistake.
 
+One word only qualifies another: `LookupKey()` keeps a `Hidden` column's typed
+column, for a credential the row is found by. It restricts nothing and reaches
+no request — see [below](#lookupkey-for-the-secret-you-find-the-row-by).
+
 The capabilities render into the `sqlb` struct tag that codegen writes onto the
 model, which is how the runtime reads them back without importing this package:
 
@@ -69,6 +73,40 @@ column is absent from the OpenAPI schema, from the filter vocabulary, and from
 the `allowed` list in a rejection message, so its existence cannot be probed.
 `Hidden` plus `Filterable` is a validation error rather than a combination you
 can write, because a filterable secret can be recovered a character at a time.
+
+It is also absent from the generated typed columns, so `AuthorCols.PasswordHash`
+does not exist and a predicate against it does not compile.
+
+### `LookupKey`, for the secret you find the row by
+
+That omission asserts a second property — *not predicated on* — and for a
+password hash it is right: a user is found by email and the hash is compared in
+Go, so `WHERE password_hash = $1` is a sign something has gone wrong. For the
+other members of "and similar values" the two come apart:
+
+```go
+schema.Text("token_hash").Hidden().LookupKey()
+```
+
+Session tokens and API keys, password-reset and verification tokens, webhook
+secrets keyed by fingerprint, idempotency keys. Every one must never leave the
+process, and every one is found by equality on its stored value — the client
+presents a token, the server hashes it, and the hash *is* the lookup key. `Hidden`
+alone took away the operation the column exists for ([#155]).
+
+`LookupKey` keeps the typed column and changes nothing else. The REST side is
+untouched: the column still has no capability, so `?token_hash=eq.…` is still a
+400 naming what would have been accepted, which is precisely the leak
+capabilities exist to prevent. This is a declaration about Go, on the writer's
+side of the boundary, where `sqlb.F("token_hash")` already reaches the column
+untyped. What it buys is that the compiler helps at the one call site that
+should have it, and that the generated file says which of the two kinds of
+secret each hidden column is.
+
+It is refused on a column that is not `Hidden`, where the typed column is there
+regardless and the word would be a claim with no effect.
+
+[#155]: https://github.com/jryannel/sqlb/issues/155
 
 ## `ReadOnly` plus a hook
 

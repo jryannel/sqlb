@@ -249,6 +249,14 @@ func (r *Registry) Validate() error {
 			if d.Hidden && d.Filterable {
 				report(t.name, d.Name, "column is both Hidden and Filterable, which leaks its contents through filter probing")
 			}
+			// LookupKey only ever *keeps* a facade entry Hidden would have
+			// removed. On a visible column the entry is there either way, so
+			// the word would read as a declaration and mean nothing — and the
+			// generated comment saying which kind of secret a column is would
+			// be saying it about one that is not a secret at all.
+			if d.LookupKey && !d.Hidden {
+				report(t.name, d.Name, "LookupKey applies to a Hidden column; the typed column is already there without it")
+			}
 			if d.Ref != nil && d.Ref.External {
 				if d.Expandable {
 					report(t.name, d.Name, "a reference across a module boundary cannot be Expandable: expanding it would join a table this module does not own")
