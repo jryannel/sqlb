@@ -18,7 +18,7 @@ Read in this order, and stop as soon as you have what you need:
    Go way instead, as `// Command sqlb …` at the head of `cmd/sqlb/main.go`.
 2. **[docs/architecture.md](docs/architecture.md)** for how the pieces fit and
    why the seams are where they are.
-3. **[docs/adr/](docs/adr/)** — 51 records, and they are *load-bearing rather
+3. **[docs/adr/](docs/adr/)** — 52 records, and they are *load-bearing rather
    than historical*. A decision here is usually the answer to "why is this not
    simpler", and reversing one without reading it is the most common way to
    spend an afternoon rediscovering a rejected alternative. Each carries a

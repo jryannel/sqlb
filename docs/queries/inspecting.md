@@ -49,6 +49,11 @@ to let drift.
 rewrites the rows rather than the statement, so resolving one would mutate the
 caller's data as a side effect of inspecting it.
 
+`Explain` and `Resolved` are one case of a general rule —
+[ADR-0051](../adr/0051-a-gap-in-the-declaration-is-reported.md): a tool that
+reports *no difference* is making a claim, and one that cannot see a property
+makes that claim about it whether or not a difference exists.
+
 [#153]: https://github.com/jryannel/sqlb/issues/153
 
 ## Explain, which plans without running

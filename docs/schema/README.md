@@ -485,6 +485,10 @@ round trip, so the fixpoint held because the declaration and the database were
 blind to the same property, and a migration that recreated the constraint without
 its clause would have passed the drift gate on its way to breaking every write.
 
+[ADR-0051](../adr/0051-a-gap-in-the-declaration-is-reported.md) is the general
+rule that came out of it: where a layer below the declaration can say something
+the declaration cannot, the gap is reported rather than left to be found.
+
 [#154]: https://github.com/jryannel/sqlb/issues/154
 
 `AddIndex` takes a fully specified `Index` for what the shorthands do not cover
