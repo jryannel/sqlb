@@ -30,6 +30,12 @@ type ActionSnap struct {
 	// so a change here is neutral — but it widens or narrows what one route
 	// can mutate, which is exactly the blast-radius question this tool is for.
 	Writes []string `json:"writes,omitempty"`
+	// Touches names the tables the verb writes through its transaction, as
+	// declared. Also neutral, and for a sharper reason than Writes: the
+	// declaration is unenforced, so a change here is a change in what the route
+	// *claims* — which is the only thing a diff can see, and the thing a
+	// reviewer most wants shown when a verb's reach grows.
+	Touches []string `json:"touches,omitempty"`
 }
 
 // ActionPropSnap is one property of an action's request body.
@@ -50,7 +56,7 @@ func (p ActionPropSnap) required() bool { return !p.Nullable && !p.HasDefault }
 func captureActions(t *schema.TableDef, path string) []ActionSnap {
 	var out []ActionSnap
 	for _, a := range t.Actions() {
-		snap := ActionSnap{Name: a.Name, Path: a.FullPath(path), Writes: a.Writes}
+		snap := ActionSnap{Name: a.Name, Path: a.FullPath(path), Writes: a.Writes, Touches: a.Touches}
 		for _, f := range a.Body {
 			d := f.Desc()
 			snap.Body = append(snap.Body, ActionPropSnap{
@@ -96,6 +102,11 @@ func diffActions(path string, o, n map[string]ActionSnap, add func(Break)) {
 			add(Break{LevelNeutral, path, FacetAction, name,
 				fmt.Sprintf("write set changed from %v to %v; no client breaks, but the route now touches different columns",
 					ov.Writes, nv.Writes)})
+		}
+		if !sameStrings(ov.Touches, nv.Touches) {
+			add(Break{LevelNeutral, path, FacetAction, name,
+				fmt.Sprintf("declared reach changed from %v to %v; no client breaks, but the route claims to write different tables",
+					ov.Touches, nv.Touches)})
 		}
 	}
 }

@@ -161,7 +161,7 @@ func TestOverriddenComputedColumnStillImportsSqlb(t *testing.T) {
 		schema.UUIDv7("id").PrimaryKey(),
 		schema.Int("open_tasks"),
 		schema.Computed("is_overdue", schema.TypeBool,
-			schema.FromSQL("open_tasks > 0")).Filterable(),
+			schema.FromSQL("open_tasks > 0")).NotNull().Filterable(),
 	)
 	// The override has to match the computed column, which is what puts it
 	// behind the guard. Matching by type is the narrowest way to say so.

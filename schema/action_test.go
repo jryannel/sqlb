@@ -152,11 +152,54 @@ func TestAnItemActionNeedsAPrimaryKey(t *testing.T) {
 
 // The manifest is what an agent reads to learn the API. A verb missing from it
 // reads as a CRUD-only resource, and the transition gets guessed at.
+// Touches is unenforced by design — the tables it names may belong to another
+// module, and tracing what a Go func writes is not something this package can
+// do. So validation refuses only what says nothing (#149).
+func TestTouchesRefusesAClaimThatSaysNothing(t *testing.T) {
+	refusal(t, tasksWith(schema.Action{
+		Name:    "complete",
+		Touches: []string{"comments", "comments"},
+	}), "Touches names \"comments\" twice")
+
+	refusal(t, tasksWith(schema.Action{
+		Name:    "complete",
+		Touches: []string{""},
+	}), "Touches has an empty table name")
+}
+
+// A table this registry has never heard of is the ordinary case, not a typo:
+// the point of the field is the cross-module write, and refusing an unknown
+// name would refuse exactly the declaration worth making.
+func TestTouchesAcceptsATableThisRegistryDoesNotHave(t *testing.T) {
+	r := tasksWith(schema.Action{
+		Name:    "complete",
+		Writes:  []string{"status"},
+		Touches: []string{"billing.invoices", "tasks"},
+	})
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a cross-module reach was refused: %v", err)
+	}
+}
+
+// Unlike Writes, which needs a row, a collection action is the shape most
+// likely to have a reach: it does all of its work through the transaction.
+func TestACollectionActionMayDeclareAReach(t *testing.T) {
+	r := tasksWith(schema.Action{
+		Name:    "purge-archived",
+		Path:    "/purge-archived",
+		Touches: []string{"tasks", "comments"},
+	})
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a collection action's reach was refused: %v", err)
+	}
+}
+
 func TestTheManifestCarriesTheVerbs(t *testing.T) {
 	r := tasksWith(schema.Action{
-		Name:   "complete",
-		Body:   schema.Body(schema.Text("note").Nullable()),
-		Writes: []string{"status"},
+		Name:    "complete",
+		Body:    schema.Body(schema.Text("note").Nullable()),
+		Writes:  []string{"status"},
+		Touches: []string{"comments"},
 	})
 	var rest *schema.RESTManifest
 	for _, tm := range r.BuildManifest().Tables {
@@ -179,5 +222,9 @@ func TestTheManifestCarriesTheVerbs(t *testing.T) {
 		t.Errorf("body = %+v", a.Body)
 	case len(a.Writes) != 1 || a.Writes[0] != "status":
 		t.Errorf("writes = %v", a.Writes)
+	// The manifest is what a program reads instead of making a request, so the
+	// half the write set understates has to be in it too.
+	case len(a.Touches) != 1 || a.Touches[0] != "comments":
+		t.Errorf("touches = %v", a.Touches)
 	}
 }

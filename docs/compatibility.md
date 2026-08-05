@@ -103,6 +103,17 @@ Named in advance, so the break is a documented plan rather than a surprise.
   failure this prevents is silent, so its migration must not be. The mechanical
   edits are `On[T]()` → `On[T](reg)`, `OnIn[T](reg)` → `On[T](reg)`,
   `PublishChangesIn` → `PublishChanges`, and a `WithHooks(reg)` on the handle.
+- ~~**A computed column's nullability.**~~ Landed: `schema.Computed` now
+  defaults to nullable, so the generated field is a pointer unless the
+  declaration calls `NotNull()`. It moved because the old default was the one
+  reading the expression cannot satisfy — a correlated subquery that matches
+  nothing is `NULL`, and the failure was a 500 at scan time on rows a fixture is
+  unlikely to contain, from a declaration `generate` and the drift gate were
+  both happy with ([#147](https://github.com/jryannel/sqlb/issues/147)). The
+  mechanical edit is `NotNull()` on every computed column whose expression
+  genuinely cannot produce a `NULL`; leaving it off is the safe direction, since
+  a pointer scans a non-null value fine. Stored columns are untouched, as is the
+  structs-first path, where the Go field's own type has always carried this.
 - **Terminal call signatures**, when Go 1.27 arrives. `sqlb.Collect[R](ctx, db,
   b)`, `filter.Apply(b, q)` and the `db` threaded through every terminal call
   all gain method forms, because a method on a concrete type cannot introduce a

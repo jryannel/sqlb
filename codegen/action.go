@@ -170,8 +170,15 @@ func renderActions(b *bytes.Buffer, defs []actionDef) {
 			fmt.Fprintf(b, "\t//\n\t// %s\n", desc)
 		}
 		if w := d.action.Writes; len(w) > 0 {
-			fmt.Fprintf(b, "\t//\n\t// The envelope persists %s afterwards, and nothing else.\n",
-				quoteList(w))
+			fmt.Fprintf(b, "\t//\n\t// The envelope persists %s off this row afterwards, and nothing\n"+
+				"\t// else — which bounds the envelope and not the func: the transaction\n"+
+				"\t// is yours through sqlb.TxFrom, and statements issued there take\n"+
+				"\t// their own locks, in an order this code owns.\n", quoteList(w))
+		}
+		if tt := d.action.Touches; len(tt) > 0 {
+			fmt.Fprintf(b, "\t//\n\t// Declared reach beyond that row: %s. Nothing checks it; it is\n"+
+				"\t// what the route tells `sqlb impact`, the OpenAPI document and the\n"+
+				"\t// CLI's --help, so a change here belongs in the schema.\n", quoteList(tt))
 		}
 		if d.action.IsCollection() {
 			fmt.Fprintf(b, "\t%s func(context.Context, %s) error\n", d.goName(), d.inputName())
@@ -201,17 +208,25 @@ func renderActionCalls(b *bytes.Buffer, optsVar string, defs []actionDef) {
 			fmt.Fprintf(b, "\t\tDescription: %q,\n", s)
 		}
 		if w := d.action.Writes; len(w) > 0 {
-			quoted := make([]string, len(w))
-			for i, name := range w {
-				quoted[i] = fmt.Sprintf("%q", name)
-			}
-			fmt.Fprintf(b, "\t\tWrites: []string{%s},\n", strings.Join(quoted, ", "))
+			fmt.Fprintf(b, "\t\tWrites: []string{%s},\n", quotedList(w))
+		}
+		if tt := d.action.Touches; len(tt) > 0 {
+			fmt.Fprintf(b, "\t\tTouches: []string{%s},\n", quotedList(tt))
 		}
 		if len(d.action.Body) > 0 {
 			fmt.Fprintf(b, "\t\tHasBody: true,\n")
 		}
 		fmt.Fprintf(b, "\t}, actions.%s); err != nil {\n\t\treturn err\n\t}\n", d.goName())
 	}
+}
+
+// quotedList renders a name set as Go source: "status", "closed_at".
+func quotedList(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = fmt.Sprintf("%q", name)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // quoteList renders a column set for a doc comment: `status` and `closed_at`.

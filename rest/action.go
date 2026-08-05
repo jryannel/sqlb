@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
@@ -63,6 +64,12 @@ type ActionSpec struct {
 	// write through the transaction, which it has.
 	Writes []string
 
+	// Touches names the tables the verb writes through that transaction, as
+	// the schema declared them. Nothing here enforces it and nothing here
+	// could; it is carried so the operation's description can state a reach
+	// the write set understates (#149).
+	Touches []string
+
 	// HasBody reports whether the action declared any body properties.
 	//
 	// The input type is generated either way, so that adding the first property
@@ -83,6 +90,31 @@ type ActionSpec struct {
 // transition durable, which is the failure the transaction exists to prevent.
 var ErrNoTransaction = errors.New(
 	"rest: this action needs the transaction, and the resource runs its writes under autocommit (Options.DisableTransactions)")
+
+// describe is the operation's description: what the schema wrote, plus what the
+// route reaches.
+//
+// The reach is appended here rather than baked into Description by codegen so
+// that a hand-written mount gets it from the same field a generated one does —
+// and so that the sentence stays one sentence, in one place, when it needs
+// rewording.
+//
+// Only Touches is appended. Writes is in the response schema and in the CLI's
+// help already, and repeating it here would put the understated number in front
+// of a reader twice for every once that the correction appears.
+func (s ActionSpec) describe() string {
+	if len(s.Touches) == 0 {
+		return s.Description
+	}
+	reach := fmt.Sprintf(
+		"Beyond the row in the response, this operation writes: %s. "+
+			"That set is declared rather than enforced — see the schema for what it claims.",
+		strings.Join(s.Touches, ", "))
+	if s.Description == "" {
+		return reach
+	}
+	return s.Description + "\n\n" + reach
+}
 
 func (s ActionSpec) validate(resource string) error {
 	switch {
@@ -242,7 +274,7 @@ func Action[T, In any](api huma.API, db sqlb.Executor, opts Options, spec Action
 		Method:                       http.MethodPost,
 		Path:                         spec.Path,
 		Summary:                      spec.Summary,
-		Description:                  spec.Description,
+		Description:                  spec.describe(),
 		Tags:                         []string{opts.tag()},
 		Security:                     opts.Security,
 		RejectUnknownQueryParameters: true,
@@ -305,7 +337,7 @@ func CollectionAction[In any](api huma.API, db sqlb.Executor, opts Options, spec
 		Method:                       http.MethodPost,
 		Path:                         spec.Path,
 		Summary:                      spec.Summary,
-		Description:                  spec.Description,
+		Description:                  spec.describe(),
 		Tags:                         []string{opts.tag()},
 		Security:                     opts.Security,
 		DefaultStatus:                statusNoBody,

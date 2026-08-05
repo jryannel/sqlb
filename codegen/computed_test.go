@@ -16,12 +16,15 @@ func computedFixture() *schema.Registry {
 		schema.Date("due_date").Nullable().Filterable().Sortable(),
 		schema.Int("open_tasks").Filterable(),
 
+		// Nullable, and not by an oversight: due_date is nullable, so the
+		// comparison is NULL for every row without one.
 		schema.Computed("is_overdue", schema.TypeBool,
 			schema.FromSQL("due_date < current_date AND open_tasks > 0")).Filterable(),
+		// EXISTS is true or false and never NULL, which is what NotNull claims.
 		schema.Computed("is_starred", schema.TypeBool,
 			schema.FromSQL("EXISTS (SELECT 1 FROM stars s "+
 				"WHERE s.project_id = projects.id AND s.member_id = ?)")).
-			Needs("viewer").Filterable(),
+			NotNull().Needs("viewer").Filterable(),
 	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList})
 	return r
 }
@@ -29,11 +32,16 @@ func computedFixture() *schema.Registry {
 // One declaration, and the field is in the row type with the expression beside
 // it — the method rather than the tag, because SQL does not fit in a
 // comma-separated list.
+//
+// The two derived fields also pin the nullability default from #147: a computed
+// column is a pointer unless the declaration claims NotNull, because an
+// expression can be NULL and there is no DDL to read the answer off.
 func TestGeneratedModelCarriesTheExpression(t *testing.T) {
 	models := generate(t, computedFixture())["models_gen.go"]
 
 	for _, want := range []string{
-		`IsOverdue bool ` + "`" + `db:"is_overdue" json:"is_overdue" sqlb:"type:bool,filter,readonly"` + "`",
+		`IsOverdue *bool ` + "`" + `db:"is_overdue" json:"is_overdue" sqlb:"type:bool,filter,readonly"` + "`",
+		`IsStarred bool ` + "`" + `db:"is_starred" json:"is_starred" sqlb:"type:bool,filter,readonly"` + "`",
 		"func (Project) ComputedColumns() []sqlb.Computed {",
 		`{Name: "is_overdue", Expr: "due_date < current_date AND open_tasks > 0"},`,
 		`Needs: []string{"viewer"}`,

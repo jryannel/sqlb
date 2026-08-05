@@ -112,6 +112,58 @@ The check proves a hook *exists*, not that it is right. That is worth knowing
 before relying on it, and it catches the case that actually happens: the table
 somebody added last week ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
 
+## One table, two surfaces
+
+Every capability above is a property of the *column*, and a column belongs to a
+model, and a table has one model. That is the right shape for almost everything
+— and it is the wrong shape for the case most applications with an admin panel
+have: a public surface and a privileged surface over the same table, differing
+in which columns each may see.
+
+`Hidden()` cannot say it. A column hidden for the storefront is hidden for the
+admin panel, which is the surface that exists to read it. `Expose` cannot say
+it either: a table carries one, and a second call replaces the first rather than
+adding a resource.
+
+What can say it is the **mount**. `rest.Options.Columns` narrows one resource to
+the columns it names, the way `rest.Options.Computed` narrows it to the derived
+columns it is willing to pay for
+([#148](https://github.com/jryannel/sqlb/issues/148)):
+
+```go
+// The generated one, over every column the schema declares.
+if err := catalog.Register(api, db); err != nil { … }
+
+// And a public one beside it, over the same generated model.
+err := rest.Resource[catalog.Product, rest.None[catalog.Product], rest.None[catalog.Product]](
+    api, db, rest.Options{
+        Path:    "/storefront/products",
+        Name:    "storefront-product",
+        Ops:     rest.OpList | rest.OpRead,
+        Columns: []string{"id", "title", "handle", "status", "price_minor"},
+    })
+```
+
+A column not listed is not reachable from that resource: absent from the
+response, absent from the `SELECT` the database sees, not filterable, not
+sortable, not searched, not nameable in `?select`, and — the part that matters
+for a surface narrowed to conceal something — not named in the list a rejection
+offers back.
+
+**What you give up is the second resource's generated half.** The models, the
+typed column facade, the manifest and the drift gate all still cover it, because
+there is still one model; the mount, and any client for it, are hand-written.
+Two further things stay wide, because they come from a Go type rather than from
+the mount: the response schema in the OpenAPI document is the model's, and the
+create and update body types are whatever you pass for `C` and `U`. A public
+surface is usually read-only, which is why `Ops` above names only two — and if
+it is not, give it body types of its own.
+
+The alternative — a second `Describe`d struct over the same table — is stronger
+in one respect, since a model with no field for a column has no code path that
+can return it, and gives up all four of the generated halves. See
+[structs-first](../start/structs-first.md) for that table.
+
 ## Next
 
 - [References and relations](references.md) — `Expandable` and its inverse

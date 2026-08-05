@@ -373,6 +373,28 @@ func Vector(name string, dim int) *Field {
 // storage: it emits no DDL in either direction, Diff does not see it, no insert
 // names it and no update assigns it. ADR-0041 has the shape and the reasons.
 //
+// # Nullability runs the other way
+//
+// A computed column is [Field.Nullable] unless it says otherwise, which is the
+// opposite of a stored one and the same as SQL: a correlated subquery that
+// matches nothing is NULL, an arithmetic expression over a nullable column is
+// NULL, and a comparison against one is NULL. A stored column reads its
+// nullability off `NOT NULL` in the DDL and the round trip checks it; an
+// expression has no DDL, so the default is doing all the work, and the default
+// that assumed otherwise failed at scan time on the first row with nothing to
+// match — a 500 with `cannot scan NULL into *string`, from a declaration
+// `sqlb generate` and the drift gate were both happy with (#147).
+//
+// [Field.NotNull] is the opt-in for an expression that cannot produce one:
+//
+//	schema.Computed("total_tasks", schema.TypeInt,
+//	    schema.FromSQL("(SELECT count(*) FROM tasks t WHERE t.project_id = projects.id)")).
+//	    NotNull()
+//
+// It is a claim, not a check — nothing parses the SQL — and it fails in the
+// direction the default does not: a nullable column typed as a pointer scans a
+// non-null value fine, where the reverse is the 500.
+//
 // # What each form may claim
 //
 // The expression is rendered as written, so a name in it resolves the way
@@ -432,6 +454,9 @@ func Computed(name string, t Type, e ComputedExpr) *Field {
 	// every write path to check is what keeps the generated create and update
 	// bodies correct without knowing this feature exists.
 	f.d.ReadOnly = true
+	// Nullable by default, which is the opposite of a stored column and the
+	// same as SQL. See the doc comment above for the argument.
+	f.d.Nullable = true
 	return f
 }
 
@@ -734,6 +759,22 @@ func (f *Field) Nullable() *Field {
 	return f
 }
 
+// NotNull is the opposite claim, and the one [Computed] needs.
+//
+// A stored column is not null unless it says otherwise, so writing this on one
+// restates the default and is harmless. A computed column defaults the other
+// way — an expression can be NULL and Postgres has no NOT NULL to read it from
+// — so this is where the author says the expression cannot produce one, and it
+// is a claim rather than a check: nothing parses the SQL (#147).
+//
+// Worth it when the expression is a `count(*)`, an `EXISTS`, or a comparison
+// already guarded against its own nulls, because those are the ones where a
+// pointer in the generated model is noise.
+func (f *Field) NotNull() *Field {
+	f.d.Nullable = false
+	return f
+}
+
 // Unique adds a single-column unique constraint.
 func (f *Field) Unique() *Field {
 	f.d.Unique = true
@@ -912,7 +953,22 @@ func (f *Field) ReadOnly() *Field {
 	return f
 }
 
-// Immutable allows the column to be set at create time only.
+// Immutable makes the column writable through REST at create time only.
+//
+// It names its boundary for the reason [Field.ReadOnly] does, and the boundary
+// is the same one: the create body carries the column, the generated patch body
+// omits it, and the update path refuses it if a request names it anyway.
+// Nothing outside REST is policed — [sqlb.UpdateRows] from application code
+// writes it, as does a hook, as does an action's write-back — because the
+// engine does not stand between an application and its own tables.
+//
+// So this is a convention in [domain logic]'s sense of the word, and it closes
+// the door the generated client opens. A column that must never change after
+// insert, wherever the write comes from, wants the guarantee underneath it too:
+// a BEFORE UPDATE trigger, which is the layer that sees the old row and the new
+// one at once.
+//
+// [domain logic]: https://github.com/jryannel/sqlb/blob/main/docs/concepts/domain-logic.md
 func (f *Field) Immutable() *Field {
 	f.d.Immutable = true
 	return f

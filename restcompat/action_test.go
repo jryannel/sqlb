@@ -153,6 +153,28 @@ func TestAChangedWriteSetIsReportedAsNeutral(t *testing.T) {
 	}
 }
 
+// A verb whose declared reach grows is the change a reviewer most wants shown,
+// and the one the diff could otherwise not see at all: no column moves, no
+// route moves, and the only evidence is the claim itself (#149).
+func TestAChangedReachIsReportedAsNeutral(t *testing.T) {
+	before := complete()
+	before.Touches = []string{"comments"}
+	after := complete()
+	after.Touches = []string{"comments", "inventory_reservations", "payments"}
+
+	breaks := restcompat.Diff(withActions(before), withActions(after))
+	b := find(t, breaks, "declared reach changed")
+	if b.Level != restcompat.LevelNeutral {
+		t.Errorf("level = %s, want neutral", b.Level)
+	}
+	if !strings.Contains(b.Summary, "payments") {
+		t.Errorf("the summary should name the tables, got %q", b.Summary)
+	}
+	if len(restcompat.Breaking(breaks)) != 0 {
+		t.Errorf("a reach change failed the strict gate: %v", restcompat.Breaking(breaks))
+	}
+}
+
 // Reordering declarations in a schema file must not show up as a contract
 // change, or every `-write` becomes a diff nobody can review.
 func TestActionOrderIsNotContract(t *testing.T) {

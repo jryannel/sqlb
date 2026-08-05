@@ -84,6 +84,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			MaxOffset:       opts.MaxOffset,
 			Expandable:      opts.Expandable,
 			Computed:        opts.Computed,
+			Columns:         opts.Columns,
 			DisableSearch:   opts.DisableSearch,
 		})
 		if err != nil {
