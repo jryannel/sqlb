@@ -1,6 +1,6 @@
 # Inspecting and tracing
 
-Nothing runs unasked. Three separate things can be asked of a query without
+Nothing runs unasked. Four separate things can be asked of a query without
 executing it, and they answer different questions.
 
 ## SQL(), which executes nothing
@@ -15,6 +15,41 @@ This is the inspection point — log it, diff it in a test, paste it into
 `EXPLAIN`. It is also how a reader confirms the claims made elsewhere in this
 documentation: values are always bind parameters, and only identifiers validated
 against the model are interpolated.
+
+**What it renders is what the builder holds.** A [`BeforeQuery` hook](hooks.md)
+amends a *clone* on the exec path, so on a model whose reads are confined by one
+— which in a multi-tenant application is most of them — the `WHERE` clause above
+is missing the predicate that confines it. Printing `SQL()` to check that the
+tenant scope is really on every read shows a statement without it, which reads
+as the hook not working ([#153]).
+
+## Resolved, which renders the statement that runs
+
+```go
+resolved, err := q.Resolved(ctx, db)
+sql, args, err := resolved.SQL()
+// SELECT ... FROM "posts" WHERE ("status" = $1) AND ("org_id" = $2)
+//                                                    ^ the hook's
+```
+
+`Resolved` applies the hooks registered for the model against `db` — and the
+expansion scopes, for a query that expands a relation — and hands back a copy.
+The receiver is untouched, as on every exec path, so resolving twice does not
+accumulate anything.
+
+Reach for it whenever the rendered text is going somewhere other than a log: a
+`GROUP BY` across join tables that has to be raw SQL and must count the same rows
+the listing returns, a test asserting that a scope is in force, a statement
+pasted into `psql`. The alternative is writing the predicate a second time, in
+another language, and a security predicate kept in two places is the worst kind
+to let drift.
+
+[`Update`](mutations.md) and `Delete` have the same method, for
+`BeforeUpdate` and `BeforeDelete`. `Insert` deliberately does not: `BeforeCreate`
+rewrites the rows rather than the statement, so resolving one would mutate the
+caller's data as a side effect of inspecting it.
+
+[#153]: https://github.com/jryannel/sqlb/issues/153
 
 ## Explain, which plans without running
 
@@ -36,8 +71,18 @@ The first half is worth dwelling on. It fails on the migration that was written
 and never applied — which a compile-time column check structurally cannot,
 because the column exists in the schema file either way.
 
+The second half needs the statement to be the real one, so `Explain` resolves
+hooks for you: it takes a `ctx` and a `db`, which is everything `Resolved` needs.
+Without that it would plan a query nobody issues — `WHERE status = $1` and
+`WHERE status = $1 AND org_id = $2` are different queries with different plans,
+and the second is the one with the composite index behind it — so a
+plan-regression test would have stayed green through exactly the change that
+makes the real query seq-scan.
+
 `ExplainAnalyze` gives real timings but **executes** the statement — on a
-mutation that means it writes. Use it inside a transaction you roll back.
+mutation that means it writes. Use it inside a transaction you roll back. It
+resolves hooks too, which on a write is a correctness property rather than a
+reporting one: what it runs is the confined statement.
 
 ## Tracing needs no API
 
@@ -83,5 +128,6 @@ are on their own pages:
 
 ## Next
 
-- [Hooks](hooks.md) — what amends a query between `SQL()` and the wire
+- [Hooks](hooks.md) — what amends a query between `SQL()` and the wire, and
+  what `Resolved` applies for you
 - [Queries](README.md)

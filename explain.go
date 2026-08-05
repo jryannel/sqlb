@@ -13,6 +13,33 @@ type Compilable interface {
 	SQL() (string, []any, error)
 }
 
+// resolvable is a Compilable that knows how to apply the hooks registered for
+// its own model, and it is how [Explain] plans the statement that will run
+// rather than the one the caller assembled.
+//
+// An interface rather than a type switch because Explain takes a Compilable and
+// the implementations are generic: naming *Builder[T] here would need a type
+// parameter Explain deliberately does not have, since a caller explaining a
+// query should not have to restate its model.
+//
+// [Insert] is deliberately not resolvable. BeforeCreate hooks rewrite the rows
+// rather than the statement, so applying them here would mutate the caller's
+// data as a side effect of inspecting it — and what they change are bind values,
+// which no plan varies on.
+type resolvable interface {
+	Compilable
+	resolvedSQL(ctx context.Context, db Executor) (string, []any, error)
+}
+
+// compileFor renders q as it will reach the database, hooks included where the
+// statement can apply them.
+func compileFor(ctx context.Context, db Executor, q Compilable) (string, []any, error) {
+	if r, ok := q.(resolvable); ok {
+		return r.resolvedSQL(ctx, db)
+	}
+	return q.SQL()
+}
+
 // Explain asks Postgres to plan a query without running it.
 //
 // It answers two questions that `SQL()` alone cannot. First, whether the
@@ -33,6 +60,16 @@ type Compilable interface {
 //	    t.Errorf("query plan regressed:\n%s", sqlb.Diagnostics(d))
 //	}
 //
+// The statement planned is the one that will run. Explain applies the hooks
+// registered for the model against db — [Builder.Resolved] and its peers on
+// [Update] and [Delete] — because otherwise the second question above is
+// answered about a different query: `WHERE status = $1` and
+// `WHERE status = $1 AND org_id = $2` have different plans, the second is the
+// one with the composite index behind it, and a plan-regression test written on
+// the first would stay green through exactly the change that makes the real
+// query seq-scan (#153). An [Insert] is the exception, and its own reason is on
+// the resolvable interface.
+//
 // Explain does not execute the statement, so it is safe on mutations. Use
 // ExplainAnalyze only when you mean to run it.
 func Explain(ctx context.Context, db Executor, q Compilable) (*Plan, error) {
@@ -43,13 +80,15 @@ func Explain(ctx context.Context, db Executor, q Compilable) (*Plan, error) {
 // row counts rather than estimates.
 //
 // On an INSERT, UPDATE or DELETE this writes to the database. Run it inside a
-// transaction you roll back, or not at all.
+// transaction you roll back, or not at all. It resolves hooks as [Explain]
+// does, which on a write is load-bearing rather than tidy: the statement it
+// runs is the confined one, so a BeforeDelete scope narrows what this removes.
 func ExplainAnalyze(ctx context.Context, db Executor, q Compilable) (*Plan, error) {
 	return explain(ctx, db, q, true)
 }
 
 func explain(ctx context.Context, db Executor, q Compilable, analyze bool) (*Plan, error) {
-	query, args, err := q.SQL()
+	query, args, err := compileFor(ctx, db, q)
 	if err != nil {
 		return nil, err
 	}
