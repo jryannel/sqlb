@@ -912,7 +912,22 @@ func (f *Field) ReadOnly() *Field {
 	return f
 }
 
-// Immutable allows the column to be set at create time only.
+// Immutable makes the column writable through REST at create time only.
+//
+// It names its boundary for the reason [Field.ReadOnly] does, and the boundary
+// is the same one: the create body carries the column, the generated patch body
+// omits it, and the update path refuses it if a request names it anyway.
+// Nothing outside REST is policed — [sqlb.UpdateRows] from application code
+// writes it, as does a hook, as does an action's write-back — because the
+// engine does not stand between an application and its own tables.
+//
+// So this is a convention in [domain logic]'s sense of the word, and it closes
+// the door the generated client opens. A column that must never change after
+// insert, wherever the write comes from, wants the guarantee underneath it too:
+// a BEFORE UPDATE trigger, which is the layer that sees the old row and the new
+// one at once.
+//
+// [domain logic]: https://github.com/jryannel/sqlb/blob/main/docs/concepts/domain-logic.md
 func (f *Field) Immutable() *Field {
 	f.d.Immutable = true
 	return f
