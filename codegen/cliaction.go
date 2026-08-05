@@ -125,13 +125,33 @@ func cliActionLong(r cliResource, a schema.Action) string {
 	}
 	if a.IsCollection() {
 		b.WriteString("A verb on the collection: it addresses no single row, and a successful call\nwrites nothing to print.")
+		writeCLIReach(&b, a)
 		return b.String()
 	}
 	b.WriteString("A verb on one row. The server fetches it, runs the transition, and answers\nwith the row as it now stands.")
 	if len(a.Writes) > 0 {
-		fmt.Fprintf(&b, "\n\nThis writes %s, and no other column.", strings.Join(a.Writes, ", "))
+		fmt.Fprintf(&b, "\n\nThe response row carries %s, and no other column the server changed on it.",
+			strings.Join(a.Writes, ", "))
 	}
+	writeCLIReach(&b, a)
 	return b.String()
+}
+
+// writeCLIReach states what the verb writes beyond the row it answers with.
+//
+// This is the surface ADR-0029's argument is sharpest about: --help is what a
+// caller with no compile step reads instead of a request, and a caller reading
+// a write set of two columns concludes the verb is confined to one row. The
+// sentence goes in whether or not the schema declared a reach, because the
+// absence of a declaration is not the absence of a reach — an undeclared verb
+// still holds the transaction.
+func writeCLIReach(b *strings.Builder, a schema.Action) {
+	if len(a.Touches) > 0 {
+		fmt.Fprintf(b, "\n\nBeyond that row the route writes: %s.\nThe schema declares that set; nothing enforces it.",
+			strings.Join(a.Touches, ", "))
+		return
+	}
+	b.WriteString("\n\nThe route declares nothing written beyond that row. A verb holds the\ntransaction and may write more, so this is the absence of a claim rather\nthan a checked bound.")
 }
 
 // cliActionExample writes one runnable invocation, filling every required flag.

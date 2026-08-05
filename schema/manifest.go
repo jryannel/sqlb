@@ -218,9 +218,14 @@ type ActionManifest struct {
 	// happen to be optional.
 	Body []ActionProperty `json:"body,omitempty"`
 	// Writes names the columns the envelope persists after the verb returns.
-	// It is what makes the blast radius of a route readable rather than
-	// something to be inferred from a handler.
+	// It is not the blast radius: it is one row of this table, and a verb may
+	// write anything else through the transaction it holds.
 	Writes []string `json:"writes,omitempty"`
+	// Touches names the tables the verb writes beyond that row, as declared.
+	// Nothing enforces it — see schema.Action.Touches — and it is here because
+	// a reader that had only Writes would conclude the route is confined to one
+	// row, which is what this field exists to contradict.
+	Touches []string `json:"touches,omitempty"`
 }
 
 // ActionProperty is one property of an action's request body.
@@ -422,6 +427,7 @@ func (a Action) manifest(resourcePath string) ActionManifest {
 		Method:  "POST",
 		Summary: a.Summary,
 		Writes:  a.Writes,
+		Touches: a.Touches,
 	}
 	for _, f := range a.Body {
 		d := f.Desc()

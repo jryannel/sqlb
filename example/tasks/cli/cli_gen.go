@@ -1298,7 +1298,10 @@ Marks the task done and stamps its completion time. A task that is already done 
 A verb on one row. The server fetches it, runs the transition, and answers
 with the row as it now stands.
 
-This writes status, completed_at, and no other column.`,
+The response row carries status, completed_at, and no other column the server changed on it.
+
+Beyond that row the route writes: comments.
+The schema declares that set; nothing enforces it.`,
 		Example: "  taskctl tasks complete <id>",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

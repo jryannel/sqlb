@@ -30,14 +30,18 @@ func actionFixture() *schema.Registry {
 				schema.Timestamp("completed_at"),
 			),
 			Writes: []string{"status", "closed_at"},
+			// The verb also writes a comment row through the transaction,
+			// which the write set above cannot say and used to leave unsaid.
+			Touches: []string{"comments"},
 		}).
 		Action(schema.Action{
 			Name:   "archive",
 			Writes: []string{"status"},
 		}).
 		Action(schema.Action{
-			Name: "purge-archived",
-			Path: "/purge-archived",
+			Name:    "purge-archived",
+			Path:    "/purge-archived",
+			Touches: []string{"tasks", "comments"},
 		})
 	return r
 }
@@ -102,6 +106,37 @@ func TestActionsStructNamesEveryVerbWithItsSignature(t *testing.T) {
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("rest_gen.go does not contain %q\n%s", want, src)
+		}
+	}
+}
+
+// The declared reach reaches the runtime spec and the doc comment above the
+// func the application writes.
+//
+// Both matter and for different readers: the spec is what puts the sentence in
+// the OpenAPI document, and the comment is what the author of the verb sees at
+// the moment they are deciding whether to reach for sqlb.TxFrom (#149).
+func TestTheDeclaredReachReachesTheGeneratedCode(t *testing.T) {
+	src := generate(t, actionFixture())["rest_gen.go"]
+
+	if !strings.Contains(specOf(t, src, "complete"), `Touches: []string{"comments"}`) {
+		t.Errorf("the action's spec does not carry its reach:\n%s", specOf(t, src, "complete"))
+	}
+	// A verb with no declared reach emits no field, so a schema that never uses
+	// this generates what it generated before.
+	if strings.Contains(specOf(t, src, "archive"), "Touches") {
+		t.Error("a verb with no declared reach emitted a Touches field")
+	}
+
+	for _, want := range []string{
+		"// Declared reach beyond that row: `comments`.",
+		// And the write set now says what it bounds, which is the envelope and
+		// not the transaction the func is handed.
+		"the transaction",
+		"is yours through sqlb.TxFrom",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the Actions doc comment is missing %q:\n%s", want, src)
 		}
 	}
 }
@@ -230,12 +265,31 @@ func TestActionsReachTheCLI(t *testing.T) {
 		// round trip less than relaying the server's 422.
 		`_ = cmd.MarkFlagRequired("completed-at")`,
 		// The write set is in the help, because "what does this touch" is the
-		// question an operator has at the prompt.
-		"This writes status, closed_at, and no other column.",
+		// question an operator has at the prompt. It is stated as what comes
+		// back on the row rather than as the blast radius, which it is not.
+		"The response row carries status, closed_at, and no other column the server changed on it.",
+		// And the declared reach beside it, which is the half the write set
+		// understates. --help is the surface ADR-0029 argues about hardest: a
+		// caller with no compile step reads this instead of making a request.
+		"Beyond that row the route writes: comments.",
+		"The schema declares that set; nothing enforces it.",
+		// A collection verb has no row at all, so the reach is the only thing
+		// it can state.
+		"Beyond that row the route writes: tasks, comments.",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("the CLI does not contain %q\n%s", want, src)
 		}
+	}
+	// An undeclared reach is not a bound. `archive` names no Touches, and its
+	// help says so rather than leaving the write set to be read as the whole
+	// of it — which is the misreading the issue reported.
+	archiveHelp := src[strings.Index(src, "newTasksArchiveCommand(c *client.Client)"):]
+	if end := strings.Index(archiveHelp, "return cmd"); end > 0 {
+		archiveHelp = archiveHelp[:end]
+	}
+	if !strings.Contains(archiveHelp, "the absence of a claim rather") {
+		t.Errorf("a verb with no declared reach should say so:\n%s", archiveHelp)
 	}
 	// A verb with no body sends none, rather than posting `{}` at an operation
 	// that does not declare one.

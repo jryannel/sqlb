@@ -66,13 +66,49 @@ type Action struct {
 	// written, from the row the verb mutated.
 	//
 	// A verb that has to touch anything else has the transaction and can issue
-	// the statement itself. What this buys is that the blast radius of a route
-	// is something the OpenAPI document and `sqlb impact` can state — and that
-	// the envelope knows to take the row lock, since a declared write set is
-	// exactly the case where a read-modify-write can be lost.
+	// the statement itself — see Touches, which is where the route says so. It
+	// is worth being precise about the scope of this field, because three
+	// surfaces print it and none of them can widen it: Writes is what the
+	// *envelope* persists, not a bound on the transaction.
+	//
+	// What it does buy is the row lock. A declared write set is exactly the
+	// case where a read-modify-write can be lost, so the envelope's fetch takes
+	// SELECT … FOR UPDATE on this row — and on this row only.
 	//
 	// It must be empty on a collection action, which has no row.
 	Writes []string
+
+	// Touches names the tables the verb writes through the transaction, beyond
+	// the row the envelope persists. It is documentation with no enforcement
+	// behind it, and that is the whole design: the alternative was a route that
+	// prints a two-column write set while opening eleven tables' worth of
+	// transaction, with nothing in the generated surfaces to say so (#149).
+	//
+	//	Order.Action(schema.Action{
+	//	    Name:    "place",
+	//	    Writes:  []string{"status", "placed_at"},
+	//	    Touches: []string{"order_lines", "inventory_reservations", "payments"},
+	//	})
+	//
+	// `sqlb impact`, the OpenAPI description and the CLI's --help carry it
+	// beside Writes, which is what makes a wide route say it is wide. The
+	// caller ADR-0029 has in mind — one with no compile step, "such as an
+	// agent" — reads a declared write set of two columns and concludes the verb
+	// is confined to one row; that inference is the one the surface invites,
+	// and this is how a route declines it.
+	//
+	// Nothing checks the claim. A test asserting it against the statements the
+	// verb actually issued is the application's to write, and can be; a checker
+	// here would have to trace application code the schema package cannot see.
+	// So a stale Touches is possible, and it is still strictly better than the
+	// silence it replaces — the failure mode is an over-broad claim rather than
+	// a confident understatement.
+	//
+	// Unlike Writes it is legal on a collection action, which does all of its
+	// work through the transaction and has no row of its own at all. Naming
+	// this table is legal too, and means what it says: the envelope writes one
+	// row of it, and a verb that writes others has no other way to declare them.
+	Touches []string
 
 	// Summary is the one-line description in the OpenAPI document.
 	//
@@ -187,6 +223,31 @@ func (r *Registry) validateActions(t *TableDef, report func(string, string, stri
 
 		r.validateActionBody(t, a, report)
 		r.validateActionWrites(t, a, report)
+		r.validateActionTouches(t, a, report)
+	}
+}
+
+// validateActionTouches checks the declared blast radius is a set of table
+// names, which is as far as checking can go: the tables are the application's
+// to write and may live in another module or another schema entirely, so a name
+// this registry does not know is a legitimate declaration rather than a typo.
+//
+// What it does refuse is a claim that says nothing: an empty name, or the same
+// table twice. The table's own name is allowed and is not redundant — the
+// envelope writes one row of it, and a verb that writes *other* rows of the
+// same table has no other way to say so.
+func (r *Registry) validateActionTouches(t *TableDef, a Action, report func(string, string, string, ...any)) {
+	seen := make(map[string]bool, len(a.Touches))
+	for _, name := range a.Touches {
+		switch {
+		case name == "":
+			report(t.name, "", "action %q: Touches has an empty table name", a.Name)
+			continue
+		case seen[name]:
+			report(t.name, "", "action %q: Touches names %q twice", a.Name, name)
+			continue
+		}
+		seen[name] = true
 	}
 }
 

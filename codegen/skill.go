@@ -212,12 +212,16 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 		b.WriteString("**Declared actions.** Domain verbs this resource owns. " +
 			"Reaching the same outcome by PATCHing a column is the mistake these exist to " +
 			"prevent — the verb owns the transition.\n\n")
-		b.WriteString("| Verb | Route | Writes |\n|---|---|---|\n")
+		b.WriteString("| Verb | Route | Writes | Also writes |\n|---|---|---|---|\n")
 		for _, a := range r.Actions {
-			fmt.Fprintf(b, "| `%s` | `%s %s` | %s |\n",
-				a.Name, a.Method, a.Path, orNone(joinCode(a.Writes, ", ")))
+			fmt.Fprintf(b, "| `%s` | `%s %s` | %s | %s |\n",
+				a.Name, a.Method, a.Path,
+				orNone(joinCode(a.Writes, ", ")), orNone(joinCode(a.Touches, ", ")))
 		}
-		b.WriteString("\n")
+		b.WriteString("\n*Writes* is the columns the envelope persists on the addressed row. " +
+			"*Also writes* is the tables the verb declares it reaches through its " +
+			"transaction — declared, not enforced, and *none* there means no claim was " +
+			"made rather than that none are written.\n\n")
 	}
 
 	if len(t.CollectedBy) > 0 {
