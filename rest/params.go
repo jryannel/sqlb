@@ -28,7 +28,12 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 	var params []*huma.Param
 
 	for _, col := range b.model.Columns {
-		if col.Hidden || !col.Filterable {
+		// served, not merely !Hidden: a column this mount does not serve — one
+		// outside Options.Columns, or a computed one it declined — is refused
+		// by the parser, and publishing a parameter for it would document a
+		// filter that answers 400 and name a column the resource was narrowed
+		// to conceal.
+		if !b.served[col.Name] || !col.Filterable {
 			continue
 		}
 		params = append(params, &huma.Param{
@@ -48,7 +53,7 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 		})
 	}
 
-	if sortable := capable(b.model, func(c *sqlb.ColumnInfo) bool { return c.Sortable }); len(sortable) > 0 {
+	if sortable := capable(b.selectable, func(c *sqlb.ColumnInfo) bool { return c.Sortable }); len(sortable) > 0 {
 		terms := make([]any, 0, len(sortable)*2)
 		for _, name := range sortable {
 			terms = append(terms, name, "-"+name)
@@ -87,7 +92,7 @@ func listParams[T any](b *binding[T]) []*huma.Param {
 	})
 
 	if !b.opts.DisableSearch {
-		if cols := capable(b.model, func(c *sqlb.ColumnInfo) bool { return c.Searchable }); len(cols) > 0 {
+		if cols := capable(b.selectable, func(c *sqlb.ColumnInfo) bool { return c.Searchable }); len(cols) > 0 {
 			params = append(params, &huma.Param{
 				Name: "search",
 				In:   "query",
@@ -312,10 +317,16 @@ func isJSON(t reflect.Type) bool {
 }
 
 // capable lists the non-hidden columns satisfying want, for documentation.
-func capable(m *sqlb.Model, want func(*sqlb.ColumnInfo) bool) []string {
+// capable names the columns of a projection that carry a capability.
+//
+// It takes the binding's projection rather than the model, because the model is
+// shared and the projection is this resource's: the same Product is mounted
+// publicly and privileged, and only the second one's document may say
+// cost_price_minor is sortable (#148).
+func capable(cols []*sqlb.ColumnInfo, want func(*sqlb.ColumnInfo) bool) []string {
 	var out []string
-	for _, col := range m.Columns {
-		if !col.Hidden && want(col) {
+	for _, col := range cols {
+		if want(col) {
 			// Wire, because every caller of this builds an enum a client is
 			// typed against or a message a caller reads.
 			out = append(out, col.Wire)

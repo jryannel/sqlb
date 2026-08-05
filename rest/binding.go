@@ -44,6 +44,15 @@ type binding[T any] struct {
 	// real false (#92).
 	selectable []*sqlb.ColumnInfo
 
+	// served is selectable as a set, for the places that ask about one column
+	// rather than walking the projection — the OpenAPI parameter list, mostly.
+	//
+	// Derived from selectable rather than recomputed from Options, because the
+	// document and the parser disagreeing about what a request may name is the
+	// failure both #92 and #148 are shaped like: a filter parameter published
+	// for a column every request naming it is about to be refused for.
+	served map[string]bool
+
 	// writable is what a request body may set. Read-only columns are excluded
 	// because the database or a hook owns them, and hidden ones because a
 	// column that never leaves the process should not be settable from
@@ -107,7 +116,19 @@ func bind[T any](opts Options) (*binding[T], error) {
 		opts:       opts,
 		model:      m,
 		jsonKey:    make(map[string][]byte, len(m.Columns)),
-		selectable: selectableFor(m, opts.Computed),
+		selectable: selectableFor(m, opts.Computed, opts.Columns),
+	}
+
+	// Checked before the loop below, because that loop decides what a request
+	// body may write and an unchecked name there is a resource quietly serving
+	// the wrong surface.
+	if err := checkColumns(m, opts); err != nil {
+		return nil, err
+	}
+	reachable := reachableSet(m, opts.Columns)
+	b.served = make(map[string]bool, len(b.selectable))
+	for _, col := range b.selectable {
+		b.served[col.Name] = true
 	}
 
 	// The unrendered names, for the diagnostic below. Serialising wants the
@@ -128,7 +149,13 @@ func bind[T any](opts Options) (*binding[T], error) {
 			}
 			b.jsonKey[col.Name] = key
 		}
-		if col.ReadOnly {
+		// A column outside Options.Columns is treated exactly as a read-only one
+		// on the write path: cleared off the row a request produced, rather than
+		// merely absent from the generated body. The generated body is shared
+		// with the wide resource, so "absent" is not something the narrowed
+		// mount can arrange — and a CreateBody.Row that sets the column would
+		// otherwise write it through a resource that cannot even read it (#148).
+		if col.ReadOnly || !reachable(col) {
 			b.readOnly = append(b.readOnly, col.Index)
 			continue
 		}
@@ -577,19 +604,74 @@ func (b *binding[T]) relationsFor(names []string) []expansion {
 	return out
 }
 
+// checkColumns validates Options.Columns against the model.
+//
+// Both refusals are startup-only on purpose. An unknown name would leave the
+// resource serving one column fewer than somebody meant, with no request able
+// to report it; a missing primary key would leave a resource that cannot
+// address, order or page its own rows, and the symptoms of that arrive one at
+// a time and in the wrong place.
+func checkColumns(m *sqlb.Model, opts Options) error {
+	if len(opts.Columns) == 0 {
+		return nil
+	}
+	for _, name := range opts.Columns {
+		if m.Column(name) == nil {
+			return fmt.Errorf(
+				"rest: %s declares Columns %q, but %s has no such column (have: %s)",
+				opts.name(), name, m.Type, strings.Join(m.ColumnNames(), ", "))
+		}
+	}
+	if m.PK != nil && !containsName(opts.Columns, m.PK.Name) {
+		return fmt.Errorf(
+			"rest: %s narrows to Columns that leave out the primary key %q; "+
+				"the key addresses a row, settles the ordering and is what a cursor is built from, "+
+				"so a resource without it cannot page — add %q, or drop Columns and use Hidden if the key must never be served",
+			opts.name(), m.PK.Name, m.PK.Name)
+	}
+	return nil
+}
+
+// reachableSet answers "is this column part of this resource" once, so the
+// binding loop does not walk the allowlist per column.
+func reachableSet(m *sqlb.Model, columns []string) func(*sqlb.ColumnInfo) bool {
+	if len(columns) == 0 {
+		return func(*sqlb.ColumnInfo) bool { return true }
+	}
+	in := make(map[string]bool, len(columns))
+	for _, name := range columns {
+		in[name] = true
+	}
+	return func(col *sqlb.ColumnInfo) bool { return col != nil && in[col.Name] }
+}
+
+func containsName(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // selectableFor is the resource's projection: every non-hidden column, minus
-// the computed ones it did not ask for.
+// the computed ones it did not ask for and the ones outside its surface.
 //
 // Model.Selectable cannot answer this on its own — it is model-wide, and the
 // same model may be mounted twice with different computed sets, which is the
-// case that made a shared model expensive to read (#92).
-func selectableFor(m *sqlb.Model, computed []string) []*sqlb.ColumnInfo {
+// case that made a shared model expensive to read (#92), and twice with
+// different column sets, which is the public-and-privileged pair (#148).
+func selectableFor(m *sqlb.Model, computed, columns []string) []*sqlb.ColumnInfo {
 	wanted := make(map[string]bool, len(computed))
 	for _, name := range computed {
 		wanted[name] = true
 	}
+	reachable := reachableSet(m, columns)
 	out := make([]*sqlb.ColumnInfo, 0, len(m.Columns))
 	for _, col := range m.Selectable() {
+		if !reachable(col) {
+			continue
+		}
 		if col.Computed() && !wanted[col.Name] {
 			continue
 		}

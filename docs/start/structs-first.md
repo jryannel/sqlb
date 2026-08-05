@@ -80,6 +80,22 @@ generate from:
 The query builder, the filter grammar, the capabilities, the hooks and the
 pagination are identical. What moves is who writes the boilerplate around them.
 
+**One case that used to land here and no longer has to.** A public surface and a
+privileged surface over the same table — a storefront and an admin panel over
+`products` — is neither an adoption path nor a legacy-struct case, and it used
+to arrive here anyway, because a table carries one `Expose` and a column hidden
+for one surface is hidden for both. `rest.Options.Columns` narrows a *mount*
+instead, so the second surface is a hand-written `rest.Resource` call over the
+generated model rather than a second model: only the last row of the table above
+is given up, and the drift gate still covers the half you would otherwise be
+writing by hand. [Capabilities](../schema/capabilities.md#one-table-two-surfaces)
+has the shape and what stays wide.
+
+A second `Describe`d struct is still the stronger answer when the point is that
+no code path can return the column *at all* — a model with no field for
+`cost_price_minor` cannot serve it by accident, this year or next — and the
+table above is what that costs.
+
 You can also start here and move: `Describe` and the DSL declare the same
 metadata by two routes, so adopting the DSL later is a schema file plus a
 codegen program, not a rewrite.

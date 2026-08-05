@@ -155,6 +155,63 @@ type Options struct {
 	// and one that does not select it no longer has to care.
 	Computed []string
 
+	// Columns narrows this resource to the columns it names. Empty — the
+	// default, and what a generated resource emits — is every column the model
+	// has.
+	//
+	// This is the answer to two surfaces over one table (#148). A storefront and
+	// an admin panel read the same products, and they differ in which columns
+	// each may see: `cost_price_minor` and `internal_notes` are the reason the
+	// admin resource exists and must not be within a mile of the public one.
+	// Hidden cannot express that, because Hidden is a property of the model and
+	// there is one model per table; Computed already established that
+	// reachability is a property of the *mount*, and this is the same idea
+	// applied to stored columns.
+	//
+	// A column not listed is not reachable from this resource at all: absent
+	// from the response, absent from the SELECT the database sees, not
+	// filterable, not sortable, not searched, not nameable in ?select, not
+	// settable by a create or update body, and not named in the list a rejection
+	// offers — that last one because a narrowed resource that advertised the
+	// column it is about to refuse would leak the schema it was narrowed to
+	// hide.
+	//
+	// Every name must be a column of the model, and the list must include the
+	// primary key: it addresses rows, settles the ordering, and is what a cursor
+	// is built from, so a resource without it cannot page. Both are checked at
+	// startup, where the failure is a resource that will not mount rather than
+	// one serving a surface nobody meant.
+	//
+	// What this does not do is generate the second resource. Codegen emits one
+	// mount per exposed table, so the narrowed half is a hand-written
+	// rest.Resource call over the generated model — the models, the typed column
+	// facade, the manifest and the drift gate all still cover it, and only the
+	// mount is yours. The alternative, a second model over the same table, gives
+	// up all four.
+	//
+	// # Two things it does not narrow, and why
+	//
+	// **The response schema in the OpenAPI document.** It is the model's Go type,
+	// registered once as a component and shared by every mount of it, so it
+	// still lists the columns this resource does not serve. Runtime responses
+	// omit them and every parameter follows this list; what a client generated
+	// from the document gets is optional fields that are always absent. Narrowing
+	// it needs a per-resource Go type, which is the generated second resource
+	// that is a larger change than this one.
+	//
+	// **The create and update body types.** They are the caller's — C and U — so
+	// a narrowed mount reusing the wide resource's bodies documents fields it
+	// will not write. It will not write them: a column outside this list is
+	// cleared off the row a body produced, the same way a ReadOnly one is, and a
+	// PATCH naming one is refused as unknown. But the document says otherwise,
+	// so a resource narrowed for disclosure usually wants Ops without the write
+	// operations, or body types of its own.
+	//
+	// Both are worth reading as the shape of the boundary: this narrows what a
+	// resource *does*, and the parts of the document that come from a Go type
+	// still describe that type.
+	Columns []string
+
 	// DisableSearch rejects ?search even when columns are searchable.
 	DisableSearch bool
 

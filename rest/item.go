@@ -159,7 +159,12 @@ func (b *binding[T]) expansions(ctx context.Context, names []string) ([]string, 
 	}
 	q, err := filter.Parse(
 		url.Values{"expand": {strings.Join(names, ",")}},
-		filter.Options{Model: b.model, Expandable: b.opts.Expandable, Computed: b.opts.Computed},
+		filter.Options{
+			Model:      b.model,
+			Expandable: b.opts.Expandable,
+			Computed:   b.opts.Computed,
+			Columns:    b.opts.Columns,
+		},
 	)
 	if err != nil {
 		return nil, asHumaError(ctx, err, b.opts.name())
@@ -336,13 +341,15 @@ func registerDelete[T any](api huma.API, w writer, b *binding[T]) {
 //
 // A hidden column is reported as unknown rather than as unwritable, and never
 // appears in the allow-list, so that the rejection cannot be used to enumerate
-// what the resource is concealing.
+// what the resource is concealing. A column outside Options.Columns is treated
+// the same way and for the same reason: from this resource it does not exist,
+// and "column is read-only" would confirm that it does (#148).
 func (b *binding[T]) rejectUnwritable(names []string) *Problem {
 	var details []*ProblemDetail
 	for _, name := range names {
 		col := b.model.Column(name)
 		switch {
-		case col == nil || col.Hidden:
+		case col == nil || col.Hidden || !b.served[name]:
 			details = append(details, &ProblemDetail{
 				Message:  "unknown column",
 				Location: "body." + name,
