@@ -47,6 +47,11 @@ type FieldDesc struct {
 	Default    *Default
 	EnumValues []string
 
+	// UniqueDeferrable is when the column's own unique constraint is checked.
+	// The zero value is NOT DEFERRABLE. See [Field.Deferred] and, for the
+	// table-level constraint this mirrors, [Unique.Deferrable].
+	UniqueDeferrable Deferrable
+
 	// Auto makes the database supply the column's value: a sequence, or an
 	// identity. Only an integer column may carry one, and never beside a
 	// Default — see [Auto], and [Serial] and [Field.Identity] for the two
@@ -788,6 +793,21 @@ func (f *Field) NotNull() *Field {
 // Unique adds a single-column unique constraint.
 func (f *Field) Unique() *Field {
 	f.d.Unique = true
+	return f
+}
+
+// Deferred makes the column's unique constraint DEFERRABLE INITIALLY DEFERRED,
+// so it holds over the committed state rather than at each statement.
+//
+//	schema.Int("position").Unique().Deferred()
+//
+// The case is a set of rows rewritten together — reordering a list by shifting
+// every position — where each intermediate state violates a rule the final one
+// satisfies. It is refused without [Field.Unique], since there is no other
+// constraint on the column for it to defer. For the table-level form, and for
+// the argument about what deferral buys, see [Unique.Deferrable].
+func (f *Field) Deferred() *Field {
+	f.d.UniqueDeferrable = DeferredCheck
 	return f
 }
 

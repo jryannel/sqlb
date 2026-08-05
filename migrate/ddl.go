@@ -495,6 +495,12 @@ type constraint struct {
 	// cols are the columns a unique constraint covers, which is what the index
 	// backing it has to be built over.
 	cols []string
+	// deferrable is the DEFERRABLE clause, already part of def. It is kept
+	// separately because the two-step form — build the index concurrently,
+	// then ADD CONSTRAINT ... USING INDEX — renders the constraint from its
+	// parts rather than from def, and a clause dropped there would produce a
+	// constraint the next diff proposes replacing (issue #154).
+	deferrable string
 
 	// covers are the columns of its own table the constraint names, for every
 	// kind of constraint rather than only the unique ones. It answers a
@@ -688,11 +694,12 @@ func constraints(t *schema.TableDef) []constraint {
 		d := f.Desc()
 		if d.Unique && !d.PrimaryKey {
 			out = append(out, constraint{
-				name:   uniqueConstraintName(t, d),
-				def:    "UNIQUE (" + quoteIdent(d.Name) + ")",
-				unique: true,
-				cols:   []string{d.Name},
-				covers: []string{d.Name},
+				name:       uniqueConstraintName(t, d),
+				def:        "UNIQUE (" + quoteIdent(d.Name) + ")" + d.UniqueDeferrable.Suffix(),
+				unique:     true,
+				cols:       []string{d.Name},
+				covers:     []string{d.Name},
+				deferrable: d.UniqueDeferrable.Suffix(),
 			})
 		}
 		if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
@@ -729,11 +736,12 @@ func constraints(t *schema.TableDef) []constraint {
 			quoted[i] = quoteIdent(c)
 		}
 		out = append(out, constraint{
-			name:   u.Name,
-			def:    "UNIQUE (" + strings.Join(quoted, ", ") + ")",
-			unique: true,
-			cols:   cols,
-			covers: cols,
+			name:       u.Name,
+			def:        "UNIQUE (" + strings.Join(quoted, ", ") + ")" + u.Deferrable.Suffix(),
+			unique:     true,
+			cols:       cols,
+			covers:     cols,
+			deferrable: u.Deferrable.Suffix(),
 		})
 	}
 
@@ -1197,7 +1205,7 @@ func addConstraintUsingIndex(table string, c constraint) string {
 		kind = "PRIMARY KEY"
 	}
 	return "ALTER TABLE " + quoteIdent(table) + " ADD CONSTRAINT " + quoteIdent(c.name) +
-		" " + kind + " USING INDEX " + quoteIdent(c.name) + ";"
+		" " + kind + " USING INDEX " + quoteIdent(c.name) + c.deferrable + ";"
 }
 
 // excludeCovers lists the table's own columns an exclusion names, so the diff

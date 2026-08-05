@@ -166,6 +166,28 @@ CREATE TABLE secrets (
     CONSTRAINT secrets_tenant_kind_tenant_id_name_key UNIQUE (tenant_kind, tenant_id, name)
 );
 
+-- A deferred UNIQUE (issue #154). A variant is identified by the combination of
+-- its option values, which live in a child table, so the combination is carried
+-- as a denormalised signature and the constraint has to hold over the committed
+-- state: a variant is inserted before the option values that identify it, so
+-- every new one passes through a state where its signature is still the default
+-- and two variants of a product collide on it.
+--
+-- It is here because deferrability used to be invisible to *both* sides of this
+-- loop, which meant the fixpoint held for the wrong reason — the declaration and
+-- the database were blind to the same property, which is the failure ADR-0016
+-- names. A migration that recreated this constraint without its clause would
+-- break every multi-variant write and the drift gate would stay green.
+CREATE TABLE product_variants (
+    id               uuid PRIMARY KEY,
+    product_id       uuid NOT NULL,
+    option_signature text NOT NULL DEFAULT '',
+    sku              text NOT NULL,
+    CONSTRAINT product_variants_product_id_option_signature_key
+        UNIQUE (product_id, option_signature) DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT product_variants_sku_key UNIQUE (sku) DEFERRABLE INITIALLY DEFERRED
+);
+
 CREATE TABLE images (
     id         uuid PRIMARY KEY,
     creator_id uuid NOT NULL REFERENCES members (id) ON DELETE CASCADE,

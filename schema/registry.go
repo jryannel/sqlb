@@ -254,6 +254,16 @@ func (r *Registry) Validate() error {
 			// the word would read as a declaration and mean nothing — and the
 			// generated comment saying which kind of secret a column is would
 			// be saying it about one that is not a secret at all.
+			if !d.UniqueDeferrable.Valid() {
+				report(t.name, d.Name, "unknown Deferrable %q", d.UniqueDeferrable)
+			}
+			// Deferral is a property of a constraint, and this one has none of
+			// its own to defer. A primary key is not it either: PRIMARY KEY is
+			// rendered from the table's key columns, and deferring it is not
+			// something this DSL can say.
+			if d.UniqueDeferrable != NotDeferrable && !d.Unique {
+				report(t.name, d.Name, "Deferred applies to a column's own unique constraint; add Unique(), or declare the constraint with AddUnique")
+			}
 			if d.LookupKey && !d.Hidden {
 				report(t.name, d.Name, "LookupKey applies to a Hidden column; the typed column is already there without it")
 			}
@@ -374,6 +384,9 @@ func (r *Registry) Validate() error {
 			if len(u.Name) > maxIdentBytes {
 				report(t.name, "", "unique constraint name %q is %d bytes; Postgres truncates at %d, "+
 					"so give it a shorter name with UniqueNamed", u.Name, len(u.Name), maxIdentBytes)
+			}
+			if !u.Deferrable.Valid() {
+				report(t.name, "", "unique constraint %q has an unknown Deferrable %q", u.Name, u.Deferrable)
 			}
 		}
 
