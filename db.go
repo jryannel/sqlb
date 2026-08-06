@@ -417,10 +417,14 @@ type txKey struct{}
 
 // TxFrom returns the transaction handle a hook is running under, if any.
 //
-// This is what lets a hook take part in the unit of work it was triggered by.
-// A BeforeQuery that needs to see rows written earlier in the same transaction
-// must read through this handle — reading through the process-wide pool would
-// miss them, because they are not committed yet:
+// This is what lets a hook take part in the unit of work it was triggered by,
+// and it is the whole of a hook's reach beyond its own model: the write hooks
+// receive a row or a statement rather than a handle, so anything a hook does to
+// another table it does through this one.
+//
+// The nearer use is reading rows written earlier in the same transaction.
+// Reading through the process-wide pool would miss them, because they are not
+// committed yet:
 //
 //	sqlb.On[Post](reg).BeforeCreate(func(ctx context.Context, p *Post) error {
 //	    tx, ok := sqlb.TxFrom(ctx)
@@ -430,6 +434,27 @@ type txKey struct{}
 //	    n, err := sqlb.Query[Post]().Where(sqlb.F("slug").Eq(p.Slug)).Count(ctx, tx)
 //	    ...
 //	})
+//
+// # The rules a statement issued here runs under
+//
+// The handle is the one the *request* resolved against, so a statement issued
+// through it runs that request's hooks — including those of the model being
+// reached for. For a consequence on the same scoping axis that is exactly right:
+// a comment's AfterCreate bumping its task's counter wants the caller's
+// workspace predicate on the update, because the comment and the task are in one
+// workspace. That is example/tasks, and it is why this is the default.
+//
+// Where the two models are scoped on *different* axes it is a trap. A buyer's
+// order decrementing a shop's stock picks up the stock table's request-facing
+// BeforeUpdate — the one that keeps a buyer from patching a shop's rows — and
+// matches nothing, and [Update.Exec] reports zero rows without an error, so the
+// order commits with the stock untouched.
+//
+// Two habits close that. Run the consequence on a handle whose rules are the
+// consequence's, with [DB.WithHooks] over a registry built for it — the
+// statement stays on this transaction and only the rules change. And prefer
+// [Update.One], which returns [ErrNotFound] rather than nothing at all when the
+// row that had to move did not.
 func TxFrom(ctx context.Context) (*DB, bool) {
 	tx, ok := ctx.Value(txKey{}).(*DB)
 	return tx, ok
