@@ -397,6 +397,62 @@ a named function with the explanation attached rather than a line inside a
 handler. `ForUpdate`, `ForShare` and `SkipLocked` are on
 [Mutations and transactions](mutations.md#row-locking).
 
+## One registration per model, and what that costs
+
+A registry is keyed by type and `On[T]` is the only way in, so **there is no
+receiver for every model**. Several listeners on one model is fine — hooks
+append and run in registration order, so independent modules can each register
+`AfterCreate` for the same type without knowing about each other. What has no
+spelling is the other axis: one listener for the whole schema.
+
+So a cross-cutting concern is one registration each, written out:
+
+```go
+for _, wire := range []func(*sqlb.Registry, rest.Publisher) error{
+    rest.PublishChanges[tasks.Task],
+    rest.PublishChanges[tasks.List],
+    rest.PublishChanges[tasks.Comment],
+} {
+    if err := wire(reg, broker); err != nil {
+        return err
+    }
+}
+```
+
+For the change feed that list is the design rather than a chore. Every model in
+it is a fan-out every subscriber pays for, which is why the loop above is three
+of that schema's six models and each of the three left out is left out for a
+stated reason. A register-everything form would make the cheap choice the default
+and the considered one an opt-out, which is backwards when each entry has a cost.
+
+The concerns where it *is* a chore are the ones with no per-model decision in
+them: an audit log, a write counter, a stamp. There the list is a place to forget
+something, and forgetting is silent — a table added next month joins the schema,
+gets a resource, gets migrated, and is simply absent. Nothing fails, because
+nothing declared that the model was meant to be in it.
+
+One thing narrows it already: registration is generic, so the list is Go the
+compiler checks rather than strings resolved at startup, and a renamed or deleted
+model breaks the build. What it cannot catch is an *added* one, because nothing
+in the new model refers to the list.
+
+**Nothing makes that omission fail, and it is worth knowing that rather than
+assuming otherwise.** The shape of a mechanism that would is already in the
+generated code: `Register` enumerates every exposed resource, and the generated
+`Actions` struct turns a schema-declared action nothing wired into a refusal when
+the resource mounts rather than a route that quietly 404s. Both work by making the
+schema and the wiring meet somewhere that can fail. Hook registration has no such
+meeting point, because a registration cannot be derived from a list of models at
+runtime — `On[T]` needs the type at compile time, so an exhaustive list has to be
+*generated* rather than iterated. That is not built.
+
+Until it is, the mitigations are the ordinary ones: register the cross-cutting
+concern next to the resource list so a reader adding a table sees both, and write
+the assertion that the concern covers what it must in a test rather than trusting
+the loop. Whether that is worth the trouble depends on what absence costs — a
+missing entry in a change feed is a client that refetches late, and a missing
+entry in an audit log is a compliance gap.
+
 ## Scoping and tests
 
 `On[T](r)` registers into the registry you hand it, and `db.WithHooks(r)` is

@@ -104,11 +104,17 @@ reachable from a generated handler and a hook can read its own writes through
 
 ## What hooks do not cover
 
-Four gaps, all deliberate and all documented where they bite:
+Five gaps, all deliberate and all documented where they bite:
 
 - **`BeforeUpdate` cannot read the assignments it was handed**, so a rule
   depending on what a column is becoming belongs in a `BEFORE` trigger
   ([ADR-0021](../adr/0021-hooks-receive-an-event.md)).
+- **A hook is registered per model, and there is no receiver for all of them.**
+  A registry is keyed by type, so a cross-cutting concern is one registration
+  each and adding a table later does not add it to the list. Where the concern
+  has a per-model cost that is selectivity rather than an oversight; where it
+  does not, the list is worth generating rather than writing
+  ([hooks](../queries/hooks.md#one-registration-per-model-and-what-that-costs)).
 - **A hook's own statements run under the caller's rules**, including the rules of
   the model it is reaching for. Right when both models are scoped on the same
   axis, wrong when they are not, and the wrong case is a write that matches
