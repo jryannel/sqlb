@@ -296,6 +296,123 @@ func TestWithHooksSurvivesIntoTheTransaction(t *testing.T) {
 	}
 }
 
+// --- a hook reaching another model ------------------------------------------
+
+// Two models scoped on *different* axes, which is the whole reason these tests
+// exist: an order belongs to a buyer, a stock row belongs to a shop, and a
+// predicate confining one says nothing true about the other.
+type shopOrder struct {
+	ID    string `db:"id" sqlb:"pk,default"`
+	Buyer string `db:"buyer_id"`
+	SKU   string `db:"sku"`
+	Qty   int32  `db:"qty"`
+}
+
+func (shopOrder) TableName() string { return "orders" }
+
+type shopStock struct {
+	SKU   string `db:"sku" sqlb:"pk"`
+	Shop  string `db:"shop_id"`
+	Count int32  `db:"count"`
+}
+
+func (shopStock) TableName() string { return "stocks" }
+
+// What TxFrom hands back is the *request's* handle, so a hook writing to another
+// model runs that model's request-facing rules — and whether that is wanted
+// depends on something no signature says. Both halves are asserted here because
+// the documentation now turns on the difference (#159):
+//
+//   - through tx, the buyer's scope lands on the shop's inventory write, where it
+//     matches nothing. Correct for example/tasks, whose comment and task share
+//     workspace_id; wrong here.
+//   - through tx.WithHooks(system), only the rules change. Same transaction.
+//
+// Resolved rather than Exec: the claim is about the statement that runs, and
+// rendering it needs no scripted reply for the RETURNING scan.
+//
+// Failed on purpose three ways (ADR-0016), each caught by the assertion that
+// should have caught it: escalating through the request registry instead of
+// system, escalating off the transaction onto the pool, and dropping the stock
+// scope so the documented trap no longer existed.
+func TestHookReachingAnotherModelRunsTheRequestsRules(t *testing.T) {
+	h := newHarness(t, []string{"id", "buyer_id", "sku", "qty"},
+		[][]any{{"o1", "buyer1", "sku1", int32(1)}})
+	t.Cleanup(h.close)
+
+	reg := sqlb.NewRegistry()
+	// The registration rest's obligation check requires of a Scoped model with an
+	// exposed update: a buyer may not PATCH a shop's stock.
+	sqlb.On[shopStock](reg).BeforeUpdate(func(_ context.Context, u *sqlb.Update[shopStock]) error {
+		u.Where(sqlb.F("shop_id").Eq("buyer-1"))
+		return nil
+	})
+
+	// The rules the consequence runs under, built at wiring time. Empty here; in
+	// an application it is where a stock write's own stamp or audit hook goes.
+	system := sqlb.NewRegistry()
+
+	var confined, escalated string
+	var escalatedInTx bool
+	sqlb.On[shopOrder](reg).AfterCreate(func(ctx context.Context, o *shopOrder) error {
+		tx, ok := sqlb.TxFrom(ctx)
+		if !ok {
+			return errors.New("no transaction reached the hook")
+		}
+		decrement := func() *sqlb.Update[shopStock] {
+			return sqlb.UpdateRows[shopStock]().
+				Set("count", 0).
+				Where(sqlb.F("sku").Eq(o.SKU))
+		}
+
+		stmt, err := decrement().Resolved(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if confined, _, err = stmt.SQL(); err != nil {
+			return err
+		}
+
+		consequence := tx.WithHooks(system)
+		escalatedInTx = consequence.InTx()
+		if stmt, err = decrement().Resolved(ctx, consequence); err != nil {
+			return err
+		}
+		escalated, _, err = stmt.SQL()
+		return err
+	})
+
+	db := sqlb.New(h.db).WithHooks(reg)
+	err := db.WithTx(context.Background(), func(ctx context.Context, tx *sqlb.DB) error {
+		o := shopOrder{Buyer: "buyer-1", SKU: "sku-1", Qty: 1}
+		_, err := sqlb.InsertRows(&o).One(ctx, tx)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	// The trap the docs now name: the buyer's predicate on the shop's write.
+	if !strings.Contains(confined, `"shop_id" =`) {
+		t.Errorf("the request's rule did not reach the hook's cross-model write, so the\n"+
+			"documented trap no longer exists and hooks.md needs revisiting:\n%s", confined)
+	}
+	// And the way out of it.
+	if strings.Contains(escalated, `"shop_id" =`) {
+		t.Errorf("WithHooks did not replace the request's rules:\n%s", escalated)
+	}
+	// Which must not be a way out of the transaction as well.
+	if !escalatedInTx {
+		t.Error("the escalated handle left the transaction; the consequence would " +
+			"commit separately from the order")
+	}
+	if !strings.Contains(escalated, `"sku" =`) {
+		t.Errorf("the hook's own predicate was lost:\n%s", escalated)
+	}
+	// One unit of work, so the consequence rolls back with the order.
+	sameStatements(t, h.statements(), []string{"BEGIN", "INSERT", "COMMIT"})
+}
+
 // The sharper half of the finding this closes: a hook could not previously
 // tell it was inside a unit of work, so it could not read uncommitted rows
 // written earlier in that unit.

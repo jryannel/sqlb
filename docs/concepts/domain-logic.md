@@ -34,6 +34,22 @@ because the hook runs inside it.
 Returning an error is how "no tenant in this context" becomes impossible to
 forget rather than merely documented: no statement runs at all.
 
+### The seam is the statement, not the API boundary
+
+Worth stating explicitly, because frameworks that offer something called a hook
+usually mean the other thing. PocketBase and Django apply their access rules at
+the request boundary and hand a hook the application — so a hook queries whatever
+it likes, unconfined, and the rule you wrote for the API does not apply to it.
+sqlb applies hooks to the **statement**, wherever it was issued from.
+
+That is the whole reason one registration covers the generated handler, the
+hand-written HTML form, the background job and the admin script alike. It has one
+consequence that surprises everybody once: a hook's *own* statements are
+statements too, so a hook reaching for another table runs that table's rules as
+well. Usually correct, occasionally not, and
+[hooks](../queries/hooks.md#the-handle-carries-the-rules-of-the-request-that-triggered-the-hook)
+has the case that decides which.
+
 ## The four places a rule can live
 
 This is the judgement the examples spend most of their prose on, so it is worth
@@ -88,11 +104,23 @@ reachable from a generated handler and a hook can read its own writes through
 
 ## What hooks do not cover
 
-Three gaps, all deliberate and all documented where they bite:
+Five gaps, all deliberate and all documented where they bite:
 
 - **`BeforeUpdate` cannot read the assignments it was handed**, so a rule
   depending on what a column is becoming belongs in a `BEFORE` trigger
   ([ADR-0021](../adr/0021-hooks-receive-an-event.md)).
+- **A hook is registered per model, and there is no receiver for all of them.**
+  A registry is keyed by type, so a cross-cutting concern is one registration
+  each and adding a table later does not add it to the list. Where the concern
+  has a per-model cost that is selectivity rather than an oversight; where it
+  does not, the list is worth generating rather than writing
+  ([hooks](../queries/hooks.md#one-registration-per-model-and-what-that-costs)).
+- **A hook's own statements run under the caller's rules**, including the rules of
+  the model it is reaching for. Right when both models are scoped on the same
+  axis, wrong when they are not, and the wrong case is a write that matches
+  nothing without erroring — so a consequence acting past the request's scope
+  needs a handle built for it
+  ([hooks](../queries/hooks.md#the-handle-carries-the-rules-of-the-request-that-triggered-the-hook)).
 - **Hooks follow an `?expand` join, with one restriction.** The target's
   `BeforeQuery` predicates are requalified onto the join alias and added to the
   join condition. A predicate that cannot be requalified — `RawPred`, or a

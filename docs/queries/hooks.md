@@ -101,11 +101,16 @@ validation — an error rolls the write back — and wrong for anything the outs
 world can observe.
 
 The write hooks are narrower than `BeforeQuery`: they receive the row or the
-statement rather than a handle. They can still reach the database, but only
+statement rather than a handle. They can still reach the whole database, but only
 where a transaction is — `rest` wraps every generated write in one, so
-`sqlb.TxFrom(ctx)` finds it and a hook can query, as
-[Reading your own writes](#reading-your-own-writes) below shows. On a read, or
-under `Options.DisableTransactions`, there is nothing to find.
+`sqlb.TxFrom(ctx)` finds it and a hook can query and write through it. On a read,
+or under `Options.DisableTransactions`, there is nothing to find.
+
+That is the extent of a hook's reach and it is easy to miss, because nothing in
+the signature mentions it. [Writing the
+consequence](#writing-the-consequence-which-is-usually-another-table) is the
+cross-model case, including which rules the statement runs under;
+[Reading your own writes](#reading-your-own-writes) is the same-model one.
 
 ### What fires when, and inside which transaction
 
@@ -164,6 +169,130 @@ The alternative is a hand-written `/orders/place`, which would work and would be
 a **second door**: the generated create would still exist, and the next person
 to write against the model would insert rows that reserved nothing. Closing both
 doors with one registration is the argument for hooks in a sentence.
+
+## Writing the consequence, which is usually another table
+
+"Reserve, match, write the consequence" is the sentence above, and the
+consequence is rarely on the model whose hook is running: placing an order
+decrements stock, posting a comment bumps a count. The write hooks receive the
+row or the statement rather than a handle, so the rest of the database is reached
+through the context — `rest` wraps every generated write in a transaction, and
+`sqlb.TxFrom(ctx)` is that transaction:
+
+```go
+sqlb.On[Order](reg).AfterCreate(func(ctx context.Context, o *Order) error {
+    tx, ok := sqlb.TxFrom(ctx)
+    if !ok {
+        // Fail closed. Without a transaction the decrement cannot move
+        // atomically with the order, and an order that quietly reserved
+        // nothing is worse than one that is refused.
+        return errors.New("orders must be placed inside a transaction")
+    }
+    _, err := sqlb.UpdateRows[Stock]().
+        SetExpr("count", sqlb.Raw{SQL: `"count" - ?`, Args: []any{o.Qty}}).
+        Where(sqlb.F("sku").Eq(o.SKU), sqlb.F("count").Gte(o.Qty)).
+        One(ctx, tx)
+    if errors.Is(err, sqlb.ErrNotFound) {
+        return huma.Error409Conflict("not enough stock")
+    }
+    return err
+})
+```
+
+Three things in there are load-bearing and none of them is visible in the hook's
+signature. The `count >= o.Qty` predicate is what makes the decrement a decision
+rather than a report — see [the four places a rule can
+live](../concepts/domain-logic.md#the-four-places-a-rule-can-live). The handle it
+runs on is `tx`, which the next section is about. And it is `One` rather than
+`Exec`, which the one after that is about.
+
+[`example/tasks/app/hooks.go`](../../example/tasks/app/hooks.go) is this shape
+in a working application: a comment's `AfterCreate` bumps the task's
+`comment_count` through `TxFrom`, and the file's own comment records that before
+generated writes were transactional this had to be a hand-written endpoint.
+
+### The handle carries the rules of the request that triggered the hook
+
+`TxFrom` returns the handle the *request* resolved against, so a statement
+issued through it runs that request's hooks — including the hooks of the model
+you are reaching for. This is the single most surprising thing about a
+cross-model write, and whether it is what you want depends on something the code
+does not say out loud: **whether the two models are scoped on the same axis.**
+
+| | the axis | the request's scope on the hook's write |
+|---|---|---|
+| A comment bumps its task's count | `workspace_id` on both | **Correct, and load-bearing.** A comment and its task are in one workspace, so the predicate that confines the request confines the consequence to the same place |
+| An order decrements a shop's stock | `buyer_id` vs `shop_id` | **Wrong.** The buyer is not the shop, so the shop's inventory row is outside the buyer's scope |
+
+The first row is `example/tasks`, and it is why this behaviour is the default
+rather than a bug: the counter bump picks up `workspace_id = <the caller's>` from
+`scopeWrites[tasks.Task]`, which is exactly the confinement the invariant wants.
+
+The second row is the case that needs saying. `Stock`'s `BeforeUpdate` exists
+because [the obligation check](#say-it-in-the-schema-so-the-missing-hook-is-the-one-that-is-caught)
+requires it of any `Scoped` model with an exposed update, and it is written for
+the request — a buyer may not `PATCH` a shop's stock. Run the decrement through
+`tx` and that predicate lands on it too:
+
+```sql
+UPDATE "stocks" SET "count" = "count" - $1 WHERE ("sku" = $2) AND ("shop_id" = $3)
+```
+
+Zero rows, because `shop_id` is the buyer's. The domain logic that was supposed
+to act *past* the request's scope has been confined by it.
+
+The fix is to name the rules the consequence runs under, which is a second
+registry and one handle built from it:
+
+```go
+// At wiring time, beside the request registry.
+system := sqlb.NewRegistry()          // whatever the consequence needs, and no request scope
+sqlb.On[Stock](system).BeforeUpdate(stampStockUpdatedAt)
+
+sqlb.On[Order](reg).AfterCreate(func(ctx context.Context, o *Order) error {
+    tx, ok := sqlb.TxFrom(ctx)
+    if !ok {
+        return errors.New("orders must be placed inside a transaction")
+    }
+    _, err := sqlb.UpdateRows[Stock]()….One(ctx, tx.WithHooks(system))
+    …
+})
+```
+
+`WithHooks` copies the handle and swaps the registry, so the statement stays on
+the same transaction — same connection, same snapshot, rolled back by the same
+failure — and only the rules change. Two things follow from that being a
+*registry* rather than a flag. The consequence's own rules still run, so a
+`system` registry is where a stock write's `updated_at` stamp or audit hook goes
+rather than nowhere. And the set of code that can escalate is the set that was
+handed the value, which is the whole question a `tx.Unscoped()` method could not
+answer — see [Scoping and tests](#scoping-and-tests).
+
+`tx.Tx()` and `sqlb.New(pgTx)` reach the same place with no registry at all,
+because an `Executor` that is not a `*sqlb.DB` carries none. That is the blunter
+instrument: it drops the consequence's rules along with the request's, which for
+a model with a soft delete or a stamped column is usually not what was meant.
+
+### When the write must have happened, say so
+
+`Update.Exec` returns the rows it updated, and **zero rows is not an error**.
+That is right for a statement whose predicate expresses a condition — an
+idempotent flag, a conditional decrement that lost its race — and it is a trap
+for a consequence that has to happen, because the hook returns nil and the
+transaction commits with the consequence missing.
+
+So use `One` when exactly one row must move. It returns `ErrNotFound` on zero,
+which inside a hook rolls the whole unit of work back — the order does not exist
+either, which is the correct outcome and the one a silent `Exec` does not give
+you. `errors.Is(err, sqlb.ErrNotFound)` is then the place to say *why* in the
+response, as the example above does with a 409.
+
+This is also the check that catches the scope mistake in the section before,
+which is the argument for reaching for `One` first and relaxing to `Exec`
+deliberately. When the count is genuinely not one, `Exec` and a length check say
+the same thing in two lines. To see what a hook actually added to the statement,
+`Resolved` renders it:
+[Inspecting](inspecting.md#resolved-which-renders-the-statement-that-runs).
 
 ## AfterCommit, for side effects
 
@@ -268,6 +397,62 @@ a named function with the explanation attached rather than a line inside a
 handler. `ForUpdate`, `ForShare` and `SkipLocked` are on
 [Mutations and transactions](mutations.md#row-locking).
 
+## One registration per model, and what that costs
+
+A registry is keyed by type and `On[T]` is the only way in, so **there is no
+receiver for every model**. Several listeners on one model is fine — hooks
+append and run in registration order, so independent modules can each register
+`AfterCreate` for the same type without knowing about each other. What has no
+spelling is the other axis: one listener for the whole schema.
+
+So a cross-cutting concern is one registration each, written out:
+
+```go
+for _, wire := range []func(*sqlb.Registry, rest.Publisher) error{
+    rest.PublishChanges[tasks.Task],
+    rest.PublishChanges[tasks.List],
+    rest.PublishChanges[tasks.Comment],
+} {
+    if err := wire(reg, broker); err != nil {
+        return err
+    }
+}
+```
+
+For the change feed that list is the design rather than a chore. Every model in
+it is a fan-out every subscriber pays for, which is why the loop above is three
+of that schema's six models and each of the three left out is left out for a
+stated reason. A register-everything form would make the cheap choice the default
+and the considered one an opt-out, which is backwards when each entry has a cost.
+
+The concerns where it *is* a chore are the ones with no per-model decision in
+them: an audit log, a write counter, a stamp. There the list is a place to forget
+something, and forgetting is silent — a table added next month joins the schema,
+gets a resource, gets migrated, and is simply absent. Nothing fails, because
+nothing declared that the model was meant to be in it.
+
+One thing narrows it already: registration is generic, so the list is Go the
+compiler checks rather than strings resolved at startup, and a renamed or deleted
+model breaks the build. What it cannot catch is an *added* one, because nothing
+in the new model refers to the list.
+
+**Nothing makes that omission fail, and it is worth knowing that rather than
+assuming otherwise.** The shape of a mechanism that would is already in the
+generated code: `Register` enumerates every exposed resource, and the generated
+`Actions` struct turns a schema-declared action nothing wired into a refusal when
+the resource mounts rather than a route that quietly 404s. Both work by making the
+schema and the wiring meet somewhere that can fail. Hook registration has no such
+meeting point, because a registration cannot be derived from a list of models at
+runtime — `On[T]` needs the type at compile time, so an exhaustive list has to be
+*generated* rather than iterated. That is not built.
+
+Until it is, the mitigations are the ordinary ones: register the cross-cutting
+concern next to the resource list so a reader adding a table sees both, and write
+the assertion that the concern covers what it must in a test rather than trusting
+the loop. Whether that is worth the trouble depends on what absence costs — a
+missing entry in a change feed is a client that refetches late, and a missing
+entry in an audit log is a compliance gap.
+
 ## Scoping and tests
 
 `On[T](r)` registers into the registry you hand it, and `db.WithHooks(r)` is
@@ -286,13 +471,27 @@ one runs unconfined. That is why models whose rows must not be read unscoped
 declare `Scoped`, which refuses the mount rather than trusting the call site
 ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
 
-A second registry earns its keep beyond isolation. `example/tasks` builds two
-handles over one pool: one resolving against its hooks, and one against an empty
-registry, used by exactly the two endpoints that have to read a user *before*
-there is a tenant to scope the read to. Two values, one of which never leaves
-its own file, is harder to misuse than one handle and a "skip the hooks"
-flag — a flag is something a caller can pass, and the set of callers allowed
-to pass it is the whole question.
+A second registry earns its keep beyond isolation, and there are two distinct
+reasons to want one.
+
+**A request that has no tenant yet.** `example/tasks` builds two handles over one
+pool: one resolving against its hooks, and one against an empty registry, used by
+exactly the two endpoints that have to read a user *before* there is a tenant to
+scope the read to. `example/fxapp` provides the same thing as a named type,
+`fxkit.Unscoped`.
+
+**A consequence that has to act past the request's scope.** This is the checkout
+case from [writing the
+consequence](#writing-the-consequence-which-is-usually-another-table): the hook
+is running under the buyer's rules and has to move the shop's stock, so it needs
+a handle whose rules are the consequence's rather than the request's.
+
+Both are the same shape, and the shape is the point. Two values, one of which
+never leaves its own file, is harder to misuse than one handle and a "skip the
+hooks" flag — a flag is something a caller can pass, and the set of callers
+allowed to pass it is the whole question. A `tx.Unscoped()` method would be that
+flag, reachable from every call site holding a handle; a registry built at wiring
+time is reachable only by what was handed it.
 
 ## Next
 
