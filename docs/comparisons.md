@@ -21,6 +21,7 @@ than asserted.
 | **Atlas** | Migrations as a product — multi-engine, declarative and versioned, linted in CI | **Complementary**: sqlb writes migration files, Atlas is a better tool for applying and linting them |
 | **Bun** | A mature multi-dialect query builder and light ORM | **Overlapping** at the builder. sqlb adds the URL grammar and the capability model above it |
 | **ent** | A mature graph model — traversal, M2M, nested eager loading — with an extension ecosystem | **Overlapping**, and the more complete answer today. sqlb layers over structs ent cannot touch |
+| **Drizzle** | Schema-as-TypeScript with compile-time inference, for a TS backend | **The same philosophy in another language.** Not a rival for a Go backend — the question it decides is whether the backend should be Go at all |
 | **PostgREST** | An API with no Go code at all | **An alternative**: the same job with the rules in RLS rather than in Go |
 
 The sections below take each in turn, leading with what it does better.
@@ -196,6 +197,54 @@ cannot put a Bun query inside it without going through `database/sql` for
 everything. That is the whole of the sqlc coexistence story above, and it is not
 available on the other side.
 
+## Drizzle
+
+The one entry on this page that is not a Go library, and it earns its section
+by being the closest *philosophical* relative here — closer than anything in
+Go. [Drizzle](https://github.com/drizzle-team/drizzle-orm) (~35k stars, checked
+August 2026) is "headless ORM for NodeJS, TypeScript and JavaScript": the
+schema is ordinary TypeScript in your codebase, and
+[drizzle-kit](https://orm.drizzle.team/docs/kit-overview) diffs migrations from
+it (`generate`), applies them (`migrate`/`push`) and introspects an existing
+database back into a declaration (`pull`). Schema as code in the application's
+own language, migrations derived rather than written, adoption by
+introspection — an evaluator who likes sqlb's shape will recognise all of it,
+which is why the comparison belongs here even though nobody chooses between
+them for one backend. What this section decides is a prior question: **if your
+whole stack is TypeScript, should the backend be Go at all?**
+
+**What Drizzle does better, and Go cannot match.** Type inference. A Drizzle
+schema types every column, every query result and every insert at compile
+time, for free — no codegen step, no generated files to gate. `db.select()`
+against a misspelled column is a squiggle in the editor. sqlb's equivalent is a
+runtime error narrowed by the [typed column facade](queries/typed-columns.md)
+and caught by `Explain`-as-a-gate in CI, and the jet/bob answer is codegen.
+None of the three is as good as what TypeScript's type system hands Drizzle
+for nothing. It is also multi-dialect — Postgres, MySQL, SQLite and a long
+list of serverless drivers — where sqlb is
+[Postgres only](adr/0001-postgres-only.md), and it has the ecosystem this page
+keeps conceding: Drizzle Studio, first-party integrations, and a community
+sqlb does not have.
+
+**Where Drizzle stops, and sqlb's argument starts.** Drizzle derives types and
+migrations from the schema and nothing else. The HTTP surface is explicitly
+your problem — the filter parsing, the allow-lists, the OpenAPI document, and
+the API-boundary validation are assembled per project from pieces
+([drizzle-zod](https://orm.drizzle.team/docs/zod) for schemas at the boundary,
+tRPC or a framework for the transport). There is no per-column capability
+model, so "which columns may a request filter by" is a hand-maintained list
+with all the drift that implies, and there is no counterpart to the `Scoped`
+obligation — a forgotten tenant predicate is a leak, not a boot failure.
+
+**The sharper difference is who the derivation protects.** Drizzle's inference
+protects one language, end to end, superbly: a TS schema change breaks the TS
+code that contradicts it, including the frontend if types are shared. It
+protects nobody else — a Dart app, a Go worker, an agent reading the API are
+all outside the inference boundary and drift silently. sqlb inverts the trade:
+weaker guarantees inside the backend language, and generated, drift-gated
+clients for four languages outside it. Which trade is right is a fact about
+your consumers, not about the tools.
+
 ## What is actually unique here
 
 Stripped down, one thing on this page is not done elsewhere:
@@ -207,6 +256,9 @@ Stripped down, one thing on this page is not done elsewhere:
 - PostgREST gives the grammar and no place for Go domain logic.
 - sqlc cannot express a conditional predicate at all.
 - Bun and the typed builders give the builder and nothing above it.
+- Drizzle gives the schema-as-code and the derived migrations, in TypeScript,
+  and stops before the HTTP surface — the allow-lists, the boundary validation
+  and the transport are assembled from pieces per project.
 - ent plus entrest is the one real counter-example, and the honest version of
   this claim has to name it: entrest compiles URL filters into ent predicates
   that pass through ent's privacy layer, which is the same shape. What is left
@@ -233,6 +285,10 @@ Stated plainly, because a comparison page that cannot answer this is marketing:
 - **You are not on Postgres.** sqlb is Postgres-only and
   [will stay that way](adr/0001-postgres-only.md).
 - **Your team wants an ORM.** This is not one, and does not intend to be.
+- **Your whole stack is TypeScript and so are all your consumers.** Drizzle
+  gives the same schema-as-code philosophy with the compile-time inference Go
+  cannot have, and sqlb's remaining edge — generated clients for the languages
+  inference does not reach — is an edge you would not be using.
 
 ---
 
