@@ -462,7 +462,7 @@ func opsExpr(ops schema.Op) string {
 	}{
 		{schema.OpCreate, "rest.OpCreate"}, {schema.OpRead, "rest.OpRead"},
 		{schema.OpUpdate, "rest.OpUpdate"}, {schema.OpDelete, "rest.OpDelete"},
-		{schema.OpList, "rest.OpList"},
+		{schema.OpList, "rest.OpList"}, {schema.OpSingleton, "rest.OpSingleton"},
 	} {
 		if ops.Has(e.op) {
 			parts = append(parts, e.name)

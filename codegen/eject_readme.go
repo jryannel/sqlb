@@ -55,17 +55,26 @@ current — and drop that gate on the day you stop.
 			if r.Ops.Has(schema.OpList) {
 				fmt.Fprintf(&b, "| GET | `%s` | `List%s` |\n", r.Path, name)
 			}
+			if r.Ops.Has(schema.OpSingleton) {
+				fmt.Fprintf(&b, "| GET | `%s` | `Get%s` |\n", r.Path, name)
+			}
 			if r.Ops.Has(schema.OpRead) {
 				fmt.Fprintf(&b, "| GET | `%s/{id}` | `Get%s` |\n", r.Path, name)
 			}
 			if r.Ops.Has(schema.OpCreate) {
 				fmt.Fprintf(&b, "| POST | `%s` | `Insert%s` |\n", r.Path, name)
 			}
+			// A singleton's writes take the collection path too: it has one row
+			// per caller, so there is no segment to name it with.
+			item := r.Path + "/{id}"
+			if r.Ops.Has(schema.OpSingleton) {
+				item = r.Path
+			}
 			if r.Ops.Has(schema.OpUpdate) {
-				fmt.Fprintf(&b, "| PATCH | `%s/{id}` | `Update%s` |\n", r.Path, name)
+				fmt.Fprintf(&b, "| PATCH | `%s` | `Update%s` |\n", item, name)
 			}
 			if r.Ops.Has(schema.OpDelete) {
-				fmt.Fprintf(&b, "| DELETE | `%s/{id}` | `Delete%s` |\n", r.Path, name)
+				fmt.Fprintf(&b, "| DELETE | `%s` | `Delete%s` |\n", item, name)
 			}
 		}
 		b.WriteString("\n")

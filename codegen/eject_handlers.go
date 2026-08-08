@@ -176,8 +176,14 @@ func ejectResource(b *bytes.Buffer, t *schema.TableDef) {
 		fmt.Fprintf(b, "\t}\n")
 	}
 
+	// A singleton's operations are the same handlers with the id block removed,
+	// on the collection path. See eject_singleton.go.
+	single := ejectSingleton(t)
 	if rest.Ops.Has(schema.OpList) {
 		ejectListHandler(b, t, typeName, lower)
+	}
+	if rest.Ops.Has(schema.OpSingleton) {
+		ejectSingletonReadHandler(b, t, typeName)
 	}
 	if rest.Ops.Has(schema.OpRead) && pk != nil {
 		ejectReadHandler(b, t, typeName, lower)
@@ -185,11 +191,21 @@ func ejectResource(b *bytes.Buffer, t *schema.TableDef) {
 	if rest.Ops.Has(schema.OpCreate) {
 		ejectCreateHandler(b, t, typeName, lower, hasDefaults)
 	}
-	if rest.Ops.Has(schema.OpUpdate) && pk != nil {
-		ejectUpdateHandler(b, t, typeName, lower)
+	if rest.Ops.Has(schema.OpUpdate) {
+		switch {
+		case single:
+			ejectSingletonUpdateHandler(b, t, typeName)
+		case pk != nil:
+			ejectUpdateHandler(b, t, typeName, lower)
+		}
 	}
-	if rest.Ops.Has(schema.OpDelete) && pk != nil {
-		ejectDeleteHandler(b, t, typeName, lower)
+	if rest.Ops.Has(schema.OpDelete) {
+		switch {
+		case single:
+			ejectSingletonDeleteHandler(b, t, typeName)
+		case pk != nil:
+			ejectDeleteHandler(b, t, typeName, lower)
+		}
 	}
 	fmt.Fprintln(b, "\treturn nil\n}")
 }
