@@ -4,7 +4,7 @@ What sqlb is for, who it is for, and what would make it a success. This is the
 most speculative document here — it is a statement of intent, not a plan of
 record, and it should be edited whenever the intent changes.
 
-*Last reviewed: 2026-07-28.*
+*Last reviewed: 2026-08-08.*
 
 ## The problem
 
@@ -52,6 +52,48 @@ tenant scoping are enforced once rather than twice.
 visible unless it says so. The blast radius of exposing a table is legible from
 the schema file, which is what makes a dynamic API safe to point at a real
 database.
+
+### Derive, refuse, hand back
+
+The shorter version, and the one to reach for when someone asks what this is:
+
+> Declare once. sqlb **derives** what must agree across surfaces, **refuses**
+> what the declaration left ambiguous, and **hands back** the rest — through
+> seams for the logic that was always going to be yours, and a supported exit if
+> you want the whole thing back.
+
+Each verb is doing work, and the middle one is the one that gets left out.
+
+**Derive** is not "generate most of the code". It is narrower and more useful
+than that: what gets derived is everything that must not disagree with itself
+across five surfaces at once — a column's spelling, its capabilities, its
+nullability, the contract a deployed client couples to. That is the set where a
+human keeping two copies in step is the actual failure mode, and it is why the
+line is drawn by *kind* rather than by proportion. Nothing here claims a
+percentage of an application.
+
+**Refuse** is where most of the design effort has gone, and it produces no code
+at all. A schema that says rows are confined obliges a hook, and a resource
+without one does not mount ([ADR-0030](adr/0030-declared-scope-is-required.md)).
+A capability nobody declared is a 400 naming what would have been accepted. A
+hook predicate that cannot be requalified onto a join alias fails the query
+rather than being dropped. A gap a layer below the declaration can see is
+reported rather than worked around
+([ADR-0051](adr/0051-a-gap-in-the-declaration-is-reported.md)). This is the
+property that separates a dynamic API from pointing PostgREST at your database,
+and it is the reason a release can consist almost entirely of things the library
+now declines to do.
+
+**Hand back** covers two things worth keeping apart. *Seams* — hooks, declared
+actions, [`rest.Reads`](rest/README.md), `Options.Columns` — are where an
+application is meant to write code, and reaching for one is not a shortfall. The
+port that motivated `rest.Reads` withheld the writes on six of its seven
+resources and no two withheld for the same reason; on the write path the
+hand-written fraction is routinely the majority, by design. *Exits* are the other
+thing: the raw `pgx.Tx` behind `db.Tx()`, the [sqlc pairing](with-sqlc.md) for
+the query that wants to be a real query, and [`sqlb eject`](eject.md), which
+is a supported end state rather than a hole — it has a CI gate of its own, and
+the day a project takes it is the day it deletes that gate.
 
 ## Why agents work well with it
 
