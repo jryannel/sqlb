@@ -125,6 +125,35 @@ type Options struct {
 	// request past it is refused with a message pointing at ?cursor=.
 	MaxOffset int
 
+	// DefaultSort is the ordering a list request that names no ?sort gets:
+	// column names, a leading "-" for descending, most significant first.
+	//
+	//	DefaultSort: []string{"-pinned", "-published_at", "-created_at"}
+	//
+	// The direction syntax is ?sort's; the names are column names, as
+	// Computed's and Columns' are.
+	//
+	// The other five limits above bound every dimension of a list request except
+	// the one that decides what the list *is*. For many resources the ordering is
+	// part of the collection's meaning rather than a client preference: a feed is
+	// pinned first, then newest, and a feed in primary-key order is not the feed.
+	// Without this the answer is primary-key order — declared nowhere, so every
+	// caller restates the real ordering on every request, forever, and the caller
+	// that forgets gets a well-formed 200 that is quietly the wrong product
+	// (#165).
+	//
+	// Empty keeps that behaviour, so this changes only what silence means. A
+	// request that sends ?sort replaces it rather than adding to it, and the
+	// primary-key tiebreak is appended exactly as it is to an explicit sort, so
+	// cursors are unaffected. It is not charged against MaxSortTerms: that bounds
+	// what an untrusted request may ask for, and this is the resource's own.
+	//
+	// Every term must name a column this resource serves and that declares
+	// Sortable, checked at startup for the reason Expandable and Computed are —
+	// at request time a default naming an undeclared column would answer 400 to a
+	// client that sent nothing wrong.
+	DefaultSort []string
+
 	// Expandable lists the relation names ?expand may name. Each must be a
 	// relation the model declares — a `expands=` field beside an `expand`
 	// column — and is checked at startup, because at request time an unknown
@@ -153,6 +182,24 @@ type Options struct {
 	// obligation follows the selection — a resource that selects a column
 	// declaring Needs still refuses to mount without a hook to supply the bind,
 	// and one that does not select it no longer has to care.
+	//
+	// # It decides the write path too
+	//
+	// One list, both paths. A create and an update evaluate exactly the columns
+	// named here in their RETURNING, so a resource that asked for none sends an
+	// INSERT over stored columns and nothing else. Until #164 that half was not
+	// narrowed by anything: every write evaluated every bind-free computed column
+	// the model declared, so a store that never reads an aggregate still paid for
+	// it on each patch, a create returned a value that was structurally wrong
+	// because the rows it counts are written later in the same transaction, and a
+	// subquery naming another module's table made the table unwritable without
+	// that module present.
+	//
+	// A column declaring Needs is the exception on this path and is left out of a
+	// write's RETURNING whether or not it is named here — a mutation has nowhere
+	// to take a bind from (ADR-0041). It is left out of the write's *response*
+	// too, so the key is absent rather than present holding a zero that reads as
+	// a real answer (#163); the next read carries the value.
 	Computed []string
 
 	// Columns narrows this resource to the columns it names. Empty — the

@@ -165,6 +165,81 @@ a **second door**: the generated create would still exist, and the next person
 to write against the model would insert rows that reserved nothing. Closing both
 doors with one registration is the argument for hooks in a sentence.
 
+### Writing the consequence
+
+"Write the consequence" is the step the signature does not show. A hook receives
+its own model and nothing else — no `*DB`, no `Executor`, no application handle —
+so read `AfterCreate(func(context.Context, *Order) error)` cold and the
+reasonable conclusion is that a hook can amend the statement it was given and
+nothing more. It is not, and the door out is `sqlb.TxFrom(ctx)`: the `ctx` that
+looks like plumbing is carrying the transaction the write is running in.
+
+Here is the checkout in full. Placing an order decrements the shop's stock, in
+the same transaction, so a refusal rolls the order back with it:
+
+```go
+sqlb.On[Order](reg).AfterCreate(func(ctx context.Context, o *Order) error {
+    tx, ok := sqlb.TxFrom(ctx)
+    if !ok {
+        return errors.New("orders must be placed in a transaction")
+    }
+    // system, not tx. See below.
+    updated, err := sqlb.UpdateRows[Stock]().
+        SetExpr("count", sqlb.Raw{SQL: `"count" - ?`, Args: []any{o.Qty}}).
+        Where(sqlb.F("sku").Eq(o.SKU)).
+        One(ctx, tx.WithHooks(system))
+    if err != nil {
+        return err   // ErrNotFound rolls the order back: nothing to sell.
+    }
+    if updated.Count < 0 {
+        return fmt.Errorf("%w: %s is oversold", ErrConflict, o.SKU)
+    }
+    return nil
+})
+```
+
+Two things in that block are the whole of it.
+
+**`tx.WithHooks(system)`, not `tx`.** `TxFrom` hands back the handle the *request*
+is running on, and that handle carries the request's rules. `Stock` is
+`Scoped`, so `rest.Resource` obliged a `BeforeUpdate` hook confining stock rows
+to their owner — and running this statement through the request's registry
+appends the *buyer's* scope to the *shop's* inventory write:
+
+```sql
+UPDATE "stocks" SET "count" = "count" - $1 WHERE ("sku" = $2) AND ("shop_id" = $3)
+--                                                              ^ the buyer
+```
+
+Against a real database that matches nothing. The rule written to confine a
+request has silently confined the domain logic that was supposed to act past it.
+So the escalated write runs on a handle carrying a *different* registry — the
+second one from [Scoping and tests](#scoping-and-tests) — which is what makes the
+statement unscoped and says so at the call site. `tx.Tx()` gives the raw `pgx.Tx`
+and resolves to no registry at all, which is the same thing spelled without a
+registry to name.
+
+**`One`, not `Exec`.** `Exec` is the natural spelling for a decrement — you want
+the effect, not the row — and it is the one that goes quiet: zero rows is
+`([]T{}, nil)`, the hook returns nil, and the transaction commits with an order
+that reserved nothing. `One` answers `ErrNotFound` on zero rows, which rolls the
+write back. Prefer it in a hook whenever "this changed nothing" is a reason to
+refuse (#159).
+
+Both mistakes are invisible in the Go code and in review, which is why this
+section exists rather than a sentence about `TxFrom`.
+
+**Why a hook's own statements are subject to the same rules at all.** Hooks here
+run at the *statement* layer, not at the API layer. That is what makes one
+registration cover the generated handler, the background job and the admin script
+alike — and it is the same property that puts a hook's own writes inside the
+rules, because from below there is nothing to distinguish them. Frameworks that
+confine at the API boundary (PocketBase's rules, a Django permission class) leave
+DAO access open, so a hook there reaches the database unconfined by default and a
+background job reaches it unconfined too. The trade is real in both directions;
+this is the side sqlb takes, and `tx.WithHooks(system)` is the escape hatch it
+costs.
+
 ## AfterCommit, for side effects
 
 Publishing an event, enqueuing a job, invalidating a cache: none of these may
@@ -286,13 +361,30 @@ one runs unconfined. That is why models whose rows must not be read unscoped
 declare `Scoped`, which refuses the mount rather than trusting the call site
 ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
 
-A second registry earns its keep beyond isolation. `example/tasks` builds two
-handles over one pool: one resolving against its hooks, and one against an empty
-registry, used by exactly the two endpoints that have to read a user *before*
-there is a tenant to scope the read to. Two values, one of which never leaves
-its own file, is harder to misuse than one handle and a "skip the hooks"
-flag — a flag is something a caller can pass, and the set of callers allowed
-to pass it is the whole question.
+### The second registry is not only for tests
+
+It is a normal part of assembling an application, and this repo has arrived at it
+twice: `example/tasks` builds `sys` beside its hooked handle, and `example/fxapp`
+provides `fxkit.Unscoped` as a distinct type so `grep -r 'fxkit.Unscoped'` lists
+every consumer. Three reasons to want one, in the order an application meets
+them:
+
+1. **Reads that happen before there is a tenant.** Sign-in has to find the user
+   before it knows which workspace to scope to. `example/tasks` uses `sys` for
+   exactly two endpoints, and for nothing else.
+2. **A hook writing past the scope of the request that triggered it.** The
+   checkout above: the buyer's rules must not narrow the shop's inventory write.
+   This is the one an application hits on day one and the one with the quietest
+   failure, which is why it has [its own
+   section](#writing-the-consequence).
+3. **Isolation between suites and between tenants**, which is where a test starts
+   and is the cheapest of the three.
+
+Two values, one of which never leaves its own file, is harder to misuse than one
+handle and a "skip the hooks" flag — a flag is something a caller can pass, and
+the set of callers allowed to pass it is the whole question. That is why there is
+no `db.Unscoped()`: the answer to "who may escalate" should be readable from the
+wiring, not from every call site that happens to hold a handle.
 
 ## Next
 

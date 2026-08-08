@@ -167,6 +167,13 @@ func skillWireSurface(b *strings.Builder, exposed []schema.TableManifest) {
 	}
 	b.WriteString("\n")
 
+	// Said once, for every resource below that does not say otherwise. Primary
+	// key order is not an ordering anybody chose, and a list is well-formed in
+	// any order — so without this a reader has no way to tell "this collection
+	// has a meaning for silence" from "this collection has none" (#165).
+	b.WriteString("A list request that names no `?sort=` gets rows in primary-key order unless the " +
+		"resource below states its own ordering. Name an ordering whenever one matters.\n\n")
+
 	for _, t := range exposed {
 		skillResource(b, t)
 	}
@@ -201,6 +208,20 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 		fmt.Fprintf(b, "| %s | %s |\n", row[0], value)
 	}
 	b.WriteString("\n")
+
+	// What an unsorted list returns, when the resource decided. The fallback is
+	// stated once for the document rather than once per resource — see
+	// skillWireSurface — because it is the same sentence every time and this
+	// section is read per resource.
+	//
+	// It is worth stating at all because it is invisible from a response: rows
+	// in some order look well-formed in any order, so a caller that does not
+	// know the resource has a meaning for "no ?sort" cannot tell it got the
+	// wrong product (#165).
+	if len(r.DefaultSort) > 0 {
+		fmt.Fprintf(b, "Ordered by %s unless `?sort=` says otherwise — this is what the collection *is*, "+
+			"so prefer it to restating an ordering.\n\n", joinCode(r.DefaultSort, ", "))
+	}
 
 	// The declared ceilings, and only those. A budget the schema left to the
 	// runtime is one this document has no number for, and inventing the

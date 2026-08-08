@@ -77,6 +77,29 @@ type REST struct {
 	// the end. The right number is a function of the row count, which is known
 	// here and nowhere else (#151).
 	MaxOffset int
+	// DefaultSort is the ordering a list request that names no ?sort gets,
+	// written in the grammar ?sort uses: column names, a leading "-" for
+	// descending, most significant first.
+	//
+	//	DefaultSort: []string{"-pinned", "-published_at", "-created_at"}
+	//
+	// Every other field here bounds a dimension of a list request. This one
+	// says what the list *is*. For many resources the ordering is part of the
+	// collection's meaning rather than a client preference — a feed is pinned
+	// first and then newest, and a feed in primary-key order is not the feed —
+	// and with nowhere to declare it, every caller restates it on every request
+	// and the one that forgets gets a well-formed 200 that is quietly the wrong
+	// product (#151's shape, reported as #165).
+	//
+	// Zero means primary-key order, which is what silence already meant; the
+	// difference is that the answer is now declarable, so it reaches the
+	// generated clients, the OpenAPI description and the generated skill instead
+	// of living in whichever SDK facade a consumer hand-maintains.
+	//
+	// Every term must name a column of this table that declares Sortable.
+	// `sqlb generate` refuses one that does not, and [rest.Resource] refuses
+	// again at mount.
+	DefaultSort []string
 	// Tag groups the resource's operations in the OpenAPI document. Defaults
 	// to the table name.
 	Tag string

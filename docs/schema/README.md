@@ -274,10 +274,14 @@ inside the expression reaches Postgres, and `Explain` against a real database is
 what catches it early.
 
 Nothing writes one: it is absent from the generated create and update bodies and
-from every `INSERT`, and a write's `RETURNING` reads back the bind-free ones so a
-`POST` response carries them without a second read. A parameterised one is left
-out of `RETURNING` — a write has no viewer to bind — and arrives on the next
-read.
+from every `INSERT`. A write's `RETURNING` can read one back, so a `POST`
+response carries it without a second read — but only the ones the caller asked
+for, with `WithComputed` on the statement or `Computed` on the resource. That is
+the same opt-in a read takes, and it is opt-in for the same reasons plus one: an
+aggregate evaluated by a create counts the rows that create has not written yet
+([#164](https://github.com/jryannel/sqlb/issues/164)). A parameterised one can
+never be read back — a write has no viewer to bind — so it is absent from the
+statement *and* from the write's response, and arrives on the next read.
 
 An index can never serve one, which is why a trigger-maintained counter or a
 `GENERATED ALWAYS AS … STORED` column is still the better answer when the value
@@ -285,6 +289,33 @@ allows it; `schema.Lint` says so once per filterable computed column.
 [`example/computed`](../../example/computed/) is the five techniques side by
 side, and [ADR-0041](../adr/0041-computed-fields.md) is why the tiers are drawn
 where they are.
+
+#### Whose table does it name
+
+Nothing parses the expression, so nothing can refuse a subquery that reaches into
+another module — and the question to ask before writing one is not "is this a
+subquery" but **whose table does it name**.
+
+A subquery over this module's own tables is what the feature is for: a chat's
+`participant_ids` over its own `chat_members` is correct and deletes an N+1.
+A subquery naming another module's table is the coupling `ExternalRef` refuses
+to expand for, arriving through a door nothing guards.
+
+It is tempting to reason that the coupling is the same as the `LEFT JOIN` being
+replaced. It is not, and the difference is the footprint. A join lives in one
+query behind one handler. A computed column travels with the model: it is
+selectable by every mount that opts into it, and it is in the `RETURNING` of
+every write that asks for it. A module that turned `LEFT JOIN projects` into
+`Computed("project_name", FromSQL("(SELECT name FROM projects …)"))` found the
+subquery in the `RETURNING` of every insert, so the table could not be written
+at all unless `projects` existed in the same database, and its isolation boot
+test failed on its own seed with `relation "projects" does not exist`. The
+column had to come back out of the declaration.
+
+The answer is `ExternalRef`'s own: fetch the other side through that module's
+API. sqlb cannot check this — resolving a table name out of raw SQL is exactly
+the dependency `ExternalRef`'s free-text target exists to avoid — which is why
+it is written down rather than enforced.
 
 ### Groups
 
@@ -566,6 +597,7 @@ Expose(schema.REST{
     MaxFilters:      12,
     MaxSortTerms:    4,
     MaxOffset:       10_000,
+    DefaultSort:     []string{"-pinned", "-published_at"},
 })
 ```
 
@@ -573,13 +605,23 @@ Expose(schema.REST{
 because a table can be readable by id without being listable. Leaving an
 operation out means the endpoint does not exist — not that it answers 405.
 
-The last five are the per-request cost ceilings, and each is worth setting per
+Five of these are the per-request cost ceilings, and each is worth setting per
 resource: they are the bounds on what one request may ask the database to do,
 and the numbers that justify them — the row count, the width of the table — are
 known here. `MaxPageSize` is a hard ceiling rather than a hint; `MaxFilters` and
 `MaxSortTerms` bound how many predicates and sort terms one request may carry;
 `MaxOffset` bounds how deep `?page=` may reach. A zero takes the package default.
 See [Pagination](../rest/pagination.md).
+
+`DefaultSort` is not a ceiling. It says what a list request that names no `?sort`
+returns — the ordering the collection *means*, rather than the primary-key order
+that is what silence used to fall back to. Terms are column names, most
+significant first, with a leading `-` for descending, and each must declare
+`Sortable`. `?sort` replaces it; the primary-key tiebreak is appended either way,
+so cursors are unaffected. It reaches the OpenAPI description, the manifest, the
+generated skill and the ejected handlers, which is the point: the alternative is
+a constant in one hand-maintained SDK facade that no other client and no agent
+reading the spec ever sees.
 
 ## Modules
 

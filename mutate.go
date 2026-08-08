@@ -30,6 +30,7 @@ type Insert[T any] struct {
 	rows     []*T
 	only     map[string]bool
 	omit     map[string]bool
+	computed map[string]bool
 	conflict *conflictClause
 	err      error
 }
@@ -83,6 +84,23 @@ func (i *Insert[T]) Only(columns ...string) *Insert[T] {
 func (i *Insert[T]) Omit(columns ...string) *Insert[T] {
 	i.checkColumns("Omit", columns)
 	i.omit = toSet(columns)
+	return i
+}
+
+// WithComputed adds the named computed columns to the statement's RETURNING.
+//
+// It is [Builder.WithComputed] for a write, and the default is the same: none.
+// See [writeComputed] for why a write's derived columns are opt-in rather than
+// automatic.
+func (i *Insert[T]) WithComputed(names ...string) *Insert[T] {
+	set, err := writeComputed(i.model, "WithComputed", i.computed, names)
+	if err != nil {
+		if i.err == nil {
+			i.err = err
+		}
+		return i
+	}
+	i.computed = set
 	return i
 }
 
@@ -287,7 +305,7 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 		}
 	}
 
-	writeReturning(c, i.model)
+	writeReturning(c, i.model, i.computed)
 	return c.result()
 }
 
@@ -451,12 +469,13 @@ func (i *Insert[T]) refuseSkippingTerminal() error {
 
 // Update is an UPDATE statement over model T.
 type Update[T any] struct {
-	model   *Model
-	dialect Dialect
-	sets    []assignment
-	where   []Pred
-	all     bool
-	err     error
+	model    *Model
+	dialect  Dialect
+	sets     []assignment
+	where    []Pred
+	all      bool
+	computed map[string]bool
+	err      error
 }
 
 type assignment struct {
@@ -519,6 +538,20 @@ func (u *Update[T]) Everything() *Update[T] {
 	return u
 }
 
+// WithComputed adds the named computed columns to the statement's RETURNING.
+//
+// It is [Builder.WithComputed] for a write, and the default is the same: none.
+// See [writeComputed] for why a write's derived columns are opt-in rather than
+// automatic.
+func (u *Update[T]) WithComputed(names ...string) *Update[T] {
+	set, err := writeComputed(u.model, "WithComputed", u.computed, names)
+	if err != nil {
+		return u.fail("%s", err)
+	}
+	u.computed = set
+	return u
+}
+
 // UseDialect overrides the dialect for this statement.
 func (u *Update[T]) UseDialect(d Dialect) *Update[T] {
 	u.dialect = d
@@ -567,7 +600,7 @@ func (u *Update[T]) SQL() (string, []any, error) {
 		c.write(" WHERE ")
 		c.predicates(u.where)
 	}
-	writeReturning(c, u.model)
+	writeReturning(c, u.model, u.computed)
 	return c.result()
 }
 
@@ -659,11 +692,12 @@ func (u *Update[T]) One(ctx context.Context, db Executor) (T, error) {
 
 // Delete is a DELETE statement over model T.
 type Delete[T any] struct {
-	model   *Model
-	dialect Dialect
-	where   []Pred
-	all     bool
-	err     error
+	model    *Model
+	dialect  Dialect
+	where    []Pred
+	all      bool
+	computed map[string]bool
+	err      error
 	// returning asks for the removed rows back. Not settable by a caller: it is
 	// set on the clone [Delete.Exec] runs, when an [Hooks.AfterDeleteRows] hook
 	// is registered for T and the rows therefore have somewhere to go. A delete
@@ -691,6 +725,23 @@ func (d *Delete[T]) Where(preds ...Pred) *Delete[T] {
 // Everything confirms an intentionally unscoped delete.
 func (d *Delete[T]) Everything() *Delete[T] {
 	d.all = true
+	return d
+}
+
+// WithComputed adds the named computed columns to the statement's RETURNING.
+//
+// A delete only carries a RETURNING at all when an [Hooks.AfterDeleteRows] hook
+// is registered, so this decides what those rows hold. The default is none, as
+// it is on the other two writes; see [writeComputed].
+func (d *Delete[T]) WithComputed(names ...string) *Delete[T] {
+	set, err := writeComputed(d.model, "WithComputed", d.computed, names)
+	if err != nil {
+		if d.err == nil {
+			d.err = err
+		}
+		return d
+	}
+	d.computed = set
 	return d
 }
 
@@ -723,7 +774,7 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 		c.predicates(d.where)
 	}
 	if d.returning {
-		writeReturning(c, d.model)
+		writeReturning(c, d.model, d.computed)
 	}
 	return c.result()
 }
@@ -815,22 +866,76 @@ func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	return n, nil
 }
 
-// writeReturning appends RETURNING over every mapped column, so that callers
-// see database-generated values without a follow-up read.
+// writeComputed validates the names a write asks its RETURNING to evaluate and
+// returns the set to hold, leaving the caller's untouched.
 //
-// A computed column is returned as its expression, so that a POST response
-// carries the derived fields without a second read — with one exception. A
+// A write's computed columns are opt-in, and the default is none. Reads flipped
+// to opt-in in #92 — "a computed column is a cost, and one the schema happens to
+// declare is not the same thing as one this caller wants to serve" — and the
+// write path was simply never revisited, so the same aggregate a read had to ask
+// for by name was evaluated by every INSERT and UPDATE of the table whether or
+// not anyone read it. Three things came of that, and only the first is about
+// cost (#164): a create returned a value that was structurally wrong, because
+// the rows the subquery counts are written later in the same transaction; and a
+// subquery naming another module's table rode into the RETURNING of every insert,
+// so the table could not be written at all unless that module's tables were
+// present. Opting in contains both to the caller that wanted the column.
+//
+// A column carrying [Field.Needs] is refused rather than accepted-and-skipped. A
 // parameterised expression needs a bind, and a mutation has nowhere to take one
 // from: the value is a property of who is asking, and the hooks a write runs
-// receive the row rather than the statement. Such a column is left out of
-// RETURNING rather than rendered against a bind that is not there, so the field
-// holds its zero value in the write's response and its real one from the next
-// read (ADR-0041).
-func writeReturning(c *compiler, m *Model) {
+// receive the row rather than the statement. ADR-0041 decided such a column is
+// left out and read back by the next query — so a caller naming one here is
+// asking for something no write can produce, and hearing so is better than a
+// field that silently arrives holding its zero value.
+func writeComputed(m *Model, method string, have map[string]bool, names []string) (map[string]bool, error) {
+	if len(names) == 0 {
+		return have, nil
+	}
+	set := make(map[string]bool, len(have)+len(names))
+	for name := range have {
+		set[name] = true
+	}
+	for _, name := range names {
+		col := m.Column(name)
+		switch {
+		case col == nil:
+			return nil, fmt.Errorf("sqlb: %s(%q): not a column of %s (have: %s)",
+				method, name, m.Table, strings.Join(m.ColumnNames(), ", "))
+		case !col.Computed():
+			return nil, fmt.Errorf("sqlb: %s(%q): %s stores that column rather than computing it; "+
+				"a stored column is already in RETURNING", method, name, m.Table)
+		case len(col.Needs) > 0:
+			return nil, fmt.Errorf("sqlb: %s(%q): %s computes that column from the %s bind, and a write has "+
+				"nowhere to take a bind from — the value is a property of who is asking, and the hooks a write "+
+				"runs receive the row rather than the statement; read it back with the next query (ADR-0041)",
+				method, name, m.Table, quoteList(col.Needs))
+		}
+		set[name] = true
+	}
+	return set, nil
+}
+
+// quoteList renders a short list of names for an error message.
+func quoteList(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = fmt.Sprintf("%q", name)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// writeReturning appends RETURNING over every stored column, so that callers see
+// database-generated values without a follow-up read, plus whichever computed
+// columns the statement asked for.
+//
+// Computed columns are not in it by default. See [writeComputed] for the
+// argument, and WithComputed on [Insert], [Update] and [Delete] for the opt-in.
+func writeReturning(c *compiler, m *Model, computed map[string]bool) {
 	c.write(" RETURNING ")
 	first := true
 	for _, col := range m.Columns {
-		if col.Computed() && len(col.Needs) > 0 {
+		if col.Computed() && !computed[col.Name] {
 			continue
 		}
 		if !first {

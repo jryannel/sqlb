@@ -432,7 +432,7 @@ func registerOrgs(mux *http.ServeMux, db DB, h OrgsHooks) error {
 }
 
 // postLimits are the ceilings posts declared.
-var postLimits = Limits{DefaultPageSize: 20, MaxPageSize: 100, MaxFilters: 12, MaxSortTerms: 4, MaxOffset: 5000}
+var postLimits = Limits{DefaultPageSize: 20, MaxPageSize: 100, MaxFilters: 12, MaxSortTerms: 4, MaxOffset: 5000, DefaultSort: []Order{{Column: "created_at", Desc: true}}}
 
 // decodePostCreate reads a create body for posts: which columns it named, and
 // what each one carried. An unknown property is refused with the list of the

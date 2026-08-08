@@ -430,6 +430,29 @@ type txKey struct{}
 //	    n, err := sqlb.Query[Post]().Where(sqlb.F("slug").Eq(p.Slug)).Count(ctx, tx)
 //	    ...
 //	})
+//
+// # It is also how a hook reaches another model
+//
+// The example above stays inside Post, and that is the smaller half of what this
+// is for. A hook's signature hands it its own model and nothing else — no *DB,
+// no Executor — so this is the only way to write the consequence an insert
+// means: placing an order decrements stock, in the same transaction, so a
+// refusal rolls the order back with it. That operation is the reason hooks
+// exist, and it cannot be inferred from any signature.
+//
+// One thing to know before writing it. The handle this returns carries the
+// *request's* registry, so a statement issued through it runs that request's
+// rules — including on a different model. Updating Stock from an Order hook
+// therefore runs Stock's own BeforeUpdate, which is the buyer-scoping hook the
+// mount obliged, and the shop's inventory write is silently narrowed to the
+// buyer. Run the escalated write on a handle carrying a second registry
+// (tx.WithHooks(system)), and prefer [Update.One] to [Update.Exec] so that
+// matching nothing refuses rather than committing (#159):
+//
+//	sqlb.UpdateRows[Stock]()….One(ctx, tx.WithHooks(system))
+//
+// docs/queries/hooks.md has the worked version and the argument for why a hook's
+// own statements are subject to the same rules at all.
 func TxFrom(ctx context.Context) (*DB, bool) {
 	tx, ok := ctx.Value(txKey{}).(*DB)
 	return tx, ok

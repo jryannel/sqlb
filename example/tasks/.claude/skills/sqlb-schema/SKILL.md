@@ -36,6 +36,8 @@ A schema edit is also an API edit. `sqlb impact` reports what it did to the REST
 | `users` | `/users` | `read` `list` | max 100 |
 | `workspaces` | `/workspaces` | `read` `list` | *default* |
 
+A list request that names no `?sort=` gets rows in primary-key order unless the resource below states its own ordering. Name an ordering whenever one matters.
+
 ### `comments`
 
 Addressed by `id`. `/comments`

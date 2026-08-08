@@ -24,6 +24,10 @@ func ceilingFixture() *schema.Registry {
 		MaxFilters:      12,
 		MaxSortTerms:    3,
 		MaxOffset:       10000,
+		// Not a ceiling, and here anyway: it travels the same road as the five
+		// above — declaration to mount to exit — and it is the one of the six
+		// whose absence is invisible in a response (#165).
+		DefaultSort: []string{"-name"},
 	})
 	return r
 }
@@ -41,6 +45,7 @@ func TestGeneratedRegisterCarriesEveryCostCeiling(t *testing.T) {
 		"MaxFilters: 12",
 		"MaxSortTerms: 3",
 		"MaxOffset: 10000",
+		`DefaultSort: []string{"-name"}`,
 	} {
 		if !contains(src, want) {
 			t.Errorf("registration missing %q:\n%s", want, src)
@@ -73,12 +78,16 @@ func TestEjectedLimitsCarryEveryCostCeiling(t *testing.T) {
 	files := eject(t, ceilingFixture())
 
 	want := "var productLimits = Limits{DefaultPageSize: 25, MaxPageSize: 100, " +
-		"MaxFilters: 12, MaxSortTerms: 3, MaxOffset: 10000}"
+		"MaxFilters: 12, MaxSortTerms: 3, MaxOffset: 10000, " +
+		`DefaultSort: []Order{{Column: "name", Desc: true}}}`
 	if !contains(files["handlers.go"], want) {
 		t.Errorf("ejected limits missing %q:\n%s", want, files["handlers.go"])
 	}
-	// And the parser has to act on the field, not merely hold it.
+	// And the parser has to act on the fields, not merely hold them.
 	if !contains(files["support.go"], "starts past the offset budget of") {
 		t.Errorf("the ejected list parser does not enforce an offset budget:\n%s", files["support.go"])
+	}
+	if !contains(files["support.go"], "lim.DefaultSort...") {
+		t.Errorf("the ejected list parser ignores the declared ordering:\n%s", files["support.go"])
 	}
 }

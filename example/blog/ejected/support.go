@@ -142,6 +142,12 @@ type Limits struct {
 	// come out, so a client walking a large collection has no cheaper spelling
 	// to be redirected to.
 	MaxOffset int
+	// DefaultSort is the ordering a request naming no ?sort gets. Empty means
+	// primary-key order. It is not a ceiling like the rest of this struct: it
+	// is what the collection *is*, and it is here so the exit answers an
+	// unsorted list the way the API did rather than in whatever order the
+	// database found convenient.
+	DefaultSort []Order
 }
 
 // ListRequest is a parsed list query.
@@ -461,6 +467,11 @@ func ParseList(values url.Values, cols []Column, lim Limits) (ListRequest, error
 			}
 			out.Query.Order = append(out.Query.Order, Order{Column: col.Name, Desc: desc})
 		}
+	} else {
+		// The resource's declared ordering, applied only when the request named
+		// none. Appended rather than assigned so the caller's slice is never
+		// aliased into a parsed request.
+		out.Query.Order = append(out.Query.Order, lim.DefaultSort...)
 	}
 
 	perPage := lim.DefaultPageSize

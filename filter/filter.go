@@ -3,6 +3,7 @@ package filter
 import (
 	"encoding"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -117,6 +118,34 @@ type Options struct {
 	// against the model at startup, where a typo is a resource missing a column
 	// rather than a request-time surprise.
 	Columns []string
+
+	// DefaultSort is the ordering a request that names no ?sort gets: column
+	// names, a leading "-" for descending, most significant first.
+	//
+	//	DefaultSort: []string{"-pinned", "-published_at", "-created_at"}
+	//
+	// The direction syntax is ?sort's. The names are column names, as
+	// Columns' and Computed's are — identical to the wire spelling unless the
+	// schema declared a WireCase, and a declaration should not have to be
+	// written in the front end's casing.
+	//
+	// Empty means primary-key order, which is what silence meant before this
+	// existed — the difference is that the answer is now declared rather than
+	// being an implementation detail nothing could state (#165). For many
+	// resources the ordering is part of what the collection *is*: a feed in
+	// primary-key order is not the feed, and every caller restating it on every
+	// request is a rule one caller can forget and get a well-formed 200 for.
+	//
+	// It is not a bound and is not charged against MaxSortTerms, which exists to
+	// cap what an untrusted request may ask for. A ?sort of any kind replaces it
+	// outright rather than being appended to it; the primary-key tiebreak is
+	// added afterwards either way, so cursors work unchanged.
+	//
+	// Every term must name a column this resource can sort by. The rest package
+	// checks that where a resource is mounted, so a default naming a column that
+	// is not Sortable is a startup failure rather than a 400 blaming whoever sent
+	// the first request.
+	DefaultSort []string
 
 	// DisableSearch rejects ?search even when columns are searchable.
 	DisableSearch bool
@@ -1085,45 +1114,63 @@ func (p *parser) parseSearch(term string) (sqlb.Pred, bool) {
 	return sqlb.Or(preds...), true
 }
 
+// parseSort resolves ?sort, falling back to the resource's declared ordering.
+//
+// The fallback goes through the same term parser rather than being applied
+// later, so the declared default and a request that spells the same thing
+// produce the same ordering — including the declared null placement, which is
+// the half a hand-written default in an SDK facade tends to lose.
 func (p *parser) parseSort(raw string) []sqlb.Order {
 	if raw == "" {
-		return nil
+		if len(p.opts.DefaultSort) == 0 {
+			return nil
+		}
+		return p.sortTerms(p.opts.DefaultSort, true)
 	}
 	terms := strings.Split(raw, ",")
 	if len(terms) > p.opts.maxSortTerms() {
 		p.errf("sort", raw, "%d sort terms requested, the limit is %d", len(terms), p.opts.maxSortTerms())
 		return nil
 	}
+	return p.sortTerms(terms, false)
+}
 
+// sortTerms turns sort terms into ordering, reporting each one it cannot.
+//
+// declared says the terms came from the resource rather than from the request,
+// which changes only what a rejection says: the terms have been checked at mount
+// since #165, so reaching a rejection here means a caller assembled
+// [Options] by hand and a message blaming the request would send them looking in
+// the wrong place.
+func (p *parser) sortTerms(terms []string, declared bool) []sqlb.Order {
 	var out []sqlb.Order
 	for _, term := range terms {
 		term = strings.TrimSpace(term)
 		if term == "" {
 			continue
 		}
-		desc := false
-		if rest, found := strings.CutPrefix(term, "-"); found {
-			desc, term = true, rest
-		} else if name, dir, found := strings.Cut(term, "."); found {
-			// The `created_at.desc` spelling, for PostgREST familiarity.
-			switch strings.ToLower(dir) {
-			case "desc":
-				desc, term = true, name
-			case "asc":
-				term = name
-			default:
-				p.errf("sort", term, "unknown sort direction %q, expected asc or desc", dir)
-				continue
-			}
+		name, desc, err := SortTerm(term)
+		if err != nil {
+			p.errf("sort", term, "%s%s", blame(declared), err)
+			continue
 		}
+		term = name
 
+		// A request names a column the way the wire spells it; a declaration
+		// names it the way the schema does, as Options.Columns and
+		// Options.Computed do. The two are the same string unless the schema
+		// declared a WireCase, and keeping them apart is what stops a
+		// declaration having to be written in the front end's casing.
 		col := p.model.ColumnByWire(term)
+		if declared {
+			col = p.model.Column(term)
+		}
 		switch {
 		case col == nil || col.Hidden || !p.opts.reachable(col):
-			p.errAllowed("sort", term, "unknown column", p.capable(capSort))
+			p.errAllowed("sort", term, blame(declared)+"unknown column", p.capable(capSort))
 			continue
 		case !col.Sortable:
-			p.errAllowed("sort", term, "column is not sortable", p.capable(capSort))
+			p.errAllowed("sort", term, blame(declared)+"column is not sortable", p.capable(capSort))
 			continue
 		}
 
@@ -1135,6 +1182,47 @@ func (p *parser) parseSort(raw string) []sqlb.Order {
 		out = append(out, withDeclaredNulls(o, col))
 	}
 	return out
+}
+
+// SortTerm splits one sort term into the column it names and its direction.
+//
+// Two spellings, both accepted: `-created_at` and `created_at.desc`. The second
+// is there for PostgREST familiarity, and having both here rather than in each
+// caller is what stops a declared default and a `?sort` disagreeing about what
+// the same text means.
+//
+// Exported because the term is written in two places — a request, and the
+// resource's own DefaultSort — and the second is checked where a resource is
+// mounted, which is outside this package.
+func SortTerm(term string) (name string, desc bool, err error) {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return "", false, errors.New("a sort term cannot be empty")
+	}
+	if name, found := strings.CutPrefix(term, "-"); found {
+		return name, true, nil
+	}
+	if name, dir, found := strings.Cut(term, "."); found {
+		switch strings.ToLower(dir) {
+		case "asc":
+			return name, false, nil
+		case "desc":
+			return name, true, nil
+		default:
+			return "", false, fmt.Errorf("unknown sort direction %q, expected asc or desc", dir)
+		}
+	}
+	return term, false, nil
+}
+
+// blame prefixes a sort rejection when the term came from the resource's
+// declared default rather than from the request, so the reader looks at the
+// mount instead of at the query string.
+func blame(declared bool) string {
+	if declared {
+		return "the resource's declared default ordering names a column it cannot sort by: "
+	}
+	return ""
 }
 
 // withDeclaredNulls applies the column's declared null placement to one term.

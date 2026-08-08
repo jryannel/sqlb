@@ -428,6 +428,28 @@ func (r *Registry) Validate() error {
 			if t.rest.MaxFilters < 0 || t.rest.MaxSortTerms < 0 || t.rest.MaxOffset < 0 {
 				report(t.name, "", "request ceilings must not be negative; leave one zero to take the package default")
 			}
+			// A default ordering naming a column that cannot be sorted by is a
+			// resource whose every unsorted list is a 400 — answering a client
+			// that sent nothing wrong. It is checkable here, so it is refused
+			// here rather than at mount, where the same mistake would have
+			// already shipped.
+			for _, term := range t.rest.DefaultSort {
+				name, _, err := SortTerm(term)
+				if err != nil {
+					report(t.name, "", "DefaultSort %q: %s", term, err)
+					continue
+				}
+				f := t.Field(name)
+				switch {
+				case f == nil:
+					report(t.name, "", "DefaultSort %q names no column of this table", term)
+				case f.Desc().Hidden:
+					report(t.name, name, "DefaultSort %q names a Hidden column; a resource cannot order by a column it never serves", term)
+				case !f.Desc().Sortable:
+					report(t.name, name, "DefaultSort %q names a column that is not Sortable; "+
+						"capabilities are opt-in, so an ordering nothing declared is one no ?sort could ask for either", term)
+				}
+			}
 			// A declared soft delete and a generated hard DELETE are a
 			// contradiction the runtime cannot resolve: nothing reads
 			// deleted_at, so the generated handler removes the row and the
@@ -479,6 +501,38 @@ func isTextual(t Type) bool {
 // and the filter parser both rely on this: an identifier that passes here can
 // be interpolated into SQL without further escaping.
 func isIdent(s string) bool { return CheckIdent(s) == nil }
+
+// SortTerm splits a sort term into the column it names and its direction.
+//
+// Both spellings the request grammar accepts are read here — `-published_at`
+// and `published_at.desc` — so a declared default and a `?sort` that means the
+// same thing are written the same way. It is exported because codegen resolves
+// a declared ordering at generation time rather than emitting a second parser
+// into the exit.
+//
+// This duplicates [filter.SortTerm] on purpose: nothing on the request path may
+// import this package, which is what keeps the runtime usable without the DSL.
+// The grammar is four lines and is pinned on both sides by tests.
+func SortTerm(term string) (name string, desc bool, err error) {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return "", false, errors.New("a sort term cannot be empty")
+	}
+	if name, found := strings.CutPrefix(term, "-"); found {
+		return name, true, nil
+	}
+	if name, dir, found := strings.Cut(term, "."); found {
+		switch strings.ToLower(dir) {
+		case "asc":
+			return name, false, nil
+		case "desc":
+			return name, true, nil
+		default:
+			return "", false, fmt.Errorf("%q is not a sort direction; write asc, desc, or a leading -", dir)
+		}
+	}
+	return term, false, nil
+}
 
 // CheckIdent reports why the DSL cannot declare a table or column called name,
 // or nil when it can.

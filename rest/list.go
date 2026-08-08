@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
@@ -82,6 +83,7 @@ func registerList[T any](api huma.API, db sqlb.Executor, b *binding[T]) {
 			MaxFilters:      opts.MaxFilters,
 			MaxSortTerms:    opts.MaxSortTerms,
 			MaxOffset:       opts.MaxOffset,
+			DefaultSort:     opts.DefaultSort,
 			Expandable:      opts.Expandable,
 			Computed:        opts.Computed,
 			Columns:         opts.Columns,
@@ -153,10 +155,20 @@ func listDescription[T any](b *binding[T]) string {
 	if desc != "" {
 		desc += "\n\n"
 	}
-	return desc + fmt.Sprintf(
+	desc += fmt.Sprintf(
 		"Filtering, sorting and searching are restricted to the columns that declare "+
 			"the capability; a request naming any other column is rejected with the list "+
 			"of columns that would have been accepted. At most %d filter conditions may be "+
 			"combined in one request.",
 		orDefault(b.opts.MaxFilters, filter.MaxFilters))
+	// What an unsorted request gets. The document could not say it before,
+	// because the answer was primary-key order and that is an implementation
+	// detail rather than something the resource decided (#165).
+	if len(b.opts.DefaultSort) > 0 {
+		desc += fmt.Sprintf(
+			"\n\nWithout ?sort the rows come back ordered by %s, which is this collection's "+
+				"own ordering; ?sort replaces it.",
+			strings.Join(b.opts.DefaultSort, ", "))
+	}
+	return desc
 }
