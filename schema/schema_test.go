@@ -325,6 +325,39 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			want: "is not a sort direction",
 		},
 		{
+			// The refusal the whole singleton shape rests on. Its row comes
+			// from the scope hook and from nothing else — no key in the path,
+			// no predicate in the statement — so on an unconfined table the
+			// read answers an arbitrary row and the PATCH reaches every row
+			// there is (#166).
+			name: "a singleton over a table nothing confines",
+			build: func(r *schema.Registry) {
+				r.Table("settings", schema.UUIDv7("id").PrimaryKey(), schema.Text("theme")).
+					Expose(schema.REST{Ops: schema.OpSingleton})
+			},
+			want: "exposes OpSingleton but declares no Scoped column",
+		},
+		{
+			// GET on the collection path cannot be the caller's row and the
+			// collection at once.
+			name: "a singleton beside a list",
+			build: func(r *schema.Registry) {
+				r.Table("settings", schema.UUIDv7("id").PrimaryKey().ReadOnly().Scoped()).
+					Expose(schema.REST{Ops: schema.OpSingleton | schema.OpList})
+			},
+			want: "the same route",
+		},
+		{
+			// A read by id is the question the shape exists to delete, so it
+			// is named as a leftover rather than as a conflict.
+			name: "a singleton beside a read by id",
+			build: func(r *schema.Registry) {
+				r.Table("settings", schema.UUIDv7("id").PrimaryKey().ReadOnly().Scoped()).
+					Expose(schema.REST{Ops: schema.OpSingleton | schema.OpRead})
+			},
+			want: "drop OpRead",
+		},
+		{
 			// Deferral is a property of a constraint, and a column with no
 			// unique constraint has none of its own to defer.
 			name: "Deferred without a unique constraint",

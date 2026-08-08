@@ -158,6 +158,7 @@ the section it bears on, and move on.
 | [0049](0049-the-skill-is-generated.md) | The agent skill is generated where it can be gated, and static only where no check is possible | Working | Medium |
 | [0050](0050-reachability-is-a-property-of-the-mount.md) | Reachability is a property of the mount, so one table can serve a public surface and a privileged one | Working | Medium |
 | [0051](0051-a-gap-in-the-declaration-is-reported.md) | A gap below the declaration is reported, not silent | Working | Medium |
+| [0052](0052-a-singleton-is-an-op-that-removes-the-id.md) | A singleton is an operation that removes the {id}, and it is legal only on a Scoped table | Working | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.

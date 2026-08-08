@@ -427,6 +427,17 @@ func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *REST
 		Sortable:        []string{},
 		Searchable:      []string{},
 	}
+	// A singleton has no list, so it has no ?filter, ?sort or ?search either —
+	// its one GET rejects every query parameter but ?expand. Reporting the
+	// column capabilities anyway would describe requests that answer 400, which
+	// is the failure #143 was: a document faithfully rendering a surface that
+	// is not there.
+	singleton := t.rest.Ops.Has(OpSingleton)
+	if singleton {
+		rm.DefaultSort = nil
+		rm.DefaultPageSize, rm.MaxPageSize = 0, 0
+		rm.MaxFilters, rm.MaxSortTerms, rm.MaxOffset = 0, 0, 0
+	}
 	for _, f := range t.fields {
 		d := f.Desc()
 		if d.Hidden {
@@ -435,6 +446,14 @@ func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *REST
 		// The wire spelling, not the column's own: this section describes what a
 		// request may send, and under a non-default WireCase the two differ.
 		name := wire.WireName(d.Name)
+		if singleton {
+			// Expansion is the one parameter the singleton read does take, so
+			// the loop still runs for it.
+			if d.Expandable && d.Ref != nil && !d.Ref.External {
+				rm.Expandable = append(rm.Expandable, d.Ref.Name)
+			}
+			continue
+		}
 		if d.Filterable {
 			rm.Filterable = append(rm.Filterable, name)
 		}
@@ -491,6 +510,15 @@ func (a Action) manifest(resourcePath string) ActionManifest {
 // request, and unlike prose it can be checked against the parser.
 func (t *TableDef) examples(rm *RESTManifest) []string {
 	var out []string
+	// A singleton's whole request surface is the path and, where it has one,
+	// ?expand. Every other example below is a list request it does not serve.
+	if t.rest.Ops.Has(OpSingleton) {
+		out = append(out, "GET "+rm.Path)
+		if len(rm.Expandable) > 0 {
+			out = append(out, fmt.Sprintf("GET %s?expand=%s", rm.Path, rm.Expandable[0]))
+		}
+		return out
+	}
 	if len(rm.Filterable) > 0 {
 		out = append(out, fmt.Sprintf("GET %s?%s=eq.VALUE", rm.Path, rm.Filterable[0]))
 	}

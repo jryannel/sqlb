@@ -102,6 +102,7 @@ hooks cover those for every read the handlers issue.
 | `OpCreate` | `POST /posts` | Body is `C`; returns the stored row |
 | `OpUpdate` | `PATCH /posts/{id}` | Body is `U`; reports its own change set |
 | `OpDelete` | `DELETE /posts/{id}` | A real `DELETE` |
+| `OpSingleton` | `GET /settings` | The caller's one row, as a bare object |
 
 An operation the schema does not expose has no endpoint — not a 405. That is
 also true of the generated [TypeScript client](../typescript/README.md) and
@@ -118,6 +119,52 @@ same request a capped `?expand` tells a caller to follow for the rest of the
 children. The one real cost is that a parent which does not exist yields an empty
 page rather than a 404
 ([ADR-0038](https://github.com/jryannel/sqlb/blob/main/docs/adr/0038-collections-are-flat.md)).
+
+### A table with one row per caller
+
+Some tables are keyed by the tenant that owns them: a subscription per org, a
+settings row per workspace, a profile per user. Both collection shapes are wrong
+for those. `OpList` answers a one-element `{items:[…]}` envelope that every
+client unwraps forever, and `OpRead` puts the caller's own tenant id in the URL —
+a value the server already holds and the hook already enforces, so the segment is
+either redundant or a lie and a mismatch is a 404 meaning *you typed your own name
+wrong*. Until `OpSingleton` the answer was a permanent hand-written handler beside
+an otherwise fully declared module ([#166]).
+
+```go
+r.Table("billing_subscriptions",
+    schema.UUIDv7("org_id").PrimaryKey().ReadOnly().Scoped(),
+    schema.Enum("plan", "free", "pro", "team").Default(schema.Value("free")),
+).Expose(schema.REST{
+    Path: "/billing-subscription",
+    Ops:  schema.OpSingleton | schema.OpUpdate,
+})
+```
+
+`GET /billing-subscription` answers the caller's row as a bare object, and 404
+when they have no row yet. `OpSingleton` removes the `{id}` segment from the whole
+resource rather than adding a route beside it, so `OpUpdate` is `PATCH
+/billing-subscription` and `OpDelete` is `DELETE /billing-subscription`.
+`OpCreate` is `POST /billing-subscription` as it always was.
+
+The row every one of those addresses is **the row the scope hook leaves**: there
+is no key in the path and no key predicate in the statement, so a singleton read
+compiles to `SELECT … FROM billing_subscriptions` and the hook appends `WHERE
+org_id = $1`. That is why the shape is refused on a table with no `Scoped` column
+— without the hook the read would answer an arbitrary row and the `PATCH` would
+reach every row in the table — and it is why the obligation check treats this read
+as its strongest case. A singleton that matches two rows is a 500 rather than a
+choice between them.
+
+`OpList` and `OpRead` are refused alongside it: the first is the same route, and
+the second is the question the shape exists to delete. Nothing else changes — the
+same hooks, the same computed columns, the same `?expand`, and no filter, sort,
+page or `?select`, since there is one row and the caller does not choose it.
+
+A singleton needs no primary key at all, which is what lets a table keyed only by
+its tenant column be a resource.
+
+[#166]: https://github.com/jryannel/sqlb/issues/166
 
 ### Documenting the auth scheme
 

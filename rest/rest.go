@@ -24,6 +24,28 @@ const (
 	OpUpdate
 	OpDelete
 	OpList // GET /resource with filter, sort, search, pagination
+
+	// OpSingleton is GET /resource — the caller's one row, with no {id}
+	// segment anywhere on the resource.
+	//
+	// A table keyed by its own scope column has one row per caller, and the two
+	// ops on offer were both wrong for it: OpList answered a one-element
+	// envelope every client unwrapped forever, and OpRead asked the client to
+	// send back the tenant id the server already holds, where a mismatch is a
+	// 404 meaning "you typed your own name wrong" (#166).
+	//
+	// It changes the resource rather than adding a route. The item path loses
+	// its {id}, so OpUpdate becomes PATCH /resource and OpDelete becomes DELETE
+	// /resource; OpCreate is POST /resource either way. The row all of them
+	// address is the one the scope hook leaves — there is no key in the path and
+	// no predicate in the statement — which is why this is refused on a model
+	// with no Scoped column. Without one the read answers an arbitrary row and
+	// the write reaches every row in the table, and that is the default-open
+	// outcome ADR-0030 exists to close.
+	//
+	// OpList and OpRead are refused alongside it: the first is the same route,
+	// and the second is the id-shaped question this exists to delete.
+	OpSingleton
 )
 
 // CRUD is the conventional single-row operation set. Combine it with OpList
@@ -329,9 +351,18 @@ func (o Options) validate() error {
 		return fmt.Errorf("rest: Options.Path %q must start with a slash", o.Path)
 	case o.Ops == 0:
 		return fmt.Errorf("rest: Options.Ops is empty for %s; a resource that exposes nothing should not be mounted", o.Path)
+	case o.Ops.Has(OpSingleton) && o.Ops.Has(OpList):
+		return fmt.Errorf("rest: %s exposes both OpSingleton and OpList, which are the same route: "+
+			"GET %s cannot be the caller's row and the collection at once", o.Path, o.Path)
+	case o.Ops.Has(OpSingleton) && o.Ops.Has(OpRead):
+		return fmt.Errorf("rest: %s exposes both OpSingleton and OpRead; OpSingleton removes the {id} "+
+			"segment from this resource, so a read by id is the question it exists to delete — drop OpRead", o.Path)
 	}
 	return nil
 }
+
+// singleton reports whether this resource is the caller's one row.
+func (o Options) singleton() bool { return o.Ops.Has(OpSingleton) }
 
 // Resource registers the exposed operations for model T on api.
 //
@@ -358,9 +389,25 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 	// Every single-row operation addresses a row by primary key, so a table
 	// without one can only be listed. Saying so at startup is better than four
 	// handlers that cannot be reached.
-	if b.model.PK == nil && opts.Ops&(OpRead|OpUpdate|OpDelete) != 0 {
+	//
+	// A singleton is the exception: its row comes from the scope hook, so no
+	// operation of it puts a key in the path or a key predicate in the
+	// statement, and a table keyed only by its tenant column can be one.
+	if !opts.singleton() && b.model.PK == nil && opts.Ops&(OpRead|OpUpdate|OpDelete) != 0 {
 		return fmt.Errorf("rest: %s exposes %s but %s declares no primary key",
 			opts.Path, opts.Ops&(OpRead|OpUpdate|OpDelete), b.model.Type)
+	}
+
+	// The whole safety argument for a singleton runs through the scope column:
+	// with one, every operation is confined by the hook ADR-0030 already makes
+	// compulsory; without one, the same statements are unconfined. Checked here
+	// as well as in `sqlb generate`, because rest is usable without the DSL.
+	if opts.singleton() && b.model.Scope == nil {
+		return fmt.Errorf("rest: %s exposes %s but %s declares no Scoped column; "+
+			"a singleton addresses the caller's row through the scope hook and nothing else, "+
+			"so without one the read answers an arbitrary row and a write reaches every row — "+
+			"tag the tenant column `sqlb:\"scope\"`, or expose OpRead and OpList instead",
+			opts.Path, opts.Ops, b.model.Type)
 	}
 
 	// A schema that says these rows are confined has to be met by something
@@ -382,14 +429,27 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 	if opts.Ops.Has(OpRead) {
 		registerRead(api, db, b)
 	}
+	if opts.Ops.Has(OpSingleton) {
+		registerSingleton(api, db, b)
+	}
 	if opts.Ops.Has(OpCreate) {
 		registerCreate[T, C](api, w, b)
 	}
+	// A singleton's write operations address the same row its read does, so they
+	// take the collection path and no key. See singleton.go.
 	if opts.Ops.Has(OpUpdate) {
-		registerUpdate[T, U](api, w, b)
+		if opts.singleton() {
+			registerSingletonUpdate[T, U](api, w, b)
+		} else {
+			registerUpdate[T, U](api, w, b)
+		}
 	}
 	if opts.Ops.Has(OpDelete) {
-		registerDelete(api, w, b)
+		if opts.singleton() {
+			registerSingletonDelete(api, w, b)
+		} else {
+			registerDelete(api, w, b)
+		}
 	}
 	return nil
 }
@@ -410,7 +470,7 @@ func (o Op) String() string {
 		name string
 	}{
 		{OpCreate, "create"}, {OpRead, "read"}, {OpUpdate, "update"},
-		{OpDelete, "delete"}, {OpList, "list"},
+		{OpDelete, "delete"}, {OpList, "list"}, {OpSingleton, "singleton"},
 	} {
 		if o.Has(e.op) {
 			parts = append(parts, e.name)
@@ -425,7 +485,16 @@ func (o Op) String() string {
 // itemPath is the single-row path, e.g. "/posts/{id}". The template is always
 // {id}, whatever the primary key column is called: the URL names the resource's
 // identity, and renaming a column should not break every client.
-func (o Options) itemPath() string { return o.Path + "/{id}" }
+//
+// A singleton's is the collection path itself. There is one row per caller and
+// the server already knows which, so there is nothing for a segment to say
+// (#166).
+func (o Options) itemPath() string {
+	if o.singleton() {
+		return o.Path
+	}
+	return o.Path + "/{id}"
+}
 
 const (
 	statusCreated = http.StatusCreated

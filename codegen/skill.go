@@ -40,6 +40,7 @@ package codegen
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jryannel/sqlb/schema"
@@ -182,6 +183,22 @@ func skillWireSurface(b *strings.Builder, exposed []schema.TableManifest) {
 func skillResource(b *strings.Builder, t schema.TableManifest) {
 	r := t.REST
 	fmt.Fprintf(b, "### `%s`\n\n", t.Name)
+
+	// A singleton is the one resource whose shape an agent cannot infer from the
+	// table above, and guessing it wrong costs a round trip in both directions:
+	// asking for `/x/{id}` gets a 404 and asking for `?filter` gets a 400. Said
+	// here rather than only in the operations column, because this is the
+	// section a reader is in when composing the request (#166).
+	if isSingleton(r) {
+		fmt.Fprintf(b, "`GET %s` — the caller's own row, as a bare object rather than a page. "+
+			"There is no `{id}`: the resource holds one row per caller and the server settles "+
+			"which, so an authenticated request has already said everything the route needs. "+
+			"404 means the caller has no row yet. It takes no filter, sort, page or `?select`.\n\n",
+			r.Path)
+		skillSingletonWrites(b, r)
+		skillEnums(b, t)
+		return
+	}
 
 	if t.PrimaryKey != "" {
 		// Wire, like everything else under an exposed resource: the item path is
@@ -444,6 +461,32 @@ func wireOf(c schema.ColumnManifest) string {
 // manifest omits hidden columns, and a hidden primary key is a schema this
 // emitter should still describe as best it can rather than one it renders a
 // blank for.
+// isSingleton reports whether a resource is the caller's one row, which is
+// carried in the manifest as an operation rather than as a flag: it is one, and
+// the operation list is what a reader of the document already consults.
+func isSingleton(r *schema.RESTManifest) bool {
+	return slices.Contains(r.Operations, "singleton")
+}
+
+// skillSingletonWrites states the write routes a singleton exposes, which are
+// the ones an agent would otherwise address by id and get a 404 from.
+func skillSingletonWrites(b *strings.Builder, r *schema.RESTManifest) {
+	var lines []string
+	for _, op := range []struct{ name, line string }{
+		{"create", fmt.Sprintf("`POST %s` creates it.", r.Path)},
+		{"update", fmt.Sprintf("`PATCH %s` writes the columns the body names.", r.Path)},
+		{"delete", fmt.Sprintf("`DELETE %s` removes it.", r.Path)},
+	} {
+		if slices.Contains(r.Operations, op.name) {
+			lines = append(lines, op.line)
+		}
+	}
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "%s No id on any of them, for the same reason.\n\n", strings.Join(lines, " "))
+}
+
 func wireOfColumn(t schema.TableManifest, column string) string {
 	for _, c := range t.Columns {
 		if c.Name == column {

@@ -239,21 +239,27 @@ func Count%s(ctx context.Context, db DB, where []Condition) (int64, error) {
 }
 
 func ejectGet(b *bytes.Buffer, t *schema.TableDef, typeName, lower string) {
-	pk := t.PrimaryKey()
-	if pk == nil {
+	if t.PrimaryKey() == nil && !ejectSingleton(t) {
 		fmt.Fprintf(b, "\n// %s has no primary key, so there is no by-id read to eject.\n", t.Name())
 		return
 	}
-	fmt.Fprintf(b, `
+	doc := `
 // Get%s reads one row by primary key. The extra conditions are whatever
 // confines this table — a tenant, a soft delete — and they are part of the
 // lookup rather than a check afterwards, so a row outside them is a 404 and not
-// a 403 that confirms it exists.
-func Get%s(ctx context.Context, db DB, id any, where []Condition) (%s, error) {
+// a 403 that confirms it exists.`
+	if ejectSingleton(t) {
+		doc = `
+// Get%s reads the caller's one row. There is no id: the conditions are the
+// whole address, which is why the resource this came from could not be mounted
+// without a hook to supply them.`
+	}
+	fmt.Fprintf(b, doc+`
+func Get%s(ctx context.Context, db DB, %swhere []Condition) (%s, error) {
 	var sb strings.Builder
 	args := new(args)
 	fmt.Fprintf(&sb, "SELECT %%s FROM %%s", %sSelect, quoteIdent(%sTable))
-	writeWhere(&sb, args, append([]Condition{{Column: %q, Op: OpEq, Value: id}}, where...))
+	writeWhere(&sb, args, %s)
 
 	row, err := scan%s(db.QueryRow(ctx, sb.String(), args.values...))
 	if err != nil {
@@ -264,7 +270,33 @@ func Get%s(ctx context.Context, db DB, id any, where []Condition) (%s, error) {
 	}
 	return row, nil
 }
-`, typeName, typeName, typeName, lower, lower, pk.Desc().Name, typeName)
+`, typeName, typeName, ejectIDParam(t), typeName, lower, lower, ejectKeyed(t), typeName)
+}
+
+// ejectSingleton reports whether the table's resource is the caller's one row,
+// in which case every ejected operation drops its id and is addressed by the
+// confining conditions alone (#166).
+func ejectSingleton(t *schema.TableDef) bool {
+	return t.Rest() != nil && t.Rest().Ops.Has(schema.OpSingleton)
+}
+
+// ejectIDParam is the id parameter a store function takes, empty for a
+// singleton.
+func ejectIDParam(t *schema.TableDef) string {
+	if ejectSingleton(t) {
+		return ""
+	}
+	return "id any, "
+}
+
+// ejectKeyed renders the condition list a statement runs under: the key
+// predicate and the caller's conditions, or — for a singleton — the caller's
+// alone.
+func ejectKeyed(t *schema.TableDef) string {
+	if ejectSingleton(t) {
+		return "where"
+	}
+	return fmt.Sprintf("append([]Condition{{Column: %q, Op: OpEq, Value: id}}, where...)", t.PrimaryKey().Desc().Name)
 }
 
 func ejectInsert(b *bytes.Buffer, t *schema.TableDef, typeName, lower string) {
@@ -313,9 +345,8 @@ func Insert%s(ctx context.Context, db DB, values map[string]any) (%s, error) {
 }
 
 func ejectUpdate(b *bytes.Buffer, t *schema.TableDef, typeName, lower string) {
-	pk := t.PrimaryKey()
 	writable := writableColumns(t)
-	if pk == nil || len(writable) == 0 {
+	if (t.PrimaryKey() == nil && !ejectSingleton(t)) || len(writable) == 0 {
 		return
 	}
 	order := make([]string, 0, len(writable))
@@ -332,7 +363,7 @@ func ejectUpdate(b *bytes.Buffer, t *schema.TableDef, typeName, lower string) {
 // Update%s writes the named columns of one row and reads the row back. An
 // empty change set is the caller's mistake rather than a statement with no SET
 // clause, which Postgres will not parse.
-func Update%s(ctx context.Context, db DB, id any, changes map[string]any, where []Condition) (%s, error) {
+func Update%s(ctx context.Context, db DB, %schanges map[string]any, where []Condition) (%s, error) {
 	order := []string{%s}
 
 	var sets []string
@@ -351,7 +382,7 @@ func Update%s(ctx context.Context, db DB, id any, changes map[string]any, where 
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "UPDATE %%s SET %%s", quoteIdent(%sTable), strings.Join(sets, ", "))
-	writeWhere(&sb, args, append([]Condition{{Column: %q, Op: OpEq, Value: id}}, where...))
+	writeWhere(&sb, args, %s)
 	fmt.Fprintf(&sb, " RETURNING %%s", %sSelect)
 
 	row, err := scan%s(db.QueryRow(ctx, sb.String(), args.values...))
@@ -363,22 +394,21 @@ func Update%s(ctx context.Context, db DB, id any, changes map[string]any, where 
 	}
 	return row, nil
 }
-`, typeName, typeName, typeName, strings.Join(order, ", "), typeName, lower, pk.Desc().Name, lower, typeName)
+`, typeName, typeName, ejectIDParam(t), typeName, strings.Join(order, ", "), typeName, lower, ejectKeyed(t), lower, typeName)
 }
 
 func ejectDelete(b *bytes.Buffer, t *schema.TableDef, typeName, lower string) {
-	pk := t.PrimaryKey()
-	if pk == nil {
+	if t.PrimaryKey() == nil && !ejectSingleton(t) {
 		return
 	}
 	fmt.Fprintf(b, `
 // Delete%s removes one row, and reports ErrNotFound rather than success when
 // the id matched nothing the conditions admit.
-func Delete%s(ctx context.Context, db DB, id any, where []Condition) error {
+func Delete%s(ctx context.Context, db DB, %swhere []Condition) error {
 	var sb strings.Builder
 	args := new(args)
 	fmt.Fprintf(&sb, "DELETE FROM %%s", quoteIdent(%sTable))
-	writeWhere(&sb, args, append([]Condition{{Column: %q, Op: OpEq, Value: id}}, where...))
+	writeWhere(&sb, args, %s)
 
 	tag, err := db.Exec(ctx, sb.String(), args.values...)
 	if err != nil {
@@ -389,5 +419,5 @@ func Delete%s(ctx context.Context, db DB, id any, where []Condition) error {
 	}
 	return nil
 }
-`, typeName, typeName, lower, pk.Desc().Name)
+`, typeName, typeName, ejectIDParam(t), lower, ejectKeyed(t))
 }
