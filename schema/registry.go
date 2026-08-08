@@ -404,9 +404,15 @@ func (r *Registry) Validate() error {
 				strings.Join(t.pkCols, ", "))
 		}
 		if t.rest != nil {
-			needsPK := t.rest.Ops.Has(OpRead) || t.rest.Ops.Has(OpUpdate) || t.rest.Ops.Has(OpDelete)
+			// A singleton addresses its row through the scope hook rather than
+			// through a path segment, so none of its operations needs a key.
+			needsPK := !t.rest.Ops.Has(OpSingleton) &&
+				(t.rest.Ops.Has(OpRead) || t.rest.Ops.Has(OpUpdate) || t.rest.Ops.Has(OpDelete))
 			if needsPK && pks == 0 {
 				report(t.name, "", "exposed for %s but has no primary key to address rows by", t.rest.Ops)
+			}
+			if t.rest.Ops.Has(OpSingleton) {
+				r.validateSingleton(t, report)
 			}
 			if t.rest.Ops == 0 {
 				report(t.name, "", "Expose declares no operations")
@@ -478,6 +484,43 @@ func (r *Registry) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// validateSingleton checks the two things that make [OpSingleton] safe.
+//
+// Both are refusals rather than warnings, and both are here rather than at
+// mount because the declaration is where the mistake is written. A singleton's
+// row is whatever the scope hook leaves — there is no key in the path and no
+// predicate in the statement — so on a table nobody declared confined, the read
+// answers an arbitrary row and PATCH reaches every row in the table. That is
+// the default-open outcome [ADR-0030] exists to close, arriving through a
+// different door.
+func (r *Registry) validateSingleton(t *TableDef, report func(string, string, string, ...any)) {
+	var scope string
+	for _, f := range t.fields {
+		if f.Desc().Scoped {
+			scope = f.Desc().Name
+			break
+		}
+	}
+	if scope == "" {
+		report(t.name, "", "exposes OpSingleton but declares no Scoped column; "+
+			"a singleton addresses the caller's row through the scope hook and nothing else, "+
+			"so on an unconfined table the read answers an arbitrary row and a write reaches every row — "+
+			"declare Scoped on the tenant column, or expose OpRead and OpList instead")
+	}
+	// OpList is a route collision — both are GET on the collection path — and
+	// OpRead is the id-shaped question a singleton exists to delete. Named
+	// separately because the fix differs: one is a choice between two shapes,
+	// the other is a leftover.
+	if t.rest.Ops.Has(OpList) {
+		report(t.name, "", "exposes both OpSingleton and OpList, which are the same route: "+
+			"GET %s cannot be the caller's row and the collection at once", t.rest.Path)
+	}
+	if t.rest.Ops.Has(OpRead) {
+		report(t.name, "", "exposes both OpSingleton and OpRead; OpSingleton removes the {id} segment "+
+			"from this resource, so a read by id is the question it exists to delete — drop OpRead")
+	}
 }
 
 // Validate checks the default registry.

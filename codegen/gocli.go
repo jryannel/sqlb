@@ -273,6 +273,22 @@ what that resource accepts.`, name, env, env)
 }
 
 // cliResourceSection emits one resource's command and its operations.
+// singleton reports whether this resource is the caller's one row, in which
+// case no command of it takes an id and every route is the collection path
+// itself (#166).
+func (r cliResource) singleton() bool { return r.ops.Has(schema.OpSingleton) }
+
+// readsOne reports whether the resource serves a single row by either shape.
+func (r cliResource) readsOne() bool { return r.ops.Has(schema.OpRead) || r.singleton() }
+
+// itemRoute is what help text calls the single-row route.
+func (r cliResource) itemRoute() string {
+	if r.singleton() {
+		return r.path
+	}
+	return r.path + "/{id}"
+}
+
 func cliResourceSection(b *bytes.Buffer, r cliResource) {
 	fmt.Fprintf(b, "\n// %s\n", cliRule(r.path))
 
@@ -289,7 +305,7 @@ func cliResourceSection(b *bytes.Buffer, r cliResource) {
 	if r.ops.Has(schema.OpList) {
 		fmt.Fprintf(b, "\tcmd.AddCommand(new%sListCommand(c))\n", r.goPlural)
 	}
-	if r.ops.Has(schema.OpRead) {
+	if r.readsOne() {
 		fmt.Fprintf(b, "\tcmd.AddCommand(new%sGetCommand(c))\n", r.goPlural)
 	}
 	if r.ops.Has(schema.OpCreate) {
@@ -307,7 +323,7 @@ func cliResourceSection(b *bytes.Buffer, r cliResource) {
 	if r.ops.Has(schema.OpList) {
 		cliListCommand(b, r)
 	}
-	if r.ops.Has(schema.OpRead) {
+	if r.readsOne() {
 		cliGetCommand(b, r)
 	}
 	if r.ops.Has(schema.OpCreate) {
@@ -551,24 +567,39 @@ func cliAllArg(r cliResource) string {
 }
 
 func cliGetCommand(b *bytes.Buffer, r cliResource) {
-	fmt.Fprintf(b, "\n// new%sGetCommand is GET %s/{id}.\n", r.goPlural, r.path)
+	fmt.Fprintf(b, "\n// new%sGetCommand is GET %s.\n", r.goPlural, r.itemRoute())
 	fmt.Fprintf(b, "func new%sGetCommand(c *client.Client) *cobra.Command {\n", r.goPlural)
 	if len(r.relations) > 0 {
 		fmt.Fprintln(b, "\tvar expand []string")
 	}
 	fmt.Fprintln(b, "\tcmd := &cobra.Command{")
-	fmt.Fprintln(b, "\t\tUse:   \"get <id>\",")
-	fmt.Fprintf(b, "\t\tShort: %q,\n", "Fetch one "+Singular(r.command)+" by primary key")
-	fmt.Fprintf(b, "\t\tLong:  %s,\n", goRawString(fmt.Sprintf(
-		"GET %s/{id}\n\nThe item endpoint declares no query parameters but expand, and rejects any\nother rather than answering a question that was not asked.", r.path)))
+	if r.singleton() {
+		fmt.Fprintln(b, "\t\tUse:   \"get\",")
+		fmt.Fprintf(b, "\t\tShort: %q,\n", "Fetch your "+Singular(r.command))
+		fmt.Fprintf(b, "\t\tLong:  %s,\n", goRawString(fmt.Sprintf(
+			"GET %s\n\nThere is no id: this resource holds one row per caller and the server settles\nwhich, so a request that authenticated has already said everything the route\nneeds. Answers 404 when you have no row yet.", r.path)))
+	} else {
+		fmt.Fprintln(b, "\t\tUse:   \"get <id>\",")
+		fmt.Fprintf(b, "\t\tShort: %q,\n", "Fetch one "+Singular(r.command)+" by primary key")
+		fmt.Fprintf(b, "\t\tLong:  %s,\n", goRawString(fmt.Sprintf(
+			"GET %s/{id}\n\nThe item endpoint declares no query parameters but expand, and rejects any\nother rather than answering a question that was not asked.", r.path)))
+	}
 	fmt.Fprintf(b, "\t\tExample: %s,\n", goRawString(cliGetExample(r)))
-	fmt.Fprintln(b, "\t\tArgs:  cobra.ExactArgs(1),")
+	if r.singleton() {
+		fmt.Fprintln(b, "\t\tArgs:  cobra.NoArgs,")
+	} else {
+		fmt.Fprintln(b, "\t\tArgs:  cobra.ExactArgs(1),")
+	}
 	fmt.Fprintln(b, "\t\tRunE: func(cmd *cobra.Command, args []string) error {")
 	fmt.Fprintln(b, "\t\t\tq := url.Values{}")
 	if len(r.relations) > 0 {
 		fmt.Fprintln(b, "\t\t\tif len(expand) > 0 {\n\t\t\t\tq.Set(\"expand\", strings.Join(expand, \",\"))\n\t\t\t}")
 	}
-	fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath(%q, args[0]), Query: q}, false)\n", r.path)
+	if r.singleton() {
+		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: %q, Query: q}, false)\n", r.path)
+	} else {
+		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath(%q, args[0]), Query: q}, false)\n", r.path)
+	}
 	fmt.Fprintln(b, "\t\t},\n\t}")
 	if len(r.relations) > 0 {
 		fmt.Fprintf(b, "\tcmd.Flags().StringSliceVar(&expand, \"expand\", nil,\n\t\t%s)\n",
@@ -579,9 +610,21 @@ func cliGetCommand(b *bytes.Buffer, r cliResource) {
 }
 
 func cliDeleteCommand(b *bytes.Buffer, r cliResource) {
-	fmt.Fprintf(b, "\n// new%sDeleteCommand is DELETE %s/{id}.\n", r.goPlural, r.path)
+	fmt.Fprintf(b, "\n// new%sDeleteCommand is DELETE %s.\n", r.goPlural, r.itemRoute())
 	fmt.Fprintf(b, "func new%sDeleteCommand(c *client.Client) *cobra.Command {\n", r.goPlural)
 	fmt.Fprintln(b, "\treturn &cobra.Command{")
+	if r.singleton() {
+		fmt.Fprintln(b, "\t\tUse:   \"delete\",")
+		fmt.Fprintf(b, "\t\tShort: %q,\n", "Delete your "+Singular(r.command))
+		fmt.Fprintf(b, "\t\tLong:  %s,\n", goRawString(fmt.Sprintf(
+			"DELETE %s\n\nThere is no id: this resource holds one row per caller. A successful delete\nwrites nothing, so there is nothing to print.", r.path)))
+		fmt.Fprintf(b, "\t\tExample: %s,\n", goRawString("  "+r.line("delete")))
+		fmt.Fprintln(b, "\t\tArgs:  cobra.NoArgs,")
+		fmt.Fprintln(b, "\t\tRunE: func(cmd *cobra.Command, args []string) error {")
+		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: http.MethodDelete, Path: %q}, false)\n", r.path)
+		fmt.Fprintln(b, "\t\t},\n\t}\n}")
+		return
+	}
 	fmt.Fprintln(b, "\t\tUse:   \"delete <id>\",")
 	fmt.Fprintf(b, "\t\tShort: %q,\n", "Delete one "+Singular(r.command)+" by primary key")
 	fmt.Fprintf(b, "\t\tLong:  %s,\n", goRawString(fmt.Sprintf(
@@ -605,7 +648,7 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 	}
 
 	fmt.Fprintf(b, "\n// new%s%sCommand is %s %s%s.\n", r.goPlural, verb,
-		strings.TrimPrefix(method, "http.Method"), r.path, cliItemSuffix(kind))
+		strings.TrimPrefix(method, "http.Method"), r.path, cliItemSuffix(r, kind))
 	fmt.Fprintf(b, "func new%s%sCommand(c *client.Client) *cobra.Command {\n", r.goPlural, verb)
 
 	fmt.Fprintln(b, "\tvar (")
@@ -623,6 +666,10 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 		fmt.Fprintln(b, "\t\tUse:   \"create\",")
 		fmt.Fprintf(b, "\t\tShort: %q,\n", "Create one "+Singular(r.command))
 		fmt.Fprintln(b, "\t\tArgs:  cobra.NoArgs,")
+	} else if r.singleton() {
+		fmt.Fprintln(b, "\t\tUse:   \"update\",")
+		fmt.Fprintf(b, "\t\tShort: %q,\n", "Update your "+Singular(r.command))
+		fmt.Fprintln(b, "\t\tArgs:  cobra.NoArgs,")
 	} else {
 		fmt.Fprintln(b, "\t\tUse:   \"update <id>\",")
 		fmt.Fprintf(b, "\t\tShort: %q,\n", "Update one "+Singular(r.command)+" by primary key")
@@ -630,7 +677,7 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 	}
 	fmt.Fprintf(b, "\t\tLong:  %s,\n", goRawString(cliWriteLong(r, kind)))
 	fmt.Fprintf(b, "\t\tExample: %s,\n", goRawString(cliWriteExample(r, kind, fields)))
-	if kind == forCreate {
+	if kind == forCreate || r.singleton() {
 		fmt.Fprintln(b, "\t\tRunE: func(cmd *cobra.Command, _ []string) error {")
 	} else {
 		fmt.Fprintln(b, "\t\tRunE: func(cmd *cobra.Command, args []string) error {")
@@ -650,7 +697,11 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 		fmt.Fprintln(b, "\t\t\tif len(body) == 0 {")
 		fmt.Fprintln(b, "\t\t\t\treturn errors.New(\"nothing to update: pass at least one field flag\")")
 		fmt.Fprintln(b, "\t\t\t}")
-		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: %s, Path: client.ItemPath(%q, args[0]), Body: body}, false)\n", method, r.path)
+		if r.singleton() {
+			fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: %s, Path: %q, Body: body}, false)\n", method, r.path)
+		} else {
+			fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: %s, Path: client.ItemPath(%q, args[0]), Body: body}, false)\n", method, r.path)
+		}
 	} else {
 		fmt.Fprintf(b, "\t\t\treturn runRequest(c, cmd, client.Request{Method: %s, Path: %q, Body: body}, false)\n", method, r.path)
 	}
@@ -681,8 +732,8 @@ func cliWriteCommand(b *bytes.Buffer, r cliResource, kind bodyKind) {
 	fmt.Fprintln(b, "\treturn cmd\n}")
 }
 
-func cliItemSuffix(kind bodyKind) string {
-	if kind == forUpdate {
+func cliItemSuffix(r cliResource, kind bodyKind) string {
+	if kind == forUpdate && !r.singleton() {
 		return "/{id}"
 	}
 	return ""
@@ -698,7 +749,7 @@ func cliWriteLong(r cliResource, kind bodyKind) string {
 		b.WriteString("value overwriting it.")
 		return b.String()
 	}
-	fmt.Fprintf(&b, "PATCH %s/{id}\n\n", r.path)
+	fmt.Fprintf(&b, "PATCH %s\n\n", r.itemRoute())
 	b.WriteString("Only the flags you pass are sent, so an update writes the columns it names and\n")
 	b.WriteString("no others — which is also why a flag left out and a flag set to an empty value\n")
 	b.WriteString("mean different things. Immutable columns have no flag here: they are settable\n")
@@ -713,7 +764,9 @@ func cliWriteExample(r cliResource, kind bodyKind, fields []*schema.Field) strin
 	if kind == forUpdate {
 		// One flag is enough to show the shape of a patch, and listing every
 		// column would suggest that one has to name them all.
-		args = append(args, cliIDPlaceholder(r))
+		if !r.singleton() {
+			args = append(args, cliIDPlaceholder(r))
+		}
 		if d := cliExampleField(fields); d != nil {
 			args = append(args, "--"+cliFlagName(d.Name)+" "+cliValueExample(d))
 		}
@@ -799,10 +852,14 @@ func cliValueExample(d *schema.FieldDesc) string {
 // relation embedded in the same response is the request a caller would
 // otherwise make twice.
 func cliGetExample(r cliResource) string {
-	line := "  " + r.line("get "+cliIDPlaceholder(r))
+	id := " " + cliIDPlaceholder(r)
+	if r.singleton() {
+		id = ""
+	}
+	line := "  " + r.line("get"+id)
 	if len(r.relations) > 0 {
 		line += "\n\n  # With " + strings.Join(r.relations, " and ") + " embedded, in one request\n  " +
-			r.line("get "+cliIDPlaceholder(r)+" --expand "+strings.Join(r.relations, ","))
+			r.line("get"+id+" --expand "+strings.Join(r.relations, ","))
 	}
 	return line
 }

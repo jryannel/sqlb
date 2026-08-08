@@ -11,6 +11,27 @@ const (
 	OpUpdate
 	OpDelete
 	OpList // GET /resource with filter, sort, search, pagination
+
+	// OpSingleton is GET /resource — the caller's one row, with no {id}
+	// segment anywhere on the resource.
+	//
+	// A table keyed by its own scope column has one row per caller, and until
+	// this there was no shape for it: OpList answered a one-element envelope
+	// every client unwrapped forever, and OpRead asked the client to send back
+	// the tenant id the server already holds — where a mismatch is a 404
+	// meaning "you typed your own name wrong" (#166). Settings-per-tenant,
+	// profile-per-user and subscription-per-org are all this, and each one was
+	// a permanent hand-written handler beside an otherwise declared module.
+	//
+	// It changes the resource rather than adding a route: the item path loses
+	// its {id}, so OpUpdate is PATCH /resource and OpDelete is DELETE
+	// /resource. The row those address is the one the scope hook leaves, which
+	// is why this is only legal on a table with a [Field.Scoped] column —
+	// without one the read answers an arbitrary row and the write reaches every
+	// row there is. OpList and OpRead are refused alongside it: the first
+	// collides on the route and the second is the id-shaped question this
+	// exists to delete.
+	OpSingleton
 )
 
 // CRUD is the conventional single-row operation set. Combine it with OpList
@@ -36,7 +57,7 @@ func (o Op) String() string {
 		name string
 	}{
 		{OpCreate, "create"}, {OpRead, "read"}, {OpUpdate, "update"},
-		{OpDelete, "delete"}, {OpList, "list"},
+		{OpDelete, "delete"}, {OpList, "list"}, {OpSingleton, "singleton"},
 	} {
 		if o.Has(e.op) {
 			parts = append(parts, e.name)

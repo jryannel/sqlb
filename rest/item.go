@@ -255,33 +255,9 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		if err != nil {
 			return nil, err
 		}
-		changes, err := in.Body.Changes()
+		names, changes, err := b.changeSet(in.Body)
 		if err != nil {
-			return nil, unprocessable(err, "body")
-		}
-		if len(changes) == 0 {
-			return nil, &Problem{
-				Title:  http.StatusText(http.StatusBadRequest),
-				Status: http.StatusBadRequest,
-				Detail: "the request body named no writable column",
-				Errors: []*ProblemDetail{{
-					Message:  "at least one field must be given",
-					Location: "body",
-					Allowed:  b.updatableNames(),
-				}},
-			}
-		}
-
-		// Sorted, so that the same request compiles to the same SQL and a test
-		// can assert on the statement.
-		names := make([]string, 0, len(changes))
-		for name := range changes {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-
-		if problem := b.rejectUnwritable(names); problem != nil {
-			return nil, problem
+			return nil, err
 		}
 
 		updated, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
@@ -342,6 +318,45 @@ func registerDelete[T any](api huma.API, w writer, b *binding[T]) {
 		}
 		return nil, nil
 	})
+}
+
+// changeSet resolves a PATCH body into the columns to write, sorted, and the
+// values to write them with.
+//
+// Shared by the collection's PATCH and the singleton's, which differ only in
+// how they address the row. Keeping it in one place is what stops the two
+// answering differently to the same bad body — the same reason registerRead's
+// two registrations share one closure.
+//
+// The names are sorted so that the same request compiles to the same SQL and a
+// test can assert on the statement.
+func (b *binding[T]) changeSet(body UpdateBody) ([]string, map[string]any, error) {
+	changes, err := body.Changes()
+	if err != nil {
+		return nil, nil, unprocessable(err, "body")
+	}
+	if len(changes) == 0 {
+		return nil, nil, &Problem{
+			Title:  http.StatusText(http.StatusBadRequest),
+			Status: http.StatusBadRequest,
+			Detail: "the request body named no writable column",
+			Errors: []*ProblemDetail{{
+				Message:  "at least one field must be given",
+				Location: "body",
+				Allowed:  b.updatableNames(),
+			}},
+		}
+	}
+	names := make([]string, 0, len(changes))
+	for name := range changes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	if problem := b.rejectUnwritable(names); problem != nil {
+		return nil, nil, problem
+	}
+	return names, changes, nil
 }
 
 // rejectUnwritable reports the columns a PATCH may not set.

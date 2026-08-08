@@ -96,7 +96,7 @@ func renderTSQueries(opts Options) ([]byte, error) {
 	// for, and a file of empty factories is worse than no file.
 	var resources []tsResource
 	for _, r := range all {
-		if r.ops.Has(schema.OpList) || r.ops.Has(schema.OpRead) {
+		if r.ops.Has(schema.OpList) || r.readsOne() {
 			resources = append(resources, r)
 		}
 	}
@@ -121,7 +121,7 @@ func renderTSQueries(opts Options) ([]byte, error) {
 			types = append(types, r.typeName+"Column", r.typeName+"ListParams")
 			values = append(values, "list"+r.plural)
 		}
-		if r.ops.Has(schema.OpRead) {
+		if r.readsOne() {
 			types = append(types, r.typeName+"GetParams")
 			values = append(values, "get"+r.typeName)
 		}
@@ -174,6 +174,23 @@ type tsResource struct {
 
 // n spells one of this resource's column names the way the wire does.
 func (r *tsResource) n(name string) string { return r.wire.WireName(name) }
+
+// singleton reports whether this resource is the caller's one row, in which
+// case every function it emits drops the `id` argument and addresses the
+// collection path itself (#166).
+func (r *tsResource) singleton() bool { return r.ops.Has(schema.OpSingleton) }
+
+// readsOne reports whether the resource serves a single row by either shape, so
+// the parameter type and the `get` function are emitted for both.
+func (r *tsResource) readsOne() bool { return r.ops.Has(schema.OpRead) || r.singleton() }
+
+// itemRoute is what a doc comment calls the single-row route.
+func (r *tsResource) itemRoute() string {
+	if r.singleton() {
+		return r.path
+	}
+	return r.path + "/{id}"
+}
 
 // tsRelation is one entry of a resource's ?expand vocabulary, in the direction
 // it is served.
@@ -393,7 +410,7 @@ func tsResourceSection(b *bytes.Buffer, r tsResource) {
 	fmt.Fprintf(b, "\n/** Columns `select` may name. The primary key is always returned. */\n")
 	fmt.Fprintf(b, "export type %sColumn =%s;\n", r.typeName, tsUnion(r.selectable))
 
-	if len(r.sortable) > 0 {
+	if len(r.sortable) > 0 && !r.singleton() {
 		terms := make([]string, 0, len(r.sortable)*2)
 		for _, name := range r.sortable {
 			terms = append(terms, name, "-"+name)
@@ -411,18 +428,23 @@ func tsResourceSection(b *bytes.Buffer, r tsResource) {
 		fmt.Fprintf(b, "export type %sExpand =%s;\n", r.typeName, tsUnion(names))
 	}
 
-	fmt.Fprintf(b, "\n/**\n * Filter conditions, one property per filterable column.\n *\n")
-	fmt.Fprint(b, " * A bare value is equality; an object names operators. The operator set is\n")
-	fmt.Fprint(b, " * narrowed by column type, so a pattern match against a number and a null\n")
-	fmt.Fprint(b, " * test against a non-nullable column do not compile.\n */\n")
-	// A type alias rather than an interface, so that it satisfies the encoder's
-	// Record<string, unknown>: TypeScript gives an object type alias an
-	// implicit index signature and an interface none.
-	fmt.Fprintf(b, "export type %sWhere = {\n", r.typeName)
-	for _, d := range r.filterable {
-		fmt.Fprintf(b, "  %s?: %s;\n", tsProp(r.n(d.Name)), tsCondType(r.typeName, d))
+	// A singleton has no collection, so it has no filter vocabulary either: its
+	// one GET rejects every query parameter but ?expand. Emitting the union
+	// anyway would offer a client a typed way to write a request that 400s.
+	if !r.singleton() {
+		fmt.Fprintf(b, "\n/**\n * Filter conditions, one property per filterable column.\n *\n")
+		fmt.Fprint(b, " * A bare value is equality; an object names operators. The operator set is\n")
+		fmt.Fprint(b, " * narrowed by column type, so a pattern match against a number and a null\n")
+		fmt.Fprint(b, " * test against a non-nullable column do not compile.\n */\n")
+		// A type alias rather than an interface, so that it satisfies the encoder's
+		// Record<string, unknown>: TypeScript gives an object type alias an
+		// implicit index signature and an interface none.
+		fmt.Fprintf(b, "export type %sWhere = {\n", r.typeName)
+		for _, d := range r.filterable {
+			fmt.Fprintf(b, "  %s?: %s;\n", tsProp(r.n(d.Name)), tsCondType(r.typeName, d))
+		}
+		fmt.Fprintln(b, "};")
 	}
-	fmt.Fprintln(b, "};")
 
 	tsParamTypes(b, r)
 	tsRowType(b, r)
@@ -431,6 +453,10 @@ func tsResourceSection(b *bytes.Buffer, r tsResource) {
 }
 
 func tsParamTypes(b *bytes.Buffer, r tsResource) {
+	if r.singleton() {
+		tsItemParamType(b, r)
+		return
+	}
 	fmt.Fprintf(b, "\n/** Parameters for `GET %s`. */\n", r.path)
 	fmt.Fprintf(b, "export interface %sListParams%s {\n", r.typeName, tsNarrowingParams(r))
 	fmt.Fprintf(b, "  where?: %sWhere;\n", r.typeName)
@@ -460,17 +486,23 @@ func tsParamTypes(b *bytes.Buffer, r tsResource) {
 	fmt.Fprint(b, "  params?: Record<string, string | readonly string[]>;\n")
 	fmt.Fprintln(b, "}")
 
-	if r.ops.Has(schema.OpRead) {
-		fmt.Fprintf(b, "\n/**\n * Parameters for `GET %s/{id}`.\n *\n", r.path)
-		fmt.Fprint(b, " * There is no `select` here: the item endpoint rejects unknown query\n")
-		fmt.Fprint(b, " * parameters and does not declare one.\n */\n")
-		if r.hasExpand() {
-			fmt.Fprintf(b, "export interface %sGetParams<E extends %sExpand = never> {\n", r.typeName, r.typeName)
-			fmt.Fprint(b, "  expand?: readonly E[];\n}\n")
-		} else {
-			fmt.Fprintf(b, "export type %sGetParams = Record<string, never>;\n", r.typeName)
-		}
+	if r.readsOne() {
+		tsItemParamType(b, r)
 	}
+}
+
+// tsItemParamType emits the single-row parameter type, which is the same for
+// both single-row shapes: the item endpoint takes ?expand or nothing at all.
+func tsItemParamType(b *bytes.Buffer, r tsResource) {
+	fmt.Fprintf(b, "\n/**\n * Parameters for `GET %s`.\n *\n", r.itemRoute())
+	fmt.Fprint(b, " * There is no `select` here: the item endpoint rejects unknown query\n")
+	fmt.Fprint(b, " * parameters and does not declare one.\n */\n")
+	if r.hasExpand() {
+		fmt.Fprintf(b, "export interface %sGetParams<E extends %sExpand = never> {\n", r.typeName, r.typeName)
+		fmt.Fprint(b, "  expand?: readonly E[];\n}\n")
+		return
+	}
+	fmt.Fprintf(b, "export type %sGetParams = Record<string, never>;\n", r.typeName)
 }
 
 // tsNarrowingParams is the generic parameter list a params type carries: the
@@ -525,7 +557,7 @@ func tsTransport(b *bytes.Buffer, r tsResource) {
 		fmt.Fprintf(b, "  return request({ method: 'GET', path: %s, query: encodeListQuery(params), signal });\n}\n", tsString(r.path))
 	}
 
-	if r.ops.Has(schema.OpRead) {
+	if r.readsOne() {
 		generic, args, params := "", "", ""
 		if r.hasExpand() {
 			generic = fmt.Sprintf("<E extends %sExpand = never>", name)
@@ -535,13 +567,25 @@ func tsTransport(b *bytes.Buffer, r tsResource) {
 			args = fmt.Sprintf("<%sColumn>", name)
 			params = fmt.Sprintf("  params: %sGetParams = {},\n", name)
 		}
-		fmt.Fprintf(b, "\n/** `GET %s/{id}` — one row by primary key. */\n", r.path)
+		if r.singleton() {
+			fmt.Fprintf(b, "\n/** `GET %s` — the caller's own row. There is no id to pass: the resource\n", r.path)
+			fmt.Fprint(b, " * holds one row per caller and the server settles which. */\n")
+		} else {
+			fmt.Fprintf(b, "\n/** `GET %s/{id}` — one row by primary key. */\n", r.path)
+		}
 		fmt.Fprintf(b, "export function get%s%s(\n", name, generic)
-		fmt.Fprint(b, "  request: Transport,\n  id: string | number,\n")
+		fmt.Fprint(b, "  request: Transport,\n")
+		if !r.singleton() {
+			fmt.Fprint(b, "  id: string | number,\n")
+		}
 		fmt.Fprint(b, params)
 		fmt.Fprint(b, "  signal?: AbortSignal,\n")
 		fmt.Fprintf(b, "): Promise<%sRow%s> {\n", name, args)
-		fmt.Fprintf(b, "  return request({ method: 'GET', path: itemPath(%s, id), query: encodeItemQuery(params), signal });\n}\n", tsString(r.path))
+		if r.singleton() {
+			fmt.Fprintf(b, "  return request({ method: 'GET', path: %s, query: encodeItemQuery(params), signal });\n}\n", tsString(r.path))
+		} else {
+			fmt.Fprintf(b, "  return request({ method: 'GET', path: itemPath(%s, id), query: encodeItemQuery(params), signal });\n}\n", tsString(r.path))
+		}
 	}
 
 	if r.ops.Has(schema.OpCreate) {
@@ -552,16 +596,27 @@ func tsTransport(b *bytes.Buffer, r tsResource) {
 	}
 
 	if r.ops.Has(schema.OpUpdate) && len(bodyFields(r.table, forUpdate)) > 0 {
-		fmt.Fprintf(b, "\n/** `PATCH %s/{id}` — write the columns the body names, and no others. */\n", r.path)
-		fmt.Fprintf(b, "export function update%s(request: Transport, id: string | number, body: %sPatch, signal?: AbortSignal): Promise<%s> {\n",
-			name, name, name)
-		fmt.Fprintf(b, "  return request({ method: 'PATCH', path: itemPath(%s, id), body, signal });\n}\n", tsString(r.path))
+		fmt.Fprintf(b, "\n/** `PATCH %s` — write the columns the body names, and no others. */\n", r.itemRoute())
+		if r.singleton() {
+			fmt.Fprintf(b, "export function update%s(request: Transport, body: %sPatch, signal?: AbortSignal): Promise<%s> {\n",
+				name, name, name)
+			fmt.Fprintf(b, "  return request({ method: 'PATCH', path: %s, body, signal });\n}\n", tsString(r.path))
+		} else {
+			fmt.Fprintf(b, "export function update%s(request: Transport, id: string | number, body: %sPatch, signal?: AbortSignal): Promise<%s> {\n",
+				name, name, name)
+			fmt.Fprintf(b, "  return request({ method: 'PATCH', path: itemPath(%s, id), body, signal });\n}\n", tsString(r.path))
+		}
 	}
 
 	if r.ops.Has(schema.OpDelete) {
-		fmt.Fprintf(b, "\n/** `DELETE %s/{id}`. */\n", r.path)
-		fmt.Fprintf(b, "export function delete%s(request: Transport, id: string | number, signal?: AbortSignal): Promise<void> {\n", name)
-		fmt.Fprintf(b, "  return request({ method: 'DELETE', path: itemPath(%s, id), signal });\n}\n", tsString(r.path))
+		fmt.Fprintf(b, "\n/** `DELETE %s`. */\n", r.itemRoute())
+		if r.singleton() {
+			fmt.Fprintf(b, "export function delete%s(request: Transport, signal?: AbortSignal): Promise<void> {\n", name)
+			fmt.Fprintf(b, "  return request({ method: 'DELETE', path: %s, signal });\n}\n", tsString(r.path))
+		} else {
+			fmt.Fprintf(b, "export function delete%s(request: Transport, id: string | number, signal?: AbortSignal): Promise<void> {\n", name)
+			fmt.Fprintf(b, "  return request({ method: 'DELETE', path: itemPath(%s, id), signal });\n}\n", tsString(r.path))
+		}
 	}
 
 	tsActionFunctions(b, r)
@@ -579,6 +634,14 @@ func tsKeys(b *bytes.Buffer, r tsResource) {
 	fmt.Fprint(b, " * disagree.\n */\n")
 	fmt.Fprintf(b, "export const %sKeys = {\n", r.ident)
 	fmt.Fprintf(b, "  all: () => [%s] as const,\n", tsString(r.table.Name()))
+	// A singleton has one row and no collection, so `list`, `infinite` and a
+	// keyed `detail` would all name routes it does not serve. `all` stays,
+	// because that is the key a change-feed subscriber invalidates by table.
+	if r.singleton() {
+		fmt.Fprintf(b, "  single: (params: unknown = {}) => [%s, 'single', params] as const,\n", tsString(r.table.Name()))
+		fmt.Fprintln(b, "};")
+		return
+	}
 	fmt.Fprintf(b, "  lists: () => [%s, 'list'] as const,\n", tsString(r.table.Name()))
 	fmt.Fprintf(b, "  list: (params: unknown = {}) => [%s, 'list', params] as const,\n", tsString(r.table.Name()))
 	fmt.Fprintf(b, "  infinite: (params: unknown = {}) => [%s, 'infinite', params] as const,\n", tsString(r.table.Name()))
@@ -643,7 +706,19 @@ func tsQueriesSection(b *bytes.Buffer, r tsResource) {
 		}
 	}
 
-	if r.ops.Has(schema.OpRead) {
+	// A singleton's read is named `single` rather than `detail`, because there is
+	// nothing to detail *from*: no list precedes it and no id selects it.
+	if r.singleton() {
+		if r.hasExpand() {
+			fmt.Fprintf(b, "    single: <E extends %sExpand = never>(params: %sGetParams<E> = {}) =>\n", name, name)
+		} else {
+			fmt.Fprintf(b, "    single: (params: %sGetParams = {}) =>\n", name)
+		}
+		fmt.Fprint(b, "      queryOptions({\n")
+		fmt.Fprintf(b, "        queryKey: %sKeys.single(params),\n", r.ident)
+		fmt.Fprintf(b, "        queryFn: ({ signal }) => get%s(request, params, signal),\n", name)
+		fmt.Fprint(b, "      }),\n")
+	} else if r.ops.Has(schema.OpRead) {
 		if r.hasExpand() {
 			fmt.Fprintf(b, "    detail: <E extends %sExpand = never>(id: string | number, params: %sGetParams<E> = {}) =>\n", name, name)
 		} else {
