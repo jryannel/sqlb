@@ -238,14 +238,20 @@ func TestComputedBindRunsAgainstPostgres(t *testing.T) {
 	}
 }
 
-// RETURNING carries an expression over the row just written. If Postgres
-// refused it, the whole INSERT would fail rather than the derived field.
+// RETURNING carries an expression over the row just written, when the write
+// asked for it. If Postgres refused the expression there, the whole INSERT
+// would fail rather than the derived field.
+//
+// Asking is the part #164 added. Before it, every write evaluated every
+// bind-free computed column the model declared — which is the same cost
+// argument #92 settled for reads, arriving on the path nobody revisited.
 func TestComputedInReturningRunsAgainstPostgres(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	raw := computedDB(t)
 
 	stored, err := sqlb.InsertRows(&CompProject{Name: "voyager", TotalTasks: 4, CompletedTasks: 1}).
+		WithComputed("progress", "star_count").
 		One(ctx, sqlb.New(raw))
 	if err != nil {
 		t.Fatalf("insert with a computed RETURNING: %v", err)
@@ -256,10 +262,45 @@ func TestComputedInReturningRunsAgainstPostgres(t *testing.T) {
 	if stored.StarCount != 0 {
 		t.Errorf("star_count = %d, want 0", stored.StarCount)
 	}
-	// The parameterised one is left out of RETURNING — a write has no viewer to
-	// bind — so it holds its zero value here and its real one on the next read.
+	// The parameterised one cannot be asked for at all — a write has no viewer
+	// to bind — so naming it is refused rather than silently skipped, and the
+	// value arrives on the next read.
 	if stored.IsStarred {
 		t.Error("is_starred should not be answered by a write")
+	}
+	_, err = sqlb.InsertRows(&CompProject{Name: "pioneer"}).
+		WithComputed("is_starred").One(ctx, sqlb.New(raw))
+	if err == nil {
+		t.Fatal("a write asked for a column it cannot bind and was allowed to")
+	}
+	if !strings.Contains(err.Error(), "nowhere to take a bind from") {
+		t.Errorf("error = %v, want it to name the missing bind", err)
+	}
+}
+
+// The default: a write evaluates no derived column it was not asked for.
+//
+// Against a real database, because the cost this closes is the database's. The
+// statement is what carries it, so the statement is what is asserted.
+func TestAWriteEvaluatesNoComputedColumnItWasNotAskedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw := computedDB(t)
+
+	stored, err := sqlb.InsertRows(&CompProject{Name: "magellan", TotalTasks: 4, CompletedTasks: 1}).
+		One(ctx, sqlb.New(raw))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if stored.Progress != nil {
+		t.Errorf("progress = %v, want it absent from a write that did not ask", stored.Progress)
+	}
+	sql, _, err := sqlb.InsertRows(&CompProject{Name: "magellan"}).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(sql, "SELECT") {
+		t.Errorf("a plain insert should carry no subquery:\n%s", sql)
 	}
 }
 

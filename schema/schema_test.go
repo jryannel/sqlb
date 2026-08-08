@@ -296,6 +296,35 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			want: "request ceilings must not be negative",
 		},
 		{
+			// The ordering a request gets when it names none. A term nothing
+			// can sort by would answer 400 to a client that sent nothing at
+			// all, which is the one direction a default must not fail in.
+			name: "a default ordering over an unknown column",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey()).
+					Expose(schema.REST{Ops: schema.OpList, DefaultSort: []string{"-nope"}})
+			},
+			want: `DefaultSort "-nope" names no column of this table`,
+		},
+		{
+			// Capabilities are opt-in, so an ordering nothing declared is one
+			// no ?sort could have asked for either.
+			name: "a default ordering over a column that is not Sortable",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(), schema.Text("name")).
+					Expose(schema.REST{Ops: schema.OpList, DefaultSort: []string{"name"}})
+			},
+			want: "names a column that is not Sortable",
+		},
+		{
+			name: "a default ordering with an unreadable direction",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(), schema.Text("name").Sortable()).
+					Expose(schema.REST{Ops: schema.OpList, DefaultSort: []string{"name.sideways"}})
+			},
+			want: "is not a sort direction",
+		},
+		{
 			// Deferral is a property of a constraint, and a column with no
 			// unique constraint has none of its own to defer.
 			name: "Deferred without a unique constraint",

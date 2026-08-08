@@ -526,9 +526,17 @@ func TestExpandRefusesAnUnqualifiableHook(t *testing.T) {
 		t.Fatal("an unrequalifiable scope predicate was accepted; it would have " +
 			"filtered the parent table instead of the target")
 	}
-	for _, want := range []string{"raw SQL", "requalified", "composite foreign key"} {
+	for _, want := range []string{
+		"raw SQL", "requalified", "composite foreign key",
+		// The third way out, and the one the first two do not reach. A scope
+		// inherited from a parent row is a subquery, F() has no spelling for
+		// one, and a reader sent to "write it with F()" searches for an API
+		// that is not there and then denormalises the scope column onto the
+		// child — the one column whose duplication is a leak (#158).
+		"subquery", "through the parent",
+	} {
 		if !contains(err.Error(), want) {
-			t.Errorf("the error should explain the way out, got: %v", err)
+			t.Errorf("the error should explain the way out (%q missing), got: %v", want, err)
 		}
 	}
 }

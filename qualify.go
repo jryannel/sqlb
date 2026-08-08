@@ -129,12 +129,29 @@ func qualifyExpr(e Expr, target *Model, alias string) (Expr, error) {
 		// opaque text this package never parsed. Splicing it in unchanged would
 		// resolve its bare names to the parent table, which is the silent wrong
 		// answer described above.
+		//
+		// The remedies are ordered by how often they apply, and the third one is
+		// here because the first two do not cover the commonest raw scope there
+		// is. A child table scoped through its parent — `cart_lines` belongs to a
+		// `carts` row, and the cart belongs to a session — confines with
+		// `cart_id IN (SELECT id FROM carts WHERE session_id = ?)`, and there is
+		// no F() spelling for a subquery: the predicate vocabulary is value
+		// comparison and column-to-column, and Builder.Exists is a terminal, not
+		// a node. Sending that reader to "write it with F()" costs them the
+		// search before they conclude they have to denormalise the scope column
+		// onto the child — which is the one column whose duplication is a leak
+		// (#158). Saying so is cheaper than the search.
 		return nil, fmt.Errorf(
 			"sqlb: a BeforeQuery hook on the expansion target uses raw SQL (%q), "+
-				"which cannot be requalified onto the join alias; write the scope "+
-				"with F() and the comparison operators, or give the expansion a "+
-				"composite foreign key that carries the scoping column so no "+
-				"predicate is needed", truncate(n.SQL, 120))
+				"which cannot be requalified onto the join alias. Three ways out, in "+
+				"the order they usually apply: write the scope with F() and the "+
+				"comparison operators, if the confinement is a comparison against a "+
+				"column of this table; give the expansion a composite foreign key "+
+				"that carries the scoping column, so no predicate is needed; or, if "+
+				"the scope is a subquery — a membership test, a scope inherited from "+
+				"a parent row — accept that it cannot be requalified and do not "+
+				"expose this table for expansion, reaching its rows through the "+
+				"parent's endpoint instead", truncate(n.SQL, 120))
 
 	default:
 		return nil, fmt.Errorf(

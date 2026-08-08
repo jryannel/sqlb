@@ -322,3 +322,68 @@ reversible, a filter grammar is not.
   report gave: it is wrong in the unsafe direction wherever it is incomplete.
   `NotNull()` is a claim rather than a check, and it fails the other way, which
   is the direction this record already prefers everywhere else.
+
+- 2026-08-08 — **Writes take the opt-in reads took, and a write's response says
+  what it computed.** Two halves of the same sentence, from
+  [#164](https://github.com/jryannel/sqlb/issues/164) and
+  [#163](https://github.com/jryannel/sqlb/issues/163).
+
+  This record decided `RETURNING` keeps a computed column "so a `POST` response
+  carries the derived fields without a second read", and that predates
+  [#92](https://github.com/jryannel/sqlb/issues/92) flipping reads to opt-in. The
+  write path was never revisited, so the same aggregate a read had to ask for by
+  name was evaluated by every `INSERT` and `UPDATE` of the table — and by every
+  `DELETE` once an `AfterDeleteRows` hook was registered. An adopting application
+  found the three consequences in ascending order: a per-write tax on aggregates
+  nobody read; a create whose `participant_ids` counted rows the same transaction
+  had not written yet, so the returned value was *always* wrong and the second
+  read this clause exists to delete had to come back; and a subquery naming
+  another module's table riding into every insert, which made the table
+  unwritable unless that module's tables were present and failed a module's own
+  isolation boot test. So `Insert`, `Update` and `Delete` grow `WithComputed`,
+  defaulting to none, and `rest.Options.Computed` narrows the write's `RETURNING`
+  as it already narrowed the read's projection — one decision covering both
+  paths.
+
+  The default flip is breaking for a caller relying on a `POST` response's
+  derived fields, and it is the direction
+  [#147](https://github.com/jryannel/sqlb/issues/147) chose for the same reason:
+  the failure of the new default is a zero field the first test that looks
+  catches, where the failure of the old one is a cost nothing reports and a value
+  that can be silently wrong.
+
+  The second half is smaller and is a plain contradiction of what this record
+  says above. "The column is left out of the write's response" was true of the
+  statement and false of the response: the mount serialised its whole read
+  projection, so a `Needs` column came back at its Go zero value — a definite
+  `false` where the truth is unknown, which is precisely the
+  "declared-but-never-computed field as a permanently-zero JSON key" this record
+  exists to prevent, arriving on the one path nobody looked at. The key is absent
+  now, which is what a client should read as "not computed here".
+
+- 2026-08-08 — **A caveat this record never wrote down: whose table the
+  expression names.** From
+  [#167](https://github.com/jryannel/sqlb/issues/167).
+
+  `ExternalRef` refuses expansion with a stated reason — "expanding it would join
+  a table this module does not own" — so the DSL takes module isolation seriously
+  enough to make it a refusal. `Computed` + `FromSQL` accepts the identical
+  coupling silently, because a correlated subquery is a static string and nothing
+  resolves table names out of it. That asymmetry is not a defect: checking it
+  would require exactly the dependency `ExternalRef`'s free-text target exists to
+  avoid, and this record's own "nothing parses the SQL" is the reason. What was
+  missing is that nothing *said* so.
+
+  The footprint is what makes the two unequal, and it is the part a porter gets
+  wrong: a `LEFT JOIN` lives in one query behind one handler, where a computed
+  column is in the projection surface of every mount that opts in and in the
+  `RETURNING` of every write that asks for it. A module that replaced the first
+  with the second "on the reasoning that the coupling was identical" could not
+  write its own table without the foreign module's tables present, and its
+  isolation boot test failed on its own seed.
+
+  So the rule is written on `FromSQL`, in the schema guide, and cross-referenced
+  from `ExternalRef`: the question is not *is this a subquery* but *whose table
+  does it name*. A subquery may name this module's tables — `participant_ids`
+  over `chat_members` is correct and deletes an N+1. One naming another module's
+  couples every statement of this table to that module's presence.

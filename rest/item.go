@@ -218,12 +218,17 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T
 		// and anything else the database owns still comes from the database.
 		b.clearReadOnly(value)
 		created, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
-			return sqlb.InsertRows(value).One(ctx, db)
+			// The mount's computed list covers both paths: the columns this
+			// resource decided to pay for are the ones its RETURNING evaluates,
+			// and a resource that named none sends an INSERT over stored columns
+			// (#164). b.writeComputed is that list minus the ones a write cannot
+			// bind, which is why this cannot fail on a Needs column.
+			return sqlb.InsertRows(value).WithComputed(b.writeComputed...).One(ctx, db)
 		})
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
-		return &createdOutput[T]{Body: row[T]{value: created, cols: b.selectable, keys: b.jsonKey}}, nil
+		return &createdOutput[T]{Body: row[T]{value: created, cols: b.writeSelectable, keys: b.jsonKey}}, nil
 	})
 }
 
@@ -280,7 +285,9 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		}
 
 		updated, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
-			stmt := sqlb.UpdateRows[T]().Where(sqlb.F(b.model.PK.Name).Eq(key))
+			stmt := sqlb.UpdateRows[T]().
+				WithComputed(b.writeComputed...).
+				Where(sqlb.F(b.model.PK.Name).Eq(key))
 			for _, name := range names {
 				stmt.Set(name, changes[name])
 			}
@@ -289,7 +296,7 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
-		return &itemOutput[T]{Body: row[T]{value: updated, cols: b.selectable, keys: b.jsonKey}}, nil
+		return &itemOutput[T]{Body: row[T]{value: updated, cols: b.writeSelectable, keys: b.jsonKey}}, nil
 	})
 }
 

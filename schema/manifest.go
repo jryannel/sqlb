@@ -177,6 +177,16 @@ type RESTManifest struct {
 	MaxSortTerms    int      `json:"maxSortTerms,omitempty"`
 	MaxOffset       int      `json:"maxOffset,omitempty"`
 
+	// DefaultSort is the ordering a list request that names no ?sort gets,
+	// spelled exactly as a client would send it back — wire names, leading "-"
+	// for descending. Absent means primary-key order.
+	//
+	// It is here because it is the one thing about a list that a consumer cannot
+	// discover any other way: an unsorted list looks well-formed whatever order
+	// it is in, so a client, a generated skill or an agent reading this document
+	// has no signal that the resource meant something more specific (#165).
+	DefaultSort []string `json:"defaultSort,omitempty"`
+
 	// Filterable, Sortable and Searchable name the columns a request may reach,
 	// in their **wire** spelling rather than the database's.
 	//
@@ -373,6 +383,36 @@ func differingWire(c WireCase, column string) string {
 	return ""
 }
 
+// wireSortTerms respells declared sort terms as a request would send them.
+//
+// The declaration names columns the way the schema does; ?sort names them the
+// way the wire does. This is the one place the two meet, and it keeps the
+// direction prefix attached to whichever spelling it is on.
+func wireSortTerms(terms []string, wire WireCase) []string {
+	if len(terms) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(terms))
+	for _, term := range terms {
+		name, desc, err := SortTerm(term)
+		if err != nil {
+			// Validate reports it; this document reproduces what was declared
+			// rather than dropping it, so the two do not disagree about what
+			// the schema says.
+			out = append(out, term)
+			continue
+		}
+		// Normalised onto the leading-minus spelling, because the document is
+		// read as something to paste and one form is easier to paste than two.
+		spelled := wire.WireName(name)
+		if desc {
+			spelled = "-" + spelled
+		}
+		out = append(out, spelled)
+	}
+	return out
+}
+
 func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *RESTManifest {
 	rm := &RESTManifest{
 		Path:            t.rest.Path,
@@ -382,6 +422,7 @@ func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *REST
 		MaxFilters:      t.rest.MaxFilters,
 		MaxSortTerms:    t.rest.MaxSortTerms,
 		MaxOffset:       t.rest.MaxOffset,
+		DefaultSort:     wireSortTerms(t.rest.DefaultSort, wire),
 		Filterable:      []string{},
 		Sortable:        []string{},
 		Searchable:      []string{},

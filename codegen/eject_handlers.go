@@ -268,8 +268,37 @@ func ejectZeroLiteral(d *schema.FieldDesc) string {
 func ejectLimits(b *bytes.Buffer, t *schema.TableDef, lower string) {
 	r := t.Rest()
 	fmt.Fprintf(b, "\n// %sLimits are the ceilings %s declared.\n", lower, t.Name())
-	fmt.Fprintf(b, "var %sLimits = Limits{DefaultPageSize: %d, MaxPageSize: %d, MaxFilters: %d, MaxSortTerms: %d, MaxOffset: %d}\n",
+	fmt.Fprintf(b, "var %sLimits = Limits{DefaultPageSize: %d, MaxPageSize: %d, MaxFilters: %d, MaxSortTerms: %d, MaxOffset: %d",
 		lower, r.DefaultPageSize, r.MaxPageSize, r.MaxFilters, r.MaxSortTerms, r.MaxOffset)
+	// A ceiling emits its zero, because zero is a value the parser reads as
+	// "take the default". An absent ordering has nothing to say, and
+	// `DefaultSort: nil` on every resource that declared none is noise in a file
+	// meant to be read.
+	if lit := ejectSortLiteral(r.DefaultSort); lit != "" {
+		fmt.Fprintf(b, ", DefaultSort: %s", lit)
+	}
+	b.WriteString("}\n")
+}
+
+// ejectSortLiteral renders a declared default ordering as the Order slice the
+// exit's parser appends. Resolved here rather than parsed there: the exit reads
+// what a resource decided, and re-parsing a term at request time would be a
+// second implementation of a grammar the schema already validated.
+func ejectSortLiteral(terms []string) string {
+	parts := make([]string, 0, len(terms))
+	for _, term := range terms {
+		name, desc, err := schema.SortTerm(term)
+		if err != nil {
+			// Validate has already reported it, and emitting a term nothing
+			// could parse would put a compile error in the exit.
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("{Column: %q, Desc: %t}", name, desc))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "[]Order{" + strings.Join(parts, ", ") + "}"
 }
 
 // ejectBodyDecoder emits the JSON decoder for a create or patch body.

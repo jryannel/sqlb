@@ -494,6 +494,41 @@ type ComputedExpr struct{ sql string }
 // admits here because there is finally a consumer for the annotation, and
 // [sqlb.Builder.Explain] against a real database is what catches it early.
 //
+// # Whose table does it name
+//
+// Nothing checks that either, and it is the question worth asking before
+// writing a subquery here — not "is this a subquery" but "whose table does it
+// name". A subquery over this module's own tables is what this feature is for:
+// a chat's `participant_ids` over its own `chat_members` is correct and deletes
+// an N+1. A subquery naming *another module's* table is the coupling
+// [ExternalRef] refuses to expand for, arriving through a door nothing guards.
+//
+// The difference from a join in one handler is the footprint, and it is larger
+// than it looks. A computed column travels with the model:
+//
+//   - it is selectable by every mount that opts into it, so the coupling is not
+//     confined to the one query that wanted the value;
+//   - it is in the RETURNING of every INSERT, UPDATE and — with
+//     [sqlb.Hooks.AfterDeleteRows] — DELETE that asks for it.
+//
+// "The coupling is identical to the LEFT JOIN I am replacing" is the plausible
+// and wrong reasoning a port applies. It is not identical: a module that
+// replaced `LEFT JOIN projects` in one handler with
+// `Computed("project_name", FromSQL("(SELECT name FROM projects …)"))` found the
+// subquery in the RETURNING of every insert, so the table could not be written
+// at all without `projects` present, and the module's own isolation boot test
+// failed on its seed with `relation "projects" does not exist`
+// ([#167](https://github.com/jryannel/sqlb/issues/167)). Since
+// [#164](https://github.com/jryannel/sqlb/issues/164) a write evaluates only the
+// computed columns it asked for, which shrinks that footprint — but the read
+// path still carries the coupling to every mount that selects the column, so the
+// rule stands.
+//
+// The answer is [ExternalRef]'s own: fetch the other side through that module's
+// API. sqlb cannot check this — resolving a table name out of raw SQL is exactly
+// the dependency ExternalRef's free-text target exists to avoid — which is why
+// it is written here rather than enforced.
+//
 // [ADR-0024]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0024-no-annotation-slot.md
 func FromSQL(sql string) ComputedExpr { return ComputedExpr{sql: sql} }
 
@@ -551,6 +586,12 @@ func Ref(name string, target *TableDef) *Field {
 //
 // Such a reference cannot be Expandable: expanding it would join a table this
 // module does not own. Fetch the other side through that module's own API.
+//
+// That refusal is a rule about the coupling, not about the syntax, so it applies
+// to the other way of writing the same join: a [Computed] column whose [FromSQL]
+// expression names the other module's table couples every read of this table to
+// that module's presence, and nothing refuses it because nothing resolves a
+// table name out of raw SQL. FromSQL's doc comment has the case that proved it.
 //
 // # relation, not column
 //
@@ -1073,6 +1114,31 @@ func (f *Field) LookupKey() *Field {
 // A table may declare one scope column. Where the confinement cannot be
 // written as a column of this table at all — a membership join, say — declare
 // it on the column the hook does constrain, which is the key it narrows.
+//
+// # A scope inherited from a parent row
+//
+// That last sentence invites a declaration this package accepts and then cannot
+// carry the whole way, so it is worth stating what you get. A child table scoped
+// through its parent — `cart_lines` belongs to a `carts` row, and the cart
+// belongs to a session — declares `Scoped` on the foreign key, and the
+// obligation lands correctly on every resource that exposes the table. The hook
+// it obliges has to confine with a subquery:
+//
+//	cart_id IN (SELECT id FROM carts WHERE session_id = $1)
+//
+// which is a [sqlb.RawPred], because the predicate vocabulary is value
+// comparison and column-to-column and has no spelling for a subquery. That works
+// for every direct query of the table, and it forecloses `?expand` onto it
+// permanently: opaque text cannot be requalified onto a join alias with
+// certainty, so the expansion is refused rather than silently resolving the
+// predicate against the wrong table.
+//
+// The refusal is loud and lands at the right moment, so this is a foreclosure
+// rather than a hazard. But it is worth deciding up front, because the other way
+// out is to store the scope column on the child as well — a second copy of the
+// one column whose wrongness is a data leak. Usually the right answer is neither:
+// leave the child unexposed and reach its rows through the parent's endpoint,
+// which is where the confinement already holds (#158).
 //
 // [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
 func (f *Field) Scoped() *Field {

@@ -103,7 +103,8 @@ func TestComputedWithoutItsBindFails(t *testing.T) {
 	}
 }
 
-// Nothing writes an expression: no insert names it, no update assigns it.
+// Nothing writes an expression: no insert names it, no update assigns it, and
+// since #164 no write evaluates one it was not asked for.
 func TestComputedIsNotWritten(t *testing.T) {
 	sql, _, err := sqlb.InsertRows(&CompProject{ID: "p1", Name: "Apollo"}).SQL()
 	if err != nil {
@@ -112,11 +113,12 @@ func TestComputedIsNotWritten(t *testing.T) {
 	if strings.Contains(sql, `INSERT INTO "projects" ("id", "name", "due_date", "open_tasks", "is_overdue"`) {
 		t.Errorf("insert writes a computed column:\n%s", sql)
 	}
-	if !strings.Contains(sql, `(due_date < current_date AND open_tasks > 0) AS "is_overdue"`) {
-		t.Errorf("RETURNING should carry the derived value back:\n%s", sql)
+	// A write takes its derived columns the way a read does: only the ones it
+	// asked for. Before #164 the same aggregate a read had to name was evaluated
+	// by every insert of the table, including the ones that discard it.
+	if strings.Contains(sql, "is_overdue") {
+		t.Errorf("RETURNING should omit a computed column nothing asked for:\n%s", sql)
 	}
-	// The parameterised one has no bind to take on a write, so it is left out
-	// rather than rendered against a bind that is not there.
 	if strings.Contains(sql, "is_starred") {
 		t.Errorf("RETURNING should omit a parameterised computed column:\n%s", sql)
 	}
@@ -124,6 +126,63 @@ func TestComputedIsNotWritten(t *testing.T) {
 	_, _, err = sqlb.UpdateRows[CompProject]().Set("is_overdue", true).Where(sqlb.F("id").Eq("p1")).SQL()
 	if err == nil || !strings.Contains(err.Error(), "computed") {
 		t.Errorf("assigning a computed column should be refused, got %v", err)
+	}
+}
+
+// The opt-in half of the same rule: a write that names the column gets it back
+// without a second read, which is what ADR-0041 wanted RETURNING for.
+func TestWriteComputedIsOptIn(t *testing.T) {
+	sql, _, err := sqlb.InsertRows(&CompProject{ID: "p1", Name: "Apollo"}).
+		WithComputed("is_overdue").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, `(due_date < current_date AND open_tasks > 0) AS "is_overdue"`) {
+		t.Errorf("RETURNING should carry the column the insert asked for:\n%s", sql)
+	}
+
+	sql, _, err = sqlb.UpdateRows[CompProject]().
+		WithComputed("is_overdue").
+		Set("name", "Artemis").
+		Where(sqlb.F("id").Eq("p1")).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if !strings.Contains(sql, `AS "is_overdue"`) {
+		t.Errorf("an update should carry the column it asked for:\n%s", sql)
+	}
+}
+
+// The three names a write cannot take, each named rather than skipped. The last
+// is the one that matters: a parameterised expression has no bind on a write, so
+// asking for it is asking for a value no statement here can produce — and the
+// alternative to refusing is a field that arrives holding a definite zero.
+func TestWriteComputedRefusesWhatItCannotReturn(t *testing.T) {
+	tests := []struct {
+		name, column, want string
+	}{
+		{"unknown", "is_overdu", "not a column of"},
+		{"stored", "name", "stores that column rather than computing it"},
+		{"needs a bind", "is_starred", "nowhere to take a bind from"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := sqlb.InsertRows(&CompProject{ID: "p1"}).WithComputed(tc.column).SQL()
+			if err == nil {
+				t.Fatalf("WithComputed(%q) was accepted on an insert", tc.column)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("insert error %q does not say %q", err, tc.want)
+			}
+			_, _, err = sqlb.UpdateRows[CompProject]().
+				WithComputed(tc.column).Set("name", "x").Where(sqlb.F("id").Eq("p1")).SQL()
+			if err == nil {
+				t.Fatalf("WithComputed(%q) was accepted on an update", tc.column)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("update error %q does not say %q", err, tc.want)
+			}
+		})
 	}
 }
 

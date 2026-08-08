@@ -10,6 +10,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/filter"
 )
 
 // binding is everything about one resource that can be computed once, at
@@ -43,6 +44,27 @@ type binding[T any] struct {
 	// zero value — which for a bool would have been indistinguishable from a
 	// real false (#92).
 	selectable []*sqlb.ColumnInfo
+
+	// writeSelectable is selectable as a create or update response can answer it:
+	// the same projection, minus the computed columns whose expression takes a
+	// bind.
+	//
+	// A write has nowhere to take a bind from, so ADR-0041 leaves such a column
+	// out of RETURNING — and the response used to serialise the scanned struct's
+	// zero value anyway, which for a bool is indistinguishable from a real false.
+	// That is the failure the projection machinery was built for on the read side
+	// (#92) arriving on the write side: `PATCH /posts/{id}` answered
+	// `"my_acknowledged": false` to the viewer who had just acknowledged it, and
+	// the consumer's tests passed because they asserted on the GET (#163). The key
+	// is absent instead, which is what the ADR promised and what a client reads as
+	// "not computed here".
+	writeSelectable []*sqlb.ColumnInfo
+
+	// writeComputed is the computed columns of writeSelectable, by name, for the
+	// statement's own opt-in. Writes take computed columns the way reads do —
+	// only the ones the mount asked for — so a resource with no Computed sends an
+	// INSERT whose RETURNING is stored columns and nothing else (#164).
+	writeComputed []string
 
 	// served is selectable as a set, for the places that ask about one column
 	// rather than walking the projection — the OpenAPI parameter list, mostly.
@@ -118,6 +140,7 @@ func bind[T any](opts Options) (*binding[T], error) {
 		jsonKey:    make(map[string][]byte, len(m.Columns)),
 		selectable: selectableFor(m, opts.Computed, opts.Columns),
 	}
+	b.writeSelectable, b.writeComputed = writeProjection(b.selectable)
 
 	// Checked before the loop below, because that loop decides what a request
 	// body may write and an unchecked name there is a resource quietly serving
@@ -214,6 +237,13 @@ func bind[T any](opts Options) (*binding[T], error) {
 					"a stored column is already in the response and does not need declaring",
 				opts.name(), name, m.Type)
 		}
+	}
+
+	// DefaultSort decides what a request that names no ordering gets, so a term
+	// it cannot serve has to fail here: at request time the client sent nothing
+	// wrong and would be answered 400 for it.
+	if err := checkDefaultSort(b, opts); err != nil {
+		return nil, err
 	}
 
 	// Expandable names a relation, not a column, and an unknown one has to fail
@@ -632,6 +662,49 @@ func checkColumns(m *sqlb.Model, opts Options) error {
 	return nil
 }
 
+// checkDefaultSort validates Options.DefaultSort against what this resource can
+// actually sort by.
+//
+// Startup-only, and for the reason Expandable's check is: the terms are the
+// resource's, not the request's, so a bad one at request time is a 400 answering
+// a client that sent nothing at all. The check is against the resource's surface
+// rather than the model's, because Columns and Computed both narrow what is
+// sortable and a default naming a column this mount does not serve is the same
+// mistake as a default naming one that does not exist (#165).
+func checkDefaultSort[T any](b *binding[T], opts Options) error {
+	for _, term := range opts.DefaultSort {
+		name, _, err := filter.SortTerm(term)
+		if err != nil {
+			return fmt.Errorf("rest: %s declares DefaultSort %q, but %w", opts.name(), term, err)
+		}
+		col := b.model.Column(name)
+		switch {
+		case col == nil || col.Hidden || !b.served[col.Name]:
+			return fmt.Errorf(
+				"rest: %s declares DefaultSort %q, but this resource has no such column (sortable: %s)",
+				opts.name(), term, strings.Join(b.sortableNames(), ", "))
+		case !col.Sortable:
+			return fmt.Errorf(
+				"rest: %s declares DefaultSort %q, but %s does not declare that column Sortable; "+
+					"a capability is opt-in, and an ordering nothing declared is one no ?sort could ask for either "+
+					"(sortable: %s)",
+				opts.name(), term, b.model.Type, strings.Join(b.sortableNames(), ", "))
+		}
+	}
+	return nil
+}
+
+// sortableNames lists the columns this resource will sort by, for a rejection.
+func (b *binding[T]) sortableNames() []string {
+	var out []string
+	for _, col := range b.selectable {
+		if col.Sortable && !col.Hidden {
+			out = append(out, col.Name)
+		}
+	}
+	return out
+}
+
 // reachableSet answers "is this column part of this resource" once, so the
 // binding loop does not walk the allowlist per column.
 func reachableSet(m *sqlb.Model, columns []string) func(*sqlb.ColumnInfo) bool {
@@ -661,6 +734,30 @@ func containsName(list []string, s string) bool {
 // same model may be mounted twice with different computed sets, which is the
 // case that made a shared model expensive to read (#92), and twice with
 // different column sets, which is the public-and-privileged pair (#148).
+// writeProjection splits a read projection into what a write can answer: the
+// columns, minus the ones a mutation cannot evaluate, and the computed names
+// among them.
+//
+// The one thing a write cannot evaluate is a column carrying Needs. Its
+// expression takes a bind, the bind is a property of who is asking, and the
+// hooks a write runs receive the row rather than the statement — so ADR-0041
+// leaves it out of RETURNING and it is read back by the next query. Dropping it
+// from the response too is what makes the two agree (#163).
+func writeProjection(selectable []*sqlb.ColumnInfo) ([]*sqlb.ColumnInfo, []string) {
+	cols := make([]*sqlb.ColumnInfo, 0, len(selectable))
+	var computed []string
+	for _, col := range selectable {
+		if col.Computed() {
+			if len(col.Needs) > 0 {
+				continue
+			}
+			computed = append(computed, col.Name)
+		}
+		cols = append(cols, col)
+	}
+	return cols, computed
+}
+
 func selectableFor(m *sqlb.Model, computed, columns []string) []*sqlb.ColumnInfo {
 	wanted := make(map[string]bool, len(computed))
 	for _, name := range computed {
