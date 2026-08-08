@@ -125,11 +125,11 @@ Four gaps, all deliberate and all documented where they bite:
   has the register-for-everything form and this does not.
 
   The reason is that the concern most people reach for it with is a change feed,
-  and there selectivity *is* the design: `example/tasks` leaves Users and
-  Workspaces out of `PublishChanges` on purpose, because every model added is a
-  fan-out every subscriber pays for. A register-for-everything form would make
-  the cheap thing the default and the considered thing the opt-out, which is
-  backwards for a broker.
+  and there selectivity *is* the design: `example/tasks` publishes three of its
+  six models and leaves Users, Workspaces and Memberships out on purpose, each
+  with a stated reason, because every model added is a fan-out every subscriber
+  pays for. A register-for-everything form would make the cheap thing the default
+  and the considered thing the opt-out, which is backwards for a broker.
 
   That argument does not transfer to an audit log or a metric, where the
   per-model registration carries no per-model decision, so this gap is smaller
