@@ -119,6 +119,14 @@ are green. [docs/compatibility.md](docs/compatibility.md) says what is frozen
 and what is expected to move; a pre-1.0 minor may break a surface listed under
 *Will move*, and the notes carry the mechanical edit that fixes it.
 
+`/release` is the procedure, and it tags the *releases-page commit* rather than
+the feature commit — `pages` only runs on a push to `main` touching a published
+path, so a tag on a commit that publishes nothing can never show the green this
+paragraph asks for. `both workflows are green` is no longer only a sentence:
+`.claude/hooks/verify-release-gate.sh` refuses the tag, the tag push and the
+release while either is red, absent or unfinished. Saying it in bold here did
+not hold twice, which is what earned the hook.
+
 ## Things that are deliberate
 
 Worth knowing before you propose removing them:
