@@ -158,3 +158,162 @@ func TestScopeCheckReadsTheHandlesRegistry(t *testing.T) {
 		t.Fatal("expected mounting to fail: the handle's own registry is empty")
 	}
 }
+
+// --- released scopes (#177) -------------------------------------------------
+
+// allFour registers every hook a fully-exposed Scoped model requires, under
+// name if one is given and unnamed otherwise.
+func allFour(reg *sqlb.Registry, name string) {
+	q := func(_ context.Context, b *sqlb.Builder[Scoped]) error {
+		b.Where(sqlb.F("org_id").Eq("org1"))
+		return nil
+	}
+	u := func(_ context.Context, s *sqlb.Update[Scoped]) error { return nil }
+	d := func(_ context.Context, s *sqlb.Delete[Scoped]) error { return nil }
+	c := func(_ context.Context, row *Scoped) error { row.OrgID = "org1"; return nil }
+
+	sqlb.On[Scoped](reg).BeforeCreate(c)
+	if name == "" {
+		sqlb.On[Scoped](reg).BeforeQuery(q).BeforeUpdate(u).BeforeDelete(d)
+		return
+	}
+	sqlb.On[Scoped](reg).Scope(name).BeforeQuery(q).BeforeUpdate(u).BeforeDelete(d)
+}
+
+// The property that makes Unscoped safe to offer at all, and the one ADR-0030
+// was protecting when it declined to add an escape hatch: releasing every rule
+// that confines a Scoped model does not get the resource mounted. The check is
+// the same one, asked of the handle the resource will actually serve from.
+func TestAResourceCannotReleaseItsWayPastTheObligationCheck(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	allFour(reg, "storefront")
+	db := sqlb.New(newFakeDB(t).db).WithHooks(reg)
+
+	// Proven both ways (ADR-0016): without the release the same mount succeeds,
+	// so the refusal below is the release and not a model that never satisfied
+	// the check.
+	if err := mountScoped(t, db, scopedOptions()); err != nil {
+		t.Fatalf("the mount fails before any release, so this proves nothing: %v", err)
+	}
+
+	// One obligation at a time. A resource exposing all of CRUD has four of
+	// them, and asserting only that the mount failed is satisfied by any one —
+	// so a BeforeQuery that had quietly stopped being release-aware would still
+	// leave this green on BeforeUpdate's refusal. That is not hypothetical: the
+	// first version of this test was written that way, and it passed with the
+	// release deliberately hidden from the check. Each case now exposes exactly
+	// the operation that requires the hook it is about.
+	for _, tc := range []struct {
+		name string
+		ops  rest.Op
+		hook string
+	}{
+		{"read", rest.OpList | rest.OpRead, "BeforeQuery"},
+		{"update", rest.OpUpdate, "BeforeUpdate"},
+		{"delete", rest.OpDelete, "BeforeDelete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := scopedOptions()
+			opts.Ops = tc.ops
+			opts.Unscoped = []string{"storefront"}
+
+			err := mountScoped(t, db, opts)
+			if err == nil {
+				t.Fatal("a resource released every rule confining a Scoped model and still mounted")
+			}
+			for _, want := range []string{tc.hook, "org_id is Scoped", `"storefront"`, "releases"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error does not mention %s:\n%s", want, err)
+				}
+			}
+		})
+	}
+}
+
+// Releasing one of two leaves the other confining the model, so the mount is
+// allowed. Without this the check would be "any release refuses", which is a
+// feature nobody could use.
+func TestReleasingOneOfTwoRulesStillMounts(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	allFour(reg, "storefront")
+	allFour(reg, "") // a second, unnamed, absolute rule
+	db := sqlb.New(newFakeDB(t).db).WithHooks(reg)
+
+	opts := scopedOptions()
+	opts.Unscoped = []string{"storefront"}
+	if err := mountScoped(t, db, opts); err != nil {
+		t.Errorf("releasing one of two confining rules refused the mount: %v", err)
+	}
+}
+
+// A name nothing registered is a typo, and the failure it would otherwise cause
+// is the quiet one: a mount that reads as narrowed and serves the wide rule.
+func TestAnUnknownReleasedScopeRefusesToMount(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	allFour(reg, "storefront")
+	db := sqlb.New(newFakeDB(t).db).WithHooks(reg)
+
+	opts := scopedOptions()
+	opts.Unscoped = []string{"storfront"} // the typo
+	err := mountScoped(t, db, opts)
+	if err == nil {
+		t.Fatal("a release naming a scope nothing registered was accepted")
+	}
+	// The rejection names what would have been accepted (ADR-0011).
+	for _, want := range []string{`"storfront"`, `"storefront"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %s:\n%s", want, err)
+		}
+	}
+}
+
+// Unscoped over an executor that carries no registry is a promise nothing
+// keeps: there is no rule to release and no name to check.
+func TestUnscopedOverAHandlelessExecutorRefusesToMount(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	allFour(reg, "storefront")
+
+	opts := scopedOptions()
+	opts.Unscoped = []string{"storefront"}
+	err := mountScoped(t, newFakeDB(t).db, opts)
+	if err == nil {
+		t.Fatal("Unscoped was honoured over an executor with no registry")
+	}
+	if !strings.Contains(err.Error(), "*sqlb.DB") {
+		t.Errorf("error does not say what the executor should have been:\n%s", err)
+	}
+}
+
+// The sharpest case the two features make together, and it landed while this
+// branch was open: OpSingleton removes the {id}, so the row every one of its
+// operations addresses is the one the scope hook leaves. Releasing that scope
+// does not widen a result set — there is no key in the path and no predicate in
+// the statement, so a PATCH would reach every row in the table, which is the
+// default-open outcome ADR-0030 exists to close.
+//
+// It composes correctly because the obligation check reads the released handle,
+// not because anything here knows about singletons. Asserted anyway: the two
+// were designed independently, and this is the case where the composition being
+// wrong would be worst.
+func TestASingletonCannotReleaseTheScopeThatChoosesItsRow(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	allFour(reg, "storefront")
+	db := sqlb.New(newFakeDB(t).db).WithHooks(reg)
+
+	opts := scopedOptions()
+	opts.Ops = rest.OpSingleton
+
+	// Both ways: the singleton mounts while the rule confines it.
+	if err := mountScoped(t, db, opts); err != nil {
+		t.Fatalf("the singleton fails to mount before any release, so this proves nothing: %v", err)
+	}
+
+	opts.Unscoped = []string{"storefront"}
+	err := mountScoped(t, db, opts)
+	if err == nil {
+		t.Fatal("a singleton released the scope that chooses its row and still mounted")
+	}
+	if !strings.Contains(err.Error(), "singleton read") {
+		t.Errorf("error does not name the singleton read as the unmet obligation:\n%s", err)
+	}
+}

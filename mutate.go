@@ -622,7 +622,7 @@ func (u *Update[T]) Clone() *Update[T] {
 // The receiver is untouched, as it is in Exec.
 func (u *Update[T]) Resolved(ctx context.Context, db Executor) (*Update[T], error) {
 	stmt := u.Clone()
-	if err := hooksFor[T](db).runBeforeUpdate(ctx, stmt); err != nil {
+	if err := hooksFor[T](db).runBeforeUpdate(ctx, stmt, releasedFrom(db)); err != nil {
 		return nil, err
 	}
 	return stmt, nil
@@ -796,7 +796,7 @@ func (d *Delete[T]) Clone() *Delete[T] {
 func (d *Delete[T]) Resolved(ctx context.Context, db Executor) (*Delete[T], error) {
 	hooks := hooksFor[T](db)
 	stmt := d.Clone()
-	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
+	if err := hooks.runBeforeDelete(ctx, stmt, releasedFrom(db)); err != nil {
 		return nil, err
 	}
 	// Decided after BeforeDelete, so that a hook registering on first use — which

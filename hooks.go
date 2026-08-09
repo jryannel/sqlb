@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 )
 
@@ -35,18 +36,39 @@ import (
 // assembled rather than of what happened to run an init function first.
 type Hooks[T any] struct {
 	mu           sync.RWMutex
-	beforeQuery  []func(context.Context, *Builder[T]) error
+	beforeQuery  []scopedFn[func(context.Context, *Builder[T]) error]
 	beforeCreate []func(context.Context, *T) error
 	afterCreate  []func(context.Context, *T) error
-	beforeUpdate []func(context.Context, *Update[T]) error
+	beforeUpdate []scopedFn[func(context.Context, *Update[T]) error]
 	afterUpdate  []func(context.Context, []T) error
-	beforeDelete []func(context.Context, *Delete[T]) error
+	beforeDelete []scopedFn[func(context.Context, *Delete[T]) error]
 	afterDelete  []func(context.Context, int64) error
 	// afterDeleteRows is the reason a delete may run RETURNING at all. Kept
 	// separate from afterDelete rather than replacing it so that the cost —
 	// materialising every row a bulk delete removed — is paid only by a program
 	// that asked for the rows.
 	afterDeleteRows []func(context.Context, []T) error
+}
+
+// scopedFn is a registration and the name under which it may be released.
+//
+// An empty scope is the ordinary registration and is the reason this is a
+// struct rather than a map: a hook nobody named cannot be released by anybody,
+// so the zero value is the absolute rule and naming one is what makes it
+// negotiable. See [Hooks.Scope].
+type scopedFn[F any] struct {
+	scope string
+	fn    F
+}
+
+// keep reports whether this registration survives a handle that released the
+// named scopes. An unnamed registration always survives.
+func (s scopedFn[F]) keep(released map[string]struct{}) bool {
+	if s.scope == "" || len(released) == 0 {
+		return true
+	}
+	_, gone := released[s.scope]
+	return !gone
 }
 
 // Registry holds the hook sets for a set of models, keyed by type.
@@ -124,10 +146,98 @@ func On[T any](r *Registry) *Hooks[T] {
 // a table the expansion did not join, fails the query rather than being
 // dropped. See the expansion notes in expand.go.
 func (h *Hooks[T]) BeforeQuery(fn func(context.Context, *Builder[T]) error) *Hooks[T] {
+	h.register(scopedFn[func(context.Context, *Builder[T]) error]{fn: fn})
+	return h
+}
+
+// Scope names the registrations made through it, so that a handle may release
+// them by that name.
+//
+// It exists for the surface that reads the same table under a different rule:
+// a storefront sees published rows and an admin panel exists to see the rest.
+// Both read one model, and a BeforeQuery registered against that model confines
+// every reader of it — so before this, the admin half had to be a second Go type
+// over the same table, which gives up the generated model, the typed column
+// facade, the manifest and the drift gate (#177).
+//
+//	sqlb.On[Product](reg).Scope("storefront").BeforeQuery(publishedOnly)
+//	admin := db.WithoutScope("storefront")
+//
+// # Naming a scope is what makes it releasable
+//
+// An ordinary registration has no name and [DB.WithoutScope] cannot reach it,
+// whatever it passes. That asymmetry is the design rather than an accident of
+// it: the author of the rule decides whether the rule is negotiable, and the
+// default — the short spelling, the one already in every codebase — stays
+// absolute. A rule that should never be escaped is written the way it always
+// was, and nothing at a mount can talk it out of applying.
+//
+// # The name is the rule, not the model
+//
+// Scope names live in the registry rather than under a type, so one name covers
+// every model the rule spans. "A shopper sees the published catalog" is one rule
+// over products, variants, categories and collections; registering it under one
+// name on four models means a handle releases it once and the release reaches
+// all four — including the ones a request arrives at through ?expand, whose
+// hooks run requalified onto the join alias.
+//
+// # What still refuses
+//
+// Releasing does not get a resource past [ADR-0030]. `rest.Resource` runs its
+// obligation check against the handle it will actually serve from, so a model
+// declared Scoped whose every BeforeQuery has been released has nothing
+// confining it and does not mount. Release one of two rules and the other still
+// counts. The check is the same one, asked after the release rather than before,
+// which is what keeps this from being the flag that record declined to add.
+//
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+func (h *Hooks[T]) Scope(name string) *ScopedHooks[T] {
+	if name == "" {
+		panic("sqlb: Scope called with an empty name; an unnamed registration is Hooks.BeforeQuery itself")
+	}
+	return &ScopedHooks[T]{hooks: h, name: name}
+}
+
+// ScopedHooks registers hooks under a scope name. See [Hooks.Scope].
+//
+// Only the three hooks that narrow which rows a statement addresses are here.
+// BeforeCreate is not: it stamps a row on the way in rather than confining a
+// set, so there is nothing for a reader to be released from, and a create that
+// skipped it would write a row with no tenant rather than see more of them.
+type ScopedHooks[T any] struct {
+	hooks *Hooks[T]
+	name  string
+}
+
+// BeforeQuery registers a named [Hooks.BeforeQuery].
+func (s *ScopedHooks[T]) BeforeQuery(fn func(context.Context, *Builder[T]) error) *ScopedHooks[T] {
+	s.hooks.register(scopedFn[func(context.Context, *Builder[T]) error]{scope: s.name, fn: fn})
+	return s
+}
+
+// BeforeUpdate registers a named [Hooks.BeforeUpdate].
+func (s *ScopedHooks[T]) BeforeUpdate(fn func(context.Context, *Update[T]) error) *ScopedHooks[T] {
+	s.hooks.mu.Lock()
+	defer s.hooks.mu.Unlock()
+	s.hooks.beforeUpdate = append(s.hooks.beforeUpdate,
+		scopedFn[func(context.Context, *Update[T]) error]{scope: s.name, fn: fn})
+	return s
+}
+
+// BeforeDelete registers a named [Hooks.BeforeDelete].
+func (s *ScopedHooks[T]) BeforeDelete(fn func(context.Context, *Delete[T]) error) *ScopedHooks[T] {
+	s.hooks.mu.Lock()
+	defer s.hooks.mu.Unlock()
+	s.hooks.beforeDelete = append(s.hooks.beforeDelete,
+		scopedFn[func(context.Context, *Delete[T]) error]{scope: s.name, fn: fn})
+	return s
+}
+
+// register appends a BeforeQuery registration, named or not.
+func (h *Hooks[T]) register(s scopedFn[func(context.Context, *Builder[T]) error]) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.beforeQuery = append(h.beforeQuery, fn)
-	return h
+	h.beforeQuery = append(h.beforeQuery, s)
 }
 
 // BeforeCreate runs on each row before insert, and may modify it: normalising
@@ -159,7 +269,8 @@ func (h *Hooks[T]) AfterCreate(fn func(context.Context, *T) error) *Hooks[T] {
 func (h *Hooks[T]) BeforeUpdate(fn func(context.Context, *Update[T]) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.beforeUpdate = append(h.beforeUpdate, fn)
+	h.beforeUpdate = append(h.beforeUpdate,
+		scopedFn[func(context.Context, *Update[T]) error]{fn: fn})
 	return h
 }
 
@@ -176,7 +287,8 @@ func (h *Hooks[T]) AfterUpdate(fn func(context.Context, []T) error) *Hooks[T] {
 func (h *Hooks[T]) BeforeDelete(fn func(context.Context, *Delete[T]) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.beforeDelete = append(h.beforeDelete, fn)
+	h.beforeDelete = append(h.beforeDelete,
+		scopedFn[func(context.Context, *Delete[T]) error]{fn: fn})
 	return h
 }
 
@@ -246,14 +358,35 @@ type RegisteredHooks struct {
 
 // Registered reports which kinds of hook are registered for T.
 func (h *Hooks[T]) Registered() RegisteredHooks {
+	return h.registered(nil)
+}
+
+// registered is Registered against a handle that released the named scopes.
+//
+// A released registration does not count, which is the whole reason the
+// obligation check is asked through an [Executor] rather than a registry: a
+// mount that released every rule confining a Scoped model has nothing
+// confining it, and reporting the registration it just switched off would let
+// the release be the flag ADR-0030 declined to add.
+func (h *Hooks[T]) registered(released map[string]struct{}) RegisteredHooks {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return RegisteredHooks{
-		BeforeQuery:  len(h.beforeQuery) > 0,
+		BeforeQuery:  anyKept(h.beforeQuery, released),
 		BeforeCreate: len(h.beforeCreate) > 0,
-		BeforeUpdate: len(h.beforeUpdate) > 0,
-		BeforeDelete: len(h.beforeDelete) > 0,
+		BeforeUpdate: anyKept(h.beforeUpdate, released),
+		BeforeDelete: anyKept(h.beforeDelete, released),
 	}
+}
+
+// anyKept reports whether any registration survives the released set.
+func anyKept[F any](fns []scopedFn[F], released map[string]struct{}) bool {
+	for _, s := range fns {
+		if s.keep(released) {
+			return true
+		}
+	}
+	return false
 }
 
 // RegisteredFor reports which hooks are registered for T against whichever
@@ -266,7 +399,7 @@ func (h *Hooks[T]) Registered() RegisteredHooks {
 // are not visible to it, and a program that mounts before it registers is a
 // program whose first request would have run unscoped anyway.
 func RegisteredFor[T any](exec Executor) RegisteredHooks {
-	return hooksFor[T](exec).Registered()
+	return hooksFor[T](exec).registered(releasedFrom(exec))
 }
 
 // Reset removes every registered hook for T.
@@ -288,12 +421,15 @@ func (h *Hooks[T]) Reset() {
 	h.beforeDelete, h.afterDelete, h.afterDeleteRows = nil, nil, nil
 }
 
-func (h *Hooks[T]) runBeforeQuery(ctx context.Context, b *Builder[T]) error {
+func (h *Hooks[T]) runBeforeQuery(ctx context.Context, b *Builder[T], released map[string]struct{}) error {
 	h.mu.RLock()
 	fns := h.beforeQuery
 	h.mu.RUnlock()
-	for _, fn := range fns {
-		if err := fn(ctx, b); err != nil {
+	for _, s := range fns {
+		if !s.keep(released) {
+			continue
+		}
+		if err := s.fn(ctx, b); err != nil {
 			return err
 		}
 	}
@@ -311,7 +447,10 @@ func (h *Hooks[T]) runBeforeQuery(ctx context.Context, b *Builder[T]) error {
 type queryScoper interface {
 	// queryScope runs the BeforeQuery hooks against a throwaway builder and
 	// returns the predicates they added, without executing anything.
-	queryScope(ctx context.Context) ([]Pred, error)
+	queryScope(ctx context.Context, released map[string]struct{}) ([]Pred, error)
+	// scopeNames returns the scope names this hook set has registrations under,
+	// which is what lets a registry enumerate them without a type parameter.
+	scopeNames() []string
 }
 
 // queryScope collects what BeforeQuery would add to a query against T.
@@ -320,7 +459,7 @@ type queryScoper interface {
 // ordering or a projection has no effect here — only its predicates are read.
 // That is the right subset for an expansion: a join carries a condition, and
 // the collection's order and cap are the schema's rather than a hook's.
-func (h *Hooks[T]) queryScope(ctx context.Context) ([]Pred, error) {
+func (h *Hooks[T]) queryScope(ctx context.Context, released map[string]struct{}) ([]Pred, error) {
 	h.mu.RLock()
 	fns := h.beforeQuery
 	h.mu.RUnlock()
@@ -328,8 +467,11 @@ func (h *Hooks[T]) queryScope(ctx context.Context) ([]Pred, error) {
 		return nil, nil
 	}
 	b := Query[T]()
-	for _, fn := range fns {
-		if err := fn(ctx, b); err != nil {
+	for _, s := range fns {
+		if !s.keep(released) {
+			continue
+		}
+		if err := s.fn(ctx, b); err != nil {
 			return nil, err
 		}
 	}
@@ -340,6 +482,59 @@ func (h *Hooks[T]) queryScope(ctx context.Context) ([]Pred, error) {
 	// seek, which is a predicate about the target's own paging and has no
 	// meaning inside a join. where is the set a scope is written into.
 	return b.where, nil
+}
+
+// scopeNames returns the distinct scope names registered on this hook set.
+func (h *Hooks[T]) scopeNames() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, s := range h.beforeQuery {
+		add(s.scope)
+	}
+	for _, s := range h.beforeUpdate {
+		add(s.scope)
+	}
+	for _, s := range h.beforeDelete {
+		add(s.scope)
+	}
+	return out
+}
+
+// ScopeNames returns every scope name registered in r, across all models, in
+// sorted order.
+//
+// It exists so that releasing a name that nothing registered can be refused
+// where the refusal is useful. `rest.Resource` calls it at mount: a typo in
+// Options.Unscoped would otherwise be silent, and a release that quietly does
+// nothing is the failure mode of every allowlist that is not checked — the
+// mount looks narrowed and serves the wide rule.
+func (r *Registry) ScopeNames() []string {
+	seen := map[string]bool{}
+	var out []string
+	r.m.Range(func(_, v any) bool {
+		s, ok := v.(queryScoper)
+		if !ok {
+			return true
+		}
+		for _, name := range s.scopeNames() {
+			if !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+		return true
+	})
+	sort.Strings(out)
+	return out
 }
 
 // scoperFor returns the type-erased hook set registered for t, or nil.
@@ -388,12 +583,15 @@ func (h *Hooks[T]) runAfterCreate(ctx context.Context, rows []T) error {
 	return nil
 }
 
-func (h *Hooks[T]) runBeforeUpdate(ctx context.Context, u *Update[T]) error {
+func (h *Hooks[T]) runBeforeUpdate(ctx context.Context, u *Update[T], released map[string]struct{}) error {
 	h.mu.RLock()
 	fns := h.beforeUpdate
 	h.mu.RUnlock()
-	for _, fn := range fns {
-		if err := fn(ctx, u); err != nil {
+	for _, s := range fns {
+		if !s.keep(released) {
+			continue
+		}
+		if err := s.fn(ctx, u); err != nil {
 			return err
 		}
 	}
@@ -412,12 +610,15 @@ func (h *Hooks[T]) runAfterUpdate(ctx context.Context, rows []T) error {
 	return nil
 }
 
-func (h *Hooks[T]) runBeforeDelete(ctx context.Context, d *Delete[T]) error {
+func (h *Hooks[T]) runBeforeDelete(ctx context.Context, d *Delete[T], released map[string]struct{}) error {
 	h.mu.RLock()
 	fns := h.beforeDelete
 	h.mu.RUnlock()
-	for _, fn := range fns {
-		if err := fn(ctx, d); err != nil {
+	for _, s := range fns {
+		if !s.keep(released) {
+			continue
+		}
+		if err := s.fn(ctx, d); err != nil {
 			return err
 		}
 	}

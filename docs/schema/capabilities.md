@@ -202,6 +202,54 @@ in one respect, since a model with no field for a column has no code path that
 can return it, and gives up all four of the generated halves. See
 [structs-first](../start/structs-first.md) for that table.
 
+### The other half: rows
+
+`Columns` settles which columns each surface may reach. Two surfaces usually
+differ in **rows** as well — the storefront reads published, unarchived
+products, and the admin panel exists to read the drafts — and that rule is a
+`BeforeQuery` hook rather than a capability.
+
+Hooks are keyed by the model's Go type, so a rule registered to confine the
+storefront confines every reader of that model, the admin mount included. Name
+the rule, and one mount can say it is the surface the rule is not about
+([#177](https://github.com/jryannel/sqlb/issues/177)):
+
+```go
+// The rule, named — which is what makes it releasable at all.
+sqlb.On[catalog.Product](reg).Scope("storefront").BeforeQuery(publishedOnly)
+
+// The admin mount, over the same generated model, released from it.
+err := rest.Resource[catalog.Product, catalog.ProductCreate, catalog.ProductPatch](
+    api, db, rest.Options{
+        Path:     "/admin/products",
+        Name:     "admin-product",
+        Ops:      rest.CRUD | rest.OpList,
+        Unscoped: []string{"storefront"},
+    })
+```
+
+Three things are worth knowing before reaching for it.
+
+**Only a named scope can be released.** An ordinary `BeforeQuery` has no name,
+and nothing at a mount can reach it. That asymmetry is the design: the author of
+a rule decides whether the rule is negotiable, and the short spelling — the one
+already in every codebase — stays absolute.
+
+**It does not get past the obligation check.** A model declared `Scoped` whose
+every confining rule a resource released has nothing confining it, and does not
+mount. The check runs against the released handle rather than against the
+registry, so releasing one of two rules is fine and releasing all of them is the
+[ADR-0030](../adr/0030-declared-scope-is-required.md) error. A name no
+registration claims is refused at startup too, because a release that quietly
+matches nothing leaves a mount that reads as narrowed and serves the wide rule.
+
+**A scope name spans models, not one type.** "A shopper sees the published
+catalog" is one rule over products, variants and categories; registering it
+under one name on all three means a mount releases it once, and the release
+reaches the models a request arrives at through `?expand` as well.
+
+See [ADR-0054](../adr/0054-a-named-scope-is-releasable-at-the-mount.md).
+
 ## Next
 
 - [References and relations](references.md) — `Expandable` and its inverse

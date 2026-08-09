@@ -37,6 +37,30 @@ predicate has to be read as *text*, for a raw statement that must count the same
 rows or for a test asserting the scope is in force. See
 [Inspecting](inspecting.md#resolved-which-renders-the-statement-that-runs).
 
+### When one surface is the exception
+
+A `BeforeQuery` confines every reader of the model, which is the point of it and
+occasionally the problem. A storefront and an admin panel read the same
+`products`, and the admin panel exists to see the drafts the storefront's rule
+hides.
+
+Name the rule, and one handle can be released from it:
+
+```go
+sqlb.On[Product](reg).Scope("storefront").BeforeQuery(publishedOnly)
+
+storefront := sqlb.New(pool).WithHooks(reg)
+admin      := storefront.WithoutScope("storefront")
+```
+
+An ordinary `BeforeQuery` has no name, and `WithoutScope` cannot reach it
+whatever it passes. Naming a rule is what makes it negotiable, so the decision
+sits with whoever wrote the rule rather than with whoever would like to be out
+of it — and a release does not get a resource past the obligation check below,
+which is asked of the handle that will actually serve the requests. See
+[capabilities](../schema/capabilities.md#the-other-half-rows) for the mount
+side, `rest.Options.Unscoped`.
+
 ## Say it in the schema, so the missing hook is the one that is caught
 
 The hook above cannot be forgotten at a call site. It can be forgotten

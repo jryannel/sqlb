@@ -105,7 +105,7 @@ func runQuery(ctx context.Context, db Executor, query string, args ...any) (rowS
 // so resolving the same builder twice does not accumulate their predicates.
 func (b *Builder[T]) Resolved(ctx context.Context, db Executor) (*Builder[T], error) {
 	q := b.Clone()
-	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
+	if err := hooksFor[T](db).runBeforeQuery(ctx, q, releasedFrom(db)); err != nil {
 		return nil, err
 	}
 	if err := q.resolveExpansionScopes(ctx, db); err != nil {

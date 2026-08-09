@@ -35,6 +35,57 @@ import (
 // [ADR-0008]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0008-hooks-as-domain-seam.md
 // [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
 
+// release applies Options.Unscoped to the handle this resource will serve from.
+//
+// It runs before every other check in Resource, which is the ordering that
+// matters: the obligation check below asks the handle what confines the model,
+// so asking it after the release is what makes a resource that released
+// everything fail instead of pass. Doing it the other way round would have made
+// Unscoped exactly the flag ADR-0030 declined to add.
+//
+// Two refusals, both at startup. A name nothing registered is a typo, and a
+// release that silently does nothing leaves a mount that reads as narrowed and
+// serves the wide rule. An executor that is not a *sqlb.DB carries no registry,
+// so there is neither anything to release nor anything to check the name
+// against, and honouring the field would be a promise nothing keeps.
+func release(db sqlb.Executor, opts Options) (sqlb.Executor, error) {
+	if len(opts.Unscoped) == 0 {
+		return db, nil
+	}
+	handle, ok := db.(*sqlb.DB)
+	if !ok {
+		return nil, fmt.Errorf(
+			"rest: %s sets Unscoped %v, but its Executor is %T rather than a *sqlb.DB;"+
+				"\n  a scope is released from the registry a handle carries, and this one carries none —"+
+				"\n  mount over sqlb.New(pool).WithHooks(reg)",
+			opts.Path, opts.Unscoped, db)
+	}
+	known := map[string]bool{}
+	for _, name := range handle.Hooks().ScopeNames() {
+		known[name] = true
+	}
+	var unknown []string
+	for _, name := range opts.Unscoped {
+		if !known[name] {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		have := handle.Hooks().ScopeNames()
+		offer := "nothing is registered under a scope name at all"
+		if len(have) > 0 {
+			offer = "registered scopes are " + quoteAll(have)
+		}
+		return nil, fmt.Errorf(
+			"rest: %s releases %s, which no hook registered;"+
+				"\n  %s"+
+				"\n  a released name that matches nothing narrows nothing, so this is refused rather than ignored;"+
+				"\n  register the rule with sqlb.On[…](reg).Scope(%s), or drop it from Unscoped",
+			opts.Path, quoteAll(unknown), offer, strconv.Quote(unknown[0]))
+	}
+	return handle.WithoutScope(opts.Unscoped...), nil
+}
+
 // obligation is one hook a resource's declarations require, and the reasons it
 // is required. Reasons accumulate because two declarations can want the same
 // hook, and an error naming both is more useful than an error naming one.
@@ -158,6 +209,17 @@ func checkObligations[T any](m *sqlb.Model, exec sqlb.Executor, opts Options) er
 		fmt.Fprintf(&b, "\n  %s: %s is not registered (%s)",
 			o.ops, o.hook, strings.Join(dedupe(o.because), "; "))
 	}
+	// A release is the likeliest cause when there is one, and "register the
+	// hook" is unhelpful advice to someone who registered it and then released
+	// it — the registration is there, and this resource asked for it not to
+	// apply. Say so, and leave the two honest ways out.
+	if len(opts.Unscoped) > 0 {
+		fmt.Fprintf(&b, "\n  this resource releases %s, so registrations under %s do not count toward the above",
+			quoteAll(opts.Unscoped), plural(len(opts.Unscoped), "that scope", "those scopes"))
+		b.WriteString("\n  release fewer of them, or expose fewer operations, or drop the declaration —" +
+			"\n  a surface that releases everything confining these rows is one the declaration is not true of")
+		return fmt.Errorf("%s", b.String())
+	}
 	b.WriteString("\n  register them on the registry this handle resolves against, before mounting;" +
 		"\n  or drop the declaration, which is the honest way to say the rows are not confined")
 	return fmt.Errorf("%s", b.String())
@@ -226,4 +288,12 @@ func dedupe(ss []string) []string {
 		}
 	}
 	return out
+}
+
+// plural picks the singular or plural form for n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
