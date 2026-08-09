@@ -68,6 +68,13 @@ resource's only `create` route. Left to run, that declaration produces a server
 that panics at mount on the duplicate operation id and four clients that do not
 compile.
 
+`rest.Action` refuses it a second time, against what is actually mounted rather
+than against what was declared, and returns an error where Huma would panic.
+The DSL is optional ([ADR-0010](../adr/0010-codegen-is-optional.md)), so a guard
+that lived only in the schema would leave the hand-written mount as the
+unguarded one — and the mount-time check sees collisions the declaration cannot,
+such as two resources sharing a `Name`.
+
 The verbs that are taken are the ones the exposed operations are generated
 under: `create`, `get` (`OpRead`, and `OpSingleton`), `update`, `delete`,
 `list`. Only those, and only when the table exposes them — `create` is a fine

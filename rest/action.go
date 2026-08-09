@@ -126,6 +126,51 @@ func (s ActionSpec) validate(resource string) error {
 	return nil
 }
 
+// operationID is the action's id in the document, which is also the one thing
+// about it that has to be unique across the whole API.
+func (s ActionSpec) operationID(opts Options) string { return s.Name + "-" + opts.name() }
+
+// refuseDuplicateID answers the collision Huma would otherwise panic on.
+//
+// An action named for an operation the resource already serves — "create" on a
+// resource exposing OpCreate — produces two operations with one id, and
+// huma.AddOperation panics on the second. A panic at mount is not the wrong
+// *time* to fail; it is the wrong *shape*, because every other refusal on this
+// path is a returned error naming the declaration to change, and because the
+// panic names the id without naming either operation that wants it.
+//
+// The check is Huma's own scan rather than a table of the verbs each Op is
+// generated under. A table here would be that table's second copy — schema has
+// one, and rest does not import schema (ADR-0040 keeps this package's
+// dependencies to huma) — and it would answer a narrower question: this scan
+// also catches two resources that share a Name, and an action colliding with
+// another action mounted from somewhere else entirely.
+//
+// It sees what is already registered, so it depends on mount order: an action
+// registered *before* the resource still panics from inside Resource. That is
+// the order codegen emits and the order the documented example uses, and
+// closing the other one would mean holding a registry of intent that nothing
+// else here needs.
+func refuseDuplicateID(api huma.API, resource, name, id string) error {
+	for path, item := range api.OpenAPI().Paths {
+		for _, op := range []*huma.Operation{
+			item.Get, item.Post, item.Put, item.Patch,
+			item.Delete, item.Head, item.Options, item.Trace,
+		} {
+			if op == nil || op.OperationID != id {
+				continue
+			}
+			return fmt.Errorf("rest: %s action %q is already the operation id %q, held by %s %s: "+
+				"an action does not replace an operation the resource serves, it adds a second one "+
+				"with the same name, and the generated clients declare that name twice. Rename the "+
+				"verb for the transition it performs, or drop the operation from Options.Ops so the "+
+				"action is the only %s route",
+				resource, name, id, op.Method, path, name)
+		}
+	}
+	return nil
+}
+
 // missingDo is the mount-time refusal of an action nobody supplied a func for.
 //
 // The compiler gets the first word — an action added to the schema is a build
@@ -269,8 +314,13 @@ func Action[T, In any](api huma.API, db sqlb.Executor, opts Options, spec Action
 		return &itemOutput[T]{Body: row[T]{value: out, cols: b.selectable, keys: b.jsonKey}}, nil
 	}
 
+	id := spec.operationID(opts)
+	if err := refuseDuplicateID(api, opts.Path, spec.Name, id); err != nil {
+		return err
+	}
+
 	op := huma.Operation{
-		OperationID:                  spec.Name + "-" + opts.name(),
+		OperationID:                  id,
 		Method:                       http.MethodPost,
 		Path:                         spec.Path,
 		Summary:                      spec.Summary,
@@ -332,8 +382,13 @@ func CollectionAction[In any](api huma.API, db sqlb.Executor, opts Options, spec
 		return nil, nil
 	}
 
+	id := spec.operationID(opts)
+	if err := refuseDuplicateID(api, opts.Path, spec.Name, id); err != nil {
+		return err
+	}
+
 	op := huma.Operation{
-		OperationID:                  spec.Name + "-" + opts.name(),
+		OperationID:                  id,
 		Method:                       http.MethodPost,
 		Path:                         spec.Path,
 		Summary:                      spec.Summary,
