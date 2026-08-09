@@ -55,8 +55,8 @@ for reproducing a CI failure rather than for routine use — CI is the gate. The
 database-backed suites read a DSN and start nothing; `mise run pg-up` provides
 it from `compose.yaml`, and the tasks that need it depend on that. Individual
 steps — `vet`, `lint`, `generate-check`, `impact-check`, `eject-check`,
-`test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on their own
-and `mise tasks` describes all 28.
+`adr-check`, `test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on
+their own and `mise tasks` describes all 32.
 
 **`mise run site-check` needs no npm install.** It is the fast way to find out
 whether a docs edit can be published, and the check that catches a link whose
@@ -108,10 +108,12 @@ registries had dropped the same thing.
 ([ADR-0018](docs/adr/0018-tooling-scoped-to-tracked-files.md)).
 
 **Prefer a failing check to a written-down rule.** `generate-check`,
-`eject-check`, `impact-check`, `deps-check` and `bisect-check` all exist
-because a convention that is only documented is a convention that drifts. If
-you are about to add a paragraph telling someone to remember something,
-consider whether it can fail in CI instead.
+`eject-check`, `impact-check`, `deps-check`, `adr-check` and `bisect-check` all
+exist because a convention that is only documented is a convention that drifts.
+If you are about to add a paragraph telling someone to remember something,
+consider whether it can fail in CI instead. `adr-check` is the newest and the
+plainest case: docs/adr/README.md said in so many words that the vocabulary has
+no "Accepted" in it, and a record carried Accepted for ten days anyway.
 
 **Releases.** A release is an annotated tag whose message *is* the notes, plus
 a GitHub release carrying the same text, on a commit where **both** workflows

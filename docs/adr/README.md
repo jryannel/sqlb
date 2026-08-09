@@ -146,7 +146,7 @@ the section it bears on, and move on.
 | [0037](0037-search-is-ilike-until-it-cannot-be.md) | `?search` is ILIKE, and a `tsvector` column is not in 1.0 † | Working | High |
 | [0038](0038-collections-are-flat.md) | A collection has one path, and the parent is a filter | Working | High |
 | [0039](0039-a-schema-edit-is-an-api-edit.md) | A schema edit is an API edit, and the break is diffed | Exploring | Medium |
-| [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Accepted | High |
+| [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Working | High |
 | [0041](0041-computed-fields.md) | A computed field is an expression in the row, and the parameterised ones oblige a hook | Working | Medium |
 | [0042](0042-the-exit-is-generated.md) | The exit is generated, and what it does not carry is named | Working | Medium |
 | [0043](0043-declared-actions.md) | A declared action generates the envelope, and the verb stays plain Go | Working | Medium |

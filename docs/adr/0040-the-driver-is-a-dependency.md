@@ -1,6 +1,6 @@
 # ADR-0040: The driver is a dependency, not a seam
 
-- **Status:** Accepted, and built. `Executor` is pgx-shaped, `array.go` is
+- **Status:** Working — built. `Executor` is pgx-shaped, `array.go` is
   deleted, `deps-check` is rewritten, and the whole gate — including `pgtest`
   against a real Postgres and a real PgBouncer — passes on it
 - **Confidence:** High. What was argued is now observed: joining a caller's

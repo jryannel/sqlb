@@ -553,6 +553,216 @@ cd "$MISE_PROJECT_ROOT/example/fxapp" && go run github.com/jryannel/sqlb/cmd/sql
 description = "Fail if the committed ejected package no longer matches what the schema would produce now. `sqlb eject` writes the way out — the schema as SQL and the resources as plain net/http handlers over pgx — and an exit nobody checks is one that has quietly stopped working by the time it is needed (ADR-0042). Only example/blog commits one, because one worked exit is the claim; the other examples would add gate time and say nothing new. Distinct from generate-check on purpose: generated code is stale when it disagrees with the schema, while an ejected package is *meant* to be edited, so the day a project takes the exit is the day it deletes this gate rather than fixing it."
 run = "go run ./cmd/sqlb eject -check ./example/blog/blogschema"
 
+[tasks.adr-check]
+description = "Fail if a record in docs/adr disagrees with the directory that holds it — a status outside the four-word vocabulary, a record missing from the index table, an index row whose status contradicts the record, or a missing Confidence or Last reviewed line. ADR-0040 carried the status `Accepted` for ten days: a word docs/adr/README.md explicitly says is not in the vocabulary, in the one place a reader looks to find out what a record is worth. Nothing caught it and a person did, which is the case for a check rather than a paragraph."
+run = '''
+# ADR-0018: the files git tracks, not whatever is on disk. .claude/worktrees/
+# holds other checkouts of this same repository, and an unscoped glob would
+# happily validate another session's records and report on those.
+index="docs/adr/README.md"
+if ! git ls-files --error-unmatch "$index" > /dev/null 2>&1; then
+  echo "adr-check: $index is not tracked, so there is nothing to check against" >&2
+  exit 1
+fi
+
+# 0000-template.md is excluded deliberately: its status line *is* the vocabulary
+# ("Exploring | Working | Revisiting | Replaced by ...") and its review date is
+# the literal YYYY-MM-DD. It is a form to copy, not a record, and it has no index
+# row for the same reason.
+records=$(git ls-files 'docs/adr/[0-9][0-9][0-9][0-9]-*.md' | grep -v '0000-template\.md$')
+if [ -z "$records" ]; then
+  echo "adr-check: no tracked records matched, so nothing was checked" >&2
+  exit 1
+fi
+
+# Unquoted, so the shell splits it into arguments. Safe because the pathspec
+# above admits only docs/adr/NNNN-slug.md, and a slug has no spaces.
+# shellcheck disable=SC2086
+awk '
+BEGIN {
+  split("Exploring Working Revisiting Replaced", w, " ")
+  for (i in w) vocab[w[i]] = 1
+  known = "Exploring, Working, Revisiting, Replaced"
+}
+
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+
+# The first word of a status, stripped of whatever punctuation the record wraps
+# it in: Working, and Working. and Working (column) all lead with Working.
+function lead(s,   t) {
+  t = trim(s)
+  sub(/[ \t].*$/, "", t)
+  gsub(/[^A-Za-z]/, "", t)
+  return t
+}
+
+# The leading vocabulary word of a status, or the empty string if any part of it
+# leads with something else. A compound status is written
+# "Working (column) / Exploring (index)" -- 0026 -- so the separator is a slash
+# with spaces around it. A bare slash would split an "and/or" in prose and refuse
+# a status that is perfectly good, which is how a check earns being ignored.
+function status_word(s,   n, part, i, t, first) {
+  n = split(s, part, " / ")
+  first = ""
+  for (i = 1; i <= n; i++) {
+    t = lead(part[i])
+    if (!(t in vocab)) return ""
+    if (first == "") first = t
+  }
+  return first
+}
+
+# Parsed here rather than handed to date(1), whose accepted syntax differs
+# between the BSD one on a laptop and the GNU one on the runner.
+function isdate(s,   y, m, d, dim, last) {
+  if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]([^0-9]|$)/) return 0
+  y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+  if (m < 1 || m > 12) return 0
+  split("31 28 31 30 31 30 31 31 30 31 30 31", dim, " ")
+  last = dim[m]
+  if (m == 2 && y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) last = 29
+  return d >= 1 && d <= last
+}
+
+function say(where, what) { printf "%s: %s\n", where, what; fail = 1 }
+function hint(what)       { printf "    %s\n", what }
+
+# ---- the index table, which is read first ----
+FILENAME ~ /README\.md$/ {
+  if ($0 !~ /^\|[ \t]*\[[0-9][0-9][0-9][0-9]\]\(/) next
+  # A row is | # | Title | Status | Confidence |, so splitting on the bar gives
+  # six fields, the first and last of them empty. Anything else is a row a
+  # column has been added to or dropped from, and the cells below would be read
+  # from the wrong places.
+  if (split($0, cell, "|") != 6) {
+    say(FILENAME " line " FNR, "index row is not | # | Title | Status | Confidence |")
+    next
+  }
+  num = cell[2];  sub(/^[^[]*\[/, "", num);  sub(/\].*$/, "", num)
+  link = cell[2]; sub(/^[^(]*\(/, "", link); sub(/\).*$/, "", link)
+  if (num in idx_row) {
+    say(FILENAME " line " FNR, "a second row for " num "; the first is on line " idx_row[num])
+    next
+  }
+  idx_row[num] = FNR
+  idx_status[num] = trim(cell[4])
+  idx_link[num] = link
+  rows++
+  next
+}
+
+# ---- the records ----
+{
+  if (!(FILENAME in seen)) {
+    seen[FILENAME] = 1
+    order[++nrec] = FILENAME
+    base = FILENAME; sub(/^.*\//, "", base)
+    num = base;      sub(/-.*$/, "", num)
+    rec_base[FILENAME] = base
+    rec_num[FILENAME] = num
+  }
+  # First occurrence only. A status runs on over several lines in a dozen
+  # records, and Revisions sections quote these headings.
+  if (!has_status[FILENAME] && $0 ~ /^- \*\*Status:\*\*/) {
+    s = $0; sub(/^- \*\*Status:\*\*/, "", s)
+    has_status[FILENAME] = 1; rec_status[FILENAME] = trim(s)
+  }
+  if (!has_conf[FILENAME] && $0 ~ /^- \*\*Confidence:\*\*/) has_conf[FILENAME] = 1
+  if (!has_rev[FILENAME] && $0 ~ /^- \*\*Last reviewed:\*\*/) {
+    s = $0; sub(/^- \*\*Last reviewed:\*\*/, "", s)
+    has_rev[FILENAME] = 1; rec_rev[FILENAME] = trim(s)
+  }
+}
+
+END {
+  for (i = 1; i <= nrec; i++) {
+    f = order[i]; num = rec_num[f]; mine = ""
+
+    if (!has_status[f]) {
+      say(f, "no `- **Status:**` line")
+      hint("every record carries one; 0000-template.md is the shape")
+    } else {
+      mine = status_word(rec_status[f])
+      if (mine == "") {
+        say(f, "status \"" rec_status[f] "\" does not lead with a word this directory uses")
+        hint("accepted: " known)
+        hint("docs/adr/README.md defines them, and says there is deliberately no Accepted and no Final")
+        hint("a compound status is written \"Working (column) / Exploring (index)\", each part leading with one of the four")
+      }
+    }
+
+    if (!(num in idx_row)) {
+      say(f, "no row in the index table in docs/adr/README.md")
+      hint("add | [" num "](" rec_base[f] ") | Title | Status | Confidence |")
+    } else {
+      matched[num] = 1
+      if (idx_link[num] != rec_base[f]) {
+        say("docs/adr/README.md line " idx_row[num], "row " num " links " idx_link[num])
+        hint("the record is " rec_base[f] " -- a rename that the index did not follow")
+      }
+      theirs = status_word(idx_status[num])
+      if (theirs == "") {
+        say("docs/adr/README.md line " idx_row[num], "status cell \"" idx_status[num] "\" does not lead with a word this directory uses")
+        hint("accepted: " known)
+      } else if (mine != "" && theirs != mine) {
+        say("docs/adr/README.md line " idx_row[num], "the index says " theirs " and " rec_base[f] " says " mine)
+        hint("the index is the summary; whichever is wrong, they cannot both stand")
+      }
+    }
+
+    if (!has_conf[f]) {
+      say(f, "no `- **Confidence:**` line")
+      hint("High, Medium or Low, and separate from status -- Working / Low is a useful thing to say")
+    }
+    if (!has_rev[f]) {
+      say(f, "no `- **Last reviewed:**` line")
+      hint("a record with no review date cannot be told from a stale one")
+    } else if (!isdate(rec_rev[f])) {
+      say(f, "last reviewed \"" rec_rev[f] "\" does not start with a date")
+      hint("expected YYYY-MM-DD, optionally followed by a note")
+    }
+  }
+
+  for (num in idx_row) {
+    if (!(num in matched)) {
+      say("docs/adr/README.md line " idx_row[num], "a row for " num " with no tracked record behind it")
+      hint("it links " idx_link[num])
+    }
+  }
+
+  # The positive controls. ADR-0016: until it has failed on purpose, a green
+  # result here is indistinguishable from a check that read nothing.
+  if (nrec == 0) {
+    print "adr-check: no records were read, so every assertion above was vacuous"
+    fail = 1
+  }
+  if (rows == 0) {
+    print "adr-check: no index rows were parsed, so the cross-check compared nothing"
+    fail = 1
+  }
+  if (status_word("Accepted, and built.") != "") {
+    print "adr-check: the vocabulary admits Accepted, which is the exact word this task exists to catch"
+    fail = 1
+  }
+  if (status_word("Working (column) / Exploring (index)") != "Working") {
+    print "adr-check: the vocabulary refuses a compound status the directory already uses (0026)"
+    fail = 1
+  }
+  if (status_word("Working / Accepted") != "") {
+    print "adr-check: only the first part of a compound status is checked, so the rest is unguarded"
+    fail = 1
+  }
+  if (!isdate("2026-07-30") || isdate("2026-13-01") || isdate("2025-02-29") || isdate("YYYY-MM-DD")) {
+    print "adr-check: the date test does not tell a date from something that merely looks like one"
+    fail = 1
+  }
+
+  if (fail) exit 1
+  printf "adr-check: %d records, %d index rows, statuses in vocabulary and agreeing\n", nrec, rows
+}
+' "$index" $records
+'''
+
 [tasks.bisect-check]
 description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
@@ -593,7 +803,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs the test databases, which test-pg starts. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs it on the PR, in three parallel jobs, and running it locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, adr-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs the test databases, which test-pg starts. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs it on the PR, in three parallel jobs, and running it locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet
@@ -603,6 +813,11 @@ mise run deps-check
 mise run generate-check
 mise run impact-check
 mise run eject-check
+# The only gate here that checks prose rather than code, and it is in this list
+# rather than beside it for the reason the others are: docs/adr is where the
+# reasoning behind this codebase lives, and a record whose status is a word the
+# directory does not use is one a reader cannot weigh.
+mise run adr-check
 mise run test-race
 mise run test-ts
 mise run test-dart
