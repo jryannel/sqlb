@@ -803,18 +803,52 @@ for f in $files; do
   # difference in what they claim.
   flat=$(tr '\n' ' ' < "$f" | tr -s ' ' | tr 'A-Z' 'a-z')
 
-  case "$flat" in
-    *"$lede"*) ;;
-    *)
-      echo "$f: does not say \"$lede\"" >&2
-      status=1
-      checked=$((checked + 1))
-      continue
-      ;;
-  esac
+  # The lede has to be the phrase itself, not the opening of a longer word:
+  # "for go" and "for golang" differ by a word boundary, and a substring test
+  # cannot tell them apart -- it reads the second as the first and passes a
+  # copy that has drifted. Walk the occurrences rather than testing only the
+  # first, because a near-miss earlier in the file must not hide a real claim
+  # later in it. End of string counts as a boundary; the terms check below is
+  # what then reports the copy that stops at the lede.
+  rest=$flat
+  near=""
+  found=0
+  drifted=""
+  while :; do
+    case "$rest" in
+      *"$lede"*) ;;
+      *) break ;;
+    esac
+    after=${rest#*"$lede"}
+    next=${after%"${after#?}"}
+    case "$next" in
+      [a-z0-9])
+        # Keep the first near-miss for the message: naming the word a copy
+        # actually says is the difference between a gate that reports and one
+        # that only refuses.
+        if [ -z "$drifted" ]; then
+          drifted=$lede$(printf '%s' "$after" | sed 's/^\([a-z0-9]*\).*/\1/')
+        fi
+        ;;
+      *)
+        found=1
+        near=$(printf '%s' "$after" | cut -c "1-$window")
+        break
+        ;;
+    esac
+    rest=$after
+  done
 
-  after=${flat#*"$lede"}
-  near=$(printf '%s' "$after" | cut -c "1-$window")
+  if [ "$found" -eq 0 ]; then
+    if [ -n "$drifted" ]; then
+      echo "$f: says \"$drifted\", which is not \"$lede\"" >&2
+    else
+      echo "$f: does not say \"$lede\"" >&2
+    fi
+    status=1
+    checked=$((checked + 1))
+    continue
+  fi
 
   for t in $terms; do
     case "$near" in
