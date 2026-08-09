@@ -106,3 +106,73 @@ func TestComputedBindIsSentOnce(t *testing.T) {
 		t.Errorf("args = %v, want the viewer first", args)
 	}
 }
+
+// Options.Columns is the same per-resource reachability, generalised to stored
+// columns: one model, two surfaces, and the second one may not see everything
+// the first does (#148).
+//
+// Tested here as well as in rest because Parse and Apply are the layer that
+// decides it — a resource whose parser refused a column while Apply projected
+// it anyway would read the value on every request and drop it on the way out,
+// which is a narrowing of the response and not of the query.
+func TestColumnsNarrowsTheSurfaceParseAndApplyAgreeOn(t *testing.T) {
+	narrow := filter.Options{
+		Model:   sqlb.ModelOf[Report](),
+		Columns: []string{"id", "title"},
+	}
+
+	// Not projected. The default projection is built in Apply, so this is the
+	// half a response-only narrowing would have missed.
+	q, err := filter.Parse(url.Values{}, narrow)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	sql, _, err := filter.Apply(sqlb.Query[Report](), q).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(sql, "due_days") {
+		t.Errorf("the narrowed projection reads a column outside its surface:\n%s", sql)
+	}
+	for _, want := range []string{`"id"`, `"title"`} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the narrowed projection dropped %s:\n%s", want, sql)
+		}
+	}
+
+	// Not filterable, not sortable, not nameable — and not offered back in the
+	// rejection, which for a resource narrowed to conceal a column is the
+	// difference between a refusal and a disclosure.
+	for _, query := range []string{"due_days=eq.3", "sort=due_days", "select=id,due_days"} {
+		values, err := url.ParseQuery(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = filter.Parse(values, narrow)
+		if err == nil {
+			t.Errorf("%s: accepted against a resource that does not serve the column", query)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unknown") {
+			t.Errorf("%s: the refusal should read as unknown: %v", query, err)
+		}
+		// The message carries the allowed list, and due_days must not be in it.
+		// The name the caller typed is echoed before it, which is not a
+		// disclosure — the caller typed it.
+		_, allowed, found := strings.Cut(err.Error(), "(allowed: ")
+		if !found {
+			t.Errorf("%s: the refusal names nothing that would have been accepted: %v", query, err)
+			continue
+		}
+		if strings.Contains(allowed, "due_days") {
+			t.Errorf("%s: the allowed list offers the column the resource does not serve: %v", query, err)
+		}
+	}
+
+	// An empty Columns is no narrowing at all, which is what every existing
+	// resource relies on.
+	wide := filter.Options{Model: sqlb.ModelOf[Report]()}
+	if _, err := filter.Parse(url.Values{"due_days": {"eq.3"}}, wide); err != nil {
+		t.Errorf("an un-narrowed resource lost a filter: %v", err)
+	}
+}

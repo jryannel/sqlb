@@ -272,6 +272,11 @@ var Task = schema.Table("tasks",
 	// do not disagree. ReadOnly says no *request* may set it; the envelope
 	// writes it from the row the verb mutated, on the server, which is the same
 	// standing the BeforeUpdate hook has.
+	//
+	// Touches is the other half, and this verb is why it exists: a note in the
+	// body becomes a comment row through sqlb.TxFrom, and the write set above
+	// cannot say so. Two columns on one row is what the envelope persists, not
+	// what the route reaches (#149).
 	Action(schema.Action{
 		Name: "complete",
 		Body: schema.Body(
@@ -279,6 +284,7 @@ var Task = schema.Table("tasks",
 				Comment("Recorded as a comment on the task, in the same transaction."),
 		),
 		Writes:      []string{"status", "completed_at"},
+		Touches:     []string{"comments"},
 		Description: "Marks the task done and stamps its completion time. A task that is already done is refused with a 409.",
 	})
 

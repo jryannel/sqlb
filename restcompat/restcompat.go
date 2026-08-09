@@ -202,7 +202,7 @@ func wireExample(s Snapshot, o, n schema.WireCase) string {
 // diffResource compares two contracts for the same path.
 func diffResource(o, n resource, add func(Break)) {
 	// Operations.
-	for _, op := range []schema.Op{schema.OpCreate, schema.OpRead, schema.OpUpdate, schema.OpDelete, schema.OpList} {
+	for _, op := range []schema.Op{schema.OpCreate, schema.OpRead, schema.OpUpdate, schema.OpDelete, schema.OpList, schema.OpSingleton} {
 		switch {
 		case o.ops.Has(op) && !n.ops.Has(op):
 			add(Break{LevelBreaking, n.path, FacetOps, "",
@@ -584,7 +584,7 @@ var canonicalOps = []struct {
 	name string
 }{
 	{schema.OpCreate, "create"}, {schema.OpRead, "read"}, {schema.OpUpdate, "update"},
-	{schema.OpDelete, "delete"}, {schema.OpList, "list"},
+	{schema.OpDelete, "delete"}, {schema.OpList, "list"}, {schema.OpSingleton, "singleton"},
 }
 
 // Capture projects a registry into its serialisable REST contract. It is the

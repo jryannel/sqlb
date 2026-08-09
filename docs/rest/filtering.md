@@ -226,6 +226,33 @@ If you want a custom projection, apply `Where`, `Order` and the limits from the
 as the PostgREST-familiar alternative spelling. Only columns declared `Sortable`
 are accepted; anything else is a 400 listing the ones that are.
 
+### What a request with no `?sort` gets
+
+`DefaultSort` on `schema.REST` answers it:
+
+```go
+Expose(schema.REST{
+    Path:        "/posts",
+    Ops:         schema.Reads,
+    DefaultSort: []string{"-pinned", "-published_at", "-created_at"},
+})
+```
+
+Without it the answer is primary-key order, which is an implementation detail
+rather than something the resource decided. That matters more than it looks: a
+list is well-formed in *any* order, so a client that does not restate the real
+ordering gets a 200 and the wrong product, with nothing to notice. For a feed —
+pinned first, then newest — the ordering is what the collection is, not a client
+preference, and putting it in the declaration is what carries it to the OpenAPI
+description, the manifest, the generated skill and the ejected handlers at once.
+
+Terms are column names in schema spelling, most significant first, and each must
+declare `Sortable` — checked by `sqlb generate` and again at mount, because a
+default naming an unsortable column would answer 400 to a client that sent
+nothing at all. A request that names `?sort` replaces the default outright rather
+than adding to it, and the primary-key tiebreak is appended in both cases, so
+cursors work exactly as before.
+
 Where NULLs sit is **declared on the column, not asked for by the request**:
 
 ```go

@@ -231,6 +231,9 @@ func Register(api huma.API, db sqlb.Executor) error {
 		DefaultPageSize: 20,
 		MaxPageSize:     100,
 		MaxFilters:      12,
+		MaxSortTerms:    4,
+		MaxOffset:       5000,
+		DefaultSort:     []string{"-created_at"},
 		Expandable:      []string{"author"},
 	}); err != nil {
 		return err

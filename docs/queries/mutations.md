@@ -12,11 +12,26 @@ being overwritten with `""`. Every statement returns the stored rows, so
 generated values land back in your structs without a follow-up read.
 
 `OnConflictDoNothing(target...)` and `OnConflictUpdate(target, update...)` cover
-upserts. A row skipped by do-nothing is simply absent from the result, so `One`
-returns `ErrNotFound`. When any row is skipped, **no** caller struct is written
-back — the returned slice is shorter than the rows that went in, so position no
-longer identifies them, and writing back by position would hand one row's
-generated id to another. The returned slice is the account of what was written.
+upserts. A row skipped by do-nothing is simply absent from the result, so the
+terminal is `Exec`: an empty slice and a nil error are what "it was already
+there" looks like. `One` after `OnConflictDoNothing` is **refused**, because the
+only answer it could give a conflict is `ErrNotFound` — a failure reported on
+the exact path an idempotent insert exists to serve. If you want the row back
+whether or not this call created it, update the conflict target to itself:
+
+```go
+sqlb.InsertRows(&p).
+    OnConflictUpdate([]string{"idem_key"}, "idem_key").
+    One(ctx, db)
+```
+
+A write that changes nothing is still a written row, and a written row is a
+returned one.
+
+When any row is skipped, **no** caller struct is written back — the returned
+slice is shorter than the rows that went in, so position no longer identifies
+them, and writing back by position would hand one row's generated id to another.
+The returned slice is the account of what was written.
 
 ## An upsert that assigns more than the proposed row
 

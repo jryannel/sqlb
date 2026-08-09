@@ -24,6 +24,28 @@ const (
 	OpUpdate
 	OpDelete
 	OpList // GET /resource with filter, sort, search, pagination
+
+	// OpSingleton is GET /resource — the caller's one row, with no {id}
+	// segment anywhere on the resource.
+	//
+	// A table keyed by its own scope column has one row per caller, and the two
+	// ops on offer were both wrong for it: OpList answered a one-element
+	// envelope every client unwrapped forever, and OpRead asked the client to
+	// send back the tenant id the server already holds, where a mismatch is a
+	// 404 meaning "you typed your own name wrong" (#166).
+	//
+	// It changes the resource rather than adding a route. The item path loses
+	// its {id}, so OpUpdate becomes PATCH /resource and OpDelete becomes DELETE
+	// /resource; OpCreate is POST /resource either way. The row all of them
+	// address is the one the scope hook leaves — there is no key in the path and
+	// no predicate in the statement — which is why this is refused on a model
+	// with no Scoped column. Without one the read answers an arbitrary row and
+	// the write reaches every row in the table, and that is the default-open
+	// outcome ADR-0030 exists to close.
+	//
+	// OpList and OpRead are refused alongside it: the first is the same route,
+	// and the second is the id-shaped question this exists to delete.
+	OpSingleton
 )
 
 // CRUD is the conventional single-row operation set. Combine it with OpList
@@ -125,6 +147,35 @@ type Options struct {
 	// request past it is refused with a message pointing at ?cursor=.
 	MaxOffset int
 
+	// DefaultSort is the ordering a list request that names no ?sort gets:
+	// column names, a leading "-" for descending, most significant first.
+	//
+	//	DefaultSort: []string{"-pinned", "-published_at", "-created_at"}
+	//
+	// The direction syntax is ?sort's; the names are column names, as
+	// Computed's and Columns' are.
+	//
+	// The other five limits above bound every dimension of a list request except
+	// the one that decides what the list *is*. For many resources the ordering is
+	// part of the collection's meaning rather than a client preference: a feed is
+	// pinned first, then newest, and a feed in primary-key order is not the feed.
+	// Without this the answer is primary-key order — declared nowhere, so every
+	// caller restates the real ordering on every request, forever, and the caller
+	// that forgets gets a well-formed 200 that is quietly the wrong product
+	// (#165).
+	//
+	// Empty keeps that behaviour, so this changes only what silence means. A
+	// request that sends ?sort replaces it rather than adding to it, and the
+	// primary-key tiebreak is appended exactly as it is to an explicit sort, so
+	// cursors are unaffected. It is not charged against MaxSortTerms: that bounds
+	// what an untrusted request may ask for, and this is the resource's own.
+	//
+	// Every term must name a column this resource serves and that declares
+	// Sortable, checked at startup for the reason Expandable and Computed are —
+	// at request time a default naming an undeclared column would answer 400 to a
+	// client that sent nothing wrong.
+	DefaultSort []string
+
 	// Expandable lists the relation names ?expand may name. Each must be a
 	// relation the model declares — a `expands=` field beside an `expand`
 	// column — and is checked at startup, because at request time an unknown
@@ -153,7 +204,82 @@ type Options struct {
 	// obligation follows the selection — a resource that selects a column
 	// declaring Needs still refuses to mount without a hook to supply the bind,
 	// and one that does not select it no longer has to care.
+	//
+	// # It decides the write path too
+	//
+	// One list, both paths. A create and an update evaluate exactly the columns
+	// named here in their RETURNING, so a resource that asked for none sends an
+	// INSERT over stored columns and nothing else. Until #164 that half was not
+	// narrowed by anything: every write evaluated every bind-free computed column
+	// the model declared, so a store that never reads an aggregate still paid for
+	// it on each patch, a create returned a value that was structurally wrong
+	// because the rows it counts are written later in the same transaction, and a
+	// subquery naming another module's table made the table unwritable without
+	// that module present.
+	//
+	// A column declaring Needs is the exception on this path and is left out of a
+	// write's RETURNING whether or not it is named here — a mutation has nowhere
+	// to take a bind from (ADR-0041). It is left out of the write's *response*
+	// too, so the key is absent rather than present holding a zero that reads as
+	// a real answer (#163); the next read carries the value.
 	Computed []string
+
+	// Columns narrows this resource to the columns it names. Empty — the
+	// default, and what a generated resource emits — is every column the model
+	// has.
+	//
+	// This is the answer to two surfaces over one table (#148). A storefront and
+	// an admin panel read the same products, and they differ in which columns
+	// each may see: `cost_price_minor` and `internal_notes` are the reason the
+	// admin resource exists and must not be within a mile of the public one.
+	// Hidden cannot express that, because Hidden is a property of the model and
+	// there is one model per table; Computed already established that
+	// reachability is a property of the *mount*, and this is the same idea
+	// applied to stored columns.
+	//
+	// A column not listed is not reachable from this resource at all: absent
+	// from the response, absent from the SELECT the database sees, not
+	// filterable, not sortable, not searched, not nameable in ?select, not
+	// settable by a create or update body, and not named in the list a rejection
+	// offers — that last one because a narrowed resource that advertised the
+	// column it is about to refuse would leak the schema it was narrowed to
+	// hide.
+	//
+	// Every name must be a column of the model, and the list must include the
+	// primary key: it addresses rows, settles the ordering, and is what a cursor
+	// is built from, so a resource without it cannot page. Both are checked at
+	// startup, where the failure is a resource that will not mount rather than
+	// one serving a surface nobody meant.
+	//
+	// What this does not do is generate the second resource. Codegen emits one
+	// mount per exposed table, so the narrowed half is a hand-written
+	// rest.Resource call over the generated model — the models, the typed column
+	// facade, the manifest and the drift gate all still cover it, and only the
+	// mount is yours. The alternative, a second model over the same table, gives
+	// up all four.
+	//
+	// # Two things it does not narrow, and why
+	//
+	// **The response schema in the OpenAPI document.** It is the model's Go type,
+	// registered once as a component and shared by every mount of it, so it
+	// still lists the columns this resource does not serve. Runtime responses
+	// omit them and every parameter follows this list; what a client generated
+	// from the document gets is optional fields that are always absent. Narrowing
+	// it needs a per-resource Go type, which is the generated second resource
+	// that is a larger change than this one.
+	//
+	// **The create and update body types.** They are the caller's — C and U — so
+	// a narrowed mount reusing the wide resource's bodies documents fields it
+	// will not write. It will not write them: a column outside this list is
+	// cleared off the row a body produced, the same way a ReadOnly one is, and a
+	// PATCH naming one is refused as unknown. But the document says otherwise,
+	// so a resource narrowed for disclosure usually wants Ops without the write
+	// operations, or body types of its own.
+	//
+	// Both are worth reading as the shape of the boundary: this narrows what a
+	// resource *does*, and the parts of the document that come from a Go type
+	// still describe that type.
+	Columns []string
 
 	// DisableSearch rejects ?search even when columns are searchable.
 	DisableSearch bool
@@ -225,9 +351,18 @@ func (o Options) validate() error {
 		return fmt.Errorf("rest: Options.Path %q must start with a slash", o.Path)
 	case o.Ops == 0:
 		return fmt.Errorf("rest: Options.Ops is empty for %s; a resource that exposes nothing should not be mounted", o.Path)
+	case o.Ops.Has(OpSingleton) && o.Ops.Has(OpList):
+		return fmt.Errorf("rest: %s exposes both OpSingleton and OpList, which are the same route: "+
+			"GET %s cannot be the caller's row and the collection at once", o.Path, o.Path)
+	case o.Ops.Has(OpSingleton) && o.Ops.Has(OpRead):
+		return fmt.Errorf("rest: %s exposes both OpSingleton and OpRead; OpSingleton removes the {id} "+
+			"segment from this resource, so a read by id is the question it exists to delete — drop OpRead", o.Path)
 	}
 	return nil
 }
+
+// singleton reports whether this resource is the caller's one row.
+func (o Options) singleton() bool { return o.Ops.Has(OpSingleton) }
 
 // Resource registers the exposed operations for model T on api.
 //
@@ -254,9 +389,25 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 	// Every single-row operation addresses a row by primary key, so a table
 	// without one can only be listed. Saying so at startup is better than four
 	// handlers that cannot be reached.
-	if b.model.PK == nil && opts.Ops&(OpRead|OpUpdate|OpDelete) != 0 {
+	//
+	// A singleton is the exception: its row comes from the scope hook, so no
+	// operation of it puts a key in the path or a key predicate in the
+	// statement, and a table keyed only by its tenant column can be one.
+	if !opts.singleton() && b.model.PK == nil && opts.Ops&(OpRead|OpUpdate|OpDelete) != 0 {
 		return fmt.Errorf("rest: %s exposes %s but %s declares no primary key",
 			opts.Path, opts.Ops&(OpRead|OpUpdate|OpDelete), b.model.Type)
+	}
+
+	// The whole safety argument for a singleton runs through the scope column:
+	// with one, every operation is confined by the hook ADR-0030 already makes
+	// compulsory; without one, the same statements are unconfined. Checked here
+	// as well as in `sqlb generate`, because rest is usable without the DSL.
+	if opts.singleton() && b.model.Scope == nil {
+		return fmt.Errorf("rest: %s exposes %s but %s declares no Scoped column; "+
+			"a singleton addresses the caller's row through the scope hook and nothing else, "+
+			"so without one the read answers an arbitrary row and a write reaches every row — "+
+			"tag the tenant column `sqlb:\"scope\"`, or expose OpRead and OpList instead",
+			opts.Path, opts.Ops, b.model.Type)
 	}
 
 	// A schema that says these rows are confined has to be met by something
@@ -278,14 +429,27 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 	if opts.Ops.Has(OpRead) {
 		registerRead(api, db, b)
 	}
+	if opts.Ops.Has(OpSingleton) {
+		registerSingleton(api, db, b)
+	}
 	if opts.Ops.Has(OpCreate) {
 		registerCreate[T, C](api, w, b)
 	}
+	// A singleton's write operations address the same row its read does, so they
+	// take the collection path and no key. See singleton.go.
 	if opts.Ops.Has(OpUpdate) {
-		registerUpdate[T, U](api, w, b)
+		if opts.singleton() {
+			registerSingletonUpdate[T, U](api, w, b)
+		} else {
+			registerUpdate[T, U](api, w, b)
+		}
 	}
 	if opts.Ops.Has(OpDelete) {
-		registerDelete(api, w, b)
+		if opts.singleton() {
+			registerSingletonDelete(api, w, b)
+		} else {
+			registerDelete(api, w, b)
+		}
 	}
 	return nil
 }
@@ -306,7 +470,7 @@ func (o Op) String() string {
 		name string
 	}{
 		{OpCreate, "create"}, {OpRead, "read"}, {OpUpdate, "update"},
-		{OpDelete, "delete"}, {OpList, "list"},
+		{OpDelete, "delete"}, {OpList, "list"}, {OpSingleton, "singleton"},
 	} {
 		if o.Has(e.op) {
 			parts = append(parts, e.name)
@@ -321,7 +485,16 @@ func (o Op) String() string {
 // itemPath is the single-row path, e.g. "/posts/{id}". The template is always
 // {id}, whatever the primary key column is called: the URL names the resource's
 // identity, and renaming a column should not break every client.
-func (o Options) itemPath() string { return o.Path + "/{id}" }
+//
+// A singleton's is the collection path itself. There is one row per caller and
+// the server already knows which, so there is nothing for a segment to say
+// (#166).
+func (o Options) itemPath() string {
+	if o.singleton() {
+		return o.Path
+	}
+	return o.Path + "/{id}"
+}
 
 const (
 	statusCreated = http.StatusCreated

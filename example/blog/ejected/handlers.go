@@ -80,7 +80,7 @@ func Register(mux *http.ServeMux, db DB, opts Options) error {
 }
 
 // authorLimits are the ceilings authors declared.
-var authorLimits = Limits{DefaultPageSize: 25, MaxPageSize: 100, MaxFilters: 0, MaxSortTerms: 0}
+var authorLimits = Limits{DefaultPageSize: 25, MaxPageSize: 100, MaxFilters: 0, MaxSortTerms: 0, MaxOffset: 0}
 
 // authorInsertDefaults are the columns an insert must set that no request body
 // carries and the database has no default for. sqlb wrote the row's zero value;
@@ -358,7 +358,7 @@ func registerAuthors(mux *http.ServeMux, db DB, h AuthorsHooks) error {
 }
 
 // orgLimits are the ceilings orgs declared.
-var orgLimits = Limits{DefaultPageSize: 0, MaxPageSize: 0, MaxFilters: 0, MaxSortTerms: 0}
+var orgLimits = Limits{DefaultPageSize: 0, MaxPageSize: 0, MaxFilters: 0, MaxSortTerms: 0, MaxOffset: 0}
 
 // registerOrgs mounts /orgs.
 func registerOrgs(mux *http.ServeMux, db DB, h OrgsHooks) error {
@@ -432,7 +432,7 @@ func registerOrgs(mux *http.ServeMux, db DB, h OrgsHooks) error {
 }
 
 // postLimits are the ceilings posts declared.
-var postLimits = Limits{DefaultPageSize: 20, MaxPageSize: 100, MaxFilters: 12, MaxSortTerms: 0}
+var postLimits = Limits{DefaultPageSize: 20, MaxPageSize: 100, MaxFilters: 12, MaxSortTerms: 4, MaxOffset: 5000, DefaultSort: []Order{{Column: "created_at", Desc: true}}}
 
 // decodePostCreate reads a create body for posts: which columns it named, and
 // what each one carried. An unknown property is refused with the list of the

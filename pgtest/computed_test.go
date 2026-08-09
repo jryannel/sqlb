@@ -238,14 +238,20 @@ func TestComputedBindRunsAgainstPostgres(t *testing.T) {
 	}
 }
 
-// RETURNING carries an expression over the row just written. If Postgres
-// refused it, the whole INSERT would fail rather than the derived field.
+// RETURNING carries an expression over the row just written, when the write
+// asked for it. If Postgres refused the expression there, the whole INSERT
+// would fail rather than the derived field.
+//
+// Asking is the part #164 added. Before it, every write evaluated every
+// bind-free computed column the model declared — which is the same cost
+// argument #92 settled for reads, arriving on the path nobody revisited.
 func TestComputedInReturningRunsAgainstPostgres(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	raw := computedDB(t)
 
 	stored, err := sqlb.InsertRows(&CompProject{Name: "voyager", TotalTasks: 4, CompletedTasks: 1}).
+		WithComputed("progress", "star_count").
 		One(ctx, sqlb.New(raw))
 	if err != nil {
 		t.Fatalf("insert with a computed RETURNING: %v", err)
@@ -256,9 +262,125 @@ func TestComputedInReturningRunsAgainstPostgres(t *testing.T) {
 	if stored.StarCount != 0 {
 		t.Errorf("star_count = %d, want 0", stored.StarCount)
 	}
-	// The parameterised one is left out of RETURNING — a write has no viewer to
-	// bind — so it holds its zero value here and its real one on the next read.
+	// The parameterised one cannot be asked for at all — a write has no viewer
+	// to bind — so naming it is refused rather than silently skipped, and the
+	// value arrives on the next read.
 	if stored.IsStarred {
 		t.Error("is_starred should not be answered by a write")
+	}
+	_, err = sqlb.InsertRows(&CompProject{Name: "pioneer"}).
+		WithComputed("is_starred").One(ctx, sqlb.New(raw))
+	if err == nil {
+		t.Fatal("a write asked for a column it cannot bind and was allowed to")
+	}
+	if !strings.Contains(err.Error(), "nowhere to take a bind from") {
+		t.Errorf("error = %v, want it to name the missing bind", err)
+	}
+}
+
+// The default: a write evaluates no derived column it was not asked for.
+//
+// Against a real database, because the cost this closes is the database's. The
+// statement is what carries it, so the statement is what is asserted.
+func TestAWriteEvaluatesNoComputedColumnItWasNotAskedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw := computedDB(t)
+
+	stored, err := sqlb.InsertRows(&CompProject{Name: "magellan", TotalTasks: 4, CompletedTasks: 1}).
+		One(ctx, sqlb.New(raw))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if stored.Progress != nil {
+		t.Errorf("progress = %v, want it absent from a write that did not ask", stored.Progress)
+	}
+	sql, _, err := sqlb.InsertRows(&CompProject{Name: "magellan"}).SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(sql, "SELECT") {
+		t.Errorf("a plain insert should carry no subquery:\n%s", sql)
+	}
+}
+
+// A correlated subquery that matches nothing is NULL, which is why a computed
+// column declared through the schema DSL is nullable unless it says otherwise
+// (#147).
+//
+// The two models below project the same expression into a pointer and into a
+// plain string. Both are legal Go and only one of them survives the row with
+// nothing to match — and which rows those are is not visible from the
+// declaration, so the report that produced this arrived as a 500 in production
+// rather than as anything `sqlb generate` or the drift gate could have said.
+type CompLookup struct {
+	ID    int64   `db:"id" sqlb:"pk,default"`
+	Name  string  `db:"name"`
+	Owner *string `db:"owner_name" sqlb:"readonly"`
+}
+
+func (CompLookup) TableName() string { return "compprojects" }
+
+func (CompLookup) ComputedColumns() []sqlb.Computed {
+	return []sqlb.Computed{{Name: "owner_name", Expr: compLookupExpr}}
+}
+
+// CompLookupNotNull is the same projection typed the way the old default
+// generated it.
+type CompLookupNotNull struct {
+	ID    int64  `db:"id" sqlb:"pk,default"`
+	Name  string `db:"name"`
+	Owner string `db:"owner_name" sqlb:"readonly"`
+}
+
+func (CompLookupNotNull) TableName() string { return "compprojects" }
+
+func (CompLookupNotNull) ComputedColumns() []sqlb.Computed {
+	return []sqlb.Computed{{Name: "owner_name", Expr: compLookupExpr}}
+}
+
+// LIMIT 1 because a scalar subquery returning two rows is an error of its own,
+// and that is not the failure under test.
+const compLookupExpr = `(SELECT s.member_id::text FROM compstars s
+	WHERE s.project_id = compprojects.id LIMIT 1)`
+
+func TestAComputedLookupThatMatchesNothingIsNull(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw := computedDB(t)
+	seedComputedRows(t, raw)
+
+	rows, err := sqlb.Query[CompLookup]().
+		WithComputed("owner_name").
+		OrderBy(sqlb.F("name").Asc()).
+		All(ctx, sqlb.New(raw))
+	if err != nil {
+		t.Fatalf("the nullable projection did not run: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+	// apollo is the only starred row; the other two correlate to nothing.
+	if rows[0].Owner == nil || *rows[0].Owner != "7" {
+		t.Errorf("apollo owner = %v, want 7", rows[0].Owner)
+	}
+	for _, row := range rows[1:] {
+		if row.Owner != nil {
+			t.Errorf("%s owner = %q, want NULL — no row matched the subquery", row.Name, *row.Owner)
+		}
+	}
+
+	// And the same read against the non-null spelling, which is the failure the
+	// default now avoids. Asserted rather than assumed: without it this test
+	// would pass on a fixture where every row happens to match, which is
+	// exactly how the bug survived.
+	_, err = sqlb.Query[CompLookupNotNull]().
+		WithComputed("owner_name").
+		All(ctx, sqlb.New(raw))
+	if err == nil {
+		t.Fatal("scanning NULL into a non-pointer string succeeded; the whole reason for the nullable default is that it does not")
+	}
+	if !strings.Contains(err.Error(), "NULL") {
+		t.Errorf("the scan failure should name the NULL, got: %v", err)
 	}
 }

@@ -334,3 +334,38 @@ them is this record arguing with itself.
   is load-bearing. `completeTask` writes a comment row through `sqlb.TxFrom`,
   the `BeforeCreate` hook supplies its `workspace_id`, and a refused completion
   rolls the comment back with it — none of which the declaration mentions.
+
+- 2026-08-05 — **`Touches` added**, because the record's escape hatch turned out
+  to be invisible from every surface that describes a route
+  ([#149](https://github.com/jryannel/sqlb/issues/149)). This record already
+  knew the shape of it — *"`completeTask` writes a comment row through
+  `sqlb.TxFrom` … none of which the declaration mentions"* is the last line of
+  the 2026-07-31 revision — and read it as a note about an example rather than
+  as a gap in the contract.
+
+  What made it one is that `Writes` is *reported* as complete, by three tools,
+  with nothing to say a verb can exceed it: `sqlb impact` states it, the OpenAPI
+  document carries it, and `--help` prints it. The CLI case is the sharp one,
+  because [ADR-0029](0029-go-cli.md)'s argument for the CLI is that `--help`
+  answers a caller with no compile step, "such as an agent" — and a declared
+  write set of two columns invites exactly the inference that the verb is
+  confined to one row. That inference can be wrong by ten tables, and the
+  repository already treats a plausible wrong answer as worse than a warning.
+
+  So `Touches []string` names tables beside `Writes`'s columns, and it is
+  documentation with no enforcement behind it. Enforcing it would mean tracing
+  application code the schema package cannot see; the alternative to an
+  unenforced claim was not an enforced one, it was silence. Validation refuses
+  only what says nothing — an empty name, a duplicate — and an unknown table is
+  accepted, since the cross-module write is the case the field exists for.
+
+  **Not a change to what an action covers.** The envelope stays declared and the
+  transition stays in Go; the eleven-table command is still a hand-written
+  command layer, and `Writes` naming columns on one row *should* understate it.
+  What changed is that the generated documentation can now tell the two apart.
+
+  The lock got the same treatment in prose rather than in code: the envelope's
+  `FOR UPDATE` covers the row it fetched, and statements issued through
+  `sqlb.TxFrom` take their own, in an order the application owns.
+  [docs/rest/actions.md](../rest/actions.md) says so under the `TxFrom` example,
+  which is where the reader is at the moment they are handed the transaction.

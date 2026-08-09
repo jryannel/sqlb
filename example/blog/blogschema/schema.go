@@ -81,4 +81,26 @@ var Post = schema.Table("posts",
 		DefaultPageSize: 20,
 		MaxPageSize:     100,
 		MaxFilters:      12,
+		MaxSortTerms:    4,
+		// A blog has thousands of posts, not a hundred thousand, so every offset
+		// past this one is a guaranteed empty page that still costs a scan to
+		// the end. The package default is two orders of magnitude looser because
+		// it has to be safe for a table nobody described; this is the number the
+		// row count actually justifies (#151).
+		MaxOffset: 5000,
+		// What a feed *is*. Without this, "no ?sort" means primary-key order —
+		// a UUIDv7, so roughly insertion order, which is nearly right and
+		// therefore the worst kind of wrong: nothing in a well-formed 200 says
+		// the client got a different collection than it meant to ask for. Every
+		// caller would otherwise restate this on every call, forever, and the
+		// one that forgets is silent (#165).
+		//
+		// created_at rather than published_at, deliberately. Ordering a feed by
+		// publication date is the better product decision and it drags a second
+		// one in with it: published_at is Nullable, its NULLs are drafts, and
+		// Postgres's default placement flips with the direction — so a
+		// `-published_at` feed lifts every draft to the top unless the column
+		// declares Sortable(schema.NullsLast). Both halves belong together; see
+		// docs/rest/filtering.md.
+		DefaultSort: []string{"-created_at"},
 	})

@@ -34,6 +34,23 @@ because the hook runs inside it.
 Returning an error is how "no tenant in this context" becomes impossible to
 forget rather than merely documented: no statement runs at all.
 
+### The seam is under the statement, not around the endpoint
+
+Worth saying once, because it is the difference from every framework this one
+gets compared to. PocketBase's rules and a Django permission class attach to the
+API boundary and leave direct data access open beneath them; a sqlb hook attaches
+to the statement, so the generated handler, the background job, the CLI and the
+admin script all pass through it. One registration covers them because there is
+no way around it.
+
+The same property has a cost, and it is the one that surprises people: **a hook's
+own statements go through the rules too.** From below there is nothing to
+distinguish "this UPDATE is the request" from "this UPDATE is a consequence the
+request triggered", so a hook writing to another model inherits the request's
+confinement unless it says otherwise. That is a real trap with a quiet failure —
+[writing the consequence](../queries/hooks.md#writing-the-consequence) is the
+worked version — and it is the price of the reach, not a defect in it.
+
 ## The four places a rule can live
 
 This is the judgement the examples spend most of their prose on, so it is worth
@@ -88,7 +105,7 @@ reachable from a generated handler and a hook can read its own writes through
 
 ## What hooks do not cover
 
-Three gaps, all deliberate and all documented where they bite:
+Four gaps, all deliberate and all documented where they bite:
 
 - **`BeforeUpdate` cannot read the assignments it was handed**, so a rule
   depending on what a column is becoming belongs in a `BEFORE` trigger
@@ -101,6 +118,26 @@ Three gaps, all deliberate and all documented where they bite:
 - **`AfterCommit` is in-process and at-most-once.** A callback that never ran
   because the process died leaves no trace. That is what a transactional outbox
   is for, and it is not built ([ADR-0012](../adr/0012-change-feed-outbox.md)).
+- **A hook is registered per model; there is no receiver for all of them.**
+  `On[T](reg)` is the only way in, so a cross-cutting concern — an audit log, a
+  write counter — is one registration per model, written by hand, and a table
+  added later is simply absent from it with nothing failing. Django's `signals`
+  has the register-for-everything form and this does not.
+
+  The reason is that the concern most people reach for it with is a change feed,
+  and there selectivity *is* the design: `example/tasks` publishes three of its
+  six models and leaves Users, Workspaces and Memberships out on purpose, each
+  with a stated reason, because every model added is a fan-out every subscriber
+  pays for. A register-for-everything form would make the cheap thing the default
+  and the considered thing the opt-out, which is backwards for a broker.
+
+  That argument does not transfer to an audit log or a metric, where the
+  per-model registration carries no per-model decision, so this gap is smaller
+  than "we decided against it" and larger than "nobody asked"
+  ([#161](https://github.com/jryannel/sqlb/issues/161)). Until it closes, write
+  the loop over an explicit list and let a test assert the list covers every
+  exposed table — a failing check beats a remembered convention, which is the
+  same answer this codebase gives everywhere else.
 
 ## Read next
 

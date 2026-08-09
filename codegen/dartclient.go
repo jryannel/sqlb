@@ -167,6 +167,22 @@ type dartResource struct {
 	wire schema.WireCase
 }
 
+// singleton reports whether this resource is the caller's one row, in which
+// case every function it emits drops the `id` argument and addresses the
+// collection path itself (#166).
+func (r dartResource) singleton() bool { return r.ops.Has(schema.OpSingleton) }
+
+// readsOne reports whether the resource serves a single row by either shape.
+func (r dartResource) readsOne() bool { return r.ops.Has(schema.OpRead) || r.singleton() }
+
+// itemRoute is what a doc comment calls the single-row route.
+func (r dartResource) itemRoute() string {
+	if r.singleton() {
+		return r.path
+	}
+	return r.path + "/{id}"
+}
+
 // dartRelation is one entry of a resource's ?expand vocabulary, in the
 // direction it is served.
 type dartRelation struct {
@@ -769,7 +785,7 @@ func dartResourceSection(b *bytes.Buffer, r dartResource) {
 	dartWireEnum(b, r.base+"Column", r.table.Name(),
 		"Columns [select] may name. The primary key is always returned.", r.selectable, r.wire)
 
-	if len(r.sortable) > 0 {
+	if len(r.sortable) > 0 && !r.singleton() {
 		fmt.Fprintln(b)
 		dartDoc(b, "", "Sortable columns. Take [asc] or [desc] to get a term [sort] accepts.")
 		fmt.Fprintf(b, "enum %sSort implements WireValue {\n", r.base)
@@ -806,7 +822,12 @@ func dartResourceSection(b *bytes.Buffer, r dartResource) {
 		fmt.Fprintln(b, "}")
 	}
 
-	dartWhere(b, r)
+	// A singleton has no collection, so no filter vocabulary either: its one GET
+	// rejects every query parameter but ?expand, and a typed way to write a
+	// request that 400s is worse than none.
+	if !r.singleton() {
+		dartWhere(b, r)
+	}
 	dartParams(b, r)
 	dartTransport(b, r)
 	dartPager(b, r)
@@ -976,9 +997,9 @@ func dartParams(b *bytes.Buffer, r dartResource) {
 		fmt.Fprintln(b, "}")
 	}
 
-	if r.ops.Has(schema.OpRead) {
+	if r.readsOne() {
 		fmt.Fprintln(b)
-		dartDoc(b, "", fmt.Sprintf("Parameters for GET %s/{id}.", r.path))
+		dartDoc(b, "", fmt.Sprintf("Parameters for GET %s.", r.itemRoute()))
 		dartDoc(b, "", "")
 		dartDoc(b, "", "There is no [select] here: the item endpoint rejects unknown query\nparameters and does not declare one.")
 		fmt.Fprintf(b, "class %sGetParams {\n", r.base)
@@ -1086,16 +1107,30 @@ func dartTransport(b *bytes.Buffer, r dartResource) {
 		fmt.Fprintf(b, "  return _page(json, %s.fromJson);\n}\n", r.row)
 	}
 
-	if r.ops.Has(schema.OpRead) {
+	if r.readsOne() {
 		fmt.Fprintln(b)
-		dartDoc(b, "", fmt.Sprintf("GET %s/{id} — one row by primary key.", r.path))
+		if r.singleton() {
+			dartDoc(b, "", fmt.Sprintf("GET %s — the caller's own row.", r.path))
+			dartDoc(b, "", "")
+			dartDoc(b, "", "There is no id to pass: the resource holds one row per caller and the\nserver settles which.")
+		} else {
+			dartDoc(b, "", fmt.Sprintf("GET %s/{id} — one row by primary key.", r.path))
+		}
 		fmt.Fprintf(b, "Future<%s> get%s(\n", r.row, r.base)
-		fmt.Fprintln(b, "  Transport request,")
-		fmt.Fprintln(b, "  Object id, {")
+		if r.singleton() {
+			fmt.Fprintln(b, "  Transport request, {")
+		} else {
+			fmt.Fprintln(b, "  Transport request,")
+			fmt.Fprintln(b, "  Object id, {")
+		}
 		fmt.Fprintf(b, "  %sGetParams params = const %sGetParams(),\n", r.base, r.base)
 		fmt.Fprintln(b, "  Object? cancel,")
 		fmt.Fprintln(b, "}) async {")
-		fmt.Fprintf(b, "  final path = _itemPath(%s, id);\n", path)
+		if r.singleton() {
+			fmt.Fprintf(b, "  const path = %s;\n", path)
+		} else {
+			fmt.Fprintf(b, "  final path = _itemPath(%s, id);\n", path)
+		}
 		fmt.Fprintln(b, "  final json = await request(_get(path, params.toQuery(), cancel));")
 		fmt.Fprintf(b, "  return _row(json, %s.fromJson);\n}\n", r.row)
 	}
@@ -1115,27 +1150,41 @@ func dartTransport(b *bytes.Buffer, r dartResource) {
 
 	if r.ops.Has(schema.OpUpdate) && len(bodyFields(r.table, forUpdate)) > 0 {
 		fmt.Fprintln(b)
-		dartDoc(b, "", fmt.Sprintf("PATCH %s/{id} — write the columns the body named, and no others.", r.path))
+		dartDoc(b, "", fmt.Sprintf("PATCH %s — write the columns the body named, and no others.", r.itemRoute()))
 		fmt.Fprintf(b, "Future<%s> update%s(\n", r.row, r.base)
 		fmt.Fprintln(b, "  Transport request,")
-		fmt.Fprintln(b, "  Object id,")
+		if !r.singleton() {
+			fmt.Fprintln(b, "  Object id,")
+		}
 		fmt.Fprintf(b, "  %sPatch body, {\n", r.base)
 		fmt.Fprintln(b, "  Object? cancel,")
 		fmt.Fprintln(b, "}) async {")
-		fmt.Fprintf(b, "  final path = _itemPath(%s, id);\n", path)
+		if r.singleton() {
+			fmt.Fprintf(b, "  const path = %s;\n", path)
+		} else {
+			fmt.Fprintf(b, "  final path = _itemPath(%s, id);\n", path)
+		}
 		fmt.Fprintln(b, "  final json = await request(_patch(path, body.toJson(), cancel));")
 		fmt.Fprintf(b, "  return _row(json, %s.fromJson);\n}\n", r.row)
 	}
 
 	if r.ops.Has(schema.OpDelete) {
 		fmt.Fprintln(b)
-		dartDoc(b, "", fmt.Sprintf("DELETE %s/{id}.", r.path))
+		dartDoc(b, "", fmt.Sprintf("DELETE %s.", r.itemRoute()))
 		fmt.Fprintf(b, "Future<void> delete%s(\n", r.base)
-		fmt.Fprintln(b, "  Transport request,")
-		fmt.Fprintln(b, "  Object id, {")
+		if r.singleton() {
+			fmt.Fprintln(b, "  Transport request, {")
+		} else {
+			fmt.Fprintln(b, "  Transport request,")
+			fmt.Fprintln(b, "  Object id, {")
+		}
 		fmt.Fprintln(b, "  Object? cancel,")
 		fmt.Fprintln(b, "}) async {")
-		fmt.Fprintf(b, "  final path = _itemPath(%s, id);\n", path)
+		if r.singleton() {
+			fmt.Fprintf(b, "  const path = %s;\n", path)
+		} else {
+			fmt.Fprintf(b, "  final path = _itemPath(%s, id);\n", path)
+		}
 		fmt.Fprintln(b, "  await request(_delete(path, cancel));")
 		fmt.Fprintln(b, "}")
 	}

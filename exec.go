@@ -82,16 +82,55 @@ func runQuery(ctx context.Context, db Executor, query string, args ...any) (rowS
 	return pgxRows{rows}, nil
 }
 
-// All runs the query and returns every matching row.
+// Resolved returns a copy of the query with everything the exec path adds to it
+// before the wire: the BeforeQuery hooks registered for T against db, and the
+// scopes of any relation this query expands.
 //
-// The builder is cloned first, so query hooks amend a copy and running the same
-// builder twice does not accumulate their predicates.
-func (b *Builder[T]) All(ctx context.Context, db Executor) ([]T, error) {
+// It is the statement that will actually run, which [Builder.SQL] on its own is
+// not. `SQL()` renders what the caller built, and for a model whose reads are
+// confined by a hook that is a statement with the confinement missing — so a
+// reader checking that the tenant predicate really is on every read by printing
+// `SQL()` concludes that it is not, and raw SQL assembled alongside a rendered
+// predicate silently counts rows the query would never have returned (#153).
+//
+//	q, err := sqlb.Query[Post]().Where(…).Resolved(ctx, db)
+//	sql, args, err := q.SQL()   // WHERE status = $1 AND org_id = $2
+//
+// This is the only supported way to read the hooks' effect as text, and it is
+// what [Explain] uses. Applying them by hand at a second call site is the
+// duplication the hook exists to remove — and the copy it duplicates is a
+// security predicate, which is the worst kind to keep in two places.
+//
+// The receiver is untouched, as it is on every exec path: hooks amend a clone,
+// so resolving the same builder twice does not accumulate their predicates.
+func (b *Builder[T]) Resolved(ctx context.Context, db Executor) (*Builder[T], error) {
 	q := b.Clone()
 	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
 		return nil, err
 	}
 	if err := q.resolveExpansionScopes(ctx, db); err != nil {
+		return nil, err
+	}
+	return q, nil
+}
+
+// resolvedSQL renders the statement that will run, and is what [Explain] calls
+// through the resolver interface when it is handed a builder.
+func (b *Builder[T]) resolvedSQL(ctx context.Context, db Executor) (string, []any, error) {
+	q, err := b.Resolved(ctx, db)
+	if err != nil {
+		return "", nil, err
+	}
+	return q.SQL()
+}
+
+// All runs the query and returns every matching row.
+//
+// The builder is cloned first, so query hooks amend a copy and running the same
+// builder twice does not accumulate their predicates.
+func (b *Builder[T]) All(ctx context.Context, db Executor) ([]T, error) {
+	q, err := b.Resolved(ctx, db)
+	if err != nil {
 		return nil, err
 	}
 	query, args, err := q.SQL()
@@ -144,11 +183,8 @@ func (b *Builder[T]) First(ctx context.Context, db Executor) (T, error) {
 // Count returns the number of matching rows, ignoring pagination. For a
 // grouped query it counts groups.
 func (b *Builder[T]) Count(ctx context.Context, db Executor) (int64, error) {
-	q := b.Clone()
-	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
-		return 0, err
-	}
-	if err := q.resolveExpansionScopes(ctx, db); err != nil {
+	q, err := b.Resolved(ctx, db)
+	if err != nil {
 		return 0, err
 	}
 	query, args, err := q.countSQL()
@@ -189,13 +225,7 @@ func (b *Builder[T]) Exists(ctx context.Context, db Executor) (bool, error) {
 	probe.orders = nil
 	probe.Limit(1)
 
-	if err := hooksFor[T](db).runBeforeQuery(ctx, probe); err != nil {
-		return false, err
-	}
-	if err := probe.resolveExpansionScopes(ctx, db); err != nil {
-		return false, err
-	}
-	query, args, err := probe.SQL()
+	query, args, err := probe.resolvedSQL(ctx, db)
 	if err != nil {
 		return false, err
 	}
@@ -230,14 +260,7 @@ func scanExists(rows rowSource) (bool, error) {
 //
 // Query hooks still run, so tenant scoping applies to aggregates too.
 func Collect[R, T any](ctx context.Context, db Executor, b *Builder[T]) ([]R, error) {
-	q := b.Clone()
-	if err := hooksFor[T](db).runBeforeQuery(ctx, q); err != nil {
-		return nil, err
-	}
-	if err := q.resolveExpansionScopes(ctx, db); err != nil {
-		return nil, err
-	}
-	query, args, err := q.SQL()
+	query, args, err := b.resolvedSQL(ctx, db)
 	if err != nil {
 		return nil, err
 	}

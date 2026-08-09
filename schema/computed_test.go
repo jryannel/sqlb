@@ -161,6 +161,46 @@ func TestComputedSortableIsAllowedWhenStable(t *testing.T) {
 	}
 }
 
+// A computed column is nullable unless it says otherwise, which is the opposite
+// of a stored one (#147).
+//
+// The default that assumed non-null was not merely unhelpful: a correlated
+// subquery matching nothing produced a 500 at scan time, from a declaration
+// `sqlb generate` accepted and the drift gate ignored, on rows a fixture is
+// unlikely to contain. Nullable is the direction that fails safely — a pointer
+// scans a non-null value fine, and the reverse is the 500.
+func TestComputedIsNullableUnlessItSaysOtherwise(t *testing.T) {
+	r := schema.NewRegistry()
+	projects := r.Table("projects",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Int("open_tasks"),
+
+		// The shape from the issue: a cross-module lookup with no foreign key,
+		// so a row pointing at nothing is ordinary rather than exceptional.
+		schema.Computed("project_name", schema.TypeText,
+			schema.FromSQL("(SELECT p.name FROM projects p WHERE p.id = time_entries.project_id)")),
+		// count(*) over a subquery is 0, never NULL.
+		schema.Computed("total_tasks", schema.TypeInt,
+			schema.FromSQL("(SELECT count(*) FROM tasks t WHERE t.project_id = projects.id)")).
+			NotNull(),
+	)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("valid schema rejected: %v", err)
+	}
+
+	if !projects.Field("project_name").Desc().Nullable {
+		t.Error("a computed column defaulted to NOT NULL; an expression that matches nothing is NULL, and the model has to be able to hold it")
+	}
+	if projects.Field("total_tasks").Desc().Nullable {
+		t.Error("NotNull did not take on a computed column")
+	}
+	// The default runs the other way for storage, where the DDL carries the
+	// answer and the round trip checks it.
+	if projects.Field("open_tasks").Desc().Nullable {
+		t.Error("a stored column defaulted to nullable")
+	}
+}
+
 // The manifest is what a program reads to answer "what does this endpoint
 // serve, and what did the server have to do to serve it".
 func TestComputedInManifest(t *testing.T) {

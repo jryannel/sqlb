@@ -40,6 +40,10 @@ Go code going through the query engine directly is trusted and bypasses
 `ReadOnly` and `Immutable`; they are enforced at the REST boundary. `Hidden` is
 enforced at the projection, so `filter.Apply` cannot select one even by mistake.
 
+One word only qualifies another: `LookupKey()` keeps a `Hidden` column's typed
+column, for a credential the row is found by. It restricts nothing and reaches
+no request — see [below](#lookupkey-for-the-secret-you-find-the-row-by).
+
 The capabilities render into the `sqlb` struct tag that codegen writes onto the
 model, which is how the runtime reads them back without importing this package:
 
@@ -69,6 +73,40 @@ column is absent from the OpenAPI schema, from the filter vocabulary, and from
 the `allowed` list in a rejection message, so its existence cannot be probed.
 `Hidden` plus `Filterable` is a validation error rather than a combination you
 can write, because a filterable secret can be recovered a character at a time.
+
+It is also absent from the generated typed columns, so `AuthorCols.PasswordHash`
+does not exist and a predicate against it does not compile.
+
+### `LookupKey`, for the secret you find the row by
+
+That omission asserts a second property — *not predicated on* — and for a
+password hash it is right: a user is found by email and the hash is compared in
+Go, so `WHERE password_hash = $1` is a sign something has gone wrong. For the
+other members of "and similar values" the two come apart:
+
+```go
+schema.Text("token_hash").Hidden().LookupKey()
+```
+
+Session tokens and API keys, password-reset and verification tokens, webhook
+secrets keyed by fingerprint, idempotency keys. Every one must never leave the
+process, and every one is found by equality on its stored value — the client
+presents a token, the server hashes it, and the hash *is* the lookup key. `Hidden`
+alone took away the operation the column exists for ([#155]).
+
+`LookupKey` keeps the typed column and changes nothing else. The REST side is
+untouched: the column still has no capability, so `?token_hash=eq.…` is still a
+400 naming what would have been accepted, which is precisely the leak
+capabilities exist to prevent. This is a declaration about Go, on the writer's
+side of the boundary, where `sqlb.F("token_hash")` already reaches the column
+untyped. What it buys is that the compiler helps at the one call site that
+should have it, and that the generated file says which of the two kinds of
+secret each hidden column is.
+
+It is refused on a column that is not `Hidden`, where the typed column is there
+regardless and the word would be a claim with no effect.
+
+[#155]: https://github.com/jryannel/sqlb/issues/155
 
 ## `ReadOnly` plus a hook
 
@@ -111,6 +149,58 @@ request body.
 The check proves a hook *exists*, not that it is right. That is worth knowing
 before relying on it, and it catches the case that actually happens: the table
 somebody added last week ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
+
+## One table, two surfaces
+
+Every capability above is a property of the *column*, and a column belongs to a
+model, and a table has one model. That is the right shape for almost everything
+— and it is the wrong shape for the case most applications with an admin panel
+have: a public surface and a privileged surface over the same table, differing
+in which columns each may see.
+
+`Hidden()` cannot say it. A column hidden for the storefront is hidden for the
+admin panel, which is the surface that exists to read it. `Expose` cannot say
+it either: a table carries one, and a second call replaces the first rather than
+adding a resource.
+
+What can say it is the **mount**. `rest.Options.Columns` narrows one resource to
+the columns it names, the way `rest.Options.Computed` narrows it to the derived
+columns it is willing to pay for
+([#148](https://github.com/jryannel/sqlb/issues/148)):
+
+```go
+// The generated one, over every column the schema declares.
+if err := catalog.Register(api, db); err != nil { … }
+
+// And a public one beside it, over the same generated model.
+err := rest.Resource[catalog.Product, rest.None[catalog.Product], rest.None[catalog.Product]](
+    api, db, rest.Options{
+        Path:    "/storefront/products",
+        Name:    "storefront-product",
+        Ops:     rest.OpList | rest.OpRead,
+        Columns: []string{"id", "title", "handle", "status", "price_minor"},
+    })
+```
+
+A column not listed is not reachable from that resource: absent from the
+response, absent from the `SELECT` the database sees, not filterable, not
+sortable, not searched, not nameable in `?select`, and — the part that matters
+for a surface narrowed to conceal something — not named in the list a rejection
+offers back.
+
+**What you give up is the second resource's generated half.** The models, the
+typed column facade, the manifest and the drift gate all still cover it, because
+there is still one model; the mount, and any client for it, are hand-written.
+Two further things stay wide, because they come from a Go type rather than from
+the mount: the response schema in the OpenAPI document is the model's, and the
+create and update body types are whatever you pass for `C` and `U`. A public
+surface is usually read-only, which is why `Ops` above names only two — and if
+it is not, give it body types of its own.
+
+The alternative — a second `Describe`d struct over the same table — is stronger
+in one respect, since a model with no field for a column has no code path that
+can return it, and gives up all four of the generated halves. See
+[structs-first](../start/structs-first.md) for that table.
 
 ## Next
 

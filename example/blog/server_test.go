@@ -412,3 +412,31 @@ func postValues(id, title string) []any {
 		int64(3), now, now, now, nil,
 	}
 }
+
+// The offset budget the schema declared reaches the wire.
+//
+// posts sets MaxOffset: 5000 because a blog has thousands of rows and not a
+// hundred thousand, and until #151 there was nowhere in schema.REST to say so —
+// a schema-first resource took the package default of 100_000 and could not be
+// moved off it. The number is the declaration's, so the refusal is the proof
+// that the declaration travelled: at 20 rows a page, page 500 starts at 9980.
+func TestDeclaredOffsetBudgetIsEnforced(t *testing.T) {
+	db := newStubDB(t, postColumns(), nil)
+	server := newServer(t, db.db, nil)
+
+	if code := do(t, server, http.MethodGet, "/posts?page=250", nil).Code; code != http.StatusOK {
+		t.Errorf("page 250 starts at offset 4980, inside the budget: got %d", code)
+	}
+	resp := do(t, server, http.MethodGet, "/posts?page=500", nil)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("page 500 starts at offset 9980, past the declared budget of 5000: got %d", resp.Code)
+	}
+	// The package default would have admitted it, so a green test here with the
+	// declaration dropped would mean the ceiling never left the schema.
+	if body := resp.Body.String(); !strings.Contains(body, "5000") {
+		t.Errorf("the refusal does not name the declared budget: %s", body)
+	}
+	if len(db.statements()) != 1 {
+		t.Errorf("a refused request reached the database: %v", db.statements())
+	}
+}

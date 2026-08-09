@@ -90,10 +90,57 @@ _, err := sqlb.InsertRows(&tasks.Comment{TaskID: task.ID, Body: *in.Note}).One(c
 
 The comment and the completion commit together or neither does.
 
+## `Writes` is not the blast radius, and `Touches` says so
+
+Read those two sections together and the gap is obvious: `Writes` is what the
+*envelope* persists — columns, on one row — and the paragraph above hands the
+same verb a transaction it can write anything through. The three surfaces that
+print `Writes` cannot see the difference, and a caller with no compile step,
+which is the caller [ADR-0029](../adr/0029-go-cli.md) has in mind,
+reads `status, completed_at` and concludes the route is confined to one row
+([#149](https://github.com/jryannel/sqlb/issues/149)).
+
+`Touches` is how a wide route says it is wide:
+
+```go
+Task.Action(schema.Action{
+    Name:    "complete",
+    Writes:  []string{"status", "completed_at"},
+    Touches: []string{"comments"},
+})
+```
+
+Table names, not columns. It travels with `Writes` everywhere `Writes` goes —
+`sqlb impact`, the manifest, the OpenAPI description, the generated `Actions`
+doc comment, and `--help`:
+
+```
+Beyond that row the route writes: comments.
+The schema declares that set; nothing enforces it.
+```
+
+**Nothing checks the claim**, and that is the design rather than a gap. Tracing
+what a Go func writes is not something the schema package can do, and the
+alternative on offer was silence. So the failure mode is an over-broad claim
+instead of a confident understatement, and a test asserting the declaration
+against the statements the verb actually issued is yours to write — which, from
+inside the application, it can be.
+
+A verb that declares nothing gets a sentence saying so, in those words: the
+absence of a claim, not a checked bound.
+
+## The lock covers one row
+
 `Writes` also decides the lock. Every one of these is a read-modify-write across
 a round trip, so a declared write set makes the fetch `SELECT … FOR UPDATE` —
 without it, two concurrent completions read the same row and the second
 overwrites the first. Nobody has to remember it per route.
+
+**The row it locks is the one the envelope fetched, and nothing else.**
+Statements issued through `sqlb.TxFrom` take their own locks, in an order this
+application owns — which is where deadlocks between two wide verbs come from,
+and which no declaration can arrange for you. The lock is a guarantee about the
+transition on one row, not about the transaction around it.
 
 ## Scoping comes with the fetch
 

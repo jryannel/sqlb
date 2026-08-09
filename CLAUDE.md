@@ -18,7 +18,7 @@ Read in this order, and stop as soon as you have what you need:
    Go way instead, as `// Command sqlb …` at the head of `cmd/sqlb/main.go`.
 2. **[docs/architecture.md](docs/architecture.md)** for how the pieces fit and
    why the seams are where they are.
-3. **[docs/adr/](docs/adr/)** — 50 records, and they are *load-bearing rather
+3. **[docs/adr/](docs/adr/)** — 53 records, and they are *load-bearing rather
    than historical*. A decision here is usually the answer to "why is this not
    simpler", and reversing one without reading it is the most common way to
    spend an afternoon rediscovering a rejected alternative. Each carries a
@@ -55,8 +55,8 @@ for reproducing a CI failure rather than for routine use — CI is the gate. The
 database-backed suites read a DSN and start nothing; `mise run pg-up` provides
 it from `compose.yaml`, and the tasks that need it depend on that. Individual
 steps — `vet`, `lint`, `generate-check`, `impact-check`, `eject-check`,
-`test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on their own
-and `mise tasks` describes all 28.
+`adr-check`, `test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on
+their own and `mise tasks` describes all 32.
 
 **`mise run site-check` needs no npm install.** It is the fast way to find out
 whether a docs edit can be published, and the check that catches a link whose
@@ -108,16 +108,26 @@ registries had dropped the same thing.
 ([ADR-0018](docs/adr/0018-tooling-scoped-to-tracked-files.md)).
 
 **Prefer a failing check to a written-down rule.** `generate-check`,
-`eject-check`, `impact-check`, `deps-check` and `bisect-check` all exist
-because a convention that is only documented is a convention that drifts. If
-you are about to add a paragraph telling someone to remember something,
-consider whether it can fail in CI instead.
+`eject-check`, `impact-check`, `deps-check`, `adr-check` and `bisect-check` all
+exist because a convention that is only documented is a convention that drifts.
+If you are about to add a paragraph telling someone to remember something,
+consider whether it can fail in CI instead. `adr-check` is the newest and the
+plainest case: docs/adr/README.md said in so many words that the vocabulary has
+no "Accepted" in it, and a record carried Accepted for ten days anyway.
 
 **Releases.** A release is an annotated tag whose message *is* the notes, plus
 a GitHub release carrying the same text, on a commit where **both** workflows
 are green. [docs/compatibility.md](docs/compatibility.md) says what is frozen
 and what is expected to move; a pre-1.0 minor may break a surface listed under
 *Will move*, and the notes carry the mechanical edit that fixes it.
+
+`/release` is the procedure, and it tags the *releases-page commit* rather than
+the feature commit — `pages` only runs on a push to `main` touching a published
+path, so a tag on a commit that publishes nothing can never show the green this
+paragraph asks for. `both workflows are green` is no longer only a sentence:
+`.claude/hooks/verify-release-gate.sh` refuses the tag, the tag push and the
+release while either is red, absent or unfinished. Saying it in bold here did
+not hold twice, which is what earned the hook.
 
 ## Things that are deliberate
 

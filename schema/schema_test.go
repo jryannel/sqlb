@@ -284,6 +284,100 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			},
 			want: "so give it a shorter name with UniqueNamed",
 		},
+		{
+			// Non-positive means "take the package default" everywhere a
+			// ceiling is read, so a negative one reads as a tighter bound and
+			// behaves as the loosest available.
+			name: "a negative cost ceiling",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey()).
+					Expose(schema.REST{Ops: schema.OpList, MaxOffset: -1})
+			},
+			want: "request ceilings must not be negative",
+		},
+		{
+			// The ordering a request gets when it names none. A term nothing
+			// can sort by would answer 400 to a client that sent nothing at
+			// all, which is the one direction a default must not fail in.
+			name: "a default ordering over an unknown column",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey()).
+					Expose(schema.REST{Ops: schema.OpList, DefaultSort: []string{"-nope"}})
+			},
+			want: `DefaultSort "-nope" names no column of this table`,
+		},
+		{
+			// Capabilities are opt-in, so an ordering nothing declared is one
+			// no ?sort could have asked for either.
+			name: "a default ordering over a column that is not Sortable",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(), schema.Text("name")).
+					Expose(schema.REST{Ops: schema.OpList, DefaultSort: []string{"name"}})
+			},
+			want: "names a column that is not Sortable",
+		},
+		{
+			name: "a default ordering with an unreadable direction",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(), schema.Text("name").Sortable()).
+					Expose(schema.REST{Ops: schema.OpList, DefaultSort: []string{"name.sideways"}})
+			},
+			want: "is not a sort direction",
+		},
+		{
+			// The refusal the whole singleton shape rests on. Its row comes
+			// from the scope hook and from nothing else — no key in the path,
+			// no predicate in the statement — so on an unconfined table the
+			// read answers an arbitrary row and the PATCH reaches every row
+			// there is (#166).
+			name: "a singleton over a table nothing confines",
+			build: func(r *schema.Registry) {
+				r.Table("settings", schema.UUIDv7("id").PrimaryKey(), schema.Text("theme")).
+					Expose(schema.REST{Ops: schema.OpSingleton})
+			},
+			want: "exposes OpSingleton but declares no Scoped column",
+		},
+		{
+			// GET on the collection path cannot be the caller's row and the
+			// collection at once.
+			name: "a singleton beside a list",
+			build: func(r *schema.Registry) {
+				r.Table("settings", schema.UUIDv7("id").PrimaryKey().ReadOnly().Scoped()).
+					Expose(schema.REST{Ops: schema.OpSingleton | schema.OpList})
+			},
+			want: "the same route",
+		},
+		{
+			// A read by id is the question the shape exists to delete, so it
+			// is named as a leftover rather than as a conflict.
+			name: "a singleton beside a read by id",
+			build: func(r *schema.Registry) {
+				r.Table("settings", schema.UUIDv7("id").PrimaryKey().ReadOnly().Scoped()).
+					Expose(schema.REST{Ops: schema.OpSingleton | schema.OpRead})
+			},
+			want: "drop OpRead",
+		},
+		{
+			// Deferral is a property of a constraint, and a column with no
+			// unique constraint has none of its own to defer.
+			name: "Deferred without a unique constraint",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(),
+					schema.Int("position").Deferred())
+			},
+			want: "Deferred applies to a column's own unique constraint",
+		},
+		{
+			// A typed string is open, and the alternative to refusing an
+			// unknown value here is DDL Postgres rejects halfway through a
+			// migration.
+			name: "an unknown deferrability",
+			build: func(r *schema.Registry) {
+				r.Table("p", schema.UUIDv7("id").PrimaryKey(), schema.Text("slug")).
+					AddUnique(schema.Unique{Columns: []string{"slug"}, Deferrable: "maybe"})
+			},
+			want: `has an unknown Deferrable "maybe"`,
+		},
 	}
 
 	for _, tt := range tests {

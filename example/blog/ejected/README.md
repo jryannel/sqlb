@@ -59,11 +59,18 @@ current — and drop that gate on the day you stop.
   SQLSTATE class 23 exactly as before — so a retry loop keyed on `409` keeps
   working. The `detail` text is generic where the API named the resource; the
   status, which is what clients branch on, is identical.
-- **The request budgets.** `MaxFilters` and `MaxSortTerms` come from the
-  schema; the list cap (100 values in one `in`/`nin`) and the value-length cap
-  (256 bytes) are constants at the top of `support.go`, edit them there.
+- **The request budgets.** `MaxFilters`, `MaxSortTerms` and `MaxOffset` come from
+  the schema; the list cap (100 values in one `in`/`nin`) and the value-length cap
+  (256 bytes) are constants at the top of `support.go`, edit them there. The
+  offset budget matters more here than it did behind the API: `?cursor` did not
+  come out, so a client reading deep has no cheaper spelling to be sent to.
   `?search` escapes `%` and `_` in the term, so a search for a
   literal percent sign still matches literally.
+- **The default ordering.** `DefaultSort` comes out as a resolved
+  `[]Order` on the resource's `Limits`, applied when a request names no
+  `?sort`. It is not a budget and it is here for a different reason: a list
+  is well-formed in any order, so an exit that dropped it would answer every
+  unsorted request with a different collection and nothing would say so.
 - **The obligation.** A table that declared `Scoped` or `SoftDelete` refuses to
   register without a `Confine` hook, and a scoped table with a create endpoint
   refuses without an `Assign` hook. Startup errors, exactly as before.

@@ -2,6 +2,7 @@ package rest_test
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -17,6 +18,10 @@ type Starred struct {
 	ID        string `db:"id" json:"id" sqlb:"pk,default,filter,readonly"`
 	Title     string `db:"title" json:"title" sqlb:"filter,sort"`
 	IsStarred bool   `db:"is_starred" json:"is_starred" sqlb:"filter,readonly"`
+	// StarCount is the other kind of computed column: an aggregate that takes no
+	// bind, so a write *could* evaluate it — and since #164 does so only when the
+	// resource asked for it.
+	StarCount int64 `db:"star_count" json:"star_count" sqlb:"readonly"`
 }
 
 func (Starred) TableName() string { return "starred" }
@@ -26,6 +31,9 @@ func (Starred) ComputedColumns() []sqlb.Computed {
 		Name:  "is_starred",
 		Expr:  "EXISTS (SELECT 1 FROM stars s WHERE s.item_id = starred.id AND s.member_id = ?)",
 		Needs: []string{"viewer"},
+	}, {
+		Name: "star_count",
+		Expr: "(SELECT count(*) FROM stars s WHERE s.item_id = starred.id)",
 	}}
 }
 
@@ -55,6 +63,99 @@ func mountStarred(t *testing.T, db sqlb.Executor) error {
 		Name:     "starred",
 		Ops:      rest.CRUD | rest.OpList,
 		Computed: []string{"is_starred"},
+	})
+}
+
+// starredAPI mounts the resource with a chosen computed set and a hook that
+// supplies the viewer bind, returning the test API to drive it with.
+func starredAPI(t *testing.T, db *fakeDB, computed ...string) humatest.TestAPI {
+	t.Helper()
+	reg := sqlb.NewRegistry()
+	sqlb.On[Starred](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[Starred]) error {
+		q.Bind("viewer", "member-1")
+		return nil
+	})
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	err := rest.Resource[Starred, starredCreate, starredUpdate](api, sqlb.New(db.db).WithHooks(reg), rest.Options{
+		Path:     "/starred",
+		Name:     "starred",
+		Ops:      rest.CRUD | rest.OpList,
+		Computed: computed,
+	})
+	if err != nil {
+		t.Fatalf("mounting starred with Computed %v: %v", computed, err)
+	}
+	return api
+}
+
+// A write cannot evaluate a Needs-computed column — it has no bind — so
+// ADR-0041 leaves it out of RETURNING. The response used to serialise the
+// scanned struct's zero value anyway, which is a definite `false` where the
+// truth is unknown, and for the acknowledged-by-me flag this feature exists to
+// serve that is exactly the bug declaring it was meant to delete (#163).
+func TestWriteResponseOmitsAColumnItCannotCompute(t *testing.T) {
+	db := newFakeDB(t, reply{
+		cols: []string{"id", "title"},
+		rows: [][]any{{"s1", "New"}},
+	})
+	api := starredAPI(t, db, "is_starred")
+
+	resp := api.Patch("/starred/s1", map[string]any{"title": "New"})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body)
+	}
+	if stmt := db.lastStatement(); strings.Contains(stmt, "is_starred") {
+		t.Errorf("the statement should not mention a column it cannot bind:\n%s", stmt)
+	}
+	// Absent, not false. A client reads an absent key as "not computed here",
+	// which is what the ADR promised; a present `false` is indistinguishable
+	// from a real answer.
+	if body := resp.Body.String(); strings.Contains(body, "is_starred") {
+		t.Errorf("the write response carries a column no statement computed: %s", body)
+	}
+}
+
+// The write path takes computed columns the way the read path has since #92:
+// only the ones the mount asked for. Proven both ways on the same resource,
+// because the failure #164 reports is the one that is invisible from inside a
+// single mount — the aggregate is correct, it is simply paid for by writes that
+// discard it, and by writes into a database where its table does not exist.
+func TestWriteReturningFollowsTheMountsComputedSet(t *testing.T) {
+	const expr = `(SELECT count(*) FROM stars s WHERE s.item_id = starred.id)`
+
+	t.Run("not asked for", func(t *testing.T) {
+		db := newFakeDB(t, reply{cols: []string{"id", "title"}, rows: [][]any{{"s1", "Hello"}}})
+		api := starredAPI(t, db)
+
+		resp := api.Post("/starred", map[string]any{"title": "Hello"})
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+		}
+		if stmt := db.lastStatement(); strings.Contains(stmt, expr) {
+			t.Errorf("a resource that named no computed column still evaluates one:\n%s", stmt)
+		}
+		if body := resp.Body.String(); strings.Contains(body, "star_count") {
+			t.Errorf("the response carries a column the resource does not serve: %s", body)
+		}
+	})
+
+	t.Run("asked for", func(t *testing.T) {
+		db := newFakeDB(t, reply{
+			cols: []string{"id", "title", "star_count"},
+			rows: [][]any{{"s1", "Hello", int64(4)}},
+		})
+		api := starredAPI(t, db, "star_count")
+
+		resp := api.Post("/starred", map[string]any{"title": "Hello"})
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+		}
+		if stmt := db.lastStatement(); !strings.Contains(stmt, expr) {
+			t.Errorf("a resource that asked for the column should get it back:\n%s", stmt)
+		}
+		if body := resp.Body.String(); !strings.Contains(body, `"star_count":4`) {
+			t.Errorf("the response should carry the value the write returned: %s", body)
+		}
 	})
 }
 

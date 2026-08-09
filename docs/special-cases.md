@@ -60,7 +60,7 @@ running Postgres, and say what it did rather than what the source implies.
 | Range overlap / `EXCLUDE USING gist` | 2 | **Not expressible.** No range types, no exclusion constraints |
 | `tsvector` | 1 | **Deliberately out** — [ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md). The blocker is the generated column, not the type |
 | `DISTINCT ON` | 1 | **`Raw` only,** measured. `RawSel` reaches it, but only as the *first* projection item — a positional convention nothing enforces, so getting it wrong is a syntax error at the database rather than a build error in Go |
-| Idempotency key | 28 | **Works,** measured, and not the way it reads. `OnConflictDoNothing` skips the row, so `One` returns `ErrNotFound` and the caller's struct stays zeroed — a retried payment arriving as "not found". What returns the first call's row is `OnConflictUpdate(target, target…)`: a write that changes nothing is still a written row, and a written row is a returned one |
+| Idempotency key | 28 | **Works,** measured, and not the way it reads. `OnConflictDoNothing` skips the row, so `One` has no row to return. It answered `ErrNotFound` — a retried payment arriving as "not found" — and since [#146](https://github.com/jryannel/sqlb/issues/146) it refuses instead, naming both routes out. What returns the first call's row is `OnConflictUpdate(target, target…)`: a write that changes nothing is still a written row, and a written row is a returned one |
 | Self-referencing parent (`parent_id`) | 0 here, universal | **Not expressible.** `Ref(name, target *TableDef)` needs the target value, which does not exist yet inside its own `Table(…)` call, and there is no `AddField`. `ExternalRef` compiles but gives up the type and `?expand` — and, measured, the foreign key too: a `parent_id` naming a row that is not there is accepted |
 | `WITH RECURSIVE` | 0 | **`Raw`, by design** — [vision](vision.md) non-goals |
 | Generated column / trigger / backfill | 1 trigger, 12 backfills | **DDL not rendered.** Hand-written migrations interleave; the "one source of truth" story keeps its asterisk |
@@ -126,12 +126,18 @@ for the port report's ranking than the report itself makes.
 
 **An idempotency key needs a spelling that looks like a mistake.**
 `OnConflictDoNothing` is the obvious call and the wrong one: a skipped row is
-absent from `RETURNING`, so `One` returns `ErrNotFound` and the caller's struct
-is left at its zero value — which `Insert.writeBack` documents and defends, and
-which turns a retried payment into a 404. What works is
-`OnConflictUpdate([]string{"key"}, "key")`, updating the conflict target to
-itself: a write that changes nothing is still a write, and a written row is
-returned. It is correct, it is one line, and it reads like a typo.
+absent from `RETURNING`, so `One` had no row to return and answered
+`ErrNotFound`, leaving the caller's struct at its zero value — which
+`Insert.writeBack` documents and defends, and which turns a retried payment into
+a 404. What works is `OnConflictUpdate([]string{"key"}, "key")`, updating the
+conflict target to itself: a write that changes nothing is still a write, and a
+written row is returned. It is correct, it is one line, and it reads like a typo.
+
+*Updated after [#146](https://github.com/jryannel/sqlb/issues/146):* the pairing
+is now refused at the terminal rather than answered, with a message naming
+`Exec` for "make sure it exists" and the line above for "give me the row either
+way". The finding stands; what changed is that it is no longer discovered from
+production.
 
 Two further numbers the census did not have. `InsertRows` renders one statement,
 so bulk insert has a hard ceiling at 65535 bind parameters divided by the columns
@@ -349,8 +355,9 @@ point where an HTTP status has to be chosen or a batch has to be sized.
 
 - **Idempotency key** — 28 lines in the corpus. Written, and the assumption in
   this line was wrong: `OnConflictDoNothing` does not return the first call's
-  row, it returns `ErrNotFound`. `OnConflictUpdate(target, target…)` does. See
-  [What the tests changed](#what-the-tests-changed).
+  row. `OnConflictUpdate(target, target…)` does. It returned `ErrNotFound`, and
+  after [#146](https://github.com/jryannel/sqlb/issues/146) the pairing is
+  refused outright. See [What the tests changed](#what-the-tests-changed).
 - **Optimistic concurrency** — a version column, `Update…Where(version.Eq(n))`,
   and the zero-rows-affected path. Written, and the mechanism is entirely there.
   What is not is the distinction a 409 needs: a stale version and a missing row

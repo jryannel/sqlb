@@ -15,7 +15,9 @@ import (
 // error, while PostCols.Titel does not compile.
 //
 // Hidden columns are omitted. A predicate against one should not be writable at
-// all, which is the compile-time half of what the schema declares.
+// all, which is the compile-time half of what the schema declares — unless the
+// column declared LookupKey, which is the case where the secret *is* the lookup
+// key and the omission took away the operation the column exists for (#155).
 func renderColumns(opts Options) ([]byte, error) {
 	tables := opts.Registry.Tables()
 
@@ -73,8 +75,14 @@ func renderColumns(opts Options) ([]byte, error) {
 		fmt.Fprintln(b, "}")
 
 		fmt.Fprintf(b, "\n// %sCols are the typed columns of %s.\n", typeName, t.Name())
-		if hasHidden(t) {
-			fmt.Fprintln(b, "// Hidden columns are omitted: a predicate against one should not compile.")
+		if omitted, kept := hiddenSplit(t); omitted > 0 || kept > 0 {
+			if omitted > 0 {
+				fmt.Fprintln(b, "// Hidden columns are omitted: a predicate against one should not compile.")
+			}
+			if kept > 0 {
+				fmt.Fprintln(b, "// A hidden column declaring LookupKey is here: it never leaves the process,")
+				fmt.Fprintln(b, "// and the row is found by its value. It is still unreachable over REST.")
+			}
 		}
 		fmt.Fprintf(b, "var %sCols = %s{\n", typeName, setName)
 		for _, f := range visible {
@@ -148,23 +156,40 @@ func renderUpdate(b interface{ WriteString(string) (int, error) }, t *schema.Tab
 }
 
 // facadeFields and writableFields are the two column sets this file renders,
-// and neither is a subset of the other: the facade omits hidden columns and
-// carries computed ones, the typed update does the reverse.
+// and neither is a subset of the other: the facade omits hidden columns (bar
+// lookup keys) and carries computed ones, the typed update does the reverse.
 //
 // Named because the import block has to account for both, and computing the
 // sets there separately is how a hidden timestamp came to be set by a file that
 // did not import time. Each renderer states the reason for its own exclusions —
 // renderColumns for hidden, renderUpdate for the primary key and computed.
 
-// facadeFields are the columns the typed facade carries.
+// facadeFields are the columns the typed facade carries: everything not hidden,
+// plus the hidden columns that declared themselves lookup keys.
 func facadeFields(t *schema.TableDef) []*schema.Field {
 	out := make([]*schema.Field, 0, len(t.Fields()))
 	for _, f := range t.Fields() {
-		if !f.Desc().Hidden {
+		if d := f.Desc(); !d.Hidden || d.LookupKey {
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// hiddenSplit counts the two kinds of hidden column, which is what the facade's
+// own comment has to distinguish: a secret nothing may predicate on, and a
+// secret the row is found by.
+func hiddenSplit(t *schema.TableDef) (omitted, kept int) {
+	for _, f := range t.Fields() {
+		switch d := f.Desc(); {
+		case !d.Hidden:
+		case d.LookupKey:
+			kept++
+		default:
+			omitted++
+		}
+	}
+	return omitted, kept
 }
 
 // writableFields are the columns the typed update can set.
@@ -244,13 +269,4 @@ func enumOrBase(typeName string, d *schema.FieldDesc) string {
 		return typeName + GoName(d.Name)
 	}
 	return base(d)
-}
-
-func hasHidden(t *schema.TableDef) bool {
-	for _, f := range t.Fields() {
-		if f.Desc().Hidden {
-			return true
-		}
-	}
-	return false
 }

@@ -347,6 +347,9 @@
           "writes": [
             "status",
             "completed_at"
+          ],
+          "touches": [
+            "comments"
           ]
         }
       ]

@@ -174,6 +174,9 @@ starts with 0053.
 | [0047](0047-no-default-hook-registry.md) | There is no default hook registry, and the short name takes the registry | Working | High |
 | [0048](0048-auto-incrementing-keys.md) | An auto-incrementing key is a property of the column, and both of Postgres's spellings are declarable | Working | High |
 | [0049](0049-the-skill-is-generated.md) | The agent skill is generated where it can be gated, and static only where no check is possible | Working | Medium |
+| [0050](0050-reachability-is-a-property-of-the-mount.md) | Reachability is a property of the mount, so one table can serve a public surface and a privileged one | Working | Medium |
+| [0051](0051-a-gap-in-the-declaration-is-reported.md) | A gap below the declaration is reported, not silent | Working | Medium |
+| [0052](0052-a-singleton-is-an-op-that-removes-the-id.md) | A singleton is an operation that removes the {id}, and it is legal only on a Scoped table | Working | Medium |
 | [0053](0053-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and a UI is authored rather than carried | Working | High (no UI) / Low (sufficiency) |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of

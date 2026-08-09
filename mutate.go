@@ -30,6 +30,7 @@ type Insert[T any] struct {
 	rows     []*T
 	only     map[string]bool
 	omit     map[string]bool
+	computed map[string]bool
 	conflict *conflictClause
 	err      error
 }
@@ -45,6 +46,13 @@ type conflictClause struct {
 type conflictSet struct {
 	column string
 	value  Expr
+}
+
+// skipsRows reports whether the clause renders DO NOTHING, which is the one
+// shape where a row can be absent from RETURNING. The condition is the same one
+// SQL renders on, and it is read from the same fields, so the two cannot drift.
+func (c *conflictClause) skipsRows() bool {
+	return c != nil && len(c.doUpdate) == 0 && len(c.sets) == 0
 }
 
 // InsertRows starts an INSERT for one or more rows. The rows are pointers so
@@ -76,6 +84,23 @@ func (i *Insert[T]) Only(columns ...string) *Insert[T] {
 func (i *Insert[T]) Omit(columns ...string) *Insert[T] {
 	i.checkColumns("Omit", columns)
 	i.omit = toSet(columns)
+	return i
+}
+
+// WithComputed adds the named computed columns to the statement's RETURNING.
+//
+// It is [Builder.WithComputed] for a write, and the default is the same: none.
+// See [writeComputed] for why a write's derived columns are opt-in rather than
+// automatic.
+func (i *Insert[T]) WithComputed(names ...string) *Insert[T] {
+	set, err := writeComputed(i.model, "WithComputed", i.computed, names)
+	if err != nil {
+		if i.err == nil {
+			i.err = err
+		}
+		return i
+	}
+	i.computed = set
 	return i
 }
 
@@ -112,7 +137,14 @@ func (i *Insert[T]) checkColumns(method string, columns []string) {
 // Because a skipped row cannot be told apart from its neighbours in what
 // comes back, a statement that skips any row leaves every caller struct
 // untouched — the returned slice is then the only account of what was
-// written. See Exec.
+// written. So the terminal is [Insert.Exec], whose empty slice and nil error
+// are what "it was already there" looks like.
+//
+// [Insert.One] is refused after this call rather than answering ErrNotFound on
+// the conflict, which is the case an idempotent insert exists to serve (#146).
+// If the row itself is wanted whether or not this call created it, the spelling
+// is OnConflictUpdate with the target as its own update column — a write that
+// changes nothing is still a written row, and a written row is a returned one.
 func (i *Insert[T]) OnConflictDoNothing(target ...string) *Insert[T] {
 	i.conflict = &conflictClause{target: target}
 	return i
@@ -273,7 +305,7 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 		}
 	}
 
-	writeReturning(c, i.model)
+	writeReturning(c, i.model, i.computed)
 	return c.result()
 }
 
@@ -383,27 +415,67 @@ func (i *Insert[T]) writeBack(stored []T) {
 }
 
 // One inserts a single row and returns it.
+//
+// It is refused over ON CONFLICT DO NOTHING. "Give me exactly one row" and "do
+// not produce a row on conflict" are a contradiction, and the way it used to
+// resolve was the worst available: the conflict — the case the clause was added
+// to allow — came back as ErrNotFound, through the same `if err != nil` as
+// everything else, from a call whose job was to make the row exist. The failure
+// also inverts with state, so a test that inserts into a clean database passes
+// and only the second call fails (#146).
 func (i *Insert[T]) One(ctx context.Context, db Executor) (T, error) {
 	var zero T
+	if err := i.refuseSkippingTerminal(); err != nil {
+		return zero, err
+	}
 	stored, err := i.Exec(ctx, db)
 	if err != nil {
 		return zero, err
 	}
 	if len(stored) == 0 {
-		// Reachable via ON CONFLICT DO NOTHING.
+		// Unreachable now that DO NOTHING is refused above, and kept because
+		// One's contract is "one row or an error" and a silent index panic is
+		// not the way to discover a statement that returned none.
 		return zero, ErrNotFound
 	}
 	return stored[0], nil
 }
 
+// refuseSkippingTerminal rejects One over a clause that can return no row.
+//
+// Refused at the terminal rather than at OnConflictDoNothing, because the
+// clause is fine and it is the pairing that is not — and the terminal is the
+// call the author is about to get wrong.
+func (i *Insert[T]) refuseSkippingTerminal() error {
+	if !i.conflict.skipsRows() {
+		return nil
+	}
+	alt := "OnConflictUpdate with the conflict target as its own update column"
+	if t := i.conflict.target; len(t) > 0 {
+		quoted := make([]string, len(t))
+		for n, name := range t {
+			quoted[n] = fmt.Sprintf("%q", name)
+		}
+		list := strings.Join(quoted, ", ")
+		alt = fmt.Sprintf("OnConflictUpdate([]string{%s}, %s)", list, list)
+	}
+	return fmt.Errorf(
+		"sqlb: One after OnConflictDoNothing on %s: a skipped insert returns no row, "+
+			"so a conflict would answer ErrNotFound — the case the clause exists to allow;\n"+
+			"  call Exec instead, whose empty slice and nil error are what \"it was already there\" looks like,\n"+
+			"  or %s if the row is wanted whether or not this call created it",
+		i.model.Table, alt)
+}
+
 // Update is an UPDATE statement over model T.
 type Update[T any] struct {
-	model   *Model
-	dialect Dialect
-	sets    []assignment
-	where   []Pred
-	all     bool
-	err     error
+	model    *Model
+	dialect  Dialect
+	sets     []assignment
+	where    []Pred
+	all      bool
+	computed map[string]bool
+	err      error
 }
 
 type assignment struct {
@@ -466,6 +538,20 @@ func (u *Update[T]) Everything() *Update[T] {
 	return u
 }
 
+// WithComputed adds the named computed columns to the statement's RETURNING.
+//
+// It is [Builder.WithComputed] for a write, and the default is the same: none.
+// See [writeComputed] for why a write's derived columns are opt-in rather than
+// automatic.
+func (u *Update[T]) WithComputed(names ...string) *Update[T] {
+	set, err := writeComputed(u.model, "WithComputed", u.computed, names)
+	if err != nil {
+		return u.fail("%s", err)
+	}
+	u.computed = set
+	return u
+}
+
 // UseDialect overrides the dialect for this statement.
 func (u *Update[T]) UseDialect(d Dialect) *Update[T] {
 	u.dialect = d
@@ -480,6 +566,11 @@ func (u *Update[T]) fail(format string, args ...any) *Update[T] {
 }
 
 // SQL compiles the statement without running it.
+//
+// What it renders is what this statement holds. A BeforeUpdate hook — the
+// updated_at stamp, the predicate that narrows the affected rows — amends a
+// clone on the exec path and is absent here; [Update.Resolved] applies them
+// (#153).
 func (u *Update[T]) SQL() (string, []any, error) {
 	if u.err != nil {
 		return "", nil, u.err
@@ -509,7 +600,7 @@ func (u *Update[T]) SQL() (string, []any, error) {
 		c.write(" WHERE ")
 		c.predicates(u.where)
 	}
-	writeReturning(c, u.model)
+	writeReturning(c, u.model, u.computed)
 	return c.result()
 }
 
@@ -522,6 +613,29 @@ func (u *Update[T]) Clone() *Update[T] {
 	return &c
 }
 
+// Resolved returns a copy of the statement with the BeforeUpdate hooks
+// registered for T against db applied — the statement that will actually run,
+// which [Update.SQL] on its own is not. It is [Builder.Resolved] for a write,
+// and the reason is the same: a hook that stamps a column or narrows the
+// affected rows is invisible in the rendered text (#153).
+//
+// The receiver is untouched, as it is in Exec.
+func (u *Update[T]) Resolved(ctx context.Context, db Executor) (*Update[T], error) {
+	stmt := u.Clone()
+	if err := hooksFor[T](db).runBeforeUpdate(ctx, stmt); err != nil {
+		return nil, err
+	}
+	return stmt, nil
+}
+
+func (u *Update[T]) resolvedSQL(ctx context.Context, db Executor) (string, []any, error) {
+	stmt, err := u.Resolved(ctx, db)
+	if err != nil {
+		return "", nil, err
+	}
+	return stmt.SQL()
+}
+
 // Exec runs the update and returns the updated rows.
 //
 // The statement is cloned first, for the reason Builder.All clones: a
@@ -530,8 +644,8 @@ func (u *Update[T]) Clone() *Update[T] {
 // Exec assign updated_at twice and narrow a scoping predicate twice.
 func (u *Update[T]) Exec(ctx context.Context, db Executor) ([]T, error) {
 	hooks := hooksFor[T](db)
-	stmt := u.Clone()
-	if err := hooks.runBeforeUpdate(ctx, stmt); err != nil {
+	stmt, err := u.Resolved(ctx, db)
+	if err != nil {
 		return nil, err
 	}
 	query, args, err := stmt.SQL()
@@ -578,11 +692,12 @@ func (u *Update[T]) One(ctx context.Context, db Executor) (T, error) {
 
 // Delete is a DELETE statement over model T.
 type Delete[T any] struct {
-	model   *Model
-	dialect Dialect
-	where   []Pred
-	all     bool
-	err     error
+	model    *Model
+	dialect  Dialect
+	where    []Pred
+	all      bool
+	computed map[string]bool
+	err      error
 	// returning asks for the removed rows back. Not settable by a caller: it is
 	// set on the clone [Delete.Exec] runs, when an [Hooks.AfterDeleteRows] hook
 	// is registered for T and the rows therefore have somewhere to go. A delete
@@ -613,6 +728,23 @@ func (d *Delete[T]) Everything() *Delete[T] {
 	return d
 }
 
+// WithComputed adds the named computed columns to the statement's RETURNING.
+//
+// A delete only carries a RETURNING at all when an [Hooks.AfterDeleteRows] hook
+// is registered, so this decides what those rows hold. The default is none, as
+// it is on the other two writes; see [writeComputed].
+func (d *Delete[T]) WithComputed(names ...string) *Delete[T] {
+	set, err := writeComputed(d.model, "WithComputed", d.computed, names)
+	if err != nil {
+		if d.err == nil {
+			d.err = err
+		}
+		return d
+	}
+	d.computed = set
+	return d
+}
+
 // UseDialect overrides the dialect for this statement.
 func (d *Delete[T]) UseDialect(dl Dialect) *Delete[T] {
 	d.dialect = dl
@@ -621,10 +753,11 @@ func (d *Delete[T]) UseDialect(dl Dialect) *Delete[T] {
 
 // SQL compiles the statement without running it.
 //
-// No RETURNING clause. Whether a delete carries one is decided by the hooks
-// registered for T against the executor it runs on, and this method has no
-// executor — so what it prints is what a delete with no row-taking hook sends.
-// See [Hooks.AfterDeleteRows].
+// No RETURNING clause, and no BeforeDelete predicate. Both are decided by the
+// hooks registered for T against the executor it runs on, and this method has no
+// executor — so what it prints is what a delete with no hooks at all sends.
+// [Delete.Resolved] takes one and renders the statement that will run. See
+// [Hooks.AfterDeleteRows].
 func (d *Delete[T]) SQL() (string, []any, error) {
 	if d.err != nil {
 		return "", nil, d.err
@@ -641,7 +774,7 @@ func (d *Delete[T]) SQL() (string, []any, error) {
 		c.predicates(d.where)
 	}
 	if d.returning {
-		writeReturning(c, d.model)
+		writeReturning(c, d.model, d.computed)
 	}
 	return c.result()
 }
@@ -652,6 +785,35 @@ func (d *Delete[T]) Clone() *Delete[T] {
 	c := *d
 	c.where = append([]Pred(nil), d.where...)
 	return &c
+}
+
+// Resolved returns a copy of the statement with the BeforeDelete hooks
+// registered for T against db applied, and with RETURNING decided — the
+// statement that will actually run, which [Delete.SQL] on its own is not. It is
+// [Builder.Resolved] for a delete (#153).
+//
+// The receiver is untouched, as it is in Exec.
+func (d *Delete[T]) Resolved(ctx context.Context, db Executor) (*Delete[T], error) {
+	hooks := hooksFor[T](db)
+	stmt := d.Clone()
+	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
+		return nil, err
+	}
+	// Decided after BeforeDelete, so that a hook registering on first use — which
+	// On[T] does — is visible to the statement it is about to affect. It is part
+	// of resolving rather than of executing because RETURNING is the difference
+	// between a bare DELETE and one that scans every row it removed, which is a
+	// difference an inspection exists to show.
+	stmt.returning = hooks.wantsDeletedRows()
+	return stmt, nil
+}
+
+func (d *Delete[T]) resolvedSQL(ctx context.Context, db Executor) (string, []any, error) {
+	stmt, err := d.Resolved(ctx, db)
+	if err != nil {
+		return "", nil, err
+	}
+	return stmt.SQL()
 }
 
 // Exec runs the delete and returns the number of rows removed.
@@ -665,13 +827,10 @@ func (d *Delete[T]) Clone() *Delete[T] {
 // DELETE and the count is the command tag's, exactly as it always was.
 func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	hooks := hooksFor[T](db)
-	stmt := d.Clone()
-	if err := hooks.runBeforeDelete(ctx, stmt); err != nil {
+	stmt, err := d.Resolved(ctx, db)
+	if err != nil {
 		return 0, err
 	}
-	// Decided after BeforeDelete, so that a hook registering on first use — which
-	// On[T] does — is visible to the statement it is about to affect.
-	stmt.returning = hooks.wantsDeletedRows()
 	query, args, err := stmt.SQL()
 	if err != nil {
 		return 0, err
@@ -707,22 +866,76 @@ func (d *Delete[T]) Exec(ctx context.Context, db Executor) (int64, error) {
 	return n, nil
 }
 
-// writeReturning appends RETURNING over every mapped column, so that callers
-// see database-generated values without a follow-up read.
+// writeComputed validates the names a write asks its RETURNING to evaluate and
+// returns the set to hold, leaving the caller's untouched.
 //
-// A computed column is returned as its expression, so that a POST response
-// carries the derived fields without a second read — with one exception. A
+// A write's computed columns are opt-in, and the default is none. Reads flipped
+// to opt-in in #92 — "a computed column is a cost, and one the schema happens to
+// declare is not the same thing as one this caller wants to serve" — and the
+// write path was simply never revisited, so the same aggregate a read had to ask
+// for by name was evaluated by every INSERT and UPDATE of the table whether or
+// not anyone read it. Three things came of that, and only the first is about
+// cost (#164): a create returned a value that was structurally wrong, because
+// the rows the subquery counts are written later in the same transaction; and a
+// subquery naming another module's table rode into the RETURNING of every insert,
+// so the table could not be written at all unless that module's tables were
+// present. Opting in contains both to the caller that wanted the column.
+//
+// A column carrying [Field.Needs] is refused rather than accepted-and-skipped. A
 // parameterised expression needs a bind, and a mutation has nowhere to take one
 // from: the value is a property of who is asking, and the hooks a write runs
-// receive the row rather than the statement. Such a column is left out of
-// RETURNING rather than rendered against a bind that is not there, so the field
-// holds its zero value in the write's response and its real one from the next
-// read (ADR-0041).
-func writeReturning(c *compiler, m *Model) {
+// receive the row rather than the statement. ADR-0041 decided such a column is
+// left out and read back by the next query — so a caller naming one here is
+// asking for something no write can produce, and hearing so is better than a
+// field that silently arrives holding its zero value.
+func writeComputed(m *Model, method string, have map[string]bool, names []string) (map[string]bool, error) {
+	if len(names) == 0 {
+		return have, nil
+	}
+	set := make(map[string]bool, len(have)+len(names))
+	for name := range have {
+		set[name] = true
+	}
+	for _, name := range names {
+		col := m.Column(name)
+		switch {
+		case col == nil:
+			return nil, fmt.Errorf("sqlb: %s(%q): not a column of %s (have: %s)",
+				method, name, m.Table, strings.Join(m.ColumnNames(), ", "))
+		case !col.Computed():
+			return nil, fmt.Errorf("sqlb: %s(%q): %s stores that column rather than computing it; "+
+				"a stored column is already in RETURNING", method, name, m.Table)
+		case len(col.Needs) > 0:
+			return nil, fmt.Errorf("sqlb: %s(%q): %s computes that column from the %s bind, and a write has "+
+				"nowhere to take a bind from — the value is a property of who is asking, and the hooks a write "+
+				"runs receive the row rather than the statement; read it back with the next query (ADR-0041)",
+				method, name, m.Table, quoteList(col.Needs))
+		}
+		set[name] = true
+	}
+	return set, nil
+}
+
+// quoteList renders a short list of names for an error message.
+func quoteList(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = fmt.Sprintf("%q", name)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// writeReturning appends RETURNING over every stored column, so that callers see
+// database-generated values without a follow-up read, plus whichever computed
+// columns the statement asked for.
+//
+// Computed columns are not in it by default. See [writeComputed] for the
+// argument, and WithComputed on [Insert], [Update] and [Delete] for the opt-in.
+func writeReturning(c *compiler, m *Model, computed map[string]bool) {
 	c.write(" RETURNING ")
 	first := true
 	for _, col := range m.Columns {
-		if col.Computed() && len(col.Needs) > 0 {
+		if col.Computed() && !computed[col.Name] {
 			continue
 		}
 		if !first {

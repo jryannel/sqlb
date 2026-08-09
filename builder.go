@@ -394,6 +394,13 @@ func (b *Builder[T]) SkipLocked() *Builder[T] {
 
 // SQL compiles the query to SQL text and its bind parameters. It is the
 // inspection point: log it, diff it in tests, or paste it into EXPLAIN.
+//
+// What it renders is what *this builder* holds, which on a model with
+// BeforeQuery hooks is not the statement that reaches the wire: a hook amends a
+// clone on the exec path, so a tenant predicate registered once for every read
+// of the model is absent here. Use [Builder.Resolved] first for the resolved
+// text — that is the form to splice into raw SQL, and the form to assert a scope
+// against (#153).
 func (b *Builder[T]) SQL() (string, []any, error) {
 	if b.err != nil {
 		return "", nil, b.err

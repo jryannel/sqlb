@@ -36,6 +36,8 @@ A schema edit is also an API edit. `sqlb impact` reports what it did to the REST
 | `users` | `/users` | `read` `list` | max 100 |
 | `workspaces` | `/workspaces` | `read` `list` | *default* |
 
+A list request that names no `?sort=` gets rows in primary-key order unless the resource below states its own ordering. Name an ordering whenever one matters.
+
 ### `comments`
 
 Addressed by `id`. `/comments`
@@ -94,9 +96,11 @@ Values: `status` is one of `todo` `in_progress` `blocked` `done`; `priority` is 
 
 **Declared actions.** Domain verbs this resource owns. Reaching the same outcome by PATCHing a column is the mistake these exist to prevent — the verb owns the transition.
 
-| Verb | Route | Writes |
-|---|---|---|
-| `complete` | `POST /tasks/{id}/complete` | `status`, `completed_at` |
+| Verb | Route | Writes | Also writes |
+|---|---|---|---|
+| `complete` | `POST /tasks/{id}/complete` | `status`, `completed_at` | `comments` |
+
+*Writes* is the columns the envelope persists on the addressed row. *Also writes* is the tables the verb declares it reaches through its transaction — declared, not enforced, and *none* there means no claim was made rather than that none are written.
 
 ### `users`
 

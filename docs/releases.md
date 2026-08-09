@@ -14,6 +14,251 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.10.0
+
+2026-08-05 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.10.0)
+
+The release where the reports started rhyming. Twelve issues, every one of them
+from somebody putting sqlb on a real schema — a sixteen-registry adoption, a
+headless shop, a product catalog — and the last four turned out to be one shape
+rather than four small gaps. A layer below the declaration could say something
+the declaration could not, and nothing reported the gap. Naming that is the most
+useful thing in this tag.
+
+**One break**, and it was listed under [*Will move*](compatibility.md#will-move)
+before it landed.
+
+**BREAKING: a computed column is nullable unless it says otherwise.**
+`schema.Computed` generates a pointer field now, and `NotNull()` is the opt-in
+for an expression that cannot produce a `NULL` — a `count(*)`, an `EXISTS`, a
+comparison already guarded against its own nulls. The old default was the one an
+expression cannot satisfy: a correlated subquery matching nothing is `NULL`,
+arithmetic over a nullable column is `NULL`, and a comparison against one is
+`NULL`. The failure was a 500 at scan time saying `cannot scan NULL into
+*string`, naming the generated model rather than the `Computed` call that
+produced it, on data a fixture is unlikely to contain — and both gates were
+green, because `generate` had no opinion and `Diff` correctly ignores a column
+that is not in the database.
+
+The mechanical edit is `NotNull()` on every computed column whose expression
+genuinely cannot produce a `NULL`. Leaving it off is the safe direction: a
+pointer scans a non-null value fine and the reverse is the 500. Stored columns
+are untouched, as is the structs-first path, where the Go field's own type has
+always carried this. Inferring nullability from the expression was the
+alternative and its own objection stands — an incomplete inference is wrong in
+the unsafe direction, which is the direction the change is about.
+
+### A gap below the declaration is reported, not silent
+
+Four issues filed as minor, each with a workaround already in hand, and the
+missing spelling was the cheap half in every one. The expensive half is that a
+tool reporting *no difference* is making a claim, and a tool that cannot see a
+property makes that claim about it whether or not a difference exists. So: close
+the gap where that is cheap, and where it is not, make the gap visible — a
+refusal at the boundary, a report from the tool that reads the database, or a
+sentence where the reader is standing. What that rules out is the fourth option
+all four had: correct behaviour, an available workaround, and the two facts
+documented in different files from each other
+([ADR-0051](adr/0051-a-gap-in-the-declaration-is-reported.md)).
+
+**Two cost ceilings the mount could express and the schema could not.**
+`schema.REST` gains `MaxSortTerms` and `MaxOffset`, so all five per-request
+bounds are declarable beside the table. `MaxOffset` is the one that matters: its
+default of 100,000 is right *as a default* precisely because it has to be safe
+for a table nobody described, which puts it two to four orders of magnitude
+above what any particular resource wants. A catalog with ten thousand products
+has no legitimate offset past ten thousand, and every one above it is a
+guaranteed empty page that still costs a scan to the end. Two surfaces were
+dropping the pair on the way out: the ejected exit emitted a literal
+`MaxSortTerms: 0` and had no `MaxOffset` at all — so the handlers that replace
+the API served `?page=50000000` while the API refused it, with no `?cursor` to
+redirect to since keyset paging does not come out — and the generated skill
+stated the filter budget and neither of the others.
+
+**The inspection points now show the statement that runs.** `SQL()` renders what
+the caller built, which on a model confined by a `BeforeQuery` hook is a
+statement with the confinement missing. `Explain` is the sharp half, because its
+documentation claims otherwise: `WHERE status = $1` and
+`WHERE status = $1 AND org_id = $2` have different plans, the second is the one
+with the composite index behind it, and a plan-regression test written on the
+first stays green through exactly the change that makes the real query seq-scan.
+
+```go
+q, err := sqlb.Query[Post]().Where(…).Resolved(ctx, db)
+sql, args, err := q.SQL()   // … AND "org_id" = $2
+```
+
+`Builder.Resolved` applies the hooks and the expansion scopes and hands back a
+copy; `Update` and `Delete` have the same for theirs; `Explain` and
+`ExplainAnalyze` compile through it, which on `ExplainAnalyze` is a correctness
+property rather than a reporting one, since it executes. The exec paths were
+rewritten onto `Resolved` rather than keeping their own copy of
+clone-then-run-hooks: the failure being fixed is two paths disagreeing about one
+statement. `Insert` is deliberately not resolvable — `BeforeCreate` rewrites the
+rows, so resolving one would mutate the caller's data as a side effect of
+inspecting it.
+
+**A constraint's deferrability is declared, read back and diffed.** The missing
+spelling was the small half. The interesting half is that the round trip was a
+fixpoint *because both sides were blind to the same property* — the introspector
+did not read `condeferrable`, the differ had no field to compare, and a
+hand-altered constraint passed `sqlb check` green. `Unique.Deferrable` and
+`Field.Deferred()` declare it; every constraint kind is read; and the kinds it
+cannot be declared on are reported as skips with their definition attached
+rather than dropped in silence. The proof is the break-on-purpose: with the
+mapping reverted the rebuilt database no longer matches the original and names
+the constraint that lost its clause, while the fixpoint test *passes* — both
+registries having dropped the same thing, which is
+[ADR-0016](adr/0016-guards-proven-both-ways.md)'s failure mode stated about a
+field rather than about an object.
+
+**A hidden column can say it is the key it is looked up by.** `Hidden` names one
+property — the value must never leave the process — and the generated facade
+asserted a second by omitting the typed column. For a password hash they
+coincide. For session tokens, API keys, reset and verification tokens, webhook
+secrets and idempotency keys they do not: the presented secret is hashed and the
+hash *is* the lookup key, so `Hidden` took away the operation the column exists
+for.
+
+```go
+schema.Text("token_hash").Hidden().LookupKey()
+```
+
+`LookupKey` keeps the facade entry and moves nothing else. It adds no capability
+and no struct-tag token, and `?token_hash=eq.…` is still a 400 naming what would
+have been accepted — a client that can probe a credential column by equality has
+an oracle, and that refusal is what capabilities are for.
+
+### One table can serve two surfaces
+
+A headless shop reads `products` from a public storefront and from an admin
+panel, and the admin surface exists precisely to serve `cost_price_minor` and
+`internal_notes`. Neither lever reached it: `Hidden` is a property of the model
+and there is one model per table, and `Expose` assigns rather than appends, so a
+second call replaces the first.
+
+`rest.Options.Columns` narrows a mount, and `filter.Options` carries it into the
+parser *and* into `Apply`'s default projection — both, because a resource whose
+parser refused a column while its projection selected it anyway would read the
+value out of Postgres on every request and drop it on the way out. A column not
+listed is unreachable: not projected, not filterable, not sortable, not
+searched, not nameable in `?select`, cleared off any row a body produced, and
+absent from the list a rejection offers back — that last one because a surface
+narrowed to conceal something must not confirm the column exists.
+[ADR-0050](adr/0050-reachability-is-a-property-of-the-mount.md) records what it
+costs and what the stronger schema-side answer would need.
+
+### A delete can hand its rows to a hook
+
+`AfterUpdate` received the rows and `AfterDelete` received a count, and that
+asymmetry stopped a port: a module publishing a domain event per mutation could
+say how many posts were deleted and not *which*, and an event carrying no id is
+worse than no event. `AfterDeleteRows` sits beside the count form rather than
+replacing it, so nothing is added to the statement unless a hook of that kind is
+registered and a program that only wants "did anything change" pays what it
+always paid.
+
+`rest.PublishChanges` moves to it, which is the half that was not asked for and
+the reason to pay the cost: `Event.Scope` is read off the changed row, so a
+keyless delete was also a *scopeless* one and every tenant's subscribers woke on
+every other tenant's delete. [ADR-0045](adr/0045-the-stream-is-a-seam.md) had
+listed keyless deletes as a what-would-change-our-mind gated on a measured
+refetch cost; that named the wrong axis and the record says so.
+
+### An action declares what it Touches
+
+`Writes` is what the envelope persists — columns, on one row — and the same page
+of docs hands the verb a transaction it can write anything through. Three tools
+reported `Writes` as complete with no signal that a verb can exceed it, and the
+CLI case is the sharp one, since
+[ADR-0029](adr/0029-go-cli.md)'s argument for the CLI
+is that `--help` answers a caller with no compile step. A declared write set of
+two columns invites the inference that the route is confined to one row, and
+that inference can be wrong by ten tables.
+
+`Touches` names tables beside `Writes`'s columns and travels with it — the
+manifest, the contract snapshot, the OpenAPI description, the generated doc
+comment and `--help` — unenforced, deliberately, and a verb that declares
+nothing now gets a sentence saying so rather than silence.
+
+### One after OnConflictDoNothing is refused
+
+"Give me exactly one row" and "do not produce a row on conflict" cannot both
+hold, and the way it used to resolve was the worst reading available: the
+conflict came back as `ErrNotFound`, through the same `if err != nil` as
+everything else, from a call whose job was to make the row exist. The failure
+inverts with state, so a test inserting into a clean database passes and only
+the second call fails.
+
+The refusal names both routes out, because which one is right depends on what
+the caller wanted: `Exec`, whose empty slice and nil error are what "it was
+already there" looks like, or `OnConflictUpdate` with the target as its own
+update column, since a write that changes nothing is still a written row and a
+written row is a returned one.
+
+### The emitted skill was wrong about the wire, and two registries wrote one file
+
+Both from adopting `Options.SkillDir` across eighty modules and 184 tables.
+
+A camelCase registry got a capability table listing `org_id` and a closing
+sentence asserting that those names are the JSON field names. An agent doing
+exactly what the file said wrote `?org_id=eq.…` and got a 400 — worse than
+guessing, since guessing from the camelCase model would have been right.
+`generate-check` was green throughout, because the file was a faithful render of
+a manifest that was itself wrong: `BuildManifest` reported the column's own name
+in a section that describes the wire. It is fixed there rather than in the
+emitter, so anything else reading the manifest for a contract is fixed with it,
+and `Manifest.WireCase` and `ColumnManifest.Wire` are new so a consumer holding
+only the document can tell the two spellings apart. `Wire` is absent where they
+are equal, so a `Verbatim` schema's `sqlb.json` is byte-identical.
+
+Worth stating next to [ADR-0049](adr/0049-the-skill-is-generated.md)'s claim
+that gating is what makes writing instructions into a repository safe: this is
+the first bug in that emitter the gate structurally could not have found. Being
+gated proves the file matches the schema, not that it is *right* about it.
+
+And `SkillDir` had no per-registry component, so every registry pointing at one
+directory wrote the same `SKILL.md` and the last writer won — with the doc
+comment recommending the placement that does it. `Options.SkillName` is the fix,
+defaulting to `sqlb-schema`.
+
+Also: `Immutable`'s doc comment now names its boundary the way `ReadOnly` does.
+It is enforced at the REST layer and application code writing through the query
+engine is trusted, which is the right design and was not what the sentence said.
+
+### What to expect on upgrade
+
+- The one break above. Everything else in this tag is additive: a schema setting
+  none of the new fields generates what it generated before.
+- An adoption whose database defers a foreign key, primary key, check or
+  exclusion now gets report entries where it got none, and `sqlb introspect`
+  exits non-zero on them. That is the change working — the entry is what turns
+  an invisible divergence into one a person can decide about — and it is still a
+  new obligation for a schema that had been quietly fine.
+- A camelCase or snake_case schema's `sqlb.json` changes: the REST section's
+  capability lists carry the wire spelling now, and columns carry both. A
+  `Verbatim` schema's is byte-identical.
+- A delete on a model with an `AfterDeleteRows` hook — including any model wired
+  to `rest.PublishChanges` — runs `DELETE … RETURNING` and scans every row it
+  matched. That is real on a bulk delete, and it is why the count form stayed.
+- An ejected package regenerated from a schema declaring `MaxOffset` now refuses
+  deep offset paging. It did not before, against a README saying it refuses what
+  the API refused.
+
+Twelve issues: [#142](https://github.com/jryannel/sqlb/issues/142),
+[#143](https://github.com/jryannel/sqlb/issues/143),
+[#144](https://github.com/jryannel/sqlb/issues/144),
+[#146](https://github.com/jryannel/sqlb/issues/146),
+[#147](https://github.com/jryannel/sqlb/issues/147),
+[#148](https://github.com/jryannel/sqlb/issues/148),
+[#149](https://github.com/jryannel/sqlb/issues/149),
+[#150](https://github.com/jryannel/sqlb/issues/150),
+[#151](https://github.com/jryannel/sqlb/issues/151),
+[#153](https://github.com/jryannel/sqlb/issues/153),
+[#154](https://github.com/jryannel/sqlb/issues/154),
+[#155](https://github.com/jryannel/sqlb/issues/155). Two new records,
+ADR-0050 and ADR-0051, and one revised, ADR-0045.
+
 ## v0.9.0
 
 2026-08-03 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.9.0)

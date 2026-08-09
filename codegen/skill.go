@@ -40,6 +40,7 @@ package codegen
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jryannel/sqlb/schema"
@@ -167,6 +168,13 @@ func skillWireSurface(b *strings.Builder, exposed []schema.TableManifest) {
 	}
 	b.WriteString("\n")
 
+	// Said once, for every resource below that does not say otherwise. Primary
+	// key order is not an ordering anybody chose, and a list is well-formed in
+	// any order — so without this a reader has no way to tell "this collection
+	// has a meaning for silence" from "this collection has none" (#165).
+	b.WriteString("A list request that names no `?sort=` gets rows in primary-key order unless the " +
+		"resource below states its own ordering. Name an ordering whenever one matters.\n\n")
+
 	for _, t := range exposed {
 		skillResource(b, t)
 	}
@@ -175,6 +183,22 @@ func skillWireSurface(b *strings.Builder, exposed []schema.TableManifest) {
 func skillResource(b *strings.Builder, t schema.TableManifest) {
 	r := t.REST
 	fmt.Fprintf(b, "### `%s`\n\n", t.Name)
+
+	// A singleton is the one resource whose shape an agent cannot infer from the
+	// table above, and guessing it wrong costs a round trip in both directions:
+	// asking for `/x/{id}` gets a 404 and asking for `?filter` gets a 400. Said
+	// here rather than only in the operations column, because this is the
+	// section a reader is in when composing the request (#166).
+	if isSingleton(r) {
+		fmt.Fprintf(b, "`GET %s` — the caller's own row, as a bare object rather than a page. "+
+			"There is no `{id}`: the resource holds one row per caller and the server settles "+
+			"which, so an authenticated request has already said everything the route needs. "+
+			"404 means the caller has no row yet. It takes no filter, sort, page or `?select`.\n\n",
+			r.Path)
+		skillSingletonWrites(b, r)
+		skillEnums(b, t)
+		return
+	}
 
 	if t.PrimaryKey != "" {
 		// Wire, like everything else under an exposed resource: the item path is
@@ -202,8 +226,36 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 	}
 	b.WriteString("\n")
 
+	// What an unsorted list returns, when the resource decided. The fallback is
+	// stated once for the document rather than once per resource — see
+	// skillWireSurface — because it is the same sentence every time and this
+	// section is read per resource.
+	//
+	// It is worth stating at all because it is invisible from a response: rows
+	// in some order look well-formed in any order, so a caller that does not
+	// know the resource has a meaning for "no ?sort" cannot tell it got the
+	// wrong product (#165).
+	if len(r.DefaultSort) > 0 {
+		fmt.Fprintf(b, "Ordered by %s unless `?sort=` says otherwise — this is what the collection *is*, "+
+			"so prefer it to restating an ordering.\n\n", joinCode(r.DefaultSort, ", "))
+	}
+
+	// The declared ceilings, and only those. A budget the schema left to the
+	// runtime is one this document has no number for, and inventing the
+	// package default here would state as a contract what the next release is
+	// free to move.
 	if r.MaxFilters > 0 {
 		fmt.Fprintf(b, "At most %d filters per request.\n\n", r.MaxFilters)
+	}
+	if r.MaxSortTerms > 0 {
+		fmt.Fprintf(b, "At most %d sort terms per request.\n\n", r.MaxSortTerms)
+	}
+	if r.MaxOffset > 0 {
+		// The one budget a caller meets mid-task rather than on a malformed
+		// request: paging until the rows run out walks into it, and the answer
+		// is a different parameter rather than a smaller number.
+		fmt.Fprintf(b, "Offset paging stops at %d rows. Use `?cursor=` to read deeper — "+
+			"it costs the same at any depth.\n\n", r.MaxOffset)
 	}
 
 	skillEnums(b, t)
@@ -212,12 +264,16 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 		b.WriteString("**Declared actions.** Domain verbs this resource owns. " +
 			"Reaching the same outcome by PATCHing a column is the mistake these exist to " +
 			"prevent — the verb owns the transition.\n\n")
-		b.WriteString("| Verb | Route | Writes |\n|---|---|---|\n")
+		b.WriteString("| Verb | Route | Writes | Also writes |\n|---|---|---|---|\n")
 		for _, a := range r.Actions {
-			fmt.Fprintf(b, "| `%s` | `%s %s` | %s |\n",
-				a.Name, a.Method, a.Path, orNone(joinCode(a.Writes, ", ")))
+			fmt.Fprintf(b, "| `%s` | `%s %s` | %s | %s |\n",
+				a.Name, a.Method, a.Path,
+				orNone(joinCode(a.Writes, ", ")), orNone(joinCode(a.Touches, ", ")))
 		}
-		b.WriteString("\n")
+		b.WriteString("\n*Writes* is the columns the envelope persists on the addressed row. " +
+			"*Also writes* is the tables the verb declares it reaches through its " +
+			"transaction — declared, not enforced, and *none* there means no claim was " +
+			"made rather than that none are written.\n\n")
 	}
 
 	if len(t.CollectedBy) > 0 {
@@ -405,6 +461,32 @@ func wireOf(c schema.ColumnManifest) string {
 // manifest omits hidden columns, and a hidden primary key is a schema this
 // emitter should still describe as best it can rather than one it renders a
 // blank for.
+// isSingleton reports whether a resource is the caller's one row, which is
+// carried in the manifest as an operation rather than as a flag: it is one, and
+// the operation list is what a reader of the document already consults.
+func isSingleton(r *schema.RESTManifest) bool {
+	return slices.Contains(r.Operations, "singleton")
+}
+
+// skillSingletonWrites states the write routes a singleton exposes, which are
+// the ones an agent would otherwise address by id and get a 404 from.
+func skillSingletonWrites(b *strings.Builder, r *schema.RESTManifest) {
+	var lines []string
+	for _, op := range []struct{ name, line string }{
+		{"create", fmt.Sprintf("`POST %s` creates it.", r.Path)},
+		{"update", fmt.Sprintf("`PATCH %s` writes the columns the body names.", r.Path)},
+		{"delete", fmt.Sprintf("`DELETE %s` removes it.", r.Path)},
+	} {
+		if slices.Contains(r.Operations, op.name) {
+			lines = append(lines, op.line)
+		}
+	}
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "%s No id on any of them, for the same reason.\n\n", strings.Join(lines, " "))
+}
+
 func wireOfColumn(t schema.TableManifest, column string) string {
 	for _, c := range t.Columns {
 		if c.Name == column {

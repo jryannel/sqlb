@@ -47,6 +47,11 @@ type FieldDesc struct {
 	Default    *Default
 	EnumValues []string
 
+	// UniqueDeferrable is when the column's own unique constraint is checked.
+	// The zero value is NOT DEFERRABLE. See [Field.Deferred] and, for the
+	// table-level constraint this mirrors, [Unique.Deferrable].
+	UniqueDeferrable Deferrable
+
 	// Auto makes the database supply the column's value: a sequence, or an
 	// identity. Only an integer column may carry one, and never beside a
 	// Default — see [Auto], and [Serial] and [Field.Identity] for the two
@@ -74,6 +79,16 @@ type FieldDesc struct {
 	ReadOnly  bool // never settable through REST
 	Immutable bool // settable at create, rejected on update
 	Hidden    bool // never serialised into a REST response
+
+	// LookupKey says a Hidden column is found by its own value, and so keeps
+	// its entry in the generated typed-column facade.
+	//
+	// It changes nothing about the REST surface and nothing at runtime — it is
+	// not in [FieldDesc.Capabilities], because there is nothing for the engine
+	// to read: `sqlb.F("token_hash")` has always worked. What it changes is
+	// whether the compiler helps, and what the generated file says about which
+	// kind of secret this column is. See [Field.LookupKey].
+	LookupKey bool
 
 	// Obligations. Neither of these changes a query. They are read once, at
 	// startup, where rest refuses to mount a resource whose declarations have
@@ -373,6 +388,28 @@ func Vector(name string, dim int) *Field {
 // storage: it emits no DDL in either direction, Diff does not see it, no insert
 // names it and no update assigns it. ADR-0041 has the shape and the reasons.
 //
+// # Nullability runs the other way
+//
+// A computed column is [Field.Nullable] unless it says otherwise, which is the
+// opposite of a stored one and the same as SQL: a correlated subquery that
+// matches nothing is NULL, an arithmetic expression over a nullable column is
+// NULL, and a comparison against one is NULL. A stored column reads its
+// nullability off `NOT NULL` in the DDL and the round trip checks it; an
+// expression has no DDL, so the default is doing all the work, and the default
+// that assumed otherwise failed at scan time on the first row with nothing to
+// match — a 500 with `cannot scan NULL into *string`, from a declaration
+// `sqlb generate` and the drift gate were both happy with (#147).
+//
+// [Field.NotNull] is the opt-in for an expression that cannot produce one:
+//
+//	schema.Computed("total_tasks", schema.TypeInt,
+//	    schema.FromSQL("(SELECT count(*) FROM tasks t WHERE t.project_id = projects.id)")).
+//	    NotNull()
+//
+// It is a claim, not a check — nothing parses the SQL — and it fails in the
+// direction the default does not: a nullable column typed as a pointer scans a
+// non-null value fine, where the reverse is the 500.
+//
 // # What each form may claim
 //
 // The expression is rendered as written, so a name in it resolves the way
@@ -432,6 +469,9 @@ func Computed(name string, t Type, e ComputedExpr) *Field {
 	// every write path to check is what keeps the generated create and update
 	// bodies correct without knowing this feature exists.
 	f.d.ReadOnly = true
+	// Nullable by default, which is the opposite of a stored column and the
+	// same as SQL. See the doc comment above for the argument.
+	f.d.Nullable = true
 	return f
 }
 
@@ -453,6 +493,41 @@ type ComputedExpr struct{ sql string }
 // but a typo inside the SQL reaches Postgres. That is the cost [ADR-0024]'s bar
 // admits here because there is finally a consumer for the annotation, and
 // [sqlb.Builder.Explain] against a real database is what catches it early.
+//
+// # Whose table does it name
+//
+// Nothing checks that either, and it is the question worth asking before
+// writing a subquery here — not "is this a subquery" but "whose table does it
+// name". A subquery over this module's own tables is what this feature is for:
+// a chat's `participant_ids` over its own `chat_members` is correct and deletes
+// an N+1. A subquery naming *another module's* table is the coupling
+// [ExternalRef] refuses to expand for, arriving through a door nothing guards.
+//
+// The difference from a join in one handler is the footprint, and it is larger
+// than it looks. A computed column travels with the model:
+//
+//   - it is selectable by every mount that opts into it, so the coupling is not
+//     confined to the one query that wanted the value;
+//   - it is in the RETURNING of every INSERT, UPDATE and — with
+//     [sqlb.Hooks.AfterDeleteRows] — DELETE that asks for it.
+//
+// "The coupling is identical to the LEFT JOIN I am replacing" is the plausible
+// and wrong reasoning a port applies. It is not identical: a module that
+// replaced `LEFT JOIN projects` in one handler with
+// `Computed("project_name", FromSQL("(SELECT name FROM projects …)"))` found the
+// subquery in the RETURNING of every insert, so the table could not be written
+// at all without `projects` present, and the module's own isolation boot test
+// failed on its seed with `relation "projects" does not exist`
+// ([#167](https://github.com/jryannel/sqlb/issues/167)). Since
+// [#164](https://github.com/jryannel/sqlb/issues/164) a write evaluates only the
+// computed columns it asked for, which shrinks that footprint — but the read
+// path still carries the coupling to every mount that selects the column, so the
+// rule stands.
+//
+// The answer is [ExternalRef]'s own: fetch the other side through that module's
+// API. sqlb cannot check this — resolving a table name out of raw SQL is exactly
+// the dependency ExternalRef's free-text target exists to avoid — which is why
+// it is written here rather than enforced.
 //
 // [ADR-0024]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0024-no-annotation-slot.md
 func FromSQL(sql string) ComputedExpr { return ComputedExpr{sql: sql} }
@@ -511,6 +586,12 @@ func Ref(name string, target *TableDef) *Field {
 //
 // Such a reference cannot be Expandable: expanding it would join a table this
 // module does not own. Fetch the other side through that module's own API.
+//
+// That refusal is a rule about the coupling, not about the syntax, so it applies
+// to the other way of writing the same join: a [Computed] column whose [FromSQL]
+// expression names the other module's table couples every read of this table to
+// that module's presence, and nothing refuses it because nothing resolves a
+// table name out of raw SQL. FromSQL's doc comment has the case that proved it.
 //
 // # relation, not column
 //
@@ -734,9 +815,40 @@ func (f *Field) Nullable() *Field {
 	return f
 }
 
+// NotNull is the opposite claim, and the one [Computed] needs.
+//
+// A stored column is not null unless it says otherwise, so writing this on one
+// restates the default and is harmless. A computed column defaults the other
+// way — an expression can be NULL and Postgres has no NOT NULL to read it from
+// — so this is where the author says the expression cannot produce one, and it
+// is a claim rather than a check: nothing parses the SQL (#147).
+//
+// Worth it when the expression is a `count(*)`, an `EXISTS`, or a comparison
+// already guarded against its own nulls, because those are the ones where a
+// pointer in the generated model is noise.
+func (f *Field) NotNull() *Field {
+	f.d.Nullable = false
+	return f
+}
+
 // Unique adds a single-column unique constraint.
 func (f *Field) Unique() *Field {
 	f.d.Unique = true
+	return f
+}
+
+// Deferred makes the column's unique constraint DEFERRABLE INITIALLY DEFERRED,
+// so it holds over the committed state rather than at each statement.
+//
+//	schema.Int("position").Unique().Deferred()
+//
+// The case is a set of rows rewritten together — reordering a list by shifting
+// every position — where each intermediate state violates a rule the final one
+// satisfies. It is refused without [Field.Unique], since there is no other
+// constraint on the column for it to defer. For the table-level form, and for
+// the argument about what deferral buys, see [Unique.Deferrable].
+func (f *Field) Deferred() *Field {
+	f.d.UniqueDeferrable = DeferredCheck
 	return f
 }
 
@@ -912,7 +1024,22 @@ func (f *Field) ReadOnly() *Field {
 	return f
 }
 
-// Immutable allows the column to be set at create time only.
+// Immutable makes the column writable through REST at create time only.
+//
+// It names its boundary for the reason [Field.ReadOnly] does, and the boundary
+// is the same one: the create body carries the column, the generated patch body
+// omits it, and the update path refuses it if a request names it anyway.
+// Nothing outside REST is policed — [sqlb.UpdateRows] from application code
+// writes it, as does a hook, as does an action's write-back — because the
+// engine does not stand between an application and its own tables.
+//
+// So this is a convention in [domain logic]'s sense of the word, and it closes
+// the door the generated client opens. A column that must never change after
+// insert, wherever the write comes from, wants the guarantee underneath it too:
+// a BEFORE UPDATE trigger, which is the layer that sees the old row and the new
+// one at once.
+//
+// [domain logic]: https://github.com/jryannel/sqlb/blob/main/docs/concepts/domain-logic.md
 func (f *Field) Immutable() *Field {
 	f.d.Immutable = true
 	return f
@@ -920,8 +1047,46 @@ func (f *Field) Immutable() *Field {
 
 // Hidden omits the column from every REST response. Use it for password
 // hashes and similar values that must never leave the process.
+//
+// It also removes the column from the generated typed-column facade, so
+// `SessionCols.TokenHash` does not exist and a predicate against a hidden column
+// does not compile. That is the right default — for a password hash,
+// `WHERE password_hash = $1` is a sign something has gone wrong — but it is a
+// second property, and for the other members of "and similar values" the two
+// come apart. Declare [Field.LookupKey] beside it for a credential that is found
+// *by* its stored value.
 func (f *Field) Hidden() *Field {
 	f.d.Hidden = true
+	return f
+}
+
+// LookupKey keeps a [Field.Hidden] column in the generated typed-column facade,
+// for a secret whose stored form is the thing you look the row up by.
+//
+//	schema.Text("token_hash").Hidden().LookupKey()
+//
+// Hidden names one property — the value must never be serialised — and the
+// facade's omission asserts a second: it must never be predicated on. For a
+// password hash the two coincide, since a user is found by email and the hash is
+// compared in Go. For session tokens, API keys, password-reset and verification
+// tokens, webhook secrets keyed by fingerprint and idempotency keys they do not:
+// the presented secret is hashed and the hash *is* the lookup key. Every one of
+// those must never leave the process, and every one is found by equality on the
+// stored value, so Hidden alone took away the operation the column exists for
+// (#155).
+//
+// Nothing about the REST surface changes, and that is the point of it being a
+// separate word. A hidden column has no capability, so the filter grammar still
+// refuses `?token_hash=eq.…` with a 400 naming what would have been accepted —
+// a client that can probe a credential column by equality has an oracle, and
+// that refusal is what capabilities exist for. This is a declaration about Go,
+// on the writer's side of the boundary, where `sqlb.F` already grants the same
+// reach untyped.
+//
+// It is refused on a column that is not Hidden, where the facade carries the
+// column anyway and the word would be a claim with no effect.
+func (f *Field) LookupKey() *Field {
+	f.d.LookupKey = true
 	return f
 }
 
@@ -949,6 +1114,31 @@ func (f *Field) Hidden() *Field {
 // A table may declare one scope column. Where the confinement cannot be
 // written as a column of this table at all — a membership join, say — declare
 // it on the column the hook does constrain, which is the key it narrows.
+//
+// # A scope inherited from a parent row
+//
+// That last sentence invites a declaration this package accepts and then cannot
+// carry the whole way, so it is worth stating what you get. A child table scoped
+// through its parent — `cart_lines` belongs to a `carts` row, and the cart
+// belongs to a session — declares `Scoped` on the foreign key, and the
+// obligation lands correctly on every resource that exposes the table. The hook
+// it obliges has to confine with a subquery:
+//
+//	cart_id IN (SELECT id FROM carts WHERE session_id = $1)
+//
+// which is a [sqlb.RawPred], because the predicate vocabulary is value
+// comparison and column-to-column and has no spelling for a subquery. That works
+// for every direct query of the table, and it forecloses `?expand` onto it
+// permanently: opaque text cannot be requalified onto a join alias with
+// certainty, so the expansion is refused rather than silently resolving the
+// predicate against the wrong table.
+//
+// The refusal is loud and lands at the right moment, so this is a foreclosure
+// rather than a hazard. But it is worth deciding up front, because the other way
+// out is to store the scope column on the child as well — a second copy of the
+// one column whose wrongness is a data leak. Usually the right answer is neither:
+// leave the child unexposed and reach its rows through the parent's endpoint,
+// which is where the confinement already holds (#158).
 //
 // [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
 func (f *Field) Scoped() *Field {

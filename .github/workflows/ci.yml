@@ -59,6 +59,11 @@ jobs:
       - run: mise run generate-check
       - run: mise run impact-check
       - run: mise run eject-check
+      # Needs neither Go nor a cache — git and awk over docs/adr — so it costs
+      # this job under a second. It is here because ADR-0040 carried a status
+      # outside the directory's vocabulary for ten days and only a person
+      # noticed, which is the case for a check rather than a paragraph.
+      - run: mise run adr-check
       - run: mise run test-race
       # Node comes from mise.toml, like Go and golangci-lint. This is the gate
       # ADR-0028 promised the TypeScript client would need: the emitted client's

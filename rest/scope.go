@@ -87,8 +87,16 @@ func checkObligations[T any](m *sqlb.Model, exec sqlb.Executor, opts Options) er
 
 	// Reads. Both declarations want this one: a scoped table wants the tenant
 	// predicate, and a soft-deleted table wants deleted_at filtered back out.
+	//
+	// A singleton's read is the strongest case of the three. The others narrow
+	// a result the client could at least name a row within; this one *is* the
+	// predicate — the statement carries nothing else — so an unregistered hook
+	// does not widen the answer, it chooses it at random.
 	if opts.Ops.Has(OpList) || opts.Ops.Has(OpRead) {
 		require("BeforeQuery", "list and read", reads)
+	}
+	if opts.Ops.Has(OpSingleton) {
+		require("BeforeQuery", "singleton read", reads)
 	}
 
 	// Writes address a row by primary key, so the read predicate is not in the

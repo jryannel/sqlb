@@ -41,11 +41,18 @@ func declaredRegistry() *schema.Registry {
 		// expression reads current_date — may not be sorted. The refusal is at
 		// declaration time, not at request time: a keyset pages on the sort
 		// column, and this one is a different value on the next page.
+		//
+		// NotNull is what the leading `due_date IS NOT NULL` earns. Without the
+		// guard the comparison would be NULL for every row with no due date,
+		// and a computed column is nullable unless it says otherwise (#147).
 		schema.Computed("is_overdue", schema.TypeBool,
 			schema.FromSQL("(due_date IS NOT NULL AND due_date < current_date AND open_tasks > 0)")).
-			Filterable(),
+			NotNull().Filterable(),
 
 		// Arithmetic over two stored columns. Stable, so it may be sorted.
+		// NULLIF is there to avoid dividing by zero, and what it divides by
+		// instead is NULL — so this one keeps the default, and Nullable says so
+		// out loud rather than relying on it.
 		schema.Computed("progress", schema.TypeInt,
 			schema.FromSQL("(completed_tasks * 100 / NULLIF(total_tasks, 0))")).
 			Nullable().Filterable().Sortable(),
@@ -58,7 +65,7 @@ func declaredRegistry() *schema.Registry {
 		schema.Computed("is_starred", schema.TypeBool,
 			schema.FromSQL("EXISTS (SELECT 1 FROM project_stars s "+
 				"WHERE s.project_id = projects.id AND s.member_id = ?)")).
-			Needs("viewer").Filterable(),
+			NotNull().Needs("viewer").Filterable(),
 	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList})
 	return r
 }

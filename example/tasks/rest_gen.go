@@ -308,7 +308,14 @@ type Actions struct {
 	//
 	// Marks the task done and stamps its completion time. A task that is already done is refused with a 409.
 	//
-	// The envelope persists `status` and `completed_at` afterwards, and nothing else.
+	// The envelope persists `status` and `completed_at` off this row afterwards, and nothing
+	// else — which bounds the envelope and not the func: the transaction
+	// is yours through sqlb.TxFrom, and statements issued there take
+	// their own locks, in an order this code owns.
+	//
+	// Declared reach beyond that row: `comments`. Nothing checks it; it is
+	// what the route tells `sqlb impact`, the OpenAPI document and the
+	// CLI's --help, so a change here belongs in the schema.
 	CompleteTask func(context.Context, *Task, CompleteTaskInput) error
 }
 
@@ -379,6 +386,7 @@ func Register(api huma.API, db sqlb.Executor, actions Actions) error {
 		Summary:     "Complete a task",
 		Description: "Marks the task done and stamps its completion time. A task that is already done is refused with a 409.",
 		Writes:      []string{"status", "completed_at"},
+		Touches:     []string{"comments"},
 		HasBody:     true,
 	}, actions.CompleteTask); err != nil {
 		return err

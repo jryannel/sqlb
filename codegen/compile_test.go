@@ -84,6 +84,12 @@ func TestGeneratedGoCompiles(t *testing.T) {
 		// body rather than by a column — context by the signatures, time by a
 		// body property on a table whose own columns need neither.
 		"actions": {Registry: actionFixture()},
+		// A singleton (#166), whose mount names an op the other cases do not
+		// and whose keyless sibling is the first exposed table in this list
+		// with no primary key at all — the emitters that reach for one have to
+		// keep working without it.
+		"singleton":        {Registry: singletonFixture()},
+		"keylesssingleton": {Registry: keylessSingletonFixture()},
 	})
 }
 

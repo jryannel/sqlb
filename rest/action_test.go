@@ -343,3 +343,49 @@ func TestACollectionActionFetchesNothingAndAnswers204(t *testing.T) {
 		}
 	}
 }
+
+// The operation's description states what the verb reaches beyond the row it
+// answers with.
+//
+// This is the surface the report singled out (#149): a write set of two columns
+// is what the envelope persists, and a reader given only that concludes the
+// route is confined to one row. The correction has to be in the document the
+// client generator and the agent read, not only in the schema file.
+func TestTheOperationDescriptionCarriesTheDeclaredReach(t *testing.T) {
+	db := newFakeDB(t)
+	spec := completeSpec()
+	spec.Description = "Close the post and note why."
+	spec.Touches = []string{"comments", "audit_log"}
+
+	api := mountAction(t, db.db, spec, func(context.Context, *Post, CompletePost) error { return nil })
+
+	op := api.OpenAPI().Paths["/posts/{id}/complete"].Post
+	if op == nil {
+		t.Fatal("the action is not in the document")
+	}
+	for _, want := range []string{
+		// The schema's own prose survives; the reach is appended to it.
+		"Close the post and note why.",
+		"comments, audit_log",
+		"declared rather than enforced",
+	} {
+		if !strings.Contains(op.Description, want) {
+			t.Errorf("description is missing %q:\n%s", want, op.Description)
+		}
+	}
+}
+
+// A verb that declares no reach gets its description back unchanged, rather
+// than a paragraph of hedging on every operation in the document.
+func TestAnUndeclaredReachAddsNothingToTheDescription(t *testing.T) {
+	db := newFakeDB(t)
+	spec := completeSpec()
+	spec.Description = "Close the post."
+
+	api := mountAction(t, db.db, spec, func(context.Context, *Post, CompletePost) error { return nil })
+
+	op := api.OpenAPI().Paths["/posts/{id}/complete"].Post
+	if op.Description != "Close the post." {
+		t.Errorf("description = %q, want the schema's own text untouched", op.Description)
+	}
+}

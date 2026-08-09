@@ -249,6 +249,24 @@ func (r *Registry) Validate() error {
 			if d.Hidden && d.Filterable {
 				report(t.name, d.Name, "column is both Hidden and Filterable, which leaks its contents through filter probing")
 			}
+			// LookupKey only ever *keeps* a facade entry Hidden would have
+			// removed. On a visible column the entry is there either way, so
+			// the word would read as a declaration and mean nothing — and the
+			// generated comment saying which kind of secret a column is would
+			// be saying it about one that is not a secret at all.
+			if !d.UniqueDeferrable.Valid() {
+				report(t.name, d.Name, "unknown Deferrable %q", d.UniqueDeferrable)
+			}
+			// Deferral is a property of a constraint, and this one has none of
+			// its own to defer. A primary key is not it either: PRIMARY KEY is
+			// rendered from the table's key columns, and deferring it is not
+			// something this DSL can say.
+			if d.UniqueDeferrable != NotDeferrable && !d.Unique {
+				report(t.name, d.Name, "Deferred applies to a column's own unique constraint; add Unique(), or declare the constraint with AddUnique")
+			}
+			if d.LookupKey && !d.Hidden {
+				report(t.name, d.Name, "LookupKey applies to a Hidden column; the typed column is already there without it")
+			}
 			if d.Ref != nil && d.Ref.External {
 				if d.Expandable {
 					report(t.name, d.Name, "a reference across a module boundary cannot be Expandable: expanding it would join a table this module does not own")
@@ -367,6 +385,9 @@ func (r *Registry) Validate() error {
 				report(t.name, "", "unique constraint name %q is %d bytes; Postgres truncates at %d, "+
 					"so give it a shorter name with UniqueNamed", u.Name, len(u.Name), maxIdentBytes)
 			}
+			if !u.Deferrable.Valid() {
+				report(t.name, "", "unique constraint %q has an unknown Deferrable %q", u.Name, u.Deferrable)
+			}
 		}
 
 		if t.rest != nil && len(t.pkCols) > 0 {
@@ -383,9 +404,15 @@ func (r *Registry) Validate() error {
 				strings.Join(t.pkCols, ", "))
 		}
 		if t.rest != nil {
-			needsPK := t.rest.Ops.Has(OpRead) || t.rest.Ops.Has(OpUpdate) || t.rest.Ops.Has(OpDelete)
+			// A singleton addresses its row through the scope hook rather than
+			// through a path segment, so none of its operations needs a key.
+			needsPK := !t.rest.Ops.Has(OpSingleton) &&
+				(t.rest.Ops.Has(OpRead) || t.rest.Ops.Has(OpUpdate) || t.rest.Ops.Has(OpDelete))
 			if needsPK && pks == 0 {
 				report(t.name, "", "exposed for %s but has no primary key to address rows by", t.rest.Ops)
+			}
+			if t.rest.Ops.Has(OpSingleton) {
+				r.validateSingleton(t, report)
 			}
 			if t.rest.Ops == 0 {
 				report(t.name, "", "Expose declares no operations")
@@ -398,6 +425,36 @@ func (r *Registry) Validate() error {
 			}
 			if t.rest.MaxPageSize > 0 && t.rest.DefaultPageSize > t.rest.MaxPageSize {
 				report(t.name, "", "DefaultPageSize %d exceeds MaxPageSize %d", t.rest.DefaultPageSize, t.rest.MaxPageSize)
+			}
+			// Negative is refused rather than resolved. Every ceiling treats a
+			// non-positive value as "take the package default", so a negative
+			// one is a declaration that reads as a tighter bound and behaves
+			// as the loosest available — which is the one direction a cost
+			// ceiling must not fail in.
+			if t.rest.MaxFilters < 0 || t.rest.MaxSortTerms < 0 || t.rest.MaxOffset < 0 {
+				report(t.name, "", "request ceilings must not be negative; leave one zero to take the package default")
+			}
+			// A default ordering naming a column that cannot be sorted by is a
+			// resource whose every unsorted list is a 400 — answering a client
+			// that sent nothing wrong. It is checkable here, so it is refused
+			// here rather than at mount, where the same mistake would have
+			// already shipped.
+			for _, term := range t.rest.DefaultSort {
+				name, _, err := SortTerm(term)
+				if err != nil {
+					report(t.name, "", "DefaultSort %q: %s", term, err)
+					continue
+				}
+				f := t.Field(name)
+				switch {
+				case f == nil:
+					report(t.name, "", "DefaultSort %q names no column of this table", term)
+				case f.Desc().Hidden:
+					report(t.name, name, "DefaultSort %q names a Hidden column; a resource cannot order by a column it never serves", term)
+				case !f.Desc().Sortable:
+					report(t.name, name, "DefaultSort %q names a column that is not Sortable; "+
+						"capabilities are opt-in, so an ordering nothing declared is one no ?sort could ask for either", term)
+				}
 			}
 			// A declared soft delete and a generated hard DELETE are a
 			// contradiction the runtime cannot resolve: nothing reads
@@ -429,6 +486,43 @@ func (r *Registry) Validate() error {
 	return errors.Join(errs...)
 }
 
+// validateSingleton checks the two things that make [OpSingleton] safe.
+//
+// Both are refusals rather than warnings, and both are here rather than at
+// mount because the declaration is where the mistake is written. A singleton's
+// row is whatever the scope hook leaves — there is no key in the path and no
+// predicate in the statement — so on a table nobody declared confined, the read
+// answers an arbitrary row and PATCH reaches every row in the table. That is
+// the default-open outcome [ADR-0030] exists to close, arriving through a
+// different door.
+func (r *Registry) validateSingleton(t *TableDef, report func(string, string, string, ...any)) {
+	var scope string
+	for _, f := range t.fields {
+		if f.Desc().Scoped {
+			scope = f.Desc().Name
+			break
+		}
+	}
+	if scope == "" {
+		report(t.name, "", "exposes OpSingleton but declares no Scoped column; "+
+			"a singleton addresses the caller's row through the scope hook and nothing else, "+
+			"so on an unconfined table the read answers an arbitrary row and a write reaches every row — "+
+			"declare Scoped on the tenant column, or expose OpRead and OpList instead")
+	}
+	// OpList is a route collision — both are GET on the collection path — and
+	// OpRead is the id-shaped question a singleton exists to delete. Named
+	// separately because the fix differs: one is a choice between two shapes,
+	// the other is a leftover.
+	if t.rest.Ops.Has(OpList) {
+		report(t.name, "", "exposes both OpSingleton and OpList, which are the same route: "+
+			"GET %s cannot be the caller's row and the collection at once", t.rest.Path)
+	}
+	if t.rest.Ops.Has(OpRead) {
+		report(t.name, "", "exposes both OpSingleton and OpRead; OpSingleton removes the {id} segment "+
+			"from this resource, so a read by id is the question it exists to delete — drop OpRead")
+	}
+}
+
 // Validate checks the default registry.
 func Validate() error { return defaultRegistry.Validate() }
 
@@ -450,6 +544,38 @@ func isTextual(t Type) bool {
 // and the filter parser both rely on this: an identifier that passes here can
 // be interpolated into SQL without further escaping.
 func isIdent(s string) bool { return CheckIdent(s) == nil }
+
+// SortTerm splits a sort term into the column it names and its direction.
+//
+// Both spellings the request grammar accepts are read here — `-published_at`
+// and `published_at.desc` — so a declared default and a `?sort` that means the
+// same thing are written the same way. It is exported because codegen resolves
+// a declared ordering at generation time rather than emitting a second parser
+// into the exit.
+//
+// This duplicates [filter.SortTerm] on purpose: nothing on the request path may
+// import this package, which is what keeps the runtime usable without the DSL.
+// The grammar is four lines and is pinned on both sides by tests.
+func SortTerm(term string) (name string, desc bool, err error) {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return "", false, errors.New("a sort term cannot be empty")
+	}
+	if name, found := strings.CutPrefix(term, "-"); found {
+		return name, true, nil
+	}
+	if name, dir, found := strings.Cut(term, "."); found {
+		switch strings.ToLower(dir) {
+		case "asc":
+			return name, false, nil
+		case "desc":
+			return name, true, nil
+		default:
+			return "", false, fmt.Errorf("%q is not a sort direction; write asc, desc, or a leading -", dir)
+		}
+	}
+	return term, false, nil
+}
 
 // CheckIdent reports why the DSL cannot declare a table or column called name,
 // or nil when it can.

@@ -174,6 +174,18 @@ type RESTManifest struct {
 	DefaultPageSize int      `json:"defaultPageSize"`
 	MaxPageSize     int      `json:"maxPageSize"`
 	MaxFilters      int      `json:"maxFilters,omitempty"`
+	MaxSortTerms    int      `json:"maxSortTerms,omitempty"`
+	MaxOffset       int      `json:"maxOffset,omitempty"`
+
+	// DefaultSort is the ordering a list request that names no ?sort gets,
+	// spelled exactly as a client would send it back — wire names, leading "-"
+	// for descending. Absent means primary-key order.
+	//
+	// It is here because it is the one thing about a list that a consumer cannot
+	// discover any other way: an unsorted list looks well-formed whatever order
+	// it is in, so a client, a generated skill or an agent reading this document
+	// has no signal that the resource meant something more specific (#165).
+	DefaultSort []string `json:"defaultSort,omitempty"`
 
 	// Filterable, Sortable and Searchable name the columns a request may reach,
 	// in their **wire** spelling rather than the database's.
@@ -218,9 +230,14 @@ type ActionManifest struct {
 	// happen to be optional.
 	Body []ActionProperty `json:"body,omitempty"`
 	// Writes names the columns the envelope persists after the verb returns.
-	// It is what makes the blast radius of a route readable rather than
-	// something to be inferred from a handler.
+	// It is not the blast radius: it is one row of this table, and a verb may
+	// write anything else through the transaction it holds.
 	Writes []string `json:"writes,omitempty"`
+	// Touches names the tables the verb writes beyond that row, as declared.
+	// Nothing enforces it — see schema.Action.Touches — and it is here because
+	// a reader that had only Writes would conclude the route is confined to one
+	// row, which is what this field exists to contradict.
+	Touches []string `json:"touches,omitempty"`
 }
 
 // ActionProperty is one property of an action's request body.
@@ -366,6 +383,36 @@ func differingWire(c WireCase, column string) string {
 	return ""
 }
 
+// wireSortTerms respells declared sort terms as a request would send them.
+//
+// The declaration names columns the way the schema does; ?sort names them the
+// way the wire does. This is the one place the two meet, and it keeps the
+// direction prefix attached to whichever spelling it is on.
+func wireSortTerms(terms []string, wire WireCase) []string {
+	if len(terms) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(terms))
+	for _, term := range terms {
+		name, desc, err := SortTerm(term)
+		if err != nil {
+			// Validate reports it; this document reproduces what was declared
+			// rather than dropping it, so the two do not disagree about what
+			// the schema says.
+			out = append(out, term)
+			continue
+		}
+		// Normalised onto the leading-minus spelling, because the document is
+		// read as something to paste and one form is easier to paste than two.
+		spelled := wire.WireName(name)
+		if desc {
+			spelled = "-" + spelled
+		}
+		out = append(out, spelled)
+	}
+	return out
+}
+
 func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *RESTManifest {
 	rm := &RESTManifest{
 		Path:            t.rest.Path,
@@ -373,9 +420,23 @@ func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *REST
 		DefaultPageSize: t.rest.DefaultPageSize,
 		MaxPageSize:     t.rest.MaxPageSize,
 		MaxFilters:      t.rest.MaxFilters,
+		MaxSortTerms:    t.rest.MaxSortTerms,
+		MaxOffset:       t.rest.MaxOffset,
+		DefaultSort:     wireSortTerms(t.rest.DefaultSort, wire),
 		Filterable:      []string{},
 		Sortable:        []string{},
 		Searchable:      []string{},
+	}
+	// A singleton has no list, so it has no ?filter, ?sort or ?search either —
+	// its one GET rejects every query parameter but ?expand. Reporting the
+	// column capabilities anyway would describe requests that answer 400, which
+	// is the failure #143 was: a document faithfully rendering a surface that
+	// is not there.
+	singleton := t.rest.Ops.Has(OpSingleton)
+	if singleton {
+		rm.DefaultSort = nil
+		rm.DefaultPageSize, rm.MaxPageSize = 0, 0
+		rm.MaxFilters, rm.MaxSortTerms, rm.MaxOffset = 0, 0, 0
 	}
 	for _, f := range t.fields {
 		d := f.Desc()
@@ -385,6 +446,14 @@ func (t *TableDef) restManifest(inverses []InverseRelation, wire WireCase) *REST
 		// The wire spelling, not the column's own: this section describes what a
 		// request may send, and under a non-default WireCase the two differ.
 		name := wire.WireName(d.Name)
+		if singleton {
+			// Expansion is the one parameter the singleton read does take, so
+			// the loop still runs for it.
+			if d.Expandable && d.Ref != nil && !d.Ref.External {
+				rm.Expandable = append(rm.Expandable, d.Ref.Name)
+			}
+			continue
+		}
 		if d.Filterable {
 			rm.Filterable = append(rm.Filterable, name)
 		}
@@ -422,6 +491,7 @@ func (a Action) manifest(resourcePath string) ActionManifest {
 		Method:  "POST",
 		Summary: a.Summary,
 		Writes:  a.Writes,
+		Touches: a.Touches,
 	}
 	for _, f := range a.Body {
 		d := f.Desc()
@@ -440,6 +510,15 @@ func (a Action) manifest(resourcePath string) ActionManifest {
 // request, and unlike prose it can be checked against the parser.
 func (t *TableDef) examples(rm *RESTManifest) []string {
 	var out []string
+	// A singleton's whole request surface is the path and, where it has one,
+	// ?expand. Every other example below is a list request it does not serve.
+	if t.rest.Ops.Has(OpSingleton) {
+		out = append(out, "GET "+rm.Path)
+		if len(rm.Expandable) > 0 {
+			out = append(out, fmt.Sprintf("GET %s?expand=%s", rm.Path, rm.Expandable[0]))
+		}
+		return out
+	}
 	if len(rm.Filterable) > 0 {
 		out = append(out, fmt.Sprintf("GET %s?%s=eq.VALUE", rm.Path, rm.Filterable[0]))
 	}

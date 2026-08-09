@@ -159,7 +159,12 @@ func (b *binding[T]) expansions(ctx context.Context, names []string) ([]string, 
 	}
 	q, err := filter.Parse(
 		url.Values{"expand": {strings.Join(names, ",")}},
-		filter.Options{Model: b.model, Expandable: b.opts.Expandable, Computed: b.opts.Computed},
+		filter.Options{
+			Model:      b.model,
+			Expandable: b.opts.Expandable,
+			Computed:   b.opts.Computed,
+			Columns:    b.opts.Columns,
+		},
 	)
 	if err != nil {
 		return nil, asHumaError(ctx, err, b.opts.name())
@@ -213,12 +218,17 @@ func registerCreate[T any, C CreateBody[T]](api huma.API, w writer, b *binding[T
 		// and anything else the database owns still comes from the database.
 		b.clearReadOnly(value)
 		created, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
-			return sqlb.InsertRows(value).One(ctx, db)
+			// The mount's computed list covers both paths: the columns this
+			// resource decided to pay for are the ones its RETURNING evaluates,
+			// and a resource that named none sends an INSERT over stored columns
+			// (#164). b.writeComputed is that list minus the ones a write cannot
+			// bind, which is why this cannot fail on a Needs column.
+			return sqlb.InsertRows(value).WithComputed(b.writeComputed...).One(ctx, db)
 		})
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
-		return &createdOutput[T]{Body: row[T]{value: created, cols: b.selectable, keys: b.jsonKey}}, nil
+		return &createdOutput[T]{Body: row[T]{value: created, cols: b.writeSelectable, keys: b.jsonKey}}, nil
 	})
 }
 
@@ -245,37 +255,15 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		if err != nil {
 			return nil, err
 		}
-		changes, err := in.Body.Changes()
+		names, changes, err := b.changeSet(in.Body)
 		if err != nil {
-			return nil, unprocessable(err, "body")
-		}
-		if len(changes) == 0 {
-			return nil, &Problem{
-				Title:  http.StatusText(http.StatusBadRequest),
-				Status: http.StatusBadRequest,
-				Detail: "the request body named no writable column",
-				Errors: []*ProblemDetail{{
-					Message:  "at least one field must be given",
-					Location: "body",
-					Allowed:  b.updatableNames(),
-				}},
-			}
-		}
-
-		// Sorted, so that the same request compiles to the same SQL and a test
-		// can assert on the statement.
-		names := make([]string, 0, len(changes))
-		for name := range changes {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-
-		if problem := b.rejectUnwritable(names); problem != nil {
-			return nil, problem
+			return nil, err
 		}
 
 		updated, err := write(ctx, w, func(ctx context.Context, db sqlb.Executor) (T, error) {
-			stmt := sqlb.UpdateRows[T]().Where(sqlb.F(b.model.PK.Name).Eq(key))
+			stmt := sqlb.UpdateRows[T]().
+				WithComputed(b.writeComputed...).
+				Where(sqlb.F(b.model.PK.Name).Eq(key))
 			for _, name := range names {
 				stmt.Set(name, changes[name])
 			}
@@ -284,7 +272,7 @@ func registerUpdate[T any, U UpdateBody](api huma.API, w writer, b *binding[T]) 
 		if err != nil {
 			return nil, asHumaError(ctx, err, opts.name())
 		}
-		return &itemOutput[T]{Body: row[T]{value: updated, cols: b.selectable, keys: b.jsonKey}}, nil
+		return &itemOutput[T]{Body: row[T]{value: updated, cols: b.writeSelectable, keys: b.jsonKey}}, nil
 	})
 }
 
@@ -332,17 +320,58 @@ func registerDelete[T any](api huma.API, w writer, b *binding[T]) {
 	})
 }
 
+// changeSet resolves a PATCH body into the columns to write, sorted, and the
+// values to write them with.
+//
+// Shared by the collection's PATCH and the singleton's, which differ only in
+// how they address the row. Keeping it in one place is what stops the two
+// answering differently to the same bad body — the same reason registerRead's
+// two registrations share one closure.
+//
+// The names are sorted so that the same request compiles to the same SQL and a
+// test can assert on the statement.
+func (b *binding[T]) changeSet(body UpdateBody) ([]string, map[string]any, error) {
+	changes, err := body.Changes()
+	if err != nil {
+		return nil, nil, unprocessable(err, "body")
+	}
+	if len(changes) == 0 {
+		return nil, nil, &Problem{
+			Title:  http.StatusText(http.StatusBadRequest),
+			Status: http.StatusBadRequest,
+			Detail: "the request body named no writable column",
+			Errors: []*ProblemDetail{{
+				Message:  "at least one field must be given",
+				Location: "body",
+				Allowed:  b.updatableNames(),
+			}},
+		}
+	}
+	names := make([]string, 0, len(changes))
+	for name := range changes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	if problem := b.rejectUnwritable(names); problem != nil {
+		return nil, nil, problem
+	}
+	return names, changes, nil
+}
+
 // rejectUnwritable reports the columns a PATCH may not set.
 //
 // A hidden column is reported as unknown rather than as unwritable, and never
 // appears in the allow-list, so that the rejection cannot be used to enumerate
-// what the resource is concealing.
+// what the resource is concealing. A column outside Options.Columns is treated
+// the same way and for the same reason: from this resource it does not exist,
+// and "column is read-only" would confirm that it does (#148).
 func (b *binding[T]) rejectUnwritable(names []string) *Problem {
 	var details []*ProblemDetail
 	for _, name := range names {
 		col := b.model.Column(name)
 		switch {
-		case col == nil || col.Hidden:
+		case col == nil || col.Hidden || !b.served[name]:
 			details = append(details, &ProblemDetail{
 				Message:  "unknown column",
 				Location: "body." + name,

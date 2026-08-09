@@ -259,11 +259,39 @@ func renderUnique(t *schema.TableDef, u schema.Unique) string {
 		quoted[i] = strconv.Quote(c)
 	}
 	args := strings.Join(quoted, ", ")
+	derived := u.Name == t.Name()+"_"+strings.Join(u.Columns, "_")+"_key"
 
-	if u.Name == t.Name()+"_"+strings.Join(u.Columns, "_")+"_key" {
+	// Deferral has no shorthand, so a deferred constraint takes the whole-struct
+	// form the way a non-default index does. Rendering it as Unique() would emit
+	// a declaration that diffs against the database it was read from.
+	if u.Deferrable != schema.NotDeferrable {
+		var b strings.Builder
+		b.WriteString("AddUnique(schema.Unique{\n")
+		if !derived {
+			fmt.Fprintf(&b, "\t\tName:       %s,\n", strconv.Quote(u.Name))
+		}
+		fmt.Fprintf(&b, "\t\tColumns:    []string{%s},\n", args)
+		fmt.Fprintf(&b, "\t\tDeferrable: %s,\n", deferrableExpr(u.Deferrable))
+		b.WriteString("\t})")
+		return b.String()
+	}
+
+	if derived {
 		return fmt.Sprintf("Unique(%s)", args)
 	}
 	return fmt.Sprintf("UniqueNamed(%s, %s)", strconv.Quote(u.Name), args)
+}
+
+// deferrableExpr names the constant, so generated source reads like a
+// declaration rather than like a string literal that happens to parse.
+func deferrableExpr(d schema.Deferrable) string {
+	switch d {
+	case schema.DeferrableCheck:
+		return "schema.DeferrableCheck"
+	case schema.DeferredCheck:
+		return "schema.DeferredCheck"
+	}
+	return "schema.NotDeferrable"
 }
 
 // renderIndex uses the shorthand when the index is exactly what the shorthand
@@ -438,6 +466,9 @@ func renderField(d *schema.FieldDesc, names map[string]string) (string, error) {
 	}
 	if d.Unique {
 		b.WriteString(".Unique()")
+		if d.UniqueDeferrable == schema.DeferredCheck {
+			b.WriteString(".Deferred()")
+		}
 	}
 	if d.Nullable {
 		b.WriteString(".Nullable()")

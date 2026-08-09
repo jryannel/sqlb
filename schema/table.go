@@ -11,6 +11,27 @@ const (
 	OpUpdate
 	OpDelete
 	OpList // GET /resource with filter, sort, search, pagination
+
+	// OpSingleton is GET /resource — the caller's one row, with no {id}
+	// segment anywhere on the resource.
+	//
+	// A table keyed by its own scope column has one row per caller, and until
+	// this there was no shape for it: OpList answered a one-element envelope
+	// every client unwrapped forever, and OpRead asked the client to send back
+	// the tenant id the server already holds — where a mismatch is a 404
+	// meaning "you typed your own name wrong" (#166). Settings-per-tenant,
+	// profile-per-user and subscription-per-org are all this, and each one was
+	// a permanent hand-written handler beside an otherwise declared module.
+	//
+	// It changes the resource rather than adding a route: the item path loses
+	// its {id}, so OpUpdate is PATCH /resource and OpDelete is DELETE
+	// /resource. The row those address is the one the scope hook leaves, which
+	// is why this is only legal on a table with a [Field.Scoped] column —
+	// without one the read answers an arbitrary row and the write reaches every
+	// row there is. OpList and OpRead are refused alongside it: the first
+	// collides on the route and the second is the id-shaped question this
+	// exists to delete.
+	OpSingleton
 )
 
 // CRUD is the conventional single-row operation set. Combine it with OpList
@@ -36,7 +57,7 @@ func (o Op) String() string {
 		name string
 	}{
 		{OpCreate, "create"}, {OpRead, "read"}, {OpUpdate, "update"},
-		{OpDelete, "delete"}, {OpList, "list"},
+		{OpDelete, "delete"}, {OpList, "list"}, {OpSingleton, "singleton"},
 	} {
 		if o.Has(e.op) {
 			parts = append(parts, e.name)
@@ -63,6 +84,43 @@ type REST struct {
 	// MaxFilters caps how many filter predicates one request may carry, which
 	// bounds the cost of a single query. Zero means the package default.
 	MaxFilters int
+	// MaxSortTerms caps how many columns one ?sort may name. Zero means the
+	// package default.
+	MaxSortTerms int
+	// MaxOffset bounds how deep ?page= and ?offset= may reach into the result
+	// set, and a request past it is refused with a message pointing at
+	// ?cursor=. Zero means the package default.
+	//
+	// The default has to be safe for a table nobody described, which puts it
+	// orders of magnitude above what any particular resource wants: a catalog
+	// of ten thousand products has no legitimate offset past ten thousand, and
+	// every one above it is a guaranteed empty page that still costs a scan to
+	// the end. The right number is a function of the row count, which is known
+	// here and nowhere else (#151).
+	MaxOffset int
+	// DefaultSort is the ordering a list request that names no ?sort gets,
+	// written in the grammar ?sort uses: column names, a leading "-" for
+	// descending, most significant first.
+	//
+	//	DefaultSort: []string{"-pinned", "-published_at", "-created_at"}
+	//
+	// Every other field here bounds a dimension of a list request. This one
+	// says what the list *is*. For many resources the ordering is part of the
+	// collection's meaning rather than a client preference — a feed is pinned
+	// first and then newest, and a feed in primary-key order is not the feed —
+	// and with nowhere to declare it, every caller restates it on every request
+	// and the one that forgets gets a well-formed 200 that is quietly the wrong
+	// product (#151's shape, reported as #165).
+	//
+	// Zero means primary-key order, which is what silence already meant; the
+	// difference is that the answer is now declarable, so it reaches the
+	// generated clients, the OpenAPI description and the generated skill instead
+	// of living in whichever SDK facade a consumer hand-maintains.
+	//
+	// Every term must name a column of this table that declares Sortable.
+	// `sqlb generate` refuses one that does not, and [rest.Resource] refuses
+	// again at mount.
+	DefaultSort []string
 	// Tag groups the resource's operations in the OpenAPI document. Defaults
 	// to the table name.
 	Tag string
@@ -190,6 +248,67 @@ type Check struct {
 type Unique struct {
 	Name    string
 	Columns []string
+
+	// Deferrable is when Postgres checks the constraint. The zero value is
+	// NOT DEFERRABLE, which is checked at the statement and is what almost
+	// every unique constraint wants.
+	//
+	// [DeferredCheck] is the one that is not merely a tuning knob. A rule about
+	// the *committed* state cannot be enforced per statement when the rows that
+	// satisfy it are written in more than one statement: a variant identified by
+	// its option values is inserted before the option values that identify it,
+	// so every new variant passes through a state where its denormalised
+	// signature is still the default and two variants of one product collide on
+	// it (issue #154). The alternatives weaken the rule — a partial index
+	// excluding the placeholder — or move it into application code, where two
+	// concurrent writers interleave between the check and the insert.
+	Deferrable Deferrable
+}
+
+// Deferrable is when Postgres checks a constraint: at the statement, or at
+// COMMIT. The zero value is NOT DEFERRABLE.
+//
+// Structured rather than written SQL, and normalised by [Deferrable.Suffix] for
+// the reason [IndexOrder] is: the diff fingerprints the rendered clause, so two
+// spellings of the same answer have to render the same or every run proposes
+// replacing a constraint that has not changed.
+type Deferrable string
+
+const (
+	// NotDeferrable checks at the end of each statement. The default, and the
+	// only setting under which a constraint violation names the statement that
+	// caused it rather than the COMMIT that found it.
+	NotDeferrable Deferrable = ""
+	// DeferrableCheck may be deferred, and is not unless a transaction says
+	// SET CONSTRAINTS ... DEFERRED. It is the setting for a rule that is
+	// per-statement in general and per-transaction for one caller.
+	DeferrableCheck Deferrable = "immediate"
+	// DeferredCheck is deferred by default: the constraint holds over the
+	// committed state and says nothing about the middle of a transaction.
+	DeferredCheck Deferrable = "deferred"
+)
+
+// Valid reports whether the value is one of the three Postgres has. A typed
+// string is open, and the alternative to checking it here is emitting DDL that
+// Postgres refuses halfway through a migration.
+func (d Deferrable) Valid() bool {
+	switch d {
+	case NotDeferrable, DeferrableCheck, DeferredCheck:
+		return true
+	}
+	return false
+}
+
+// Suffix renders the clause that follows a constraint definition, empty for the
+// default. It is what the DDL emits and what the diff compares.
+func (d Deferrable) Suffix() string {
+	switch d {
+	case DeferrableCheck:
+		return " DEFERRABLE INITIALLY IMMEDIATE"
+	case DeferredCheck:
+		return " DEFERRABLE INITIALLY DEFERRED"
+	}
+	return ""
 }
 
 // Exclusion is an EXCLUDE constraint: no two rows may hold values that are
@@ -624,6 +743,26 @@ func (t *TableDef) Unique(columns ...string) *TableDef {
 // rather than the one the convention would derive. See [TableDef.Unique].
 func (t *TableDef) UniqueNamed(name string, columns ...string) *TableDef {
 	t.uniques = append(t.uniques, Unique{Name: name, Columns: columns})
+	return t
+}
+
+// AddUnique adds a composite UNIQUE constraint given whole, which is the form
+// that reaches the fields the two shorthands above do not — currently
+// [Unique.Deferrable].
+//
+//	AddUnique(schema.Unique{
+//	    Name:       "variants_product_option_combination_key",
+//	    Columns:    []string{"product_id", "option_signature"},
+//	    Deferrable: schema.DeferredCheck,
+//	})
+//
+// An empty Name takes the one the convention derives, so the constraint is
+// still recognised in a database that has it under Postgres's own spelling.
+func (t *TableDef) AddUnique(u Unique) *TableDef {
+	if u.Name == "" {
+		u.Name = uniqueConstraintName(t.name, u.Columns)
+	}
+	t.uniques = append(t.uniques, u)
 	return t
 }
 

@@ -147,17 +147,21 @@ q.Where(sqlb.F("at").Gte(start), sqlb.F("at").Lt(end))
 // → WHERE ("at" >= $1) AND ("at" < $2)
 ```
 
-### Trap 4 — `OnConflictDoNothing` + `One` returns `ErrNotFound`
+### Trap 4 — `OnConflictDoNothing` picks the terminal for you
 
 An idempotency key does not behave the way it reads. `DO NOTHING` skips the
-row, so nothing is returned and the caller's struct stays zeroed — a retried
-payment arriving as "not found".
+row, so nothing is returned and there is no row for `One` to give back. Since
+#146 the pairing is refused at the terminal rather than answered with
+`ErrNotFound`, but the choice is still yours to make:
 
 ```go
-// Returns ErrNotFound on the retry:
+// Refused, with a message naming both of the following:
 sqlb.InsertRows(&p).OnConflictDoNothing("idem_key").One(ctx, db)
 
-// Returns the first call's row — a write that changes nothing is still a
+// "Make sure it exists" — empty slice, nil error, on the conflict:
+sqlb.InsertRows(&p).OnConflictDoNothing("idem_key").Exec(ctx, db)
+
+// "Give me the row either way" — a write that changes nothing is still a
 // written row, and a written row is a returned one:
 sqlb.InsertRows(&p).OnConflictUpdate([]string{"idem_key"}, "idem_key").One(ctx, db)
 ```
