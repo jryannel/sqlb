@@ -18,8 +18,9 @@ export default defineConfig({
     starlight({
       title: "sqlb",
       description:
-        "A schema-first data layer for Go: declare your tables once, get typed " +
-        "composable queries, a validated REST filter grammar, and domain hooks.",
+        "Declarative Postgres for Go: a schema is ordinary Go, and migrations, " +
+        "typed models, composable queries, REST handlers, an OpenAPI document " +
+        "and generated clients are all derived from it.",
       social: [
         { icon: "github", label: "GitHub", href: "https://github.com/jryannel/sqlb" },
       ],

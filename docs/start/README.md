@@ -1,9 +1,11 @@
 # Overview
 
-sqlb is a schema-first data layer for Go and Postgres. You declare your tables
-once, as ordinary Go values, and that one declaration becomes typed composable
-queries, a validated REST filter grammar, generated clients, and the place your
-domain logic hangs off.
+sqlb is declarative Postgres for Go. You declare your tables once, as ordinary
+Go values, and everything else is derived from that one declaration: migrations,
+typed models, composable queries, REST handlers, an OpenAPI document, and
+clients for TypeScript, Dart and the command line. Domain logic hangs off the
+same declaration as hooks, so nothing downstream is written by hand and nothing
+drifts out of step.
 
 It exists because the layer between an HTTP handler and the database is
 high-volume, low-novelty code that gets rewritten per resource — parse the query

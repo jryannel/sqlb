@@ -763,6 +763,91 @@ END {
 ' "$index" $records
 '''
 
+[tasks.tagline-check]
+description = "Fail if the four hand-written copies of the project's one-line pitch have drifted apart. README.md, docs/start/README.md and the site's two `description` fields all state what sqlb is, none of them is generated from any other, and nothing links them — so an edit to the README leaves three copies saying something the project stopped claiming. This is the same class as the mirroring CLAUDE.md already warns about for the emitter docs, caught the same way adr-check catches a status outside the vocabulary: cheaply, and before a reader does. It checks the claim rather than the wording, because the four are written for different media — a markdown paragraph, a YAML folded block, a JS string in three pieces — and forcing them to be byte-identical would be a gate that fights the copy instead of protecting it."
+run = '''
+set -e
+
+# tr on macOS refuses a byte it cannot decode in a UTF-8 locale, and these files
+# carry em dashes. C makes the lowercasing a byte operation, which is all it
+# needs to be: it maps ASCII A-Z and leaves every multibyte sequence alone.
+LC_ALL=C
+export LC_ALL
+
+# ADR-0018: the files git tracks, not whatever is on disk. .claude/worktrees/
+# holds other checkouts of this same repository, and an unscoped read would
+# happily validate another session's copy and report on that.
+files="README.md docs/start/README.md site/src/content/docs/index.mdx site/astro.config.mjs"
+
+# The claim every copy has to make: the lede, then the surfaces the one
+# declaration is the source for. Lowercased, because docs/start reaches the
+# phrase mid-sentence -- "sqlb is declarative Postgres for Go" -- where the
+# other three open with it.
+lede="declarative postgres for go"
+terms="migrations models queries rest openapi clients"
+
+# How far past the lede a copy has to have made its case. Wide enough for the
+# longest of the four, narrow enough that the word "clients" elsewhere on the
+# page cannot stand in for one in the tagline.
+window=400
+
+status=0
+checked=0
+for f in $files; do
+  if ! git ls-files --error-unmatch "$f" > /dev/null 2>&1; then
+    echo "tagline-check: $f is not tracked, so there is nothing to check against" >&2
+    exit 1
+  fi
+
+  # Flattened to one lowercase line. The four wrap differently and that is not a
+  # difference in what they claim.
+  flat=$(tr '\n' ' ' < "$f" | tr -s ' ' | tr 'A-Z' 'a-z')
+
+  case "$flat" in
+    *"$lede"*) ;;
+    *)
+      echo "$f: does not say \"$lede\"" >&2
+      status=1
+      checked=$((checked + 1))
+      continue
+      ;;
+  esac
+
+  after=${flat#*"$lede"}
+  near=$(printf '%s' "$after" | cut -c "1-$window")
+
+  for t in $terms; do
+    case "$near" in
+      *"$t"*) ;;
+      *)
+        echo "$f: says \"$lede\" but not \"$t\" within $window characters of it" >&2
+        status=1
+        ;;
+    esac
+  done
+
+  checked=$((checked + 1))
+done
+
+# The list is a literal above, so this can only fire if someone empties it --
+# which would otherwise make the gate pass by checking nothing, the one failure
+# mode a green check cannot report.
+if [ "$checked" -eq 0 ]; then
+  echo "tagline-check: no copies were checked, so nothing was verified" >&2
+  exit 1
+fi
+
+if [ "$status" -ne 0 ]; then
+  echo >&2
+  echo "tagline-check: the tagline is written out by hand in $checked places and they disagree." >&2
+  echo "Every copy has to open with \"$lede\" and name what is derived from the" >&2
+  echo "schema within $window characters: $terms." >&2
+  exit 1
+fi
+
+echo "tagline-check: $checked copies of the tagline agree"
+'''
+
 [tasks.bisect-check]
 description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
@@ -803,7 +888,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, adr-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs the test databases, which test-pg starts. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs it on the PR, in three parallel jobs, and running it locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, adr-check, tagline-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs the test databases, which test-pg starts. Does not include bisect-check, which CI runs only on pull requests since it is linear in the number of commits. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs it on the PR, in three parallel jobs, and running it locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet
@@ -813,11 +898,14 @@ mise run deps-check
 mise run generate-check
 mise run impact-check
 mise run eject-check
-# The only gate here that checks prose rather than code, and it is in this list
-# rather than beside it for the reason the others are: docs/adr is where the
-# reasoning behind this codebase lives, and a record whose status is a word the
-# directory does not use is one a reader cannot weigh.
+# The two gates here that check prose rather than code, and they are in this
+# list rather than beside it for the reason the others are: docs/adr is where
+# the reasoning behind this codebase lives, and a record whose status is a word
+# the directory does not use is one a reader cannot weigh. The tagline is the
+# first sentence anyone reads about this project, and it is written out by hand
+# in four places that nothing links.
 mise run adr-check
+mise run tagline-check
 mise run test-race
 mise run test-ts
 mise run test-dart
