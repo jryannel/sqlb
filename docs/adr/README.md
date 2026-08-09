@@ -116,10 +116,10 @@ of the code that assumed it.
 So the section is worth its heading only if it is honest. `None.` is a claim and
 belongs there when it is true; an absent heading says nothing.
 
-Records 0001–0049 predate this and do not carry it. **They should not be
+Records 0001–0052 predate this and do not carry it. **They should not be
 backfilled.** An open question reconstructed a year later is invented rationale
 with a different name, which this directory rejects everywhere else. The section
-starts with 0050.
+starts with 0053.
 
 ## Index
 
@@ -174,7 +174,7 @@ starts with 0050.
 | [0047](0047-no-default-hook-registry.md) | There is no default hook registry, and the short name takes the registry | Working | High |
 | [0048](0048-auto-incrementing-keys.md) | An auto-incrementing key is a property of the column, and both of Postgres's spellings are declarable | Working | High |
 | [0049](0049-the-skill-is-generated.md) | The agent skill is generated where it can be gated, and static only where no check is possible | Working | Medium |
-| [0050](0050-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and a UI is authored rather than carried | Working | High (no UI) / Low (sufficiency) |
+| [0053](0053-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and a UI is authored rather than carried | Working | High (no UI) / Low (sufficiency) |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.

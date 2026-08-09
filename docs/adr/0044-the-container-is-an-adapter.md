@@ -6,7 +6,7 @@
   second consumer ever appears.
 - **Decided:** 2026-07-31
 - **Reversed in part:** 2026-08-01 — see Revisions.
-- **Last reviewed:** 2026-08-01
+- **Last reviewed:** 2026-08-08 — the "codegen wants in" trigger fired (#171).
 
 ## Context
 
@@ -204,3 +204,27 @@ made.
   have bought the published contract turned out not to be coming — studio-apps/core
   will not import the kit. The general rule the two halves make — publish the
   seams, copy the assembly — is the part of this that generalises.
+- 2026-08-08 — **"Codegen wants in" has fired**, filed as
+  [#171](https://github.com/jryannel/sqlb/issues/171). studio-apps reports the
+  count this trigger asked for and then some: across 38 declarative modules, **78
+  hand-written migration-set providers** (byte-identical modulo the tracking name
+  and dir) and **183 operation-set literals**. Its own record of the decision is
+  studio-apps ADR-0047.
+
+  The trigger's stated consequence did **not** follow, and that is the part worth
+  recording. This record predicted that codegen "needs a stable import path to
+  generate *against*, which would force the publish question again". The shape
+  proposed in #171 does not: the emitted file imports the *host's* types, named in
+  `codegen.Options` as fully-qualified `import/path.TypeName` **strings**, so sqlb
+  compiles against nothing of the consumer's and a wrong name is a compile error in
+  the generated file. Generating for fx turns out not to require publishing an fx
+  contract — which strengthens *publish the seams, copy the assembly* rather than
+  reopening it, since the emitter generates a copy of the assembly instead of
+  importing one.
+
+  Two things the same report says an emitter cannot derive, and which are the
+  reason it needs configuration rather than convention: **which value group a
+  resource joins** is an access-surface decision (that tree has ten distinct
+  operation groups, `protected` / `admin` / `sdk` among them), and for a
+  `schema.NewRegistry()` module **neither the fx module name nor the
+  migration-tracking name exists in the declaration** at all.

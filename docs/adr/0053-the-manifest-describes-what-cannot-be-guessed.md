@@ -1,4 +1,4 @@
-# ADR-0050: The manifest describes what a client cannot guess, and a UI is authored rather than carried
+# ADR-0053: The manifest describes what a client cannot guess, and a UI is authored rather than carried
 
 - **Status:** Working — the manifest is built by `Registry.BuildManifest`, emitted
   as `sqlb.json` and gated by `sqlb check`. What is new here is the rule that
