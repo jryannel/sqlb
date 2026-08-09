@@ -281,6 +281,46 @@ type Options struct {
 	// still describe that type.
 	Columns []string
 
+	// Unscoped releases the named hook scopes for this resource, so that two
+	// mounts over one model can differ in which *rows* each may reach.
+	//
+	// Columns above is the disclosure half of two surfaces over one table
+	// (#148). This is the other half. A rule registered under a name —
+	// `sqlb.On[Product](reg).Scope("storefront").BeforeQuery(publishedOnly)` —
+	// confines every reader of that model, which is the point of it; naming it
+	// is what lets one mount say it is the surface the rule is not about. The
+	// admin panel that exists to show drafts mounts with
+	// `Unscoped: []string{"storefront"}` over the same generated model, and
+	// keeps the model, the typed column facade, the manifest and the drift gate
+	// that a second Go type over the same table gives up (#177).
+	//
+	// Only a named scope can be released. An ordinary BeforeQuery has no name,
+	// nothing here can reach it, and that is what keeps this from being a way to
+	// turn scoping off: the author of a rule decides whether the rule is
+	// negotiable, by choosing how to spell it.
+	//
+	// The release reaches every model this resource's statements touch,
+	// including an ?expand target's own hooks, because a scope name spans the
+	// models its rule spans.
+	//
+	// # What it does not get past
+	//
+	// The obligation check, which runs after the release rather than before it.
+	// A model declared Scoped whose every confining rule this resource released
+	// has nothing confining it and does not mount — the ADR-0030 error, naming
+	// what was released. That ordering is the reason this is safe to offer:
+	// ADR-0030 declined an escape hatch on the grounds that "an unused escape
+	// hatch is the thing most likely to be reached for reflexively", and a hatch
+	// that still refuses the case the check exists for is not that hatch.
+	//
+	// A name no registration claims is refused at startup, for the reason every
+	// allowlist is checked: a release that quietly does nothing leaves a mount
+	// that looks narrowed and serves the wide rule.
+	//
+	// The executor must be a *sqlb.DB. A raw pool carries no registry, so there
+	// would be nothing to release and no name to check against.
+	Unscoped []string
+
 	// DisableSearch rejects ?search even when columns are searchable.
 	DisableSearch bool
 
@@ -379,6 +419,14 @@ func Resource[T any, C CreateBody[T], U UpdateBody](api huma.API, db sqlb.Execut
 	}
 	if db == nil {
 		return fmt.Errorf("rest: %s has no Executor", opts.Path)
+	}
+
+	// Released before anything else reads the handle, so that every check below
+	// and every handler registered further down sees the rules this resource
+	// will actually serve under — the obligation check most of all.
+	db, err := release(db, opts)
+	if err != nil {
+		return err
 	}
 
 	b, err := bind[T](opts)

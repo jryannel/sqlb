@@ -623,3 +623,46 @@ func TestExpandWithoutTargetHooksIsUnchanged(t *testing.T) {
 		t.Errorf("an unhooked expansion should carry no extra condition:\n%s", stmt)
 	}
 }
+
+// A release reaches an expansion target's hooks, not only the subject's.
+//
+// This is the property that makes a scope name span models rather than types
+// (ADR-0053): "a shopper sees the published catalog" is one rule over several
+// tables, and an admin reading a draft product expects the draft variants under
+// it. If the release stopped at the subject, an admin's ?expand would carry the
+// storefront's rule on the join and quietly drop rows the admin exists to see.
+func TestAReleaseReachesTheExpansionTargetsHooks(t *testing.T) {
+	reg := sqlb.NewRegistry()
+	sqlb.On[expTask](reg).Scope("storefront").BeforeQuery(func(_ context.Context, q *sqlb.Builder[expTask]) error {
+		q.Where(sqlb.F("id").Neq("hidden-task"))
+		return nil
+	})
+	sqlb.On[expList](reg).Scope("storefront").BeforeQuery(func(_ context.Context, q *sqlb.Builder[expList]) error {
+		q.Where(sqlb.F("name").Neq("hidden-list"))
+		return nil
+	})
+
+	h := newHarness(t, []string{"id", "list_id", "title", "__expand_list"}, nil)
+	defer h.close()
+
+	// Both directions, because an assertion that the join carries no predicate
+	// cannot tell a released rule from one that never ran.
+	if _, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), h.handle(reg)); err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if stmt := h.lastQuery(); !contains(stmt, `"__ex_list"."name" <> $`) {
+		t.Fatalf("the target's scope is absent before any release, so this proves nothing:\n%s", stmt)
+	}
+
+	admin := h.handle(reg).WithoutScope("storefront")
+	if _, err := sqlb.Query[expTask]().Expand("list").All(context.Background(), admin); err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	stmt := h.lastQuery()
+	if contains(stmt, `"__ex_list"."name" <> $`) {
+		t.Errorf("the release did not reach the expansion target's hook:\n%s", stmt)
+	}
+	if contains(stmt, `"tasks"."id" <> $`) {
+		t.Errorf("the release did not reach the subject's own hook:\n%s", stmt)
+	}
+}

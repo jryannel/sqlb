@@ -193,7 +193,7 @@ func (b *Builder[T]) resolveExpansionScopes(ctx context.Context, exec Executor) 
 		if scoper == nil {
 			continue
 		}
-		preds, err := scoper.queryScope(ctx)
+		preds, err := scoper.queryScope(ctx, releasedFrom(exec))
 		if err != nil {
 			return fmt.Errorf("sqlb: running %s's query hooks for expansion %q: %w",
 				target.Type.Name(), name, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
@@ -50,6 +51,9 @@ type DB struct {
 	// outside one. A nested WithTx hands back the same handle, so callbacks
 	// registered by an inner block accumulate here and drain once.
 	tx *txState
+	// released names the scopes this handle does not apply. Nil on every handle
+	// that did not ask, which is the common one — see DB.WithoutScope.
+	released map[string]struct{}
 }
 
 // txState is what a transaction accumulates besides its statements.
@@ -223,6 +227,81 @@ func (d *DB) WithHooks(r *Registry) *DB {
 // Hooks returns the registry this handle resolves against.
 func (d *DB) Hooks() *Registry { return d.hooks }
 
+// WithoutScope returns a copy of the handle that does not apply the named
+// scopes.
+//
+// It is the reading half of [Hooks.Scope]. A rule registered under a name is
+// one its author marked negotiable, and this is where the negotiation happens:
+// the storefront's handle applies "storefront" because it never asked not to,
+// and the admin's handle is that same handle with the rule released.
+//
+//	sqlb.On[Product](reg).Scope("storefront").BeforeQuery(publishedOnly)
+//
+//	storefront := sqlb.New(pool).WithHooks(reg)
+//	admin      := storefront.WithoutScope("storefront")
+//
+// # What it cannot reach
+//
+// An unnamed registration, whatever it passes. Releasing a name nothing claims
+// is not an error here, and that is deliberate rather than lax: a registry may
+// gain registrations after a handle is built, so the honest place to refuse a
+// typo is where the whole registry is known and the mistake is expensive.
+// `rest.Resource` does that with Options.Unscoped, and [Registry.ScopeNames]
+// is exported for anyone wanting the check somewhere else.
+//
+// # The release follows the handle, not the model
+//
+// Every statement this handle issues is released, including the reads an
+// ?expand performs against a different model, because a scope name spans the
+// models its rule spans. That is what makes it usable: "a shopper sees the
+// published catalog" is one rule over products, variants and categories, and
+// an admin reading a draft product expects the draft variants under it.
+//
+// Releasing is visible to the obligation check rather than hidden from it: a
+// resource whose model is declared Scoped, and whose every confining rule this
+// handle released, has nothing confining it and does not mount (ADR-0030).
+func (d *DB) WithoutScope(names ...string) *DB {
+	if len(names) == 0 {
+		return d
+	}
+	clone := *d
+	clone.released = make(map[string]struct{}, len(d.released)+len(names))
+	for name := range d.released {
+		clone.released[name] = struct{}{}
+	}
+	for _, name := range names {
+		if name != "" {
+			clone.released[name] = struct{}{}
+		}
+	}
+	return &clone
+}
+
+// Released returns the scope names this handle does not apply, sorted.
+func (d *DB) Released() []string {
+	if len(d.released) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(d.released))
+	for name := range d.released {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// releasedFrom returns the scopes exec releases, or nil.
+//
+// An Executor that is not a *DB carries no handle and therefore no release —
+// the same answer registryOf gives it, and for the same reason: a statement
+// with no handle has whatever rules its call site can see, which is none.
+func releasedFrom(exec Executor) map[string]struct{} {
+	if d, ok := exec.(*DB); ok {
+		return d.released
+	}
+	return nil
+}
+
 // InTx reports whether this handle is inside a transaction. A BeforeQuery hook
 // that must not run its own statements outside the caller's unit of work can
 // check it.
@@ -346,7 +425,7 @@ func (d *DB) WithTxOptions(ctx context.Context, opts pgx.TxOptions, fn func(ctx 
 	}
 
 	state := &txState{}
-	tx := &DB{exec: pgTx, hooks: d.hooks, inTx: true, tx: state}
+	tx := &DB{exec: pgTx, hooks: d.hooks, inTx: true, tx: state, released: d.released}
 	txCtx := context.WithValue(ctx, txKey{}, tx)
 
 	// Rolling back is a statement of its own, and pgx wants a context for it.
