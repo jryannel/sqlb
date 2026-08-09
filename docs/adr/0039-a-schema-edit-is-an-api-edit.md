@@ -1,14 +1,23 @@
 # ADR-0039: A schema edit is an API edit, and the break is diffed
 
-- **Status:** Exploring — the reasoning is settled; nothing here is built. This
-  decides the shape before `sqlb impact`
-  ([#21](https://github.com/jryannel/sqlb/issues/21)) is written
+- **Status:** Working — built and in the gate. `restcompat.Diff` is the registry
+  diff this record specifies, `sqlb impact`
+  ([#21](https://github.com/jryannel/sqlb/issues/21)) is its surface, `-error`
+  turns a `Breaking` into a failure, and four committed `restcontract.json`
+  baselines are the concrete answer to "compatible relative to what".
+  `impact-check` runs it in CI
 - **Confidence:** High that the check is a registry diff beside `migrate.Diff`
-  and must read capabilities the DDL diff ignores; Medium that stating-not-gating
-  is the right default; lower on the type-and-nullable classification, which is
-  where a lazy answer claims coverage it does not have
+  and must read capabilities the DDL diff ignores — the breaks that have
+  actually been caught live in the capability set, and a DDL diff would have
+  been silent on every one of them. High, raised from Medium, that
+  stating-not-gating is the right default: the flag turned out to be the whole
+  of it, and this repository's own gate opts into `-error` while a consumer
+  without deployed clients need not. Medium on the type classification, raised
+  because the lazy answer was avoided rather than because the hard case is
+  solved — `diffType` reports `unknown` for a change it cannot classify instead
+  of guessing neutral
 - **Decided:** 2026-07-30
-- **Last reviewed:** 2026-08-03
+- **Last reviewed:** 2026-08-09
 
 ## Context
 
@@ -132,6 +141,22 @@ move slowly, because a client may have been versioned on the old answer.
 
 ## Revisions
 
+- 2026-08-09 — **Status corrected to `Working`.** It still read `Exploring —
+  nothing here is built`, which stopped being true well before the 2026-08-03
+  entry below, itself written *about* the implementation. Nothing about the
+  decision changed; the header simply never followed the code, and a record that
+  understates what exists is the same failure as one that overstates it — a
+  reader deciding whether to write `sqlb impact` would have written it twice.
+
+  What shipped is wider than the sketch. This record names response, filter,
+  sort, the two body splits and the `Op` set; the implementation adds `expand`
+  and `action` facets, splits nullability into its reader and writer effects,
+  and compares `ReadOnly`/`Immutable` and sort-null placement — the last two
+  because they passed the gate silently first
+  ([#68](https://github.com/jryannel/sqlb/issues/68),
+  [#88](https://github.com/jryannel/sqlb/issues/88)). Both were found the way
+  [ADR-0016](0016-guards-proven-both-ways.md) prescribes, which is the argument
+  for the facet list being evidence rather than design.
 - 2026-08-03 — **The contract has a schema-level property, and the walk had no
   place to put one.** This record describes the diff as a walk "for each exposed
   model", and the implementation followed it exactly: every `Break` carried a
