@@ -1,6 +1,6 @@
 # ADR-0040: The driver is a dependency, not a seam
 
-- **Status:** Accepted, and built. `Executor` is pgx-shaped, `array.go` is
+- **Status:** Working — built. `Executor` is pgx-shaped, `array.go` is
   deleted, `deps-check` is rewritten, and the whole gate — including `pgtest`
   against a real Postgres and a real PgBouncer — passes on it
 - **Confidence:** High. What was argued is now observed: joining a caller's
@@ -221,9 +221,14 @@ Neither was reachable from the database-free suite. Both were caught by
   one operator's five applications plus a fact about the ecosystem, not a
   survey — but the trigger it bears on asked for a consumer with a *reason*, and
   the reasons available have got thinner. Rewritten to say so.
-- 2026-07-30 — Built, and moved to Accepted. What changed against the plan: the
+- 2026-07-30 — Built, and moved out of Exploring. What changed against the plan: the
   `database/sql` path was deleted outright rather than kept beside the new one,
   which this record was least confident about and which turned out to have no
   callers worth keeping. Added *What the port actually cost*, including the two
   bugs the flip introduced — both of them cases where pgx hands back what
   Postgres sent and `database/sql` had been quietly tidying it.
+- 2026-08-09 — Status corrected to `Working`. It read `Accepted`, which is not in
+  this directory's vocabulary — the README says so in as many words — and the
+  evidence quoted beside it was always the evidence for `Working`. No decision
+  changed; the record was describing itself with a word the convention does not
+  have.
