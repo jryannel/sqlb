@@ -137,6 +137,63 @@ func TestActionNamesAreConstrained(t *testing.T) {
 	}
 }
 
+// A verb spelled like an operation the resource already exposes is a duplicate
+// rather than an override, and every surface says so differently: the OpenAPI
+// document carries two operations with one id — which Huma refuses at mount —
+// and each generated client carries two declarations of one function name,
+// which does not compile. The declaration is where that is fixable.
+func TestAnActionCannotTakeTheVerbOfAnExposedOp(t *testing.T) {
+	// The collection form: POST /tasks/create beside POST /tasks.
+	refusal(t, tasksWith(schema.Action{Name: "create", Path: "/create"}),
+		`action "create" collides with OpCreate`, "drop OpCreate from Expose")
+
+	// And the item form, where the two routes genuinely differ and the two
+	// names do not.
+	refusal(t, tasksWith(schema.Action{Name: "update"}), "OpUpdate")
+	refusal(t, tasksWith(schema.Action{Name: "delete"}), "OpDelete")
+	refusal(t, tasksWith(schema.Action{Name: "list", Path: "/list"}), "OpList")
+
+	// OpRead is generated as `get` everywhere — getTask, `tasks get`,
+	// get-tasks — so `get` is the name that collides with it, and `read`,
+	// which nothing generates, is a legal verb.
+	refusal(t, tasksWith(schema.Action{Name: "get"}), "OpRead", `its "get" operation`)
+	if err := tasksWith(schema.Action{Name: "read"}).Validate(); err != nil {
+		t.Errorf("a verb no operation is generated under was refused: %v", err)
+	}
+}
+
+// OpSingleton is the same read without the id, and it is generated under the
+// same word.
+func TestASingletonsGetIsTakenToo(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("settings",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.UUID("tenant_id").ReadOnly().Scoped(),
+		schema.Text("theme"),
+	).Expose(schema.REST{Ops: schema.OpSingleton}).
+		Action(schema.Action{Name: "get", Path: "/get"})
+
+	refusal(t, r, "OpSingleton")
+}
+
+// The rule is about what the resource actually generates, so the same verb on a
+// resource that does not expose the operation is the ordinary case: a read-only
+// resource whose one write is a declared verb is exactly the shape Reads exists
+// for.
+func TestAVerbIsFreeWhenTheOpIsNotExposed(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("tasks",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("title").Sortable(),
+	).Expose(schema.REST{Ops: schema.Reads}).
+		Action(schema.Action{Name: "create", Path: "/create"}).
+		Action(schema.Action{Name: "delete"})
+
+	if err := r.Validate(); err != nil {
+		t.Fatalf("verbs naming unexposed operations were refused: %v", err)
+	}
+}
+
 // An item verb addresses a row by id, so there has to be something to address
 // it by. Caught at the declaration rather than at mount, because the
 // declaration is where the mistake is.

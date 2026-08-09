@@ -315,6 +315,69 @@ func TestAnActionOnAScopedModelObligesTheReadHook(t *testing.T) {
 	}
 }
 
+// An action named for an operation the resource serves is a second operation
+// with the same id, and huma.AddOperation panics on the second. Mounting is a
+// path whose every other refusal is a returned error naming the declaration to
+// change, so this one is too — and it names both operations, which the panic
+// does not.
+//
+// The schema package refuses the same pair at declaration time, which is where
+// it is fixable. This is the half of it that survives ADR-0010: the DSL is
+// optional, so a guard that only exists there leaves the hand-written mount as
+// the unguarded one.
+func TestAnActionCannotTakeTheIDOfAMountedOperation(t *testing.T) {
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	if err := rest.Resource[Post, PostCreate, PostUpdate](api, db.db, postOptions()); err != nil {
+		t.Fatalf("mounting the resource: %v", err)
+	}
+
+	spec := completeSpec()
+	spec.Name, spec.Path, spec.Field = "create", "/posts/{id}/create", "CreatePost"
+	err := rest.Action[Post, CompletePost](api, db.db, postOptions(), spec,
+		func(context.Context, *Post, CompletePost) error { return nil })
+
+	if err == nil {
+		t.Fatal("an action taking a mounted operation's id was accepted")
+	}
+	// The id, the operation already holding it, and the way out.
+	for _, want := range []string{`action "create"`, "create-post", "POST /posts", "Options.Ops"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v\nwant it to mention %q", err, want)
+		}
+	}
+
+	// The collection form is the same refusal, and it is the shape that
+	// actually occurs: POST /posts/create beside POST /posts.
+	spec.Path = "/posts/create"
+	err = rest.CollectionAction[CompletePost](api, db.db, postOptions(), spec,
+		func(context.Context, CompletePost) error { return nil })
+	if err == nil {
+		t.Fatal("a collection action taking a mounted operation's id was accepted")
+	}
+}
+
+// The id is what has to be free, not the word. A verb spelled like an operation
+// the resource does not expose collides with nothing, and refusing it would
+// refuse the read-only resource whose one write is a declared verb.
+func TestAnActionMayTakeTheVerbOfAnOperationThatIsNotMounted(t *testing.T) {
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+
+	opts := postOptions()
+	opts.Ops = rest.OpRead | rest.OpList
+	if err := rest.Resource[Post, PostCreate, PostUpdate](api, db.db, opts); err != nil {
+		t.Fatalf("mounting the resource: %v", err)
+	}
+
+	spec := completeSpec()
+	spec.Name, spec.Path, spec.Field = "create", "/posts/create", "CreatePost"
+	if err := rest.CollectionAction[CompletePost](api, db.db, opts, spec,
+		func(context.Context, CompletePost) error { return nil }); err != nil {
+		t.Fatalf("a verb no mounted operation holds was refused: %v", err)
+	}
+}
+
 // A collection action has no row: no fetch, no lock, no write set, 204.
 func TestACollectionActionFetchesNothingAndAnswers204(t *testing.T) {
 	db := newFakeDB(t)
