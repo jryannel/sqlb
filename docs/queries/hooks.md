@@ -219,6 +219,25 @@ statement unscoped and says so at the call site. `tx.Tx()` gives the raw `pgx.Tx
 and resolves to no registry at all, which is the same thing spelled without a
 registry to name.
 
+But `system` is not the answer for every cross-model write, and reaching for it
+by reflex removes confinement that was doing work. What makes the checkout need
+it is that the two models are scoped on *different axes*: an order is the buyer's,
+a stock row is the shop's, and no predicate about one says anything true about
+the other. Where both sides share an axis the inherited scope is the point.
+
+[`example/tasks`](../../example/tasks/app/hooks.go) is that case. A comment's
+`AfterCreate` bumps its task's `comment_count` through plain `tx`, and
+`scopeWrites[tasks.Task]` appends `workspace_id = <the caller's>` to that update —
+which is exactly right, because a comment and its task are in one workspace, and
+a bump that could reach outside it would be a bug. Escalating there would drop a
+confinement nobody would notice was gone until the counter on another tenant's
+task moved.
+
+So the question to ask is not "is this hook writing to another model" but "is the
+request's scope a true statement about the row I am about to touch". Same axis:
+`tx`. Different axes: `tx.WithHooks(system)`, and the reason belongs in a comment
+because the next reader cannot recover it from the types.
+
 **`One`, not `Exec`.** `Exec` is the natural spelling for a decrement — you want
 the effect, not the row — and it is the one that goes quiet: zero rows is
 `([]T{}, nil)`, the hook returns nil, and the transaction commits with an order
