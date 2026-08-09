@@ -24,6 +24,13 @@ func tsActionName(t *schema.TableDef, a schema.Action) string {
 	return lowerFirstRune(verb + TypeName(t.LocalName()))
 }
 
+// tsActionProp is the verb's spelling on the mutations object: "mark-done"
+// becomes markDone, beside create, update and delete. The type is not repeated
+// because the object is already the resource's.
+func tsActionProp(a schema.Action) string {
+	return lowerFirstRune(GoName(strings.ReplaceAll(a.Name, "-", "_")))
+}
+
 // tsActionInput is the request body interface, named for the function that
 // takes it.
 func tsActionInput(t *schema.TableDef, a schema.Action) string {

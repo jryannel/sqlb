@@ -257,7 +257,7 @@ func TestTSQueriesAreTheOnlyFileThatNeedsTanStack(t *testing.T) {
 		t.Errorf("the runtime file should import nothing:\n%s", files["runtime.gen.ts"])
 	}
 	for _, want := range []string{
-		"import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';",
+		"import { infiniteQueryOptions, mutationOptions, queryOptions } from '@tanstack/react-query';",
 		"export function postQueries(request: Transport) {",
 		"queryKey: postKeys.list(params),",
 		"getNextPageParam: (last) => last.next_cursor,",
@@ -267,6 +267,124 @@ func TestTSQueriesAreTheOnlyFileThatNeedsTanStack(t *testing.T) {
 	} {
 		if !contains(queries, want) {
 			t.Errorf("queries missing %q:\n%s", want, queries)
+		}
+	}
+}
+
+// tsCode is the emitted TypeScript with its comments removed, for assertions
+// about what the generator emits rather than about what it says.
+func tsCode(src string) string {
+	for {
+		start := strings.Index(src, "/*")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(src[start:], "*/")
+		if end < 0 {
+			break
+		}
+		src = src[:start] + src[start+end+2:]
+	}
+	var out []string
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// The mutation layer's whole claim is that it stops at mutationFn. A generated
+// onSuccess would be a guess about which views an application keeps, and a
+// guess is what gets copied out and edited (ADR-0028).
+func TestTSMutationsCarryNoPolicy(t *testing.T) {
+	queries := generateTS(t, tsFixture())["queries.gen.ts"]
+
+	for _, want := range []string{
+		"export function postMutations(request: Transport) {",
+		"create: mutationOptions({ mutationFn: (body: PostCreate) => createPost(request, body), }),",
+		// One variables object rather than two arguments, because mutate takes
+		// exactly one.
+		"update: mutationOptions({ mutationFn: ({ id, body }: { id: string | number; body: PostPatch }) => updatePost(request, id, body), }),",
+		"delete: mutationOptions({ mutationFn: (id: string | number) => deletePost(request, id), }),",
+	} {
+		if !contains(queries, want) {
+			t.Errorf("queries missing %q:\n%s", want, queries)
+		}
+	}
+
+	// The refusal, stated as the absence it is. mutationKey is on this list
+	// too: a key shape is expensive once anything consumes it, and nothing
+	// here needs one. Comments are stripped first, because the doc comment
+	// names onSuccess on purpose — showing the caller where their policy goes
+	// is the point, and asserting against prose would forbid saying so.
+	code := tsCode(queries)
+	for _, unwanted := range []string{"onSuccess", "onError", "onSettled", "onMutate", "mutationKey", "invalidateQueries"} {
+		if strings.Contains(code, unwanted) {
+			t.Errorf("the mutation layer emitted %q, which is policy it cannot derive:\n%s", unwanted, queries)
+		}
+	}
+
+	// orgs is read-only, so it has read options and no write options at all.
+	if !strings.Contains(queries, "export function orgQueries(") {
+		t.Error("the read-only resource lost its query factory")
+	}
+	if strings.Contains(queries, "orgMutations") {
+		t.Errorf("a read-only resource acquired a mutations factory:\n%s", queries)
+	}
+}
+
+// A declared verb is a write whose route the schema knows (ADR-0043), so
+// leaving it out would make it the one mutation still hand-written.
+func TestTSActionsReachTheMutationLayer(t *testing.T) {
+	queries := generateTS(t, actionFixture())["queries.gen.ts"]
+
+	for _, want := range []string{
+		// An item verb with a body: both, in one variables object.
+		"complete: mutationOptions({ mutationFn: ({ id, body }: { id: string | number; body: CompleteTaskInput }) => completeTask(request, id, body), }),",
+		// An item verb without one: the id is the variables.
+		"archive: mutationOptions({ mutationFn: (id: string | number) => archiveTask(request, id), }),",
+		// A collection verb with neither: mutate() takes nothing.
+		"purgeArchived: mutationOptions({ mutationFn: () => purgeArchivedTask(request), }),",
+	} {
+		if !contains(queries, want) {
+			t.Errorf("queries missing %q:\n%s", want, queries)
+		}
+	}
+}
+
+// The TanStack import is computed from the body rather than fixed, because
+// `noUnusedLocals` turns a name this file does not use into a build failure in
+// the consumer's project — the same reason the client computes its runtime
+// import (#110).
+func TestTSTanStackImportNamesOnlyWhatIsUsed(t *testing.T) {
+	readOnly := schema.NewRegistry()
+	readOnly.Table("orgs",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("name").Sortable(),
+	).Expose(schema.REST{Ops: schema.OpRead | schema.OpList})
+
+	queries := generateTS(t, readOnly)["queries.gen.ts"]
+	if !strings.Contains(queries, "import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';") {
+		t.Errorf("a read-only schema should import neither more nor less than it calls:\n%s", queries)
+	}
+
+	// And the other direction: a resource that only writes imports neither the
+	// read helpers nor the key factory, which nothing in the file would name.
+	writeOnly := schema.NewRegistry()
+	writeOnly.Table("events",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("kind"),
+	).Expose(schema.REST{Ops: schema.OpCreate})
+
+	queries = generateTS(t, writeOnly)["queries.gen.ts"]
+	if !strings.Contains(queries, "import { mutationOptions } from '@tanstack/react-query';") {
+		t.Errorf("a write-only schema should import only mutationOptions:\n%s", queries)
+	}
+	for _, unwanted := range []string{"eventKeys", "queryOptions", "eventQueries"} {
+		if strings.Contains(queries, unwanted) {
+			t.Errorf("a write-only resource pulled in %q, which nothing in the file uses:\n%s", unwanted, queries)
 		}
 	}
 }

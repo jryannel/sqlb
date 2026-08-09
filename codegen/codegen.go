@@ -37,9 +37,10 @@ type Options struct {
 	// project that has no TypeScript consumer.
 	//
 	// Three files land there. The runtime and the client are dependency-free;
-	// the queries file takes @tanstack/react-query as a peer dependency, so a
-	// project that does not use it sets TSQueriesFile to "-" and keeps the
-	// rest.
+	// the queries file holds the queryOptions, infiniteQueryOptions and
+	// mutationOptions factories and takes @tanstack/react-query as a peer
+	// dependency, so a project that does not use it sets TSQueriesFile to "-"
+	// and keeps the rest.
 	TSDir         string
 	TSClientFile  string
 	TSQueriesFile string

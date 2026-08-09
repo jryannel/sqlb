@@ -115,7 +115,7 @@ does not depend on.
 |---|---|---|
 | `TSDir` | *empty* | Relative to `Dir`. **Empty means nothing is emitted** — the right default for a project with no TypeScript consumer |
 | `TSClientFile` | `client.gen.ts` | Row types, request bodies, the typed parameter vocabulary, the URL encoder, one function per operation, the cache keys. **Imports nothing** |
-| `TSQueriesFile` | `queries.gen.ts` | TanStack Query `queryOptions` and `infiniteQueryOptions`. Takes `@tanstack/react-query` as a peer dependency; set to `"-"` to skip |
+| `TSQueriesFile` | `queries.gen.ts` | TanStack Query `queryOptions`, `infiniteQueryOptions` and `mutationOptions`. Takes `@tanstack/react-query` as a peer dependency; set to `"-"` to skip |
 
 Two files because the layers are usable separately. See
 [TypeScript SDK](/sqlb/typescript/).
