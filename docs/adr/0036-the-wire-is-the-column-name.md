@@ -9,7 +9,7 @@
   spelling* is what the amendment resolves — the answer is that it is the right
   **default** and was the wrong **only**.
 - **Decided:** 2026-07-29
-- **Last reviewed:** 2026-08-02
+- **Last reviewed:** 2026-08-03
 
 ## Context
 
@@ -264,6 +264,27 @@ it.
 
 ## Revisions
 
+- 2026-08-03 — **The amendment made `WireCase` a breaking change and nothing
+  checked it.** The paragraph below — *"changing a deployment's `WireCase` is a
+  breaking change for that deployment, exactly as renaming a column is"* — was
+  written into [compatibility.md](../compatibility.md) under **Frozen** and
+  reached no code. `restcompat` records each field by its *column* name and never
+  recorded the registry's case, so flipping a schema from `Verbatim` to `Camel`
+  respelled every field of every resource and `sqlb impact -error` stayed green:
+  both snapshots held the same column names, and a diff that matches columns by
+  column name is blind to the one edit that renames all of them at once.
+
+  `Snapshot.WireCase` is new and the change is one breaking finding naming both
+  spellings, not one per column — N lines of "renamed from" would report the
+  consequence and lose the cause. It is absent for `Verbatim`, so every committed
+  `restcontract.json` is byte-identical and no baseline needs re-recording.
+
+  The class is worth naming, because this is its second instance in two days and
+  the entry below is the first: "one setting, five surfaces" was tested as five
+  surfaces, and the surfaces that *describe* the wire rather than speak it were
+  not among them. The manifest was one; the contract snapshot is another, and it
+  is the one whose job was to notice. The decision is unchanged — one spelling,
+  derived, no per-field override.
 - 2026-08-03 — **The amendment missed a surface, and it was the one read as
   instructions.** `BuildManifest` reported the column's own name in the REST
   section — the capability lists and the worked example requests — so a
