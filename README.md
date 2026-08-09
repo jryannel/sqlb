@@ -5,9 +5,10 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/jryannel/sqlb)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A schema-first data layer for Go and Postgres: declare your tables once, get
-typed composable queries, a validated REST filter grammar, and domain hooks —
-without hand-writing the HTTP-to-SQL layer for every dynamic view.
+Declarative Postgres for Go. A schema is ordinary Go, and everything else is
+derived from it: migrations, typed models, composable queries, REST handlers,
+an OpenAPI document, and clients for TypeScript, Dart and the command line.
+Nothing downstream is written by hand, so nothing drifts out of step.
 
 **[Documentation](https://jryannel.github.io/sqlb/)** ·
 [Quickstart](https://jryannel.github.io/sqlb/start/quickstart/) ·
