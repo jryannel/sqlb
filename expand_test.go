@@ -627,7 +627,7 @@ func TestExpandWithoutTargetHooksIsUnchanged(t *testing.T) {
 // A release reaches an expansion target's hooks, not only the subject's.
 //
 // This is the property that makes a scope name span models rather than types
-// (ADR-0053): "a shopper sees the published catalog" is one rule over several
+// (ADR-0054): "a shopper sees the published catalog" is one rule over several
 // tables, and an admin reading a draft product expects the draft variants under
 // it. If the release stopped at the subject, an admin's ?expand would carry the
 // storefront's rule on the join and quietly drop rows the admin exists to see.

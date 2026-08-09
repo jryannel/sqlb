@@ -2,29 +2,39 @@
 //
 // TanStack Query option factories, one per exposed resource.
 //
-// queryOptions objects rather than hooks: a hook bakes in a framework and is
-// the thing people copy out and edit, where an options object is spread and
+// Option objects rather than hooks: a hook bakes in a framework and is the
+// thing people copy out and edit, where an options object is spread and
 // overridden. Deleting this file breaks only the call sites that used it — the
 // types, the encoder and the keys next door do not depend on it.
 //
+// A mutation carries mutationFn and no onSuccess: what a write invalidates is
+// not derivable from a schema. keysByTable is the mechanical half.
+//
 // ADR-0028.
 
-import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
+import { infiniteQueryOptions, mutationOptions, queryOptions } from '@tanstack/react-query';
 import type {
   CommentColumn,
+  CommentCreate,
   CommentGetParams,
   CommentListParams,
+  CompleteTaskInput,
   ListColumn,
+  ListCreate,
   ListExpand,
   ListGetParams,
   ListListParams,
+  ListPatch,
   MembershipColumn,
+  MembershipCreate,
   MembershipGetParams,
   MembershipListParams,
   TaskColumn,
+  TaskCreate,
   TaskExpand,
   TaskGetParams,
   TaskListParams,
+  TaskPatch,
   Transport,
   UserColumn,
   UserGetParams,
@@ -35,6 +45,12 @@ import type {
 } from './client.gen';
 import {
   commentKeys,
+  completeTask,
+  createComment,
+  createList,
+  createMembership,
+  createTask,
+  deleteMembership,
   getComment,
   getList,
   getMembership,
@@ -50,6 +66,8 @@ import {
   listWorkspaces,
   membershipKeys,
   taskKeys,
+  updateList,
+  updateTask,
   userKeys,
   workspaceKeys,
 } from './client.gen';
@@ -86,6 +104,21 @@ export function commentQueries(request: Transport) {
   };
 }
 
+/**
+ * Write options for /comments, bound to a transport.
+ *
+ * `mutationFn` and nothing else: what a write should invalidate is a policy
+ * this file cannot derive, so it is spread in rather than edited out —
+ * `useMutation({ ...commentMutations(request).create, onSuccess })`.
+ */
+export function commentMutations(request: Transport) {
+  return {
+    create: mutationOptions({
+      mutationFn: (body: CommentCreate) => createComment(request, body),
+    }),
+  };
+}
+
 // ----------------------------------------------------------------- /lists
 
 /**
@@ -115,6 +148,24 @@ export function listQueries(request: Transport) {
         queryKey: listKeys.detail(id, params),
         queryFn: ({ signal }) => getList(request, id, params, signal),
       }),
+  };
+}
+
+/**
+ * Write options for /lists, bound to a transport.
+ *
+ * `mutationFn` and nothing else: what a write should invalidate is a policy
+ * this file cannot derive, so it is spread in rather than edited out —
+ * `useMutation({ ...listMutations(request).create, onSuccess })`.
+ */
+export function listMutations(request: Transport) {
+  return {
+    create: mutationOptions({
+      mutationFn: (body: ListCreate) => createList(request, body),
+    }),
+    update: mutationOptions({
+      mutationFn: ({ id, body }: { id: string | number; body: ListPatch }) => updateList(request, id, body),
+    }),
   };
 }
 
@@ -150,6 +201,24 @@ export function membershipQueries(request: Transport) {
   };
 }
 
+/**
+ * Write options for /memberships, bound to a transport.
+ *
+ * `mutationFn` and nothing else: what a write should invalidate is a policy
+ * this file cannot derive, so it is spread in rather than edited out —
+ * `useMutation({ ...membershipMutations(request).create, onSuccess })`.
+ */
+export function membershipMutations(request: Transport) {
+  return {
+    create: mutationOptions({
+      mutationFn: (body: MembershipCreate) => createMembership(request, body),
+    }),
+    delete: mutationOptions({
+      mutationFn: (id: string | number) => deleteMembership(request, id),
+    }),
+  };
+}
+
 // ----------------------------------------------------------------- /tasks
 
 /**
@@ -179,6 +248,27 @@ export function taskQueries(request: Transport) {
         queryKey: taskKeys.detail(id, params),
         queryFn: ({ signal }) => getTask(request, id, params, signal),
       }),
+  };
+}
+
+/**
+ * Write options for /tasks, bound to a transport.
+ *
+ * `mutationFn` and nothing else: what a write should invalidate is a policy
+ * this file cannot derive, so it is spread in rather than edited out —
+ * `useMutation({ ...taskMutations(request).create, onSuccess })`.
+ */
+export function taskMutations(request: Transport) {
+  return {
+    create: mutationOptions({
+      mutationFn: (body: TaskCreate) => createTask(request, body),
+    }),
+    update: mutationOptions({
+      mutationFn: ({ id, body }: { id: string | number; body: TaskPatch }) => updateTask(request, id, body),
+    }),
+    complete: mutationOptions({
+      mutationFn: ({ id, body }: { id: string | number; body: CompleteTaskInput }) => completeTask(request, id, body),
+    }),
   };
 }
 

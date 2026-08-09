@@ -1,4 +1,4 @@
-# ADR-0053: A named scope is releasable at the mount, and only a named one
+# ADR-0054: A named scope is releasable at the mount, and only a named one
 
 - **Status:** Working — the engine applies it, `rest.Options.Unscoped` selects
   it, and the obligation check refuses a resource that released everything

@@ -97,11 +97,29 @@ order and never reused.
 
 **Keep it short.** A page is usually enough, and a record nobody finishes reading
 has failed at its only job. The sections are Context, Decision, Consequences,
-What would change our mind, Cost of change, Revisions — and that is the whole
-set. There is deliberately no *Alternatives considered*: a record is here to say
-what we are doing and what it costs, not to re-argue the case against every path
-not taken. Where a rejected option is genuinely close, name it in a line inside
-the section it bears on, and move on.
+What would change our mind, Cost of change, Open questions I had to answer
+myself, Revisions — and that is the whole set. There is deliberately no
+*Alternatives considered*: a record is here to say what we are doing and what it
+costs, not to re-argue the case against every path not taken. Where a rejected
+option is genuinely close, name it in a line inside the section it bears on, and
+move on.
+
+## Open questions
+
+The last section before Revisions names every assumption the writer had to make
+because nothing written down settled it. It is instrumentation rather than
+content: a record that had to answer five questions for itself is reporting that
+the gap is upstream — in the guide, in another record, or in a decision nobody
+made — and it reports it while fixing is still cheap, rather than during a review
+of the code that assumed it.
+
+So the section is worth its heading only if it is honest. `None.` is a claim and
+belongs there when it is true; an absent heading says nothing.
+
+Records 0001–0052 predate this and do not carry it. **They should not be
+backfilled.** An open question reconstructed a year later is invented rationale
+with a different name, which this directory rejects everywhere else. The section
+starts with 0053.
 
 ## Index
 
@@ -159,7 +177,8 @@ the section it bears on, and move on.
 | [0050](0050-reachability-is-a-property-of-the-mount.md) | Reachability is a property of the mount, so one table can serve a public surface and a privileged one | Working | Medium |
 | [0051](0051-a-gap-in-the-declaration-is-reported.md) | A gap below the declaration is reported, not silent | Working | Medium |
 | [0052](0052-a-singleton-is-an-op-that-removes-the-id.md) | A singleton is an operation that removes the {id}, and it is legal only on a Scoped table | Working | Medium |
-| [0053](0053-a-named-scope-is-releasable-at-the-mount.md) | A named scope is releasable at the mount, and only a named one, so two surfaces over one table can differ in rows | Working | High |
+| [0053](0053-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and a UI is authored rather than carried | Working | High (no UI) / Low (sufficiency) |
+| [0054](0054-a-named-scope-is-releasable-at-the-mount.md) | A named scope is releasable at the mount, and only a named one, so two surfaces over one table can differ in rows | Working | High |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.

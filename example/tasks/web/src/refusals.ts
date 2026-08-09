@@ -11,6 +11,8 @@
 // are answered here instead, before the request is sent.
 
 import { listTasks, getComment, type Transport } from './api/client.gen';
+import { taskMutations } from './api/queries.gen';
+import { useMutation } from '@tanstack/react-query';
 
 export function refusals(request: Transport) {
   // @ts-expect-error — "titel" is not a column of tasks.
@@ -61,6 +63,34 @@ export function refusals(request: Transport) {
 
   // @ts-expect-error — the item endpoint has no ?select, and rejects one.
   void getComment(request, 'id', { select: ['body'] });
+}
+
+/**
+ * The mutation layer inherits the same refusals, because its variables are the
+ * body types rather than a second spelling of them.
+ */
+export function writeRefusals(request: Transport) {
+  const tasks = taskMutations(request);
+  const create = useMutation(tasks.create);
+  const update = useMutation(tasks.update);
+  const complete = useMutation(tasks.complete);
+
+  // @ts-expect-error — workspace_id is owned by a hook, so the create body has
+  // no such property and there is nothing for the server to ignore.
+  create.mutate({ list_id: 'l', title: 't', description: '', workspace_id: 'w' });
+
+  // @ts-expect-error — comment_count is read-only: it is filterable and
+  // sortable, and still has no spelling in a patch body.
+  update.mutate({ id: 'a', body: { comment_count: 3 } });
+
+  // @ts-expect-error — an item verb's variables carry the id, not just the body.
+  complete.mutate({ note: 'done' });
+
+  // And the calls that do work, so the refusals above are not passing because
+  // the whole shape is wrong:
+  create.mutate({ list_id: 'l', title: 't', description: '' });
+  update.mutate({ id: 'a', body: { title: 'renamed' } });
+  complete.mutate({ id: 'a', body: { note: 'done' } });
 }
 
 export async function narrowing(request: Transport) {

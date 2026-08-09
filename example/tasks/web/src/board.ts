@@ -14,11 +14,16 @@ import {
   taskKeys,
   updateTask,
   type Page,
+  type Task,
   type TaskRow,
   type Transport,
 } from './api/client.gen';
 import { ApiError } from './api/http';
-import { taskQueries } from './api/queries.gen';
+import { taskMutations, taskQueries } from './api/queries.gen';
+// This file is typechecked, never run — which is what lets it call hooks
+// outside a component to show that the generated options are what the hooks
+// already take.
+import { useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 
 /**
  * The board's main query: open, urgent-ish work in one list, newest first.
@@ -131,6 +136,46 @@ export function boardOptions(request: Transport, listId: string) {
     ...taskQueries(request).list({ where: { list_id: listId }, sort: 'position' }),
     staleTime: 30_000,
   };
+}
+
+/**
+ * The claim that layer 4 is consumable as-is, stated as something tsc checks.
+ *
+ * A `queryOptions` object is what `useQuery` and `useSuspenseQuery` both take,
+ * so there is no hook to generate — and `useSuspenseQuery` narrows `data` to
+ * non-undefined without the factory knowing which of the two a caller picked.
+ */
+export function boardHooks(request: Transport, listId: string) {
+  const options = taskQueries(request).list({ where: { list_id: listId }, sort: 'position' });
+  const polled = useQuery({ ...options, refetchInterval: 5_000 });
+  const suspended = useSuspenseQuery(options);
+  return { polled: polled.data?.items, suspended: suspended.data.items };
+}
+
+/**
+ * The write half, and the seam the mutation layer exists to leave open.
+ *
+ * `taskMutations` carries the `mutationFn` and stops. What completing a task
+ * should invalidate — this list, that detail, a burndown view that is not a
+ * table at all — is the application's to say, so it is spread in here rather
+ * than edited into a generated file.
+ */
+export function completeOptions(request: Transport, invalidate: (key: readonly unknown[]) => void) {
+  return {
+    ...taskMutations(request).complete,
+    onSuccess: (task: Task) => {
+      invalidate(taskKeys.lists());
+      invalidate(taskKeys.detail(task.id));
+    },
+  };
+}
+
+export function useCompleteTask(request: Transport, invalidate: (key: readonly unknown[]) => void) {
+  const mutation = useMutation(completeOptions(request, invalidate));
+  // The variables are typed from the verb's declaration — `note` is the one
+  // property `complete` accepts, and it is nullable — so a body the server
+  // would reject does not compile.
+  return () => mutation.mutate({ id: 'a-task-id', body: { note: 'shipped' } });
 }
 
 /** A write, and the keys it invalidates. */

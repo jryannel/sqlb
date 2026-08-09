@@ -248,7 +248,7 @@ catalog" is one rule over products, variants and categories; registering it
 under one name on all three means a mount releases it once, and the release
 reaches the models a request arrives at through `?expand` as well.
 
-See [ADR-0053](../adr/0053-a-named-scope-is-releasable-at-the-mount.md).
+See [ADR-0054](../adr/0054-a-named-scope-is-releasable-at-the-mount.md).
 
 ## Next
 

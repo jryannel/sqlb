@@ -25,13 +25,15 @@ import (
 //
 //   - client.gen.ts   types, encoder, transport functions, key factory. No
 //     imports at all, so it typechecks in any project.
-//   - queries.gen.ts  queryOptions and infiniteQueryOptions, which take
-//     @tanstack/react-query as a peer dependency.
+//   - queries.gen.ts  queryOptions, infiniteQueryOptions and mutationOptions,
+//     which take @tanstack/react-query as a peer dependency.
 //
-// What is deliberately not emitted: the client shell, hooks, mutation helpers
-// and optimistic updates. Auth, refresh, retry and redirect-on-401 are not
-// derivable from a schema, so the transport is injected — the same seam
-// argument `rest` makes by mounting onto a huma.API the application built.
+// What is deliberately not emitted: the client shell, hooks, optimistic updates
+// and any write policy — a mutation gets its `mutationFn` and no `onSuccess`,
+// because what a write invalidates is not derivable from a schema. Auth,
+// refresh, retry and redirect-on-401 are not derivable either, so the transport
+// is injected — the same seam argument `rest` makes by mounting onto a huma.API
+// the application built.
 
 // renderTSClient emits layers 1 to 3, plus the key factory.
 func renderTSClient(opts Options) ([]byte, error) {
@@ -92,11 +94,11 @@ func renderTSQueries(opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A resource exposing neither list nor read has no reads to offer options
-	// for, and a file of empty factories is worse than no file.
+	// A resource that can neither be read nor written has nothing to offer
+	// options for, and a file of empty factories is worse than no file.
 	var resources []tsResource
 	for _, r := range all {
-		if r.ops.Has(schema.OpList) || r.readsOne() {
+		if r.hasQueries() || r.hasMutations() {
 			resources = append(resources, r)
 		}
 	}
@@ -104,8 +106,12 @@ func renderTSQueries(opts Options) ([]byte, error) {
 		return nil, nil
 	}
 
-	var b bytes.Buffer
-	fmt.Fprint(&b, tsQueriesHeader)
+	// The body first, so the TanStack import can be computed from what it
+	// actually references rather than fixed in the header. A read-only schema
+	// that imported mutationOptions would fail its own build under
+	// `noUnusedLocals`, which is the same reason the client next door computes
+	// its runtime import (#110).
+	var body bytes.Buffer
 
 	// Types and values are imported separately, because a project with
 	// `verbatimModuleSyntax` needs a type import to say so — and because it
@@ -113,26 +119,70 @@ func renderTSQueries(opts Options) ([]byte, error) {
 	types := []string{"Transport"}
 	values := []string{}
 	for _, r := range resources {
-		values = append(values, r.ident+"Keys")
-		if r.hasExpand() {
-			types = append(types, r.typeName+"Expand")
+		fmt.Fprintf(&body, "\n// %s\n", tsRule(r.path))
+
+		if r.hasQueries() {
+			tsQueriesSection(&body, r)
+			// Keys belong to the read half: a mutation here carries no
+			// `onSuccess`, so a write-only resource must not import a factory
+			// nothing in the file names.
+			values = append(values, r.ident+"Keys")
+			if r.hasExpand() {
+				types = append(types, r.typeName+"Expand")
+			}
+			if r.ops.Has(schema.OpList) {
+				types = append(types, r.typeName+"Column", r.typeName+"ListParams")
+				values = append(values, "list"+r.plural)
+			}
+			if r.readsOne() {
+				types = append(types, r.typeName+"GetParams")
+				values = append(values, "get"+r.typeName)
+			}
 		}
-		if r.ops.Has(schema.OpList) {
-			types = append(types, r.typeName+"Column", r.typeName+"ListParams")
-			values = append(values, "list"+r.plural)
-		}
-		if r.readsOne() {
-			types = append(types, r.typeName+"GetParams")
-			values = append(values, "get"+r.typeName)
+
+		if r.hasMutations() {
+			tsMutationsSection(&body, r)
+			if r.canCreate() {
+				types = append(types, r.typeName+"Create")
+				values = append(values, "create"+r.typeName)
+			}
+			if r.canUpdate() {
+				types = append(types, r.typeName+"Patch")
+				values = append(values, "update"+r.typeName)
+			}
+			if r.canDelete() {
+				values = append(values, "delete"+r.typeName)
+			}
+			for _, a := range r.table.Actions() {
+				values = append(values, tsActionName(r.table, a))
+				if len(a.Body) > 0 {
+					types = append(types, tsActionInput(r.table, a))
+				}
+			}
 		}
 	}
+
+	var b bytes.Buffer
+	fmt.Fprint(&b, tsQueriesHeader)
+	fmt.Fprint(&b, tsTanStackImport(body.String()))
 	tsImportList(&b, "import type", types, opts.tsClientImport())
 	tsImportList(&b, "import", values, opts.tsClientImport())
-
-	for _, r := range resources {
-		tsQueriesSection(&b, r)
-	}
+	b.Write(body.Bytes())
 	return b.Bytes(), nil
+}
+
+// tsTanStackImport names only the option helpers the body actually calls.
+func tsTanStackImport(body string) string {
+	var used []string
+	for _, name := range []string{"infiniteQueryOptions", "mutationOptions", "queryOptions"} {
+		if usesSymbol(body, name) {
+			used = append(used, name)
+		}
+	}
+	if len(used) == 0 {
+		return ""
+	}
+	return "import { " + strings.Join(used, ", ") + " } from '@tanstack/react-query';\n"
 }
 
 // tsImportList writes one import statement, sorted and one name per line, so
@@ -202,6 +252,28 @@ type tsRelation struct {
 }
 
 func (r tsResource) hasExpand() bool { return len(r.relations) > 0 }
+
+// The four predicates below decide what layer 4 offers, and each mirrors the
+// condition the transport function next door was emitted under — an option
+// object naming a function that does not exist is a generator that compiles
+// into a build failure.
+func (r tsResource) hasQueries() bool {
+	return r.ops.Has(schema.OpList) || r.readsOne()
+}
+
+func (r tsResource) canCreate() bool { return r.ops.Has(schema.OpCreate) }
+
+// A patch body with no writable columns leaves `update` unemitted, so there is
+// nothing to wrap.
+func (r tsResource) canUpdate() bool {
+	return r.ops.Has(schema.OpUpdate) && len(bodyFields(r.table, forUpdate)) > 0
+}
+
+func (r tsResource) canDelete() bool { return r.ops.Has(schema.OpDelete) }
+
+func (r tsResource) hasMutations() bool {
+	return r.canCreate() || r.canUpdate() || r.canDelete() || len(r.table.Actions()) > 0
+}
 
 func tsResources(reg *schema.Registry) ([]tsResource, error) {
 	var out []tsResource
@@ -672,7 +744,6 @@ func tsKeyIndex(b *bytes.Buffer, resources []tsResource) {
 // tsQueriesSection emits the TanStack factories for one resource.
 func tsQueriesSection(b *bytes.Buffer, r tsResource) {
 	name := r.typeName
-	fmt.Fprintf(b, "\n// %s\n", tsRule(r.path))
 	fmt.Fprintf(b, "\n/**\n * Read options for %s, bound to a transport.\n *\n", r.path)
 	fmt.Fprint(b, " * `queryOptions` objects rather than hooks: an options object is spread and\n")
 	fmt.Fprint(b, " * overridden — `{ ...queries.list(p), staleTime: 30_000 }` — where a hook is\n")
@@ -731,6 +802,101 @@ func tsQueriesSection(b *bytes.Buffer, r tsResource) {
 	}
 
 	fmt.Fprint(b, "  };\n}\n")
+}
+
+// tsMutationsSection emits the TanStack mutation options for one resource.
+//
+// Each entry carries `mutationFn` and nothing else. The mechanical half of a
+// write is derivable — the route, the body type, the response — and the half
+// that matters is not: what a write invalidates depends on which views the
+// application keeps, and a computed view is not a table, so its key cannot be
+// generated at all (ADR-0028). A generated `onSuccess` would therefore be a
+// guess, and a guess in generated code is the thing that gets copied out and
+// edited. `keysByTable` next door is the mechanical half of invalidation; the
+// choice of what to invalidate stays with the caller.
+//
+// These are values rather than functions, unlike the read factories: a query's
+// parameters are known when the options are built, where a mutation's variables
+// arrive at `mutate()`, so there is nothing to pass and `()` would be noise.
+func tsMutationsSection(b *bytes.Buffer, r tsResource) {
+	name := r.typeName
+	fmt.Fprintf(b, "\n/**\n * Write options for %s, bound to a transport.\n *\n", r.path)
+	fmt.Fprint(b, " * `mutationFn` and nothing else: what a write should invalidate is a policy\n")
+	fmt.Fprint(b, " * this file cannot derive, so it is spread in rather than edited out —\n")
+	fmt.Fprintf(b, " * `useMutation({ ...%sMutations(request).create, onSuccess })`.\n */\n", r.ident)
+	fmt.Fprintf(b, "export function %sMutations(request: Transport) {\n", r.ident)
+	fmt.Fprint(b, "  return {\n")
+
+	if r.canCreate() {
+		tsMutation(b, "create", fmt.Sprintf("(body: %sCreate)", name),
+			fmt.Sprintf("create%s(request, body)", name))
+	}
+	if r.canUpdate() {
+		// A singleton has no id to carry, so its variables are the body alone
+		// — the same drop the transport function makes (#166). Otherwise one
+		// variables object rather than two arguments, because `mutate` takes
+		// exactly one.
+		if r.singleton() {
+			tsMutation(b, "update", fmt.Sprintf("(body: %sPatch)", name),
+				fmt.Sprintf("update%s(request, body)", name))
+		} else {
+			tsMutation(b, "update", fmt.Sprintf("({ id, body }: { id: string | number; body: %sPatch })", name),
+				fmt.Sprintf("update%s(request, id, body)", name))
+		}
+	}
+	if r.canDelete() {
+		if r.singleton() {
+			tsMutation(b, "delete", "()", fmt.Sprintf("delete%s(request)", name))
+		} else {
+			tsMutation(b, "delete", "(id: string | number)",
+				fmt.Sprintf("delete%s(request, id)", name))
+		}
+	}
+
+	// A declared verb is a write with a route the schema knows (ADR-0043), so
+	// it belongs here rather than being the one mutation left hand-written.
+	for _, a := range r.table.Actions() {
+		fn := tsActionName(r.table, a)
+		var params, args []string
+		if !a.IsCollection() {
+			params = append(params, "id: string | number")
+			args = append(args, "id")
+		}
+		if len(a.Body) > 0 {
+			params = append(params, "body: "+tsActionInput(r.table, a))
+			args = append(args, "body")
+		}
+
+		call := fmt.Sprintf("%s(request%s)", fn, prefixJoin(", ", args))
+		switch len(params) {
+		case 0:
+			// No variables at all, so `mutate()` takes none.
+			tsMutation(b, tsActionProp(a), "()", call)
+		case 1:
+			tsMutation(b, tsActionProp(a), "("+params[0]+")", call)
+		default:
+			tsMutation(b, tsActionProp(a),
+				fmt.Sprintf("({ id, body }: { %s })", strings.Join(params, "; ")), call)
+		}
+	}
+
+	fmt.Fprint(b, "  };\n}\n")
+}
+
+// tsMutation writes one entry of a mutations object.
+func tsMutation(b *bytes.Buffer, prop, params, call string) {
+	fmt.Fprintf(b, "    %s: mutationOptions({\n", tsProp(prop))
+	fmt.Fprintf(b, "      mutationFn: %s => %s,\n", params, call)
+	fmt.Fprint(b, "    }),\n")
+}
+
+// prefixJoin joins with sep and leads with it, so an empty list contributes
+// nothing to an argument list that already has a leading argument.
+func prefixJoin(sep string, parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	return sep + strings.Join(parts, sep)
 }
 
 // tsType is the TypeScript type of a column in a row or a request body.
@@ -1249,12 +1415,14 @@ const tsQueriesHeader = `// Code generated by github.com/jryannel/sqlb. DO NOT E
 //
 // TanStack Query option factories, one per exposed resource.
 //
-// queryOptions objects rather than hooks: a hook bakes in a framework and is
-// the thing people copy out and edit, where an options object is spread and
+// Option objects rather than hooks: a hook bakes in a framework and is the
+// thing people copy out and edit, where an options object is spread and
 // overridden. Deleting this file breaks only the call sites that used it — the
 // types, the encoder and the keys next door do not depend on it.
 //
+// A mutation carries mutationFn and no onSuccess: what a write invalidates is
+// not derivable from a schema. keysByTable is the mechanical half.
+//
 // ADR-0028.
 
-import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 `

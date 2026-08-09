@@ -154,7 +154,7 @@ authored against it: relaxing later is safe, tightening further is not.
   privileged surface over one table, differing in rows
   ([#177](https://github.com/jryannel/sqlb/issues/177)). `Options.Unscoped`
   releases a *named* rule, and
-  [ADR-0053](0053-a-named-scope-is-releasable-at-the-mount.md) keeps this check
+  [ADR-0054](0054-a-named-scope-is-releasable-at-the-mount.md) keeps this check
   in force by running it against the released handle: a resource that released
   everything confining a `Scoped` model still does not mount. The obligation is
   unchanged; what is new is that a registration can be invisible to it, and only

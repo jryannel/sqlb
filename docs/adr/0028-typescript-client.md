@@ -6,7 +6,7 @@
   in `web/src/refusals.ts`, so a widened type fails the build; Low still on the
   key shape and on `queryOptions`, since no application has lived with either
 - **Decided:** 2026-07-28
-- **Last reviewed:** 2026-07-28
+- **Last reviewed:** 2026-08-09
 
 ## Context
 
@@ -50,10 +50,22 @@ from the emitted OpenAPI document — and emit it into the consuming repo, the w
    and their `-` forms; `select` and `expand` narrow the response type.
 3. **Transport functions**, encoding those parameters into the URL grammar and
    taking an injected request function.
-4. **A key factory and `queryOptions` factories** for list and item reads.
+4. **A key factory, `queryOptions` factories** for list and item reads, and
+   **`mutationOptions` carrying `mutationFn` and nothing else** for each write,
+   including declared verbs ([ADR-0043](0043-declared-actions.md)).
 
-Explicitly not: the client shell, hooks, mutation helpers, optimistic updates, or
-a published npm package.
+Explicitly not: the client shell, hooks, write policy, optimistic updates, or a
+published npm package.
+
+- **A mutation stops at `mutationFn`.** The mechanical half of a write is
+  derivable — route, body type, response — and the half that matters is not:
+  what a write invalidates depends on which views an application keeps, and a
+  computed view is not a table, so its key cannot be generated at all. A
+  generated `onSuccess` would be a guess, and a guess in generated code is what
+  gets copied out and edited. `keysByTable` is the mechanical half of
+  invalidation; choosing what to invalidate stays with the caller. No
+  `mutationKey` either — a key shape is expensive once anything consumes it, and
+  nothing here needs one.
 
 - **Wire names keep the `json` tag spelling.** Camel-casing needs a runtime
   mapping layer, and the point of the emitted client is types plus a URL encoder
@@ -117,6 +129,10 @@ from the start, partly so that reaching for it is observable.
   API.
 - Generated `queryOptions` get copied out and edited — the seam is wrong; revisit
   it rather than add options.
+- Every consumer writes the same `onSuccess` over the generated mutations. That
+  is the signal the policy was derivable after all, and the shape to reach for
+  is a `mutationKey` plus `setMutationDefaults` — one place for the application
+  to attach its own — rather than an emitted `onSuccess`.
 - Response narrowing needs enough generic machinery that its type errors become
   unreadable — drop the narrowing and return the full row type.
 - A second framework needs something other than `queryOptions` — the TanStack
@@ -155,3 +171,8 @@ a breaking rename of every field.
 - 2026-07-28 — Renumbered from 0026 and reconciled with keyset pagination, which
   made the infinite-query factory a concrete second emitter.
 - 2026-07-30 — Condensed.
+- 2026-08-09 — Layer 4 grew `mutationOptions`, prompted by a reader who reported
+  the layer stopping at fetchers and keys. Half of that was discoverability —
+  `queryOptions` had shipped and was being missed — and half was real: the write
+  side genuinely stopped at layer 3. Recorded the line the mutation layer holds
+  at (`mutationFn`, no `onSuccess`, no `mutationKey`) and what would move it.

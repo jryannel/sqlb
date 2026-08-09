@@ -134,6 +134,33 @@ func TestSingletonClientsTakeNoID(t *testing.T) {
 	}
 }
 
+// The mutation layer drops the id too, which is the seam where the two features
+// meet: `mutationOptions` was written against resources addressed by key, and a
+// variables object carrying an id would name an argument the transport function
+// does not take (ADR-0028, ADR-0052).
+func TestSingletonMutationsTakeNoID(t *testing.T) {
+	queries := generateTS(t, singletonFixture())["queries.gen.ts"]
+	for _, want := range []string{
+		// The body alone, not { id, body }.
+		"update: mutationOptions({ mutationFn: (body: BillingSubscriptionPatch) => updateBillingSubscription(request, body), }),",
+		// And nothing at all, so mutate() takes no variables.
+		"delete: mutationOptions({ mutationFn: () => deleteBillingSubscription(request), }),",
+	} {
+		if !contains(queries, want) {
+			t.Errorf("queries missing %q:\n%s", want, queries)
+		}
+	}
+	if strings.Contains(queries, "id: string | number") {
+		t.Errorf("a singleton's options ask for an id no function takes:\n%s", queries)
+	}
+
+	// A singleton still reads, so the read half has to survive the same
+	// predicate change — a factory keyed on OpRead alone would emit nothing.
+	if !strings.Contains(queries, "export function billingSubscriptionQueries(") {
+		t.Errorf("a singleton lost its read options:\n%s", queries)
+	}
+}
+
 // The exit carries the shape too, and its statements are the mount's: no key
 // predicate, and the confining conditions as the whole address.
 func TestEjectCarriesTheSingleton(t *testing.T) {
