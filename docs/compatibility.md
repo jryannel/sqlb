@@ -165,21 +165,36 @@ Named in advance, so the break is a documented plan rather than a surprise.
   that is confidently wrong about a schema it no longer describes is worse than
   an absent one.
 
-### Three that broke without being listed here first
+### Four that broke without being listed here first
 
-`v0.6.0` broke three surfaces that were not under *Will move*, and the honest
-version is that all three came out of consumer reports rather than a plan. The
-[release notes](releases.md#v060) carry each with its mechanical edit, which is
-the other half of the promise above; this is the half that was missed, recorded
-where the announcement should have been.
+`v0.6.0` broke three surfaces that were not under *Will move*, and `v0.11.0`
+broke a fourth — which is the first one finishing. The honest version is that
+all four came out of consumer reports rather than a plan. The release notes —
+[v0.6.0](releases.md#v060) and [v0.11.0](releases.md#v0110) — carry each with
+its mechanical edit, which is the other half of the promise above; this is the
+half that was missed, recorded where the announcement should have been.
 
-- **A computed column is opt-in.** `sqlb.Query[T]()` no longer projects declared
-  computed columns; `WithComputed(names…)` asks for them, and
-  `rest.Options.Computed` is the hand-written mount's form. A generated resource
-  opts into its own table's, so generated endpoints are unchanged. It broke
-  because the default charged every reader of a shared model for one screen's
-  aggregates, and made an existence check by id fail for want of a bind it had
-  no business supplying.
+- **A computed column is opt-in on reads** (`v0.6.0`). `sqlb.Query[T]()` no
+  longer projects declared computed columns; `WithComputed(names…)` asks for
+  them, and `rest.Options.Computed` is the hand-written mount's form. A
+  generated resource opts into its own table's, so generated endpoints are
+  unchanged. It broke because the default charged every reader of a shared model
+  for one screen's aggregates, and made an existence check by id fail for want
+  of a bind it had no business supplying.
+- **And on writes** (`v0.11.0`). `Insert`, `Update` and `Delete` evaluate no
+  computed column in `RETURNING` unless `WithComputed(names…)` asks, and
+  `rest.Options.Computed` narrows a write's `RETURNING` as it already narrowed
+  the read's projection — so a `POST` or `PATCH` response carries a derived
+  field only where the mount declared it, and the key is absent rather than
+  zero. A column carrying `Needs` is refused there rather than skipped.
+
+  This is the entry the section exists for. The write path was the same break
+  and it was not revisited when the read path flipped, so the announcement was
+  owed at `v0.6.0` and is being made five releases late. It broke for the
+  reasons the read half did and one more: a create whose subquery counts rows
+  the same transaction has not written yet returns a value that is *always*
+  wrong, so the second read the clause existed to delete had to come back
+  anyway ([#164](https://github.com/jryannel/sqlb/issues/164)).
 - **The generated Go client is its own package.** `cli.New` takes a
   `*client.Client` from the emitted `client` package. Regenerate, then the edit
   is in the four-line main. It broke because a program wanting the typed encoder

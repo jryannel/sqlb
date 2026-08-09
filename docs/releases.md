@@ -14,6 +14,362 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.11.0
+
+2026-08-09 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.11.0)
+
+The last tag named two things it would not do, and this one does both. A
+tenant-keyed singleton was *"a release of its own, not the ninth item on a
+list"*; [ADR-0050](adr/0050-reachability-is-a-property-of-the-mount.md) scoped its column
+split to columns and said in as many words that a second surface differing in
+rows was the alternative it did not cover. Both came out of the same adoption
+and both needed a *shape* rather than a setting, which is why neither fitted in
+the release that found them.
+
+The other half of this tag is smaller and less flattering: four conventions that
+existed only as prose became checks, after each of them drifted in the space of
+a week.
+
+**One break.** It is *not* listed under [*Will
+move*](compatibility.md#will-move), and that is a miss rather than a plan —
+recorded [where the announcement should have
+been](compatibility.md#four-that-broke-without-being-listed-here-first).
+
+**BREAKING: a write evaluates no computed column unless asked.** `Insert`,
+`Update` and `Delete` grow `WithComputed`, defaulting to none, and
+`rest.Options.Computed` narrows a write's `RETURNING` as it already narrowed the
+read's projection. Reads took this opt-in in `v0.6.0` and nothing revisited
+writes, so [ADR-0041](adr/0041-computed-fields.md)'s clause keeping computed
+columns in `RETURNING` *"so a POST response carries the derived fields without a
+second read"* outlived the default it was written against.
+
+An adopting application found all three consequences. A per-write tax on
+aggregates nobody read. A create whose subquery counted rows the same
+transaction had not written yet — so the returned value was *always* wrong and
+the second read the clause exists to delete had to come back anyway. And a
+subquery naming another module's table riding into every insert, which made the
+table unwritable unless that module's tables were present, and failed the
+module's own isolation boot test.
+
+The mechanical edit is `WithComputed(names…)` on the statement, or `Computed` on
+the resource. It is [#147](https://github.com/jryannel/sqlb/issues/147)'s
+direction and the same argument: the failure of the new default is a missing
+field that the first test which looks catches, where the failure of the old one
+is a cost nothing reports and a value that can be silently wrong. A column
+carrying `Needs` is refused rather than accepted-and-skipped — a write has
+nowhere to take a bind from, so naming one asks for something no statement here
+can produce.
+
+### A tenant-keyed singleton is a shape
+
+A table keyed by the column that scopes it has one row per caller, and neither
+exposed shape fitted: `OpList` answered a one-element `{items:[…]}` envelope for
+a resource that is definitionally singular, and `OpRead` put the caller's own
+tenant id in the URL — a value the server already holds and the `BeforeQuery`
+hook already enforces, so the segment is redundant when it matches and a lie
+when it does not.
+
+```go
+Expose(schema.REST{
+    Path: "/billing-subscription",
+    Ops:  schema.OpSingleton | schema.OpUpdate,
+})
+```
+
+`OpSingleton` changes the resource rather than adding a route beside it: the
+item path loses its `{id}`, so `OpUpdate` is `PATCH /billing-subscription` and
+`OpDelete` is `DELETE /billing-subscription`. It needs no primary key, which is
+what lets a table keyed only by its tenant column be a resource at all.
+
+**The refusal is the design.** There is no key in the path and no key predicate
+in the statement, so the read compiles to `SELECT … FROM billing_subscriptions`
+and the hook appends `WHERE org_id = $1`. Read cold those statements are
+under-constrained, and without the hook they are: on an unconfined table the
+read answers an arbitrary row and the `PATCH` reaches every row there is. So the
+chain is startup refusals rather than convention — `OpSingleton` requires a
+`Scoped` column, a `Scoped` column requires the hook — checked in `sqlb generate`
+and again at mount, because `rest` is usable without the DSL. Two rows is a 500
+rather than a pick, for the same reason. `OpList` and `OpRead` are refused
+alongside it, named separately because the fix differs.
+
+A singleton reports *no* filterable, sortable or searchable columns and emits no
+filter vocabulary in the clients even where the columns declare those
+capabilities: its one `GET` rejects every query parameter but `?expand`, so
+publishing them would document requests that answer 400.
+[ADR-0052](adr/0052-a-singleton-is-an-op-that-removes-the-id.md).
+
+### A named scope is releasable at the mount, and only a named one
+
+Row visibility is a `BeforeQuery` hook keyed by the model's Go type, reaching
+every statement whose subject is that type — so a rule registered to confine a
+storefront confined the admin panel that exists to see the drafts. ADR-0050
+closed the columns half of that in `v0.10.0` and said the rows half needed a
+second model over the same table, which gives up all four derivations.
+
+```go
+sqlb.On[Product](reg).Scope("storefront").BeforeQuery(publishedOnly)
+admin := db.WithoutScope("storefront")
+```
+
+`rest.Options.Unscoped` selects it at a mount. Only `BeforeQuery`,
+`BeforeUpdate` and `BeforeDelete` are nameable — `BeforeCreate` stamps a row
+rather than confining a set, so there is nothing to be released from.
+
+Three properties are the design, and the second is what made it safe to add at
+all.
+
+**An unnamed registration cannot be released by anybody.** `Hooks.BeforeQuery`
+is unchanged and absolute, so every existing registration stays unreleasable and
+the short spelling stays the safe one: the author of a rule decides whether it
+is negotiable, next to the rule rather than at the mount that would like to be
+out of it.
+
+**The obligation check runs after the release.** `rest.Resource` derives the
+released handle first and checks against the handle it will actually serve from,
+so a `Scoped` model whose every confining rule a resource released does not
+mount. [ADR-0030](adr/0030-declared-scope-is-required.md) declined an escape
+hatch on the grounds that *"an unused escape hatch is the thing most likely to
+be reached for reflexively"*; a hatch that still refuses the case the check
+exists for is not that hatch.
+
+**A scope name belongs to the registry, not to a type.** "A shopper sees the
+published catalog" is one rule over four tables, so a handle releases it once
+and the release reaches all four — including models a request arrives at through
+`?expand`, whose hooks run requalified onto the join alias.
+[ADR-0054](adr/0054-a-named-scope-is-releasable-at-the-mount.md).
+
+### Five more from the same set of reports
+
+**A write's response no longer states a definite false.** The mount serialised
+its whole read projection, so a `Needs`-computed column came back at its Go zero
+value on the one path nobody looked at — the permanently-zero JSON key ADR-0041
+exists to prevent. The key is now absent rather than zero. The reporting
+consumer had ported a module to sqlb *because* its hand-written `PATCH` lacked
+the `EXISTS` predicate its `GET` had; the declaration moved the bug into the
+runtime rather than deleting it, and their tests passed because they asserted on
+the `GET`.
+
+**A resource can declare what its list is.** `schema.REST` bounded every
+dimension of a list request except the one deciding what the list *is*.
+`DefaultSort` lands on `schema.REST`, `rest.Options` and `filter.Options`,
+checked by `sqlb generate` and again at mount against the sortable columns — a
+default naming an unsortable column would otherwise answer 400 to a client that
+sent nothing at all. `?sort` replaces it and the primary-key tiebreak is
+appended either way, so cursors are unchanged. It travels the manifest, the
+generated mount, the OpenAPI description, the generated skill and the ejected
+handlers, which is the point of declaring it rather than keeping it in an SDK
+facade where no other client and no agent reading the spec ever sees it.
+
+**A hook can reach past its own model, and nothing showed it.** "Write the
+consequence" is the operation [the hooks page](queries/hooks.md) holds up as the
+reason hooks exist, and every `TxFrom` example in the repo stayed inside the
+hook's own model. The obvious way to write it is wrong twice over: `TxFrom`
+hands back the handle the *request* is running on, so a checkout's stock
+decrement inherits the buyer's scope and updates nothing, and `Exec` reports
+that as an empty slice and a nil error — so the order commits having reserved
+nothing, and both mistakes are invisible in the Go code and in review. The
+discriminator is not "is this hook writing to another model" but "is the
+request's scope a true statement about the row I am about to touch": same axis,
+`tx`; different axes, `tx.WithHooks(system)`. A comment's `AfterCreate` bumping
+its task's `comment_count` is the same-axis case already in this repository, and
+a reader escalating there would drop a confinement whose absence shows up as
+another tenant's counter moving.
+
+**Two errors and a comment that pointed somewhere else.** `qualifyExpr`'s
+refusal recommended writing the scope "with `F()` and the comparison operators",
+which cannot express the commonest raw scope there is — a child table confined
+through its parent needs `IN (SELECT …)` and the predicate vocabulary has no
+subquery node, so the reader searches for an API that is not there and then
+denormalises the scope column onto the child. `FromSQL` accepted a subquery into
+another module's tables with no comment, where `ExternalRef` refuses the
+identical coupling with a stated reason; sqlb cannot check it, so the doc
+comment is the only lever and it was silent. And "a hook is registered per
+model; there is no receiver for all of them" is now a stated gap in
+[domain logic](concepts/domain-logic.md) with its counter-argument attached.
+
+### `impact` sees a `WireCase` flip
+
+[Compatibility](compatibility.md#frozen) has said since 2026-08-02 that
+"changing a deployment's `WireCase` is a breaking change for that deployment,
+exactly as renaming a column is". That sentence reached no code: `restcompat`
+recorded each field by its *column* name and never recorded the registry's case,
+so flipping a schema from `Verbatim` to `Camel` respelled every field of every
+resource and `sqlb impact -error` stayed green. Both snapshots held the same
+column names, and a comparison matching columns by column name is blind to the
+one edit that renames all of them at once.
+
+`Snapshot.WireCase` is new and one breaking finding reports a change to it,
+naming both spellings and one column that actually moves — `author_id is now
+authorId` — because "the wire case changed" is not actionable without them.
+**One finding, not one per column:** every field did change, so N lines would be
+accurate and would also report the consequence and lose the cause, which is a
+single-line edit.
+
+**Absent means `Verbatim`, deliberately.** The field is `omitempty`, so a
+`Verbatim` schema's snapshot is byte-identical to one recorded before the field
+existed and no committed `restcontract.json` needs re-recording. A schema that
+already declared `Camel` sees one spurious break the first time it is checked
+and clears it with `-write`. That is the safe direction and the alternative is
+not: reading absence as "not recorded" would suppress the finding against
+exactly the baselines that predate the check.
+[ADR-0039](adr/0039-a-schema-edit-is-an-api-edit.md).
+
+### The TypeScript writes reach the layer the reads were already at
+
+`queryOptions` and `infiniteQueryOptions` have shipped since `v0.2.0` and were
+being missed because the docs named the file and never showed a `useQuery` call.
+The write side genuinely stopped at the fetcher, so turning `createTask` into
+something `useMutation` takes was four lines every consumer wrote for
+themselves. `mutationOptions` is now emitted per write, declared verbs included
+— an action is a write whose route the schema knows, and leaving it out would
+make it the one mutation still hand-written next to three that were not.
+
+What it deliberately does **not** emit is the half that matters. There is no
+`onSuccess`: what a write invalidates depends on which views an application
+keeps, and a computed view is not a table, so its key cannot be derived at all.
+A generated `onSuccess` would be a guess, and a guess in generated code is
+precisely what gets copied out and edited. `keysByTable` is the mechanical half;
+choosing what to invalidate stays with the caller. No `mutationKey` either, on
+the narrower ground that a key shape is expensive once anything consumes it and
+nothing here needs one. [ADR-0028](adr/0028-typescript-client.md).
+
+### A verb the resource already generates is refused
+
+A table exposing `OpCreate` and declaring `Action{Name: "create"}` validated
+clean and then failed everywhere downstream: two `createTask` declarations in
+`client.gen.ts` so it does not compile, two `create:` properties in
+`queries.gen.ts`, and Huma panicking at startup with `duplicate operation ID:
+create-post`. The refusal goes in schema validation rather than in the emitters
+— five surfaces would each need their own version of it, they would disagree
+about the wording, and four of them are downstream of a declaration that is
+already wrong.
+
+The taken verbs are the *generated* ones rather than `Op.String()`'s: `OpRead`
+is `get` in the clients, on the command line and in the document, so `get` is
+refused beside it and `read` is not.
+
+The DSL is optional ([ADR-0010](adr/0010-codegen-is-optional.md)), so
+`rest.Action` and `rest.CollectionAction` return an error too, naming the id,
+the method and path already holding it, and the two ways out. The scan is Huma's
+own rather than a table of the verbs each `Op` generates: `rest` does not import
+`schema`, so a table here would be that table's second copy with nothing keeping
+them honest, and it answers a narrower question — the scan also catches two
+resources sharing a `Name`, and an action colliding with one mounted elsewhere.
+Known limit, in the doc comment rather than papered over: an action mounted
+*before* its resource still panics from inside `Resource`.
+
+### Four rules that were prose are now gates
+
+Each of them drifted first, which is the only reason they are here.
+
+**Both workflows green is a gate.** `CLAUDE.md` has said since `v0.7.0` that a
+release needs a commit where *both* `ci` and `pages` are green, and gave the
+reason `gh pr checks` cannot answer it. Saying it did not make it happen:
+`v0.7.0` was tagged with `pages` red and `v0.8.0` nearly was.
+`.claude/hooks/verify-release-gate.sh` is a `PreToolUse` gate on `git tag`, the
+tag push and `gh release create`. Infrastructure failure asks rather than denies
+— being unable to see the runs is not the same as the runs being red, and a gate
+that blocks when the network is down is a gate that gets switched off. `/release`
+is the procedure around it and writes down the ordering that makes the gate
+satisfiable: **tag the releases-page commit, not the feature commit.**
+
+**The ADR status vocabulary is four words.**
+[ADR-0040](adr/0040-the-driver-is-a-dependency.md) carried `Accepted` for ten
+days, in [a directory](adr/README.md) whose README says in so many words that
+there is no *Accepted* and no *Final*. A person caught it by eye. `adr-check`
+reads `docs/adr` and refuses a status outside the vocabulary, a record with no
+index row, a row whose link no longer names the record, an orphan row, an index
+cell contradicting the record, and a missing or unparseable `Confidence` or
+`Last reviewed` line. Compound statuses are real, so each slash-separated part
+must *lead* with a vocabulary word rather than match one.
+
+**The tagline says what the project is, in all four copies.** The first sentence
+anyone read described "a schema-first data layer … typed composable queries, a
+validated REST filter grammar, and domain hooks", which is the query layer and
+the seam beside it — a fraction of what a declaration is the source for. The gap
+matters more here than it would elsewhere, because the name does not close it:
+`sqlb` reads as "SQL builder", so the one place the declarative claim could be
+made was the one place it was missing. All four copies now open with
+**Declarative Postgres for Go** and name what is derived, and `tagline-check`
+gates the *claim* rather than the wording — the lede, then six terms naming the
+derived surfaces within 400 characters of it.
+
+Renaming was considered and declined. `sqld` was the candidate; it is the libSQL
+server binary and one letter from the name it would replace, so every existing
+mention becomes ambiguous forever. A rename touches 596 import lines and 161
+non-Go files to buy branding, and pre-1.0 a subtitle buys the same thing for
+nothing.
+
+And **`tagline-check` itself was wrong on its first working day**, which is the
+most useful item in this list. The lede test asked whether the phrase appears
+anywhere: lowercased, `declarative postgres for golang` contains `declarative
+postgres for go`, so a copy that drifted to *Golang* while the other three said
+*Go* passed the gate — the exact drift the check exists to catch, in the one
+phrase it is built around. The both-ways proof missed it because both mutations
+were too large. A guard proven only against total absence is proven against the
+easy half ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+
+### Deliberately not done
+
+**No admin emitter**, and no row-label declaration to feed one. A UI is HTML,
+CSS, a component vocabulary, a theme and a browser support matrix, none of which
+exist here and all of which would tie a release cadence to frontend churn rather
+than to the schema.
+[ADR-0053](adr/0053-the-manifest-describes-what-cannot-be-guessed.md) states the
+rule the manifest had been following without saying so: it carries what a
+competent author cannot guess and would get wrong silently, and nothing an
+author can decide and the compiler will check.
+
+**The manifest does not carry what a mount releases**, so `restcompat` cannot
+see a surface change what it is exempt from between versions. That is ADR-0054's
+own open question and the likeliest next step.
+
+**No refusal of an unregistered scope name in `WithoutScope`**, because a
+registry may gain registrations after a handle is built; `rest` refuses it,
+where the whole registry is known. And nothing changed in the hand-written
+`rest.ActionSpec` path beyond the error above.
+
+### What to expect on upgrade
+
+- **The one break.** A `POST` or `PATCH` response no longer carries derived
+  fields unless the mount declares `Computed`; the key is absent rather than
+  zero. Everything else in this tag is additive — a schema setting none of the
+  new fields generates what it generated before.
+
+- A hand-written statement that relied on `RETURNING` evaluating computed
+  columns needs `WithComputed`. A statement naming a `Needs` column there is
+  refused rather than skipped.
+
+- A schema that already declares `WireCase(Camel)` sees one spurious
+  `restcompat` break the first time `sqlb impact` runs, cleared with `-write`. A
+  `Verbatim` schema's committed `restcontract.json` is byte-identical and needs
+  nothing.
+
+- Regenerating a TypeScript client emits `mutationOptions` per write into the
+  file that already takes `@tanstack/react-query`, and the TanStack import is now
+  computed from the body rather than fixed — so a read-only or write-only schema
+  imports only what it uses under `noUnusedLocals`.
+
+- A schema declaring an action named after a verb its own exposed operations
+  generate now fails `sqlb generate` rather than emitting code that does not
+  compile and a server that does not start. If that describes yours, it was
+  already broken downstream.
+
+- Nothing about hook registration changed. Named scopes are opt-in and an
+  unnamed registration cannot be released.
+
+Ten issues: [#158](https://github.com/jryannel/sqlb/issues/158),
+[#159](https://github.com/jryannel/sqlb/issues/159),
+[#160](https://github.com/jryannel/sqlb/issues/160),
+[#161](https://github.com/jryannel/sqlb/issues/161),
+[#163](https://github.com/jryannel/sqlb/issues/163),
+[#164](https://github.com/jryannel/sqlb/issues/164),
+[#165](https://github.com/jryannel/sqlb/issues/165),
+[#166](https://github.com/jryannel/sqlb/issues/166),
+[#167](https://github.com/jryannel/sqlb/issues/167),
+[#177](https://github.com/jryannel/sqlb/issues/177). ADR-0052, ADR-0053 and
+ADR-0054 are new; 0028, 0030, 0036, 0039, 0040, 0041 and 0044 carry revisions.
+
 ## v0.10.0
 
 2026-08-05 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.10.0)
