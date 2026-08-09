@@ -30,7 +30,7 @@ Three files, because the layers are usable separately:
 |---|---|
 | `runtime.gen.ts` | `Page`, `Collection`, `Problem`, `Transport` and the filter encoder — the part that depends on no schema. **Imports nothing.** |
 | `client.gen.ts` | Row types, request bodies, the typed parameter vocabulary, one function per exposed operation, and the cache keys. Imports the runtime, and re-exports it. |
-| `queries.gen.ts` | TanStack Query `queryOptions` and `infiniteQueryOptions`. Takes `@tanstack/react-query` as a peer dependency. Set `TSQueriesFile: "-"` to skip it. |
+| `queries.gen.ts` | TanStack Query `queryOptions`, `infiniteQueryOptions` and `mutationOptions`. Takes `@tanstack/react-query` as a peer dependency. Set `TSQueriesFile: "-"` to skip it. |
 
 The runtime is a file of its own so that an application with more than one
 generated module has one `Page` and wires one `Transport` rather than N
@@ -151,6 +151,39 @@ answers to where a page starts, and the factory owns the answer. Paging by hand
 is the same loop with `cursor` threaded through `next_cursor`, and it costs the
 same at any depth.
 
+## Writes
+
+One `mutationOptions` object per write, carrying `mutationFn` and nothing else:
+
+```ts
+const tasks = taskMutations(request);
+
+useMutation(tasks.create);   // mutate({ list_id, title, description })
+useMutation(tasks.update);   // mutate({ id, body })
+useMutation(tasks.delete);   // mutate(id)
+useMutation(tasks.complete); // a declared verb, mutate({ id, body })
+```
+
+The variables are the body types from `client.gen.ts`, so a read-only column has
+no spelling here either — an argument that would earn a 400 does not compile.
+
+There is no generated `onSuccess`. What a write invalidates depends on which
+views the application keeps, and a computed view is not a table, so its key
+cannot be derived at all. Policy is spread in rather than edited out:
+
+```ts
+useMutation({
+  ...taskMutations(request).update,
+  onSuccess: (task) => {
+    queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+    queryClient.invalidateQueries({ queryKey: taskKeys.detail(task.id) });
+  },
+});
+```
+
+`keysByTable` below is the mechanical half of that; the choice of what to
+invalidate stays yours.
+
 ## Cache keys
 
 One factory per resource, plus a table-keyed index:
@@ -168,9 +201,9 @@ where mutations and an event stream each kept their own list.
 
 ## What is not generated
 
-Hooks, mutation helpers, optimistic updates, a client object, an npm package.
-Hooks bake in a framework and get copied out and edited; a `queryOptions` object
-is spread and overridden instead:
+Hooks, write policy, optimistic updates, a client object, an npm package. Hooks
+bake in a framework and get copied out and edited; an options object is spread
+and overridden instead:
 
 ```ts
 { ...postQueries(request).list({ sort: 'title' }), staleTime: 30_000 }
