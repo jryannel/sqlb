@@ -33,6 +33,11 @@ type Action struct {
 	// Name is the verb. It appears in the URL, in the operation ID, and in the
 	// generated identifiers — "complete" gives POST /tasks/{id}/complete and an
 	// Actions.CompleteTask field.
+	//
+	// It may not be the verb of an operation the table already exposes. An
+	// action named "create" beside OpCreate does not override it: both spell one
+	// operation id and one client function, and Validate refuses the pair rather
+	// than leaving the duplicate to be discovered at mount.
 	Name string
 
 	// Path is the sub-path under the collection. It defaults to
@@ -201,6 +206,15 @@ func (r *Registry) validateActions(t *TableDef, report func(string, string, stri
 		}
 		seen[a.Name] = true
 
+		if op, verb, dup := collidesWithOp(t.rest.Ops, a.Name); dup {
+			report(t.name, "", "action %q collides with %s, which the resource already generates as its "+
+				"%q operation: the two share an operation id in the OpenAPI document, which Huma refuses "+
+				"at mount, and a function name in every generated client, which then does not compile. "+
+				"Name the verb for the transition it performs — complete, archive, mark-read — or drop "+
+				"%s from Expose, which leaves the action as the resource's only %s route",
+				a.Name, op, verb, op, verb)
+		}
+
 		if !strings.HasPrefix(a.Path, "/") {
 			report(t.name, "", "action %q has path %q, which must start with %q", a.Name, a.Path, "/")
 		}
@@ -225,6 +239,45 @@ func (r *Registry) validateActions(t *TableDef, report func(string, string, stri
 		r.validateActionWrites(t, a, report)
 		r.validateActionTouches(t, a, report)
 	}
+}
+
+// collidesWithOp reports whether name is the verb an exposed operation is
+// already generated under, and if so names both: the operation as Expose spells
+// it, and the verb every surface spells it with.
+//
+// The verbs are not [Op.String]'s. That one names the operation — read — and
+// this one names the word the generated code carries: OpRead is get%s in the
+// TypeScript and Dart clients, `get` on the command line and get-%s in the
+// OpenAPI document, and OpSingleton is the same word without the id. The
+// mapping has to be here rather than in codegen because a duplicate is not a
+// codegen problem: a declaration this package accepts produces a server that
+// panics at mount on the duplicate operation id, and four clients that fail to
+// compile on the duplicate declaration. The refusal belongs where the mistake
+// is.
+//
+// The comparison is literal, not normalised. An action name is already
+// constrained to lower-case and hyphens by [isActionName], and no operation
+// verb carries a hyphen — so `cre-ate` is creAte%s in a client and cre-ate-%s
+// in the document, which collides with nothing, and stripping hyphens before
+// comparing would refuse it for a collision it does not have.
+func collidesWithOp(ops Op, name string) (op, verb string, found bool) {
+	for _, e := range []struct {
+		op       Op
+		declared string // how Expose spells it
+		verb     string // how the generated surfaces spell it
+	}{
+		{OpCreate, "OpCreate", "create"},
+		{OpRead, "OpRead", "get"},
+		{OpUpdate, "OpUpdate", "update"},
+		{OpDelete, "OpDelete", "delete"},
+		{OpList, "OpList", "list"},
+		{OpSingleton, "OpSingleton", "get"},
+	} {
+		if ops.Has(e.op) && name == e.verb {
+			return e.declared, e.verb, true
+		}
+	}
+	return "", "", false
 }
 
 // validateActionTouches checks the declared blast radius is a set of table

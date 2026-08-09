@@ -50,6 +50,29 @@ consequence: generated handlers that get copied out and edited by hand mean the
 seams were in the wrong place. So nothing here tries to *express* the
 transition. `Writes` says which columns it may leave changed; the rest is Go.
 
+## The verb has to be free
+
+The name reaches every surface as an identifier: `create-tasks` in the OpenAPI
+document, `createTask` in the TypeScript and Dart clients, `tasks create` on the
+command line. So a verb spelled like an operation the resource already exposes
+is not an override of it — it is a second one, with the same name:
+
+```go
+Task.Expose(schema.REST{Ops: schema.CRUD | schema.OpList}).
+    Action(schema.Action{Name: "create", Path: "/create"}) // refused
+```
+
+Schema validation refuses the pair, naming the operation and the two ways out —
+rename the verb, or drop the operation from `Expose` and let the action be the
+resource's only `create` route. Left to run, that declaration produces a server
+that panics at mount on the duplicate operation id and four clients that do not
+compile.
+
+The verbs that are taken are the ones the exposed operations are generated
+under: `create`, `get` (`OpRead`, and `OpSingleton`), `update`, `delete`,
+`list`. Only those, and only when the table exposes them — `create` is a fine
+verb on a read-only resource, which is exactly the shape `schema.Reads` is for.
+
 ## Binding the func
 
 When any table declares an action, `Register` grows a parameter:
