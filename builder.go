@@ -48,9 +48,9 @@ type Builder[T any] struct {
 	// Empty means none: a computed column is opt-in, because it is declared on
 	// the model and wanted by one caller (#92). See WithComputed.
 	computed map[string]bool
-	limit  *int
-	offset *int
-	lock   string
+	limit    *int
+	offset   *int
+	lock     string
 	// resolved records that this query has run its model's BeforeQuery hooks,
 	// which is what makes it safe to nest inside another statement. See
 	// [Subquery]. It survives Clone because the predicates the hooks added do.

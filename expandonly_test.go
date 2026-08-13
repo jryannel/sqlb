@@ -79,7 +79,7 @@ func TestExpandOnlyRefusals(t *testing.T) {
 	}{
 		{
 			name:    "a column the target does not have",
-			build:   func() *sqlb.Builder[expTask] { return sqlb.Query[expTask]().ExpandOnly("list", "nmae") },
+			build:   func() *sqlb.Builder[expTask] { return sqlb.Query[expTask]().ExpandOnly("list", "titel") },
 			wantErr: "not a column of lists",
 		},
 		{
