@@ -47,6 +47,10 @@ type Builder[T any] struct {
 	limit  *int
 	offset *int
 	lock   string
+	// resolved records that this query has run its model's BeforeQuery hooks,
+	// which is what makes it safe to nest inside another statement. See
+	// [Subquery]. It survives Clone because the predicates the hooks added do.
+	resolved bool
 	err      error
 }
 

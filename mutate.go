@@ -650,6 +650,16 @@ func (u *Update[T]) Resolved(ctx context.Context, db Executor) (*Update[T], erro
 	if err := hooksFor[T](db).runBeforeUpdate(ctx, stmt, releasedFrom(db)); err != nil {
 		return nil, err
 	}
+	// A WHERE may name a nested query, and one over a confined model has to have
+	// run that model's hooks before it can decide which rows this write touches.
+	// See [Subquery].
+	exprs := make([]Expr, 0, len(stmt.sets))
+	for _, a := range stmt.sets {
+		exprs = append(exprs, a.value)
+	}
+	if err := guardNested(ctx, db, stmt.where, exprs); err != nil {
+		return nil, err
+	}
 	return stmt, nil
 }
 
@@ -830,6 +840,11 @@ func (d *Delete[T]) Resolved(ctx context.Context, db Executor) (*Delete[T], erro
 	// between a bare DELETE and one that scans every row it removed, which is a
 	// difference an inspection exists to show.
 	stmt.returning = hooks.wantsDeletedRows()
+	// See [Update.Resolved]: a nested query choosing which rows a write removes
+	// is the position where a missing scope matters most.
+	if err := guardNested(ctx, db, stmt.where, nil); err != nil {
+		return nil, err
+	}
 	return stmt, nil
 }
 

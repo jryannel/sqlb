@@ -65,6 +65,10 @@ type compiler struct {
 	// Nil for a statement that has nothing more specific to say.
 	overflow func(need int) error
 
+	// depth is how many nested SELECTs enclose the node being rendered. See
+	// compiler.subquery.
+	depth int
+
 	// base is the table an unqualified column belongs to. Empty while the
 	// statement names one table, which is the common case and the one whose
 	// SQL should stay readable. See qualifyTo.
@@ -479,6 +483,9 @@ func (c *compiler) expr(e Expr) {
 
 	case Raw:
 		c.raw(n)
+
+	case SubqueryExpr:
+		c.subquery(n)
 
 	default:
 		c.fail("sqlb: unsupported expression node %T", e)

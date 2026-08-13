@@ -12,7 +12,15 @@
 //
 // Because the query is a value, hooks and the REST layer can both mutate it
 // before it is compiled, and the same predicate AST is produced by hand-written
-// Go and by parsed URL filter expressions.
+// Go and by parsed URL filter expressions. A value also nests, so a set the
+// database computes is a query rather than a list of values:
+//
+//	sub, err := sqlb.Query[Post]().Select(sqlb.F("author_id")).Resolved(ctx, db)
+//	q := sqlb.Query[Author]().Where(sqlb.F("id").InQuery(sub))
+//
+// Resolving the inner query first is required whenever its model's reads are
+// confined by a hook, because nesting compiles a query rather than running it.
+// See [Subquery].
 //
 // Values never reach the SQL text. Every user-supplied value becomes a bind
 // parameter; only identifiers validated against the model are interpolated.

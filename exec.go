@@ -111,6 +111,15 @@ func (b *Builder[T]) Resolved(ctx context.Context, db Executor) (*Builder[T], er
 	if err := q.resolveExpansionScopes(ctx, db); err != nil {
 		return nil, err
 	}
+	// After the hooks rather than before, because a hook is free to add a
+	// predicate carrying a nested query of its own, and one added here is as
+	// unresolved as one the caller wrote.
+	var w subqueryWalk
+	q.walkSubqueries(&w)
+	if err := w.check(ctx, db); err != nil {
+		return nil, err
+	}
+	q.resolved = true
 	return q, nil
 }
 
