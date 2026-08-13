@@ -123,14 +123,34 @@ WebSocket. Any delivery guarantee at all.
 
 ## What would change our mind
 
-- **A deployment runs two replicas and wants this.** That is the trigger for the
+- ~~**A deployment runs two replicas and wants this.** That is the trigger for the
   outbox, not a reason to widen the Broker: a second in-memory broker that
   gossips is a distributed system with none of the durability the outbox gets for
-  free by writing a row.
-- **A second `Source` appears** — River, NATS, the outbox dispatcher — and does
+  free by writing a row.~~ The outbox is built
+  ([ADR-0012](0012-change-feed-outbox.md)), so the answer to two replicas is now
+  a constructor call rather than a plan. The Broker stays as-is and stays
+  documented as single-replica; nothing about it widened.
+- ~~**A second `Source` appears** — River, NATS, the outbox dispatcher — and does
   not fit `Subscribe(ctx, since) (<-chan Delivery, error)`. One implementation
   has not tested the contract, and the position-based resume is the part most
-  likely to be wrong for a source whose positions are not a dense sequence.
+  likely to be wrong for a source whose positions are not a dense sequence.~~
+  Fired, and the contract held: `outbox.Dispatcher` implements it unchanged, and
+  the endpoint, the wire format and both clients were untouched by the swap.
+
+  The second half of the entry was right about the risk and wrong about where it
+  would bite. A source whose positions are not dense *would* break resume — so
+  the outbox makes them dense, with a transaction-scoped advisory lock that puts
+  its ids in commit order ([ADR-0012](0012-change-feed-outbox.md)). The
+  `Subscribe` signature did not have to change; something behind it had to pay
+  for the guarantee the signature already assumed. That is a seam working, and it
+  is also a warning: this interface makes a dense monotonic position look free,
+  and for the second implementation it cost a throughput ceiling.
+
+- **A third `Source` cannot make its positions dense.** NATS sequence numbers and
+  a Kafka offset are per-partition; a source over either would have to either
+  fake a position or reset every reconnection. That is the entry the one above
+  turned into, and it is now the live risk on this interface rather than a
+  hypothetical about the outbox.
 - **`Filter` turns out to be where authorization actually lives** rather than a
   hook a few applications set. Then it should not be a func on an options struct
   — it should be the same kind of declared obligation
@@ -165,6 +185,14 @@ unaffected by their removal.
 
 ## Revisions
 
+- 2026-08-13 — The outbox landed behind this seam
+  ([ADR-0012](0012-change-feed-outbox.md)) and two *what would change our mind*
+  entries fired. Nothing in this record's decision changed, which is the result
+  it was written hoping for: `Source`, `Delivery`, the two event types and the
+  `Last-Event-ID` contract are what they were, and `rest.Broker` is untouched.
+  One thing was added to `rest` rather than changed — `TxPublisher`, the optional
+  interface `PublishChanges` asserts for, which is what lets a durable publisher
+  record inside the writing transaction while a Broker keeps announcing after it.
 - 2026-08-01 — Written, with the transport built and the outbox still unbuilt.
   Splits ADR-0012's decision in two: this record owns the fan-out and the wire,
   0012 keeps the durability.

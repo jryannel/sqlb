@@ -200,11 +200,18 @@ any depth and does not repeat rows when the table is written to underneath it
 ([ADR-0027](adr/0027-keyset-pagination.md)). Backwards paging is deliberately
 not built; the record says what would change that.
 
-**4. The change feed.** A transactional outbox, a dispatcher woken by
-`LISTEN/NOTIFY`, and fan-out to `AfterCommit` hooks and live subscribers
+**4. The change feed.** Built, in both halves. The SSE endpoint, the wire format
+and an in-process source landed first ([ADR-0045](adr/0045-the-stream-is-a-seam.md)),
+and the transactional outbox behind them — a table written by the same
+transaction as the change, a dispatcher woken by `LISTEN/NOTIFY`, at-least-once
+across replicas — is the `outbox` package
 ([ADR-0012](adr/0012-change-feed-outbox.md)). This is what closes the loop from
-"dynamic views" to "live views", and the piece most likely to change shape once
-it meets real traffic.
+"dynamic views" to "live views".
+
+It remains the piece most likely to change shape once it meets real traffic, and
+the reason is now specific rather than general: the ordering guarantee is bought
+with an advisory lock that serialises writes to published models, and nobody has
+measured what that ceiling is under load.
 
 It is also worth less on its own than the ordering suggests. A feed delivers
 table plus row key and expects the client to refetch, which is only mechanical if

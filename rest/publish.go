@@ -39,6 +39,20 @@ import (
 // durable when the hook runs — so the event is published immediately. The
 // distinction is real but not visible to a subscriber.
 //
+// # Unless p can do better
+//
+// A p that also implements [TxPublisher] is handed the events *inside* the
+// transaction instead, so that the event and the change commit together or
+// neither does. That is what an outbox is, and it is why swapping a [Broker] for
+// one changes nothing here: this call is the same, and the assertion in
+// [TxPublisher] decides which guarantee it gets.
+//
+// The visible difference is the failure. A Broker cannot fail a write — it is
+// told after the commit, when there is nothing left to refuse — while a
+// TxPublisher that cannot record the event rolls the mutation back. A row that
+// exists while every subscriber believes it does not is the failure this feed
+// exists to prevent, reached from the other direction.
+//
 // # Multi-tenancy
 //
 // When the model declares a `scope` column ([ADR-0030]), each event carries that
@@ -152,13 +166,25 @@ func publishChanges[T any](h *sqlb.Hooks[T], p Publisher) error {
 	return nil
 }
 
-// announce publishes after the commit when there is one to be after, and
-// immediately when there is not.
+// announce hands the events to the publisher at the moment that publisher can
+// use, which is one of three and not two.
 //
-// The fallback is not a silent downgrade of the guarantee: under autocommit the
-// statement committed before the hook was called, so publishing now is publishing
-// after the commit. What it does lose is atomicity across a multi-statement unit
-// of work, which under autocommit does not exist to lose.
+// A [TxPublisher] inside a transaction records *into* it, so the event and the
+// change commit together or neither does — the durability [ADR-0012] is about.
+// Its error is returned rather than reported, which rolls the write back: a
+// change that could not be recorded is one no subscriber would ever hear about,
+// and a row that exists while every client believes it does not is worse than a
+// write that failed and said so.
+//
+// Everything else publishes after the commit when there is one to be after, and
+// immediately when there is not. That fallback is not a silent downgrade: under
+// autocommit the statement committed before the hook was called, so publishing
+// now *is* publishing after the commit. What it loses is atomicity across a
+// multi-statement unit of work, which under autocommit does not exist to lose —
+// and a TxPublisher lands here for the same reason, having no transaction to
+// record into.
+//
+// [ADR-0012]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0012-change-feed-outbox.md
 func announce(ctx context.Context, p Publisher, events ...Event) error {
 	if len(events) == 0 {
 		return nil
@@ -166,6 +192,9 @@ func announce(ctx context.Context, p Publisher, events ...Event) error {
 	if _, inTx := sqlb.TxFrom(ctx); !inTx {
 		p.Publish(events...)
 		return nil
+	}
+	if tp, ok := p.(TxPublisher); ok {
+		return tp.Record(ctx, events...)
 	}
 	return sqlb.AfterCommit(ctx, func(context.Context) error {
 		p.Publish(events...)

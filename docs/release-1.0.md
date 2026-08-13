@@ -297,10 +297,22 @@ feature does not.
 
 Named so that "it is missing" is not mistaken for "it was forgotten".
 
-- **The change feed** ([ADR-0012](adr/0012-change-feed-outbox.md)). The biggest
+- ~~**The change feed** ([ADR-0012](adr/0012-change-feed-outbox.md)). The biggest
   unbuilt item in [the vision](vision.md), and the one most likely to change
   shape on contact with traffic. Freezing an outbox format on a guess is exactly
-  the mistake 1.0 exists to avoid.
+  the mistake 1.0 exists to avoid.~~ **Built**, in two halves and in that order —
+  the endpoint and the wire format first
+  ([ADR-0045](adr/0045-the-stream-is-a-seam.md)), the transactional outbox behind
+  them second, which is what stopped the format from being a guess: the wire was
+  settled against a running client a fortnight before the durable source existed,
+  and the source then landed without changing it.
+
+  The deferral's reasoning still applies to one thing, so it moves rather than
+  disappears: **the delivery semantics** are what a consumer builds against, and
+  at-least-once with a replayable position is now a promise. The `outbox` package
+  is additive and nothing depends on it, so what 1.0 should be careful about is
+  not the format but a client written to skip its own refetch because the stream
+  promised catch-up.
 - **Nested `?expand`, and backwards cursors.** Both are already named in
   `compatibility.md` under *Will move*, both are additive, and neither changes
   the meaning of a request that can be sent today.
