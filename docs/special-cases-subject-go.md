@@ -205,31 +205,34 @@ already exists, and it needs no encoder behind it: the two arrays are ordinary
 bind parameters since [ADR-0040](adr/0040-the-driver-is-a-dependency.md), which
 deleted the array codec this paragraph used to point at.
 
-### 4. Bulk insert has an exact ceiling, and it is worth naming
+### 4. Bulk insert has an exact ceiling, and it is now named — closed
 
 The first census lists this as "nothing measures what happens at a thousand".
 The number: `InsertRows` renders **one** `VALUES` list with one bind per column
-per row ([`mutate.go:115-155`](../mutate.go)) — no batching, no check. The wire
-protocol caps a statement at 65,535 bind parameters; at the 10 columns this
-corpus's chunk table uses, that is ~6,553 rows. Fine in every test anyone
-writes, a hard failure on the first large document in production, and the error
-arrives from the driver in terms of *parameters* rather than rows. (The corpus
-uses sqlc's `:copyfrom` — Postgres `COPY` — for exactly these three tables.)
+per row ([`mutate.go`](../mutate.go)) — no batching. The wire protocol caps a
+statement at 65,535 bind parameters; at the 10 columns this corpus's chunk table
+uses, that is ~6,553 rows. Fine in every test anyone writes, a hard failure on
+the first large document in production. (The corpus uses sqlc's `:copyfrom` —
+Postgres `COPY` — for exactly these three tables.)
 
-Measured rather than reasoned about, in
-[`pgtest/subjectgo_test.go`](../pgtest/subjectgo_test.go): 6,553 rows insert,
-6,554 do not, and the refusal is **pgx's own** — `extended protocol limited to
-65535 parameters` — raised before the batch reaches the server. Two consequences
-for the shape of the fix. The message names the unit nobody wrote, so a caller
-who inserted 6,554 rows has to divide to learn what happened; and because the
-wording belongs to the driver rather than to Postgres, it is not sqlb's to lean
-on — another driver may word it differently, or send the batch and let the
-server answer. A refusal in `InsertRows` is the same answer under every driver.
+The refusal used to be **pgx's own** — `extended protocol limited to 65535
+parameters` — raised before the batch reached the server, and that was the gap:
+the message named the unit nobody wrote, so a caller who inserted 6,554 rows had
+to divide to learn what happened, and because the wording belonged to the driver
+rather than to Postgres it was not sqlb's to lean on.
 
-Refusing clearly, naming the row count and the maximum, is two lines and meets
-the [actionable-errors](adr/0011-actionable-errors.md) bar. Batching inside a
-transaction is the larger option and changes atomicity, so it has to be said out
-loud if it is chosen. `COPY` itself is a `database/sql` problem and can stay out.
+`compiler.result` now refuses any statement over the ceiling, and `InsertRows`
+supplies the arithmetic, so the batch never reaches the driver:
+
+> `sqlb: inserting 6554 rows into chunks binds 65540 values across 10 columns,
+> and one statement can carry 65535; insert at most 6553 rows at a time, in a
+> transaction if they have to land together`
+
+Which is the [actionable-errors](adr/0011-actionable-errors.md) answer: rows in,
+rows out. Batching inside a transaction was the larger option and is deliberately
+*not* taken — a batch silently becoming several statements stops being atomic
+outside a transaction, and how to divide the work is the caller's decision.
+`COPY` itself is a `database/sql` problem and can stay out.
 
 ## Vectors: a second data point for ADR-0026
 

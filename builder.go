@@ -44,9 +44,9 @@ type Builder[T any] struct {
 	// Empty means none: a computed column is opt-in, because it is declared on
 	// the model and wanted by one caller (#92). See WithComputed.
 	computed map[string]bool
-	limit    *int
-	offset   *int
-	lock     string
+	limit  *int
+	offset *int
+	lock   string
 	err      error
 }
 

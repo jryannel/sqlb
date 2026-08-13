@@ -211,6 +211,7 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 	}
 
 	c := newCompiler(i.dialect)
+	c.overflow = i.overflowErr(len(cols))
 	c.write("INSERT INTO ")
 	c.table(i.model.Table)
 	c.write(" (")
@@ -307,6 +308,30 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 
 	writeReturning(c, i.model, i.computed)
 	return c.result()
+}
+
+// overflowErr explains a batch too wide for one statement in terms of the batch
+// rather than of the protocol.
+//
+// The ceiling is reported as a row count because rows are what the caller
+// controls: they chose the batch size, not the column count. It is derived from
+// the values actually bound rather than from rows × columns, because the two
+// differ — a column left to its database default writes the DEFAULT keyword and
+// binds nothing — and a suggestion computed from the wider figure would name a
+// batch size that still does not fit.
+//
+// Integer division floors, which is the safe direction: the answer is a batch
+// that fits, and rounding up would name one that does not.
+func (i *Insert[T]) overflowErr(width int) func(int) error {
+	rows := len(i.rows)
+	return func(need int) error {
+		fits := rows * maxBindParams / need
+		return fmt.Errorf(
+			"sqlb: inserting %d rows into %s binds %d values across %d columns, "+
+				"and one statement can carry %d; insert at most %d rows at a time, "+
+				"in a transaction if they have to land together",
+			rows, i.model.Table, need, width, maxBindParams, fits)
+	}
 }
 
 // columns picks the columns to write: everything mapped, minus Only/Omit, and

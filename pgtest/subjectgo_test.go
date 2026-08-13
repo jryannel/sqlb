@@ -9,7 +9,8 @@ package pgtest
 //     want one is that the alternative is several statements or a CASE per
 //     column, which is where a tenant predicate gets forgotten;
 //   - the bind parameter ceiling is the wire protocol's, so only a real driver
-//     and server can say where it is and what is said when it is crossed;
+//     and server can confirm that the largest batch sqlb accepts is one Postgres
+//     actually takes;
 //   - a bulk reposition is a claim about one statement doing what N would;
 //   - and a cursor held across a reorder either repeats a row or it does not.
 //
@@ -192,16 +193,17 @@ func TestAFilteredSumOverNoMatchingRowsIsNullUntilItIsCoalesced(t *testing.T) {
 // bind per column per row and checks nothing, so at the ten columns this
 // corpus's chunk table uses the last statement that works has 6,553 rows in it.
 //
-// Two things this pins that the arithmetic alone cannot. The refusal comes from
-// the *driver* — pgx says "extended protocol limited to 65535 parameters", so
-// the message is in terms of parameters, which is not the unit anybody wrote: a
-// caller who inserted 6,554 rows has to divide to find out what happened. And
-// because it is the driver's, it is not sqlb's to rely on: another driver may
-// word it differently, or send the batch and let the server refuse it.
+// The refusal is now sqlb's rather than the driver's, and this is where that is
+// worth measuring: the arithmetic says 6,553 rows is the largest batch that
+// fits, and only a real server can confirm that the batch sqlb accepts is one
+// Postgres actually takes. A ceiling that is one row too generous fails in
+// production and nowhere else.
 //
-// Refusing in sqlb, naming rows and columns and the maximum, is the ADR-0011
-// answer, is two lines, and is the same answer under every driver.
-func TestBulkInsertIsRefusedInTermsOfParametersRatherThanRows(t *testing.T) {
+// The other direction — that 6,554 rows is refused, in terms of rows — is
+// settled without a database in the engine's own suite. What it adds here is
+// that the refusal happens *before* the wire: pgx never sees the statement, so
+// the message is sqlb's, in the units the caller wrote.
+func TestBulkInsertIsRefusedInTermsOfRowsAtTheBindParameterCeiling(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	raw := freshDB(t)
@@ -244,8 +246,8 @@ func TestBulkInsertIsRefusedInTermsOfParametersRatherThanRows(t *testing.T) {
 			maxRows, maxRows*columns, err)
 	}
 
-	// One row more. 65,540 parameters, and sqlb has no opinion about it — the
-	// statement is rendered in full and handed over.
+	// One row more. 65,540 parameters, and sqlb refuses it rather than sending
+	// it: the statement never reaches pgx.
 	_, err := sqlb.InsertRows(rows(maxRows+1, maxRows)...).Exec(ctx, db)
 	if err == nil {
 		t.Fatalf("inserting %d rows (%d parameters) succeeded; the ceiling has moved and this "+
@@ -253,15 +255,16 @@ func TestBulkInsertIsRefusedInTermsOfParametersRatherThanRows(t *testing.T) {
 	}
 	t.Logf("the answer at %d parameters: %v", (maxRows+1)*columns, err)
 
-	// The message names parameters, which is the point. Nothing in it says
-	// "rows", so nothing in it says what the caller did.
-	if !strings.Contains(err.Error(), "65535") {
-		t.Errorf("the failure does not name the protocol maximum, so the arithmetic above is "+
-			"guessing at which limit was hit: %v", err)
+	// In rows, because rows are what the caller chose. pgx's own wording —
+	// "extended protocol limited to 65535 parameters" — would leave a caller who
+	// inserted 6,554 rows to divide by the column count to find out what
+	// happened, and that wording appearing here would mean sqlb had let the
+	// batch through after all.
+	if !strings.Contains(err.Error(), "insert at most") {
+		t.Errorf("the failure does not say how large a batch would work: %v", err)
 	}
-	if strings.Contains(strings.ToLower(err.Error()), " rows") {
-		t.Errorf("the failure mentions rows after all; the gap this test describes is smaller "+
-			"than it claims: %v", err)
+	if strings.Contains(err.Error(), "extended protocol") {
+		t.Errorf("the batch reached the driver, so sqlb's own check did not fire: %v", err)
 	}
 }
 

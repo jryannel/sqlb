@@ -42,12 +42,28 @@ func (Postgres) QuoteIdent(s string) string {
 // uses UseDialect on that statement, which is scoped and race-free.
 var defaultDialect Dialect = Postgres{}
 
+// maxBindParams is how many bind parameters one statement can carry.
+//
+// The limit is the extended query protocol's, not Postgres's: the Bind message
+// counts its parameters in an int16, so 65535 is the ceiling for every driver
+// that speaks it, pgx included. Nothing about the server or the statement
+// changes it, which is why it is a constant here rather than a configurable.
+const maxBindParams = 65535
+
 // compiler accumulates SQL text and its bind parameters.
 type compiler struct {
 	sb   strings.Builder
 	args []any
 	d    Dialect
 	err  error
+
+	// overflow describes what a caller can do about a statement that binds more
+	// values than the protocol can carry. The generic message can only say that
+	// the statement is too wide; the arithmetic that makes it actionable —
+	// "12000 rows × 6 columns, so insert at most 10922 at a time" — is known
+	// only to whoever assembled the statement, so it is supplied from there.
+	// Nil for a statement that has nothing more specific to say.
+	overflow func(need int) error
 
 	// base is the table an unqualified column belongs to. Empty while the
 	// statement names one table, which is the common case and the one whose
@@ -546,6 +562,31 @@ func (c *compiler) orders(orders []Order) {
 func (c *compiler) result() (string, []any, error) {
 	if c.err != nil {
 		return "", nil, c.err
+	}
+	// Checked here rather than at each statement's own terminal because here is
+	// the one place every statement passes through, and because the count is
+	// only known once the last value has been bound: a multi-row insert drops a
+	// defaulted column per row, so the width cannot be multiplied out in
+	// advance.
+	//
+	// Refusing rather than splitting the statement is the decision. pgx reports
+	// the overflow itself — "extended protocol limited to 65535 parameters" —
+	// and scan drives the result set specifically so that message survives, so
+	// this is not the difference between failing and working. It is the
+	// difference between a driver-level complaint about the protocol and an
+	// error that names the batch that caused it (ADR-0011). Chunking would be
+	// the other way to make it work, and it is deliberately not done: a batch
+	// silently becoming several statements stops being atomic outside a
+	// transaction, and how to divide the work is the caller's decision to make.
+	if len(c.args) > maxBindParams {
+		if c.overflow != nil {
+			return "", nil, c.overflow(len(c.args))
+		}
+		return "", nil, fmt.Errorf(
+			"sqlb: this statement binds %d values and one statement can carry %d; "+
+				"a long list of values in a predicate is the usual cause — split it, "+
+				"or match against a subquery instead",
+			len(c.args), maxBindParams)
 	}
 	return c.sb.String(), c.args, nil
 }
