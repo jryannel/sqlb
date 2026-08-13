@@ -140,6 +140,9 @@ func expandRowsAlias(name string) string { return "__rows_" + name }
 //
 // Expanding is additive and idempotent: naming the same relation twice joins it
 // once.
+//
+// An expanded row carries every column of the target that is not hidden. Use
+// [Builder.ExpandOnly] to carry fewer.
 func (b *Builder[T]) Expand(names ...string) *Builder[T] {
 	for _, name := range names {
 		if name == "" {
@@ -158,6 +161,75 @@ func (b *Builder[T]) Expand(names ...string) *Builder[T] {
 		}
 		b.expand = append(b.expand, name)
 	}
+	return b
+}
+
+// ExpandOnly resolves a relation carrying only the named columns of the target.
+//
+// It is [Builder.Expand] with a narrower row: `ExpandOnly("author", "id",
+// "name")` joins the author and puts two keys in the expanded object rather
+// than all of them. Naming the same relation again replaces the previous
+// selection, so a narrowing cannot accumulate into the full row by accident.
+//
+// # Why this narrows and cannot widen
+//
+// It takes columns off an expanded row and can put nothing on one. Hidden stays
+// hidden, a computed column stays absent for the reason writeRowObject gives,
+// and the cap and ordering of a collection stay where the schema declared them
+// ([ADR-0022]): those are what stop a response's size being a function of data
+// nobody bounded, and a per-query lever over them would be a request deciding
+// how much work it costs to answer. What a caller may decide is how much of
+// each row they are willing to pay to carry, which is the same shape as
+// [Builder.WithComputed] — opt-in, per query, narrowing only.
+//
+// This is a Go API rather than a request parameter. The wire shape of an
+// expansion is derived from the schema, and a client asking for fewer keys
+// would make one endpoint answer with rows of varying shape
+// ([ADR-0039](https://github.com/jryannel/sqlb/blob/main/docs/adr/0039-a-schema-edit-is-an-api-edit.md)).
+//
+// [ADR-0022]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0022-references-declare-their-inverse.md
+func (b *Builder[T]) ExpandOnly(name string, columns ...string) *Builder[T] {
+	if b.Expand(name); b.err != nil {
+		return b
+	}
+	if len(columns) == 0 {
+		return b.fail("ExpandOnly(%q) names no columns; use Expand(%q) for the whole row", name, name)
+	}
+	rel := b.model.Relation(name)
+	target, err := rel.Target()
+	if err != nil {
+		return b.Fail(err)
+	}
+	only := make(map[string]bool, len(columns))
+	for _, col := range columns {
+		info := target.Column(col)
+		switch {
+		case info == nil:
+			return b.fail("ExpandOnly(%q) names %q, which is not a column of %s (have: %s)",
+				name, col, target.Table, strings.Join(target.ColumnNames(), ", "))
+		case info.Hidden:
+			// Refused rather than skipped. A hidden column dropped quietly would
+			// read as "this expansion carries what I asked for" right up until
+			// someone tried to use the key that is not there.
+			return b.fail("ExpandOnly(%q) names %q, which %s hides; an expanded row never carries it",
+				name, col, target.Table)
+		case info.Computed():
+			return b.fail("ExpandOnly(%q) names %q, which %s computes; an expanded row carries stored "+
+				"columns only, and its derived ones are answered by its own endpoint",
+				name, col, target.Table)
+		}
+		only[col] = true
+	}
+	// The primary key is not added back. "Only" means only, and the two places
+	// the expansion needs the key — the NULL test that tells an absent related
+	// row from a row of nulls, and a collection's ordering — reference the
+	// joined column in SQL rather than reading it out of the row object, so
+	// leaving it out costs the caller a key they did not ask for and nothing
+	// else.
+	if b.expandOnly == nil {
+		b.expandOnly = make(map[string]map[string]bool, 1)
+	}
+	b.expandOnly[name] = only
 	return b
 }
 
@@ -292,7 +364,7 @@ func (b *Builder[T]) compileExpansionSelections(c *compiler) {
 		c.write("CASE WHEN ")
 		c.column(Column{Table: alias, Name: target.PK.Name})
 		c.write(" IS NULL THEN NULL ELSE ")
-		writeRowObject(c, target, alias)
+		writeRowObject(c, target, alias, b.expandOnly[name])
 		c.write(" END AS ")
 		c.ident(expandPrefix + name)
 	}
@@ -304,11 +376,18 @@ func (b *Builder[T]) compileExpansionSelections(c *compiler) {
 // to hold across an expansion in either direction: a hidden column on the
 // target is hidden when the target is expanded, and row_to_json of the whole
 // row would quietly carry a password hash into a response.
-func writeRowObject(c *compiler, target *Model, alias string) {
+// only, when non-nil, is the set of columns the caller narrowed the row to with
+// ExpandOnly. It can only remove columns: Hidden and Computed are still skipped
+// below whatever it names, because ExpandOnly refuses those names outright and
+// this stays correct if it ever stops.
+func writeRowObject(c *compiler, target *Model, alias string, only map[string]bool) {
 	c.write("json_build_object(")
 	first := true
 	for _, col := range target.Columns {
 		if col.Hidden {
+			continue
+		}
+		if only != nil && !only[col.Name] {
 			continue
 		}
 		// A computed column is SQL text written against the target's own table,
@@ -439,7 +518,7 @@ func (b *Builder[T]) compileCollection(c *compiler, name string, rel *RelationIn
 	c.write(" <= " + capped + "), '[]'::json), 'has_more', count(*) > " + capped + ")")
 
 	c.write(" FROM (SELECT ")
-	writeRowObject(c, target, alias)
+	writeRowObject(c, target, alias, b.expandOnly[name])
 	c.write(" AS ")
 	c.ident("o")
 	c.write(", row_number() OVER (ORDER BY ")
