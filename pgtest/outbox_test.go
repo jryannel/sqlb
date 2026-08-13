@@ -126,7 +126,7 @@ func newOutboxFixture(t *testing.T) *outboxFixture {
 // below say so by not tolerating the poll's latency.
 func (f *outboxFixture) runDispatcher(t *testing.T, opts outbox.DispatcherOptions) *outbox.Dispatcher {
 	t.Helper()
-	opts.Options.OnError = f.errs.add
+	opts.OnError = f.errs.add
 	if opts.Poll == 0 {
 		opts.Poll = 250 * time.Millisecond
 	}
