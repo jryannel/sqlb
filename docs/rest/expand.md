@@ -106,6 +106,24 @@ relations do not expand in turn, and there is no `?expand=list.workspace`. One
 level is a join per relation and a bounded statement; nesting is where a depth
 limit and a cost model have to be argued for, and neither has been.
 
+An expanded row carries every column of the target that is not `Hidden`, and a
+request cannot ask for fewer. That is deliberate: the wire shape of an expansion
+is derived from the schema, and a client choosing which keys come back would
+make one endpoint answer with rows of varying shape
+([ADR-0039](../adr/0039-a-schema-edit-is-an-api-edit.md)).
+
+In Go, where the caller is the application rather than a client, `ExpandOnly`
+narrows it:
+
+```go
+sqlb.Query[Task]().ExpandOnly("list", "name")   // {"name": …} rather than the whole list
+```
+
+It only ever removes columns. `Hidden` stays hidden and a computed column stays
+absent — both are refused by name rather than skipped — and a collection's cap
+and ordering stay where the schema declared them, since those are what stop a
+response's size being a function of data nobody bounded.
+
 ## An embedded row is the same shape as a direct one
 
 An expanded row is built by Postgres, with `json_build_object`, rather than

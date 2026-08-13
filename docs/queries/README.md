@@ -66,6 +66,33 @@ Combine with `And`, `Or` and `Not`. All three skip zero predicates, and `Not` of
 a zero predicate stays zero, so an absent filter stays absent rather than
 becoming always-false.
 
+## Matching against another query
+
+A query is a value, so it nests. `InQuery` and `NotInQuery` match a column
+against the single column a subquery selects; `Exists` and `NotExists` ask
+whether it returns any row:
+
+```go
+tagged := sqlb.Query[PostTag]().Select(sqlb.F("post_id")).Where(sqlb.F("tag_id").Eq(id))
+posts, err := sqlb.Query[Post]().Where(sqlb.F("id").InQuery(tagged)).All(ctx, db)
+```
+
+This is `OneOf` over a set the database computes rather than one your code
+enumerates, and the difference is not only convenience: a list of values costs a
+bind parameter each, and a statement carries at most 65,535 of them.
+
+**A nested query has to be resolved first if its model's reads are confined by a
+hook.** Nesting compiles a query rather than running it, and hooks apply when a
+query runs — so the scope would be silently absent from inside someone else's
+`WHERE` clause. That is refused rather than dropped:
+
+```go
+sub, err := sqlb.Query[Post]().Select(sqlb.F("author_id")).Resolved(ctx, db)
+```
+
+A model with no hook needs none of this. [ADR-0055](../adr/0055-a-nested-query-runs-nobodys-hooks.md)
+has the reasoning, including why the inner query is not resolved for you.
+
 ## Aggregates and other shapes
 
 `Collect[R]` scans into a type other than the model, which is how grouped

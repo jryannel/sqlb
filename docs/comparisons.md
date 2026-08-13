@@ -279,8 +279,12 @@ Stated plainly, because a comparison page that cannot answer this is marketing:
   production history. Use ent.
 - **Your queries are mostly static.** The thing sqlb is for does not arise, and
   sqlc gives a stronger guarantee for that work.
-- **You need a graph.** Many-to-many, reverse expansion, traversal predicates —
-  ent has them and sqlb does not.
+- **You need a graph.** Traversal predicates and expansion more than one level
+  deep — ent has them and sqlb does not. Reverse expansion it does have
+  ([ADR-0022](adr/0022-references-declare-their-inverse.md)), and many-to-many is
+  a junction table queried directly rather than a declaration
+  ([ADR-0056](adr/0056-a-junction-is-a-table.md)); if a graph is the shape of
+  your domain rather than an edge of it, ent is still the answer.
 - **Migrations are the problem.** Atlas.
 - **You are not on Postgres.** sqlb is Postgres-only and
   [will stay that way](adr/0001-postgres-only.md).

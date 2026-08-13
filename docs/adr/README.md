@@ -180,6 +180,7 @@ starts with 0053.
 | [0053](0053-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and a UI is authored rather than carried | Working | High (no UI) / Low (sufficiency) |
 | [0054](0054-a-named-scope-is-releasable-at-the-mount.md) | A named scope is releasable at the mount, and only a named one, so two surfaces over one table can differ in rows | Working | High |
 | [0055](0055-a-nested-query-runs-nobodys-hooks.md) | A query nests inside another, and a nested one is refused unless it has been resolved | Working | Medium |
+| [0056](0056-a-junction-is-a-table.md) | A junction is a table, and many-to-many is not a declaration | Working | High (junction) / Medium (no sugar) |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.
