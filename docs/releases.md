@@ -14,6 +14,50 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.14.0
+
+2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.14.0)
+
+No breaking changes. Three pieces of work, all additive.
+
+**`sqlb docs` writes facts instead of asking for them, and gains a section for
+routes it can't see.** Follow-up to `v0.13.0`'s first cut, based on feedback
+after that PR landed. Filterable/sortable/searchable/expandable columns on a
+list, required/optional columns on a create, writable columns on a patch, a
+declared verb's `Body`/`Writes`/`Touches` — all schema-derivable, now rendered
+above the notes block so an agent's writing time goes to what only it can
+supply. The open-ended notes prompt is now a fixed template —
+`Source:`/`Request:`/`Response:`/`Invariants:` — because a diff on an
+`Invariants:` line is meaningful and a diff on a paragraph of prose is not.
+A note's key is `"<table> <kind>"` instead of `"METHOD /path"`, so renaming a
+resource's REST path carries its notes with it instead of archiving them
+under a new key. And a route mounted by hand with `huma.Register` — the one
+with no `Describe()` to fall back on, and so the one that most needed a
+written note — now gets a section too, via `Project.HandwrittenOps`. Closes
+[#211](https://github.com/jryannel/sqlb/issues/211).
+
+**studio's README now says what it doesn't do, not just what it does.**
+A real-consumer review of `v0.13.0`'s studio confirmed the built scope works —
+hidden columns excluded, row-scoping held, bearer-token login as designed —
+and then named what "an uncurated data/schema/action browser" was leaving
+unsaid next to Django's admin: no curation layer, no inline/nested editing, no
+bulk actions, no history/audit trail, no permission-configuration screen.
+None of that was ever promised by [ADR-0053](adr/0053-the-manifest-describes-what-cannot-be-guessed.md),
+and the README now says so directly instead of by omission.
+
+**A worked cross-tenant admin surface, in `example/tasks`.** Answers "how do I
+see all data from all tenants as an admin?" with the mechanism that already
+exists — [ADR-0054](adr/0054-a-named-scope-is-releasable-at-the-mount.md)'s
+named-scope release — written out as a copy-pasteable pattern. The boundary is
+two independent halves: row visibility (naming the workspace-confining hook so
+a mount may release it, while the soft-delete hook stays permanently
+unreleased) and route access (`RequireAdmin("/admin/")`, gated on a
+`PlatformAdmin` claim no public flow can set). Neither half is the boundary
+alone. Where releasing a model's only confining hook would otherwise leave
+`rest.Resource` unable to mount ([ADR-0030](adr/0030-declared-scope-is-required.md)
+doing its job), a permanent, unnamed no-op hook — `rest/scope.go`'s own
+sanctioned answer — takes its place on `/admin/*`.
+
 ## v0.13.1
 
 2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.13.1)
