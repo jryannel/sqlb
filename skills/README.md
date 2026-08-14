@@ -23,12 +23,19 @@ skill is offered from the first turn — give each registry its own
 
 | Skill | Covers |
 |---|---|
+| [`sqlb-authoring`](sqlb-authoring/SKILL.md) | The DSL's own vocabulary for *writing* a schema: column types, capability flags (`Filterable`/`Sortable`/`Scoped`/`Hidden`/…), predicates, hooks and the escape hatches around each — grounded at file:line, not tied to any one project's schema |
 | [`sqlb-queries`](sqlb-queries/SKILL.md) | Where the builder ends and `Raw`, sqlc or hand-written SQL begins — plus four failure modes that compile, pass their tests, and are wrong at runtime |
 | [`sqlb-adoption`](sqlb-adoption/SKILL.md) | Whether an existing codebase should adopt sqlb at all: a five-step census producing a ratio and a pilot, with the two stop conditions that end the evaluation early |
 
-They answer different questions and neither subsumes the other: `sqlb-adoption`
-runs once per codebase and mostly decides *whether*; `sqlb-queries` applies every
-time someone writes a query afterwards.
+They answer different questions and none subsumes another: `sqlb-adoption`
+runs once per codebase and mostly decides *whether*; `sqlb-authoring` applies
+when someone is declaring or changing a table; `sqlb-queries` applies every
+time someone writes a query afterwards. `sqlb-authoring` is also the
+hand-maintained sibling of the *generated* `sqlb-schema` skill below — that one
+says which columns *this project's* schema actually declared capabilities on,
+this one says what the capability vocabulary is in the first place. Load the
+generated one for "can I filter `tasks.author_id`" and this one for "does
+`Filterable` exist" or "what does `Scoped` enforce".
 
 ## Installing
 
@@ -80,6 +87,16 @@ an evaluation that reports "sqlb replaces the API" when the honest answer is
 "the least novel third of it", or that surveys the routes before finding out the
 tables are blocked.
 
+`sqlb-authoring` is the third case, and it argues differently than the other
+two: a check *could* in principle enumerate `Field`'s methods, but the DSL's
+vocabulary changes at the rate of a minor release, not a schema edit — the
+opposite drift risk `sqlb-schema` exists to close by generating. What makes a
+hand-written document safe here is the same thing that makes it unsafe for the
+per-project half: nothing about it is a fact any particular registry could get
+out of sync with. It still rots on a rename the way `sqlb-queries` does, so
+every method and doc-comment claim below is grounded at a file:line rather than
+asserted from memory — see "Keeping it honest".
+
 ## Keeping it honest
 
 Every code sample in `sqlb-queries/SKILL.md` was compiled and rendered against
@@ -88,6 +105,13 @@ stale claim in the process. The traps carry their evidence: the `timestamptz`
 one is asserted by `pgtest/census_test.go`, and that test fails loudly if the
 missing cast is ever added, so the skill's claim and the code cannot silently
 disagree.
+
+Every method, flag and line reference in `sqlb-authoring/SKILL.md` was checked
+against the source at the time it was written — `field.go`, `expr.go`,
+`hooks.go`, `db.go`, `registry.go`, `rest/scope.go` and `rest/rest.go` line
+numbers included — rather than described from memory. A renumbered file makes
+an entry wrong in a way nothing here catches automatically; treat a stale
+line number as a signal to recheck the claim next to it, not just the number.
 
 Every shell command in `sqlb-adoption/SKILL.md` was run against synthetic
 fixtures on BSD awk, which is what the stated platform has, and its `sqlb survey`
