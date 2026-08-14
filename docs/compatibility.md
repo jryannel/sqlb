@@ -6,7 +6,7 @@ sqlb is pre-1.0 and has one author. It no longer has no consumers, and that is
 what has changed since this document was written at `v0.1.0`: the breaks below
 are not hypothetical any more. `v0.7.0` removed the default hook registry
 because the ambient one had switched a real adopter's tenant boundary off
-without a compile error, and the three unannounced breaks recorded at the
+without a compile error, and the five unannounced breaks recorded at the
 bottom of this page all came out of consumer reports rather than a plan.
 
 That is the reason this document exists, and the reason it is maintained rather
@@ -165,14 +165,16 @@ Named in advance, so the break is a documented plan rather than a surprise.
   that is confidently wrong about a schema it no longer describes is worse than
   an absent one.
 
-### Four that broke without being listed here first
+### Five that broke without being listed here first
 
-`v0.6.0` broke three surfaces that were not under *Will move*, and `v0.11.0`
-broke a fourth — which is the first one finishing. The honest version is that
-all four came out of consumer reports rather than a plan. The release notes —
-[v0.6.0](releases.md#v060) and [v0.11.0](releases.md#v0110) — carry each with
-its mechanical edit, which is the other half of the promise above; this is the
-half that was missed, recorded where the announcement should have been.
+`v0.6.0` broke three surfaces that were not under *Will move*, `v0.11.0` broke
+a fourth — which is the first one finishing — and `v0.13.0` broke a fifth. The
+honest version is that all five came out of consumer reports rather than a
+plan. The release notes — [v0.6.0](releases.md#v060),
+[v0.11.0](releases.md#v0110) and [v0.13.0](releases.md#v0130) — carry each
+with its mechanical edit, which is the other half of the promise above; this
+is the half that was missed, recorded where the announcement should have
+been.
 
 - **A computed column is opt-in on reads** (`v0.6.0`). `sqlb.Query[T]()` no
   longer projects declared computed columns; `WithComputed(names…)` asks for
@@ -202,6 +204,13 @@ half that was missed, recorded where the announcement should have been.
 - **A nil member of `OneOf` widens the set** rather than binding a `NULL` that
   could never match. Hand-written Go only — the filter grammar has a separate
   `isnull` operator and never routes a nil through `OneOf`.
+- **`schema.Mutation` is gone** (`v0.13.0`). Folded back into `Action`'s
+  existing item form, the shape it was always byte-for-byte identical to.
+  `AddMutation(schema.Mutation{...})` becomes `AddAction(schema.Action{...})`;
+  `rest.Mutation[T,In]` becomes `rest.Action[T,In]`; `rest.MutationSpec`
+  becomes `rest.ActionSpec`. It broke because an independent port confirmed,
+  with a diff rather than a hypothesis, the redundancy `v0.12.0`'s own release
+  notes had already named as an open question rather than a settled one.
 
 One behavioural change landed with cursors and is worth stating plainly, because
 it affects requests that do not use them: **every list is now ordered

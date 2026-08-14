@@ -14,6 +14,121 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.13.0
+
+2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.13.0)
+
+Two separate pieces of work, not one shape. A first real external port —
+sqlbcoach, `dcoach` ported onto `v0.12.0` — found four gaps and confirmed one
+of last tag's own open questions; all four are closed here. Two commands land
+alongside it, both additive: `sqlb docs` and a browsable `studio` module.
+
+**One break.** It is *not* listed under [*Will
+move*](compatibility.md#will-move), and that is a miss rather than a plan —
+recorded [where the announcement should have
+been](compatibility.md#four-that-broke-without-being-listed-here-first).
+
+**BREAKING: `schema.Mutation` is gone, folded back into `Action`'s item
+form.** `v0.12.0` shipped `Mutation` beside `Action`'s existing item-form
+envelope for the same row-scoped write, on the argument that naming the shape
+at the declaration was worth a second type — and named its own doubt in the
+same breath: *"deliberately not deprecated, since its form may still
+change… left open until there is evidence rather than a guess."* The
+evidence arrived the same day, in an independent port: swapping
+`AddMutation` for `AddAction` on a live table changed the generated code by
+exactly one identifier and nothing about behavior, route, or response shape.
+Convex's query/mutation/action split — where `Mutation`'s name was borrowed
+from — names differences that exist in a query-*language* RPC surface;
+sqlb's row-scoped write is already one REST verb with one envelope, so there
+was never a second shape for a second name to describe.
+
+The mechanical edit: `AddMutation(schema.Mutation{...})` becomes
+`AddAction(schema.Action{...})` — the two structs share every field, `Name`
+through `Description` — `rest.Mutation[T,In]` becomes `rest.Action[T,In]`,
+and `rest.MutationSpec` becomes `rest.ActionSpec`. `Query` is unaffected:
+its split from `Action` is a genuine shape difference (`Do`'s return type
+vs. a row), and the argument for it still holds.
+
+### Three more from the same port, none breaking
+
+**CRUD reads as complete and is not.** `schema.CRUD`/`rest.CRUD` is
+create+read+update+delete, and the constant's own doc comment already said
+to combine it with `OpList` *"for a fully exposed collection"* — nothing
+enforced it, so a table declared with bare `CRUD` mounted a working
+create/read/update/delete and a silent `405` on the collection route.
+`rest.Options.validate()` now refuses to mount a resource whose `Ops` is
+exactly `CRUD`.
+
+**`AddExclude`'s `btree_gist` requirement now arrives with it.** A scalar
+`=` inside a gist `EXCLUDE` — `coach_id WITH =, tstzrange(...) WITH &&` —
+needs the extension, and nothing generated it: the only worked pattern in
+the tree for an extension the diff engine does handle (pgvector) is
+actively misleading here, since a hand-written `CREATE EXTENSION` after the
+migration containing the inline `EXCLUDE` fails outright on a fresh
+database. `migrate.Diff` now emits `btree_gist` in the same migration as
+whatever needs it.
+
+**A column can be `WriteOnly`.** `Hidden` conflated "never read" with
+"never written" — a column like `QuizOption.is_correct`, set by the coach
+who authored the quiz and never served to the student taking it, had no
+generated create or update at all, and the only way out was hand-writing
+the whole route. `WriteOnly` is `Hidden`'s converse: omitted from every
+response the same way, but still settable through the generated body and
+still present in the typed column facade, so trusted Go code — a grading
+hook — can read it back.
+
+### `sqlb docs` writes a feature checklist that survives schema evolution
+
+Every other generated artefact is fully owned by sqlb — a rerun overwrites
+it and `check` gates on that — which cannot be how a file meant for a coding
+agent or a teammate to fill in with what an endpoint actually does works.
+`sqlb docs <package>` writes `FEATURES.md`, keeping whatever notes sit
+inside a still-existing endpoint's key on rerun, and archiving the rest
+instead of discarding it.
+
+### `studio` is an uncurated data/schema/action browser
+
+Over `sqlb.json`, its own module off the engine's release cadence.
+[ADR-0053](adr/0053-the-manifest-describes-what-cannot-be-guessed.md)
+declined to carry any UI, on the argument that a curated admin needs
+guesses — a row label, a field order — the manifest cannot answer; that
+argument holds and stays. It does not hold for a raw grid over
+primary-keyed rows, Convex's dashboard shape rather than Django's, and the
+manifest was already sufficient. Every data fetch goes through the
+generated REST API with the operator's own bearer token, never the database
+directly, so the browser sees exactly what that token could already fetch.
+Schema, data grid, edit/create, and action invocation; no delete, no bulk
+edit, no service credential, no logs.
+
+### Deliberately not done
+
+**No retroactive edit to `v0.12.0`'s own release notes** to say the
+`Mutation` doubt was already there — a tag message is immutable and the
+page quotes it, and editing the prose around a quote to imply it said more
+than it did is the one repair worse than the gap.
+
+**No new lint rule for the `CRUD`-without-`OpList` mistake**, though
+`schema.Lint()` — unwired from the CLI entirely — was already positioned to
+catch it earlier and advisory-style; filed as
+[#201](https://github.com/jryannel/sqlb/issues/201), not built here.
+
+### What to expect on upgrade
+
+- **The one break.** `AddMutation`, `schema.Mutation`, `rest.Mutation` and
+  `rest.MutationSpec` no longer exist. Replace with `AddAction`,
+  `schema.Action`, `rest.Action` and `rest.ActionSpec` — same fields, same
+  envelope.
+- A bare `schema.CRUD` with no `OpList` now refuses to mount rather than
+  serving a silent `405` on the collection route. If that describes yours,
+  add `OpList`.
+- Nothing else in this tag changes behavior for a schema that does not
+  reach for `WriteOnly`, `AddExclude`, `sqlb docs`, or `studio`.
+
+Three issues from the same port: [#193](https://github.com/jryannel/sqlb/issues/193),
+[#194](https://github.com/jryannel/sqlb/issues/194),
+[#195](https://github.com/jryannel/sqlb/issues/195). `sqlb docs` and
+`studio` are new. ADR-0057 revised in place; ADR-0053 revised in place.
+
 ## v0.12.0
 
 2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.12.0)
