@@ -360,20 +360,22 @@ type Exclusion struct {
 // TableDef is a table declaration. Build one with Table, which also registers
 // it in the default registry.
 type TableDef struct {
-	name    string // storage name, including any module prefix
-	local   string // name as declared, without the prefix
-	module  string
-	comment string
-	pkName  string
-	oldName string // previous storage name, from RenamedFrom
-	fields  []*Field
-	indexes []Index
-	checks  []Check
-	uniques []Unique
-	excls   []Exclusion
-	pkCols  []string // a composite PRIMARY KEY, when the key is not one column
-	rest    *REST
-	actions []Action
+	name      string // storage name, including any module prefix
+	local     string // name as declared, without the prefix
+	module    string
+	comment   string
+	pkName    string
+	oldName   string // previous storage name, from RenamedFrom
+	fields    []*Field
+	indexes   []Index
+	checks    []Check
+	uniques   []Unique
+	excls     []Exclusion
+	pkCols    []string // a composite PRIMARY KEY, when the key is not one column
+	rest      *REST
+	actions   []Action
+	queries   []Query
+	mutations []Mutation
 }
 
 // Table declares a table and registers it in the default registry. This is the
@@ -478,6 +480,52 @@ func (t *TableDef) Field(name string) *Field {
 		}
 	}
 	return nil
+}
+
+// AddField adds one column to the table and returns it, so the declaration
+// that adds a column and whatever needs to refer back to it can be the same
+// statement:
+//
+//	status := Task.AddField(schema.Enum("status", "todo", "done").Default(schema.Value("todo")))
+//	Task.AddMutation(schema.Mutation{Writes: []string{status.Name()}})
+//
+// It exists beside schema.Table's variadic form rather than instead of it.
+// Most columns want the compact, one-expression declaration every table in
+// this codebase already uses; AddField is for the rare column something
+// else — a Mutation.Writes, a cross-table reference — needs a handle to,
+// without pulling every column in the table out to a named var to get one.
+//
+// Unlike AddIndex and the other Add* methods it returns the field rather
+// than the table, on the grounds that a caller reaching for this already has
+// the table and is here for the field.
+func (t *TableDef) AddField(f *Field) *Field {
+	t.fields = append(t.fields, f)
+	return f
+}
+
+// AddFields is AddField for a spec that contributes more than one column —
+// [Timestamps] and [SoftDelete] both do. It is what makes a reusable base
+// column set (an audit trio, a soft-delete marker) applyable procedurally,
+// the way schema.Table's variadic form already applies it declaratively:
+//
+//	func withAudit(t *TableDef) *TableDef {
+//	    t.AddFields(Timestamps())
+//	    return t
+//	}
+//
+//	withAudit(Task)
+//	withAudit(List)
+func (t *TableDef) AddFields(specs ...FieldSpec) []*Field {
+	var added []*Field
+	for _, s := range specs {
+		if s == nil {
+			continue
+		}
+		fs := s.fields()
+		t.fields = append(t.fields, fs...)
+		added = append(added, fs...)
+	}
+	return added
 }
 
 // StoredField returns the named column if the database holds it, and nil for a
@@ -656,7 +704,7 @@ func (t *TableDef) UniqueIndexNamed(name string, columns ...string) *TableDef {
 //   - it cannot be the target of [Ref] or [ExternalRef], because a reference is
 //     single-column here too;
 //   - it cannot be exposed over REST, because /{id} addresses one column;
-//   - it cannot carry a non-collection [TableDef.Action], for the same reason.
+//   - it cannot carry a non-collection [TableDef.AddAction], for the same reason.
 //
 // Those refusals are the point rather than a shortfall. The tables this is for
 // — association tables where the pair *is* the row, and natural-key caches that

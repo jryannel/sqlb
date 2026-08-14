@@ -23,7 +23,7 @@ func actionFixture() *schema.Registry {
 		schema.Enum("status", "open", "done", "archived").Default(schema.Value("open")).Filterable(),
 		schema.Timestamp("closed_at").Nullable(),
 	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList}).
-		Action(schema.Action{
+		AddAction(schema.Action{
 			Name: "complete",
 			Body: schema.Body(
 				schema.Text("note").Nullable(),
@@ -34,11 +34,11 @@ func actionFixture() *schema.Registry {
 			// which the write set above cannot say and used to leave unsaid.
 			Touches: []string{"comments"},
 		}).
-		Action(schema.Action{
+		AddAction(schema.Action{
 			Name:   "archive",
 			Writes: []string{"status"},
 		}).
-		Action(schema.Action{
+		AddAction(schema.Action{
 			Name:    "purge-archived",
 			Path:    "/purge-archived",
 			Touches: []string{"tasks", "comments"},

@@ -79,6 +79,8 @@ const usage = `sqlb keeps a project's generated code and migration history in st
 
 Usage:
 
+    sqlb init -module <path> [dir]   write a new project: a schema with one
+                                     table, a server, a migration runner
     sqlb generate <package>          write every artefact the project declares
     sqlb check [flags] <package>     report stale artefacts, write nothing; with
                                      -database, also report a declaration that no
@@ -188,6 +190,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "introspect":
 		// The same reasoning, and the same shape: a -dsn rather than a package.
 		return introspectCmd(args[1:], stdout, stderr)
+	case "init":
+		// The same shape again, and the opposite reason: there is nothing yet
+		// to import because nothing has been written yet.
+		return initCmd(args[1:], stdout, stderr)
 	case "generate", "check", "migrate", "impact", "eject":
 	default:
 		_, _ = fmt.Fprintf(stderr, "sqlb: unknown command %q\n\n", verb)

@@ -18,7 +18,7 @@ func withActions(actions ...schema.Action) *schema.Registry {
 		schema.Timestamp("closed_at").Nullable(),
 	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList})
 	for _, a := range actions {
-		t.Action(a)
+		t.AddAction(a)
 	}
 	return r
 }

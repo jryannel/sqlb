@@ -9,7 +9,7 @@ A declared action gives the transition a route, and generates everything around
 it except the transition itself ([ADR-0043](../adr/0043-declared-actions.md)):
 
 ```go
-Task.Action(schema.Action{
+Task.AddAction(schema.Action{
     Name:   "complete",
     Body:   schema.Body(schema.Text("note").Nullable()),
     Writes: []string{"status", "completed_at"},
@@ -59,7 +59,7 @@ is not an override of it — it is a second one, with the same name:
 
 ```go
 Task.Expose(schema.REST{Ops: schema.CRUD | schema.OpList}).
-    Action(schema.Action{Name: "create", Path: "/create"}) // refused
+    AddAction(schema.Action{Name: "create", Path: "/create"}) // refused
 ```
 
 Schema validation refuses the pair, naming the operation and the two ways out —
@@ -133,7 +133,7 @@ reads `status, completed_at` and concludes the route is confined to one row
 `Touches` is how a wide route says it is wide:
 
 ```go
-Task.Action(schema.Action{
+Task.AddAction(schema.Action{
     Name:    "complete",
     Writes:  []string{"status", "completed_at"},
     Touches: []string{"comments"},
@@ -189,7 +189,7 @@ A path with no `{id}` addresses the collection. There is no row to fetch, so the
 func receives only the body and the response is a 204:
 
 ```go
-Project.Action(schema.Action{
+Project.AddAction(schema.Action{
     Name: "purge-archived",
     Path: "/purge-archived",
 })

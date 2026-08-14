@@ -1,0 +1,345 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// init is the other verb that needs no schema package, and for the opposite
+// reason introspect does: there is nothing yet to import because nothing has
+// been written yet.
+//
+// It writes a small, real project rather than an empty one — a single Task
+// table, exposed CRUD — on the grounds that an empty schema package proves
+// nothing runs and answers no question a first-time user actually has. The
+// three files it writes (go.mod, <pkg>schema/schema.go, <pkg>schema/sqlb.go)
+// are exactly what every other command here already needs to exist; init's
+// whole job is writing the boilerplate this file's own package doc says a
+// project has to have before `sqlb generate` has anything to read.
+//
+// cmd/server and the migration runner are scaffolded too, so that the last
+// step really is `go run ./cmd/server` — but init does not run `go mod tidy`,
+// `go generate` or `sqlb migrate` itself. Each needs something init cannot
+// promise: `go mod tidy` needs the network to resolve a module this command
+// just started depending on, `go generate` needs that resolution to have
+// already happened, and the migration needs the generated code `go generate`
+// produces to exist so a driver program can import it. Printing the three
+// commands in order costs one paragraph; running them here would mean this
+// command's own success depending on the network and on a Go toolchain
+// finding what it needs, and failing three different, confusing ways instead
+// of one.
+const initUsage = `sqlb init -module <path> [dir] writes a new project: a schema with one
+table, a server that mounts it, and a migration runner — everything else
+here operates on a project this leaves you to grow.
+
+    -module <path>   the new project's module path, e.g. github.com/you/app (required)
+
+<dir> defaults to ".". It must not already contain a go.mod.
+
+What it writes:
+
+    go.mod
+    doc.go                  placeholder for the package go generate writes into
+    <pkg>schema/schema.go   the schema: one Task table, exposed as CRUD + list
+    <pkg>schema/sqlb.go     SqlbProject, so ` + "`sqlb generate`" + ` and ` + "`sqlb migrate`" + ` know where output goes
+    migrations/             empty; the first migration is a command away, not a file here
+    cmd/server/main.go      rest.NewServer, migrations applied from disk at startup
+
+<pkg> is the last path segment of -module, lower-cased to a Go identifier.
+
+What it does not do: run go mod tidy, go generate, or sqlb migrate. Each needs
+something this command cannot promise — network, or output an earlier step
+produces — so they are the next commands you run, and init prints them.
+`
+
+func initCmd(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	module := fs.String("module", "", "the new project's module path (required)")
+	fs.Usage = func() { _, _ = fmt.Fprint(stderr, initUsage) }
+	if err := fs.Parse(args); err != nil {
+		return exitCode(2)
+	}
+	if strings.TrimSpace(*module) == "" {
+		return errors.New("init needs -module, for example: sqlb init -module github.com/you/app")
+	}
+	if fs.NArg() > 1 {
+		return fmt.Errorf("init takes at most one directory argument, got %d", fs.NArg())
+	}
+	dir := "."
+	if fs.NArg() == 1 {
+		dir = fs.Arg(0)
+	}
+
+	pkg := identFromModule(*module)
+	if pkg == "" {
+		return fmt.Errorf("init: %q has no path segment usable as a Go package name; "+
+			"pass a module ending in one, e.g. github.com/you/app", *module)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		return fmt.Errorf("init: %s already exists; init writes a new project and refuses to "+
+			"overwrite one", filepath.Join(dir, "go.mod"))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("init: checking for an existing go.mod: %w", err)
+	}
+
+	data := initData{
+		Module:    *module,
+		Pkg:       pkg,
+		SchemaPkg: pkg + "schema",
+		EnvPrefix: strings.ToUpper(pkg),
+	}
+
+	files := []struct {
+		path string
+		tmpl string
+	}{
+		{"go.mod", initGoMod},
+		// doc.go exists so the root package is non-empty before `go generate`
+		// fills it in. Without it `go mod tidy` cannot resolve cmd/server's
+		// import of it — the directory codegen.Options.Package targets has no
+		// .go files yet, and that reads as "no such local package" rather than
+		// "not generated yet", which fails resolution before generate ever
+		// gets to run.
+		{"doc.go", initDocGo},
+		{filepath.Join(data.SchemaPkg, "schema.go"), initSchemaGo},
+		{filepath.Join(data.SchemaPkg, "sqlb.go"), initSqlbGo},
+		{filepath.Join("cmd", "server", "main.go"), initMainGo},
+	}
+	for _, f := range files {
+		full := filepath.Join(dir, f.path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return fmt.Errorf("init: %w", err)
+		}
+		if err := renderFile(full, f.tmpl, data); err != nil {
+			return fmt.Errorf("init: %w", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0o755); err != nil {
+		return fmt.Errorf("init: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, `wrote a new project to %s:
+
+    go.mod
+    doc.go                 (placeholder; go generate fills this package in)
+    %s/schema.go
+    %s/sqlb.go
+    migrations/            (empty)
+    cmd/server/main.go
+
+Next:
+
+    cd %s
+    go mod tidy
+    go generate ./...
+    go run github.com/jryannel/sqlb/cmd/sqlb migrate -name initial_schema ./%s
+    export %s_DATABASE_URL='postgres://user:pass@localhost:5432/%s?sslmode=disable'
+    go run ./cmd/server
+`, dir, data.SchemaPkg, data.SchemaPkg, dir, data.SchemaPkg, data.EnvPrefix, data.Pkg)
+	return nil
+}
+
+type initData struct {
+	Module    string
+	Pkg       string
+	SchemaPkg string
+	EnvPrefix string
+}
+
+// identFromModule takes the last path segment of a module path and lowers it
+// to a valid, lower-case Go identifier — the same shape codegen already
+// requires of a package name, so a project init writes never has one
+// generate refuses.
+func identFromModule(module string) string {
+	seg := module
+	if i := strings.LastIndexByte(module, '/'); i >= 0 {
+		seg = module[i+1:]
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(seg) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if out == "" || out[0] < 'a' || out[0] > 'z' {
+		return ""
+	}
+	return out
+}
+
+func renderFile(path, tmpl string, data initData) error {
+	content := strings.NewReplacer(
+		"{{.Module}}", data.Module,
+		"{{.Pkg}}", data.Pkg,
+		"{{.SchemaPkg}}", data.SchemaPkg,
+		"{{.EnvPrefix}}", data.EnvPrefix,
+	).Replace(tmpl)
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+const initGoMod = `module {{.Module}}
+
+go 1.25
+`
+
+const initDocGo = `// Package {{.Pkg}} holds what ` + "`sqlb generate`" + ` writes from {{.SchemaPkg}} — models,
+// the typed column facade, and the REST resources. Run it:
+//
+//	go generate ./...
+package {{.Pkg}}
+`
+
+const initSchemaGo = `// Package {{.SchemaPkg}} is {{.Pkg}}'s schema — the single source of truth
+// ` + "`sqlb generate`" + ` and ` + "`sqlb migrate`" + ` read.
+//
+// Add tables, columns and capabilities as the project needs them. Task below
+// is not special beyond being what a first run needs something to serve —
+// see [github.com/jryannel/sqlb/schema]'s doc comment for the vocabulary.
+package {{.SchemaPkg}}
+
+import "github.com/jryannel/sqlb/schema"
+
+// Task is a unit of work.
+var Task = schema.Table("tasks",
+	schema.UUIDv7("id").PrimaryKey(),
+	schema.Text("title").Searchable().Sortable(),
+	schema.Bool("done").Default(schema.Value(false)).Filterable().Sortable(),
+	schema.Timestamps(),
+).
+	Describe("A unit of work.").
+	Expose(schema.REST{
+		Path:            "/tasks",
+		Ops:             schema.CRUD | schema.OpList,
+		DefaultPageSize: 25,
+		MaxPageSize:     100,
+	})
+`
+
+const initSqlbGo = `package {{.SchemaPkg}}
+
+//go:generate go run github.com/jryannel/sqlb/cmd/sqlb generate .
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jryannel/sqlb/codegen"
+)
+
+// shadowDSNEnv names the scratch database ` + "`sqlb migrate`" + ` replays the migration
+// history into, once there is history to replay. The first migration diffs
+// against nothing and needs no database at all.
+const shadowDSNEnv = "{{.EnvPrefix}}_SHADOW_DSN"
+
+// SqlbProject tells ` + "`sqlb generate`" + ` and ` + "`sqlb migrate`" + ` what this project emits and
+// where.
+func SqlbProject() codegen.Project {
+	return codegen.Project{
+		Options: codegen.Options{
+			Package: "{{.Pkg}}",
+		},
+		MigrationsDir: "migrations",
+		MinPostgres:   18,
+		ShadowDB:      shadowDB,
+	}
+}
+
+func shadowDB(ctx context.Context) (*pgxpool.Pool, error) {
+	dsn := os.Getenv(shadowDSNEnv)
+	if dsn == "" {
+		return nil, fmt.Errorf("%s is not set, and replaying the migration history needs a scratch database", shadowDSNEnv)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := pool.Exec(ctx, ` + "`DROP SCHEMA public CASCADE; CREATE SCHEMA public`" + `); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("emptying the shadow database at %s: %w", shadowDSNEnv, err)
+	}
+	return pool, nil
+}
+`
+
+const initMainGo = `// Command server runs {{.Pkg}}.
+//
+//	export {{.EnvPrefix}}_DATABASE_URL='postgres://user:pass@localhost:5432/{{.Pkg}}?sslmode=disable'
+//	go run ./cmd/server
+//
+// Then http://localhost:8080/docs for the API.
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+
+	"github.com/jryannel/sqlb"
+	"github.com/jryannel/sqlb/rest"
+
+	"{{.Module}}"
+)
+
+func main() {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	slog.SetDefault(log)
+
+	dsn := os.Getenv("{{.EnvPrefix}}_DATABASE_URL")
+	if dsn == "" {
+		log.Error("exiting", "error", "{{.EnvPrefix}}_DATABASE_URL is not set")
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	err := rest.Serve(ctx, rest.ServeConfig{
+		DSN:     dsn,
+		Server:  rest.Config{Title: "{{.Pkg}}", Version: "0.0.0"},
+		Log:     log,
+		Migrate: migrate,
+	}, mount)
+	if err != nil {
+		log.Error("exiting", "error", err)
+		os.Exit(1)
+	}
+}
+
+// mount is the seam rest.Serve leaves to the application. This scaffold
+// declares one table and no actions, mutations or queries, so it is one
+// call; a schema that grows any of those grows this func, not rest.Serve.
+func mount(srv *rest.Server, db sqlb.Executor) error {
+	return {{.Pkg}}.Register(srv.API, db)
+}
+
+// migrate applies migrations/*.sql with goose, reading the directory from
+// disk rather than embedding it — the simplest thing that works for
+// ` + "`go run ./cmd/server`" + ` from the module root, and enough until this ships as a
+// binary that runs somewhere the source tree will not be. See
+// github.com/jryannel/sqlb's example/tasks2/migrations for the embedded form.
+func migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	db := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = db.Close() }()
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+	return goose.UpContext(ctx, db, "migrations")
+}
+`
