@@ -1,8 +1,9 @@
 # studio — an uncurated browser over `sqlb.json`
 
 A generic data/schema/action browser: point it at a manifest and a running
-application's REST API, and it renders a grid, not a curated admin. See the
-package doc (`go doc ./studio`) for the argument and
+application's REST API, and it renders a grid, not a curated admin. **Not a
+Django-admin replacement** — see *What it does not do* below before reaching
+for it as one. See the package doc (`go doc ./studio`) for the argument and
 [docs/adr/0053](../docs/adr/0053-the-manifest-describes-what-cannot-be-guessed.md)
 for the decision this module exists to test.
 
@@ -56,3 +57,39 @@ don't carry," and the seam already exists
 for OpenTelemetry, Uptrace, or a Grafana dashboard, none of which this module
 needs to know about). No optimistic concurrency — a second operator's
 concurrent edit overwrites the first, same as calling `PATCH` by hand would.
+
+**The gap to Django-admin parity, named rather than left implicit** (a
+real-consumer review is what surfaced the need to say this plainly — the
+phrase "uncurated browser" undersells it otherwise):
+
+- **No curation layer — `list_display`, `list_filter`, `search_fields`,
+  `fieldsets`.** Every column renders the same way on every table, on
+  purpose (ADR-0053's whole argument). Building the editorial layer Django's
+  `ModelAdmin` is — which column stands for a row, which are worth a list
+  view, which sort into a fieldset — is a second design surface with its own
+  admission test, not a rendering tweak on this one. Not planned here.
+- **No inline or nested editing** — seeding a parent row's children (a
+  company's memberships, a course's modules) in one screen. Studio is one
+  table per page; a parent-with-children form is exactly the kind of
+  hand-written screen an application still owns. Not planned here.
+- **No bulk actions.** Studio is per-row plus a declared `Action`; there is
+  no select-N-rows-apply-one-action. Not planned here.
+- **No history or audit trail, and not because the infrastructure is
+  missing — because studio doesn't read it.** The durable change feed
+  ([`outbox`](../outbox), [ADR-0012](../docs/adr/0012-change-feed-outbox.md))
+  is built and durable, but its `Event` ([`rest/events.go`](../rest/events.go))
+  is an invalidation signal — table, key, create/update/delete — with no
+  actor and no field-level diff. Turning that into a Django `LogEntry`
+  equivalent needs both a studio page reading the stream *and* the event
+  itself carrying who changed what, neither of which exists today. This one
+  is the plausible near-term follow-up of the four; the other three are not.
+- **No permission-configuration screen.** Studio's own model — every
+  request as the signed-in operator, through the same hooks the API
+  enforces — has one advantage a real review already confirmed: one source
+  of truth for who sees what, rather than Django's parallel permission
+  system. But *configuring* a role (who is an admin, what a role can do)
+  is application data (a `CompanyMember.role` column, hooks that read it),
+  and there is no studio screen for editing it. Correct placement, not a
+  gap in the security model — but "replaces Django admin" would otherwise
+  quietly assume the application builds this screen itself, and that should
+  be said rather than discovered.
