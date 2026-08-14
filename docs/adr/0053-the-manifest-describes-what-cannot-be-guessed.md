@@ -1,15 +1,16 @@
-# ADR-0053: The manifest describes what a client cannot guess, and a UI is authored rather than carried
+# ADR-0053: The manifest describes what a client cannot guess, and an uncurated browser is carried while a curated admin stays authored
 
 - **Status:** Working — the manifest is built by `Registry.BuildManifest`, emitted
-  as `sqlb.json` and gated by `sqlb check`. What is new here is the rule that
-  decides what may go into it, not the artefact
-- **Confidence:** High that this repository should not carry a UI — the
-  maintenance surface is unlike anything else here, and Django's admin is twenty
-  years of evidence that a carried admin becomes a framework. **Low that the
-  manifest is sufficient**, because no admin UI has been written against it and
-  that is the only test that counts
+  as `sqlb.json` and gated by `sqlb check`. **Revised 2026-08-14**: sqlb also
+  carries a generic, uncurated data/schema/action browser; nothing about the
+  original rule for what the manifest holds changed
+- **Confidence:** High that a *curated* admin — one that guesses a row label, a
+  field order, a widget — should stay authored per application; Django's admin
+  is twenty years of evidence that carrying one becomes a framework. **Low that
+  an *uncurated* browser is worth carrying**, because none has been built
+  against `sqlb.json` yet and that is the only test that counts, same as before
 - **Decided:** 2026-08-09
-- **Last reviewed:** 2026-08-09
+- **Last reviewed:** 2026-08-14
 
 ## Context
 
@@ -42,8 +43,9 @@ fails `tsc` rather than drifting silently.
 
 ## Decision
 
-**sqlb enables a UI and carries none. The manifest is where the enabling
-happens.**
+**sqlb enables a curated UI and carries none of it. The manifest is where the
+enabling happens.** This half of the record is unchanged — see below for what
+now carries.
 
 **The manifest carries what a competent author cannot guess and would get wrong
 silently.** That is the admission test, and it explains every field already
@@ -71,20 +73,59 @@ is a 404 and not a 403. An authored admin therefore cannot grey out a button it
 lacks permission for, and must not try to infer one. There is no permission
 registry.
 
+**An uncurated browser needs none of the facts the manifest declines to carry,
+so it is carried.** The comparison the rest of this record makes is to Django's
+`ModelAdmin`, which is curated: it guesses a row label, a field order, a widget.
+Convex's dashboard is the other shape — a grid over raw rows, addressed by
+primary key, with no `__str__` to get wrong. Every fact that grid needs is
+already in `sqlb.json`: column types and enums render a cell, `references`
+renders a foreign key as a link to the row it points at, and `ActionManifest`
+already carries a typed `Body` per declared action, which is enough to render
+an invoke form without guessing a field the way the curated case would have to.
+So sqlb carries this one: a browser reading `sqlb.json` for schema and calling
+the generated REST API for data and actions, built and released separately from
+the engine the way `pgtest` already is a separate module from `.` — the
+component-vocabulary-and-browser-support-matrix cost this record raised against
+a carried UI is real regardless of curated or not, and paying it once, off the
+engine's cadence, is the same trade `pgtest` already made for a different
+reason.
+
+**It calls the REST API, not the database, and that is what makes it safe to
+carry.** The same sentence as the *Buys* paragraph below applies here first:
+a browser that fetches through the generated endpoints inherits row scoping for
+free, the same as `?expand=` does. It does not solve the permission question the
+next paragraph raises — it inherits it, which is different from answering it.
+
+**Logs are out of scope for the browser and for the manifest.** `Executor` is
+already an interface a wrapper can trace ([`example_trace_test.go`](../../example_trace_test.go)),
+and an application that wants OpenTelemetry wires it there today, pointed at
+Uptrace, Jaeger, or anything else that reads OTel — sqlb declares nothing new
+and the browser does not attempt to render spans itself. This is "instrument,
+don't carry," the same posture the rest of this record already takes, not an
+exception to it.
+
 ## Consequences
 
-**Buys.** The repository stays Go and SQL. A UI is authored per application, in
-its own stack, at its own cadence, and inherits the hook boundary for free
-because it calls the same endpoints — the row scoping in `notes/hooks.go` applies
-to an admin exactly as it applies to `?expand=`, which is precisely what Django's
-admin does *not* give you without a per-`ModelAdmin` `get_queryset` override.
+**Buys.** The engine's own module stays Go and SQL, with no frontend build step
+or browser matrix in `.`'s release cadence — the browser is a separate module,
+same as `pgtest`. A curated UI is still authored per application, in its own
+stack, at its own cadence. Both shapes inherit the hook boundary for free
+because both call the same endpoints — the row scoping in `notes/hooks.go`
+applies to a grid exactly as it applies to `?expand=`, which is precisely what
+Django's admin does *not* give you without a per-`ModelAdmin` `get_queryset`
+override. *There is now something in the box* for anyone evaluating sqlb in an
+afternoon, which was the sharpest cost the original record named.
 
-**Costs.** *There is no admin in the box*, and "generate one with an agent" is a
-worse answer than a working page for anyone evaluating sqlb in an afternoon.
-*The claim is untested* — the manifest is asserted to be sufficient and nobody
-has built the thing that would prove it. *The rule is a judgement call at the
-margin*: "cannot guess" is a property of the guesser, and an agent is a better
-guesser than the generic renderer this rule was written against.
+**Costs.** *The claim is still untested for the browser* — the manifest is
+asserted to be sufficient for a grid and nobody has built the thing that would
+prove it, same gap as before, now on new ground. *The permission question is
+inherited, not answered*: a browser calling the REST API with a caller's own
+credentials shows only what that caller could already fetch, so an operator
+wanting a cross-tenant view needs a credential that already sees everything,
+which this record does not design. *The rule is still a judgement call at the
+margin* for the curated case: "cannot guess" is a property of the guesser, and
+an agent is a better guesser than a generic renderer at the curated end of the
+spectrum — only the uncurated end, where there is nothing to guess, is settled.
 
 ## What would change our mind
 
@@ -95,9 +136,17 @@ guesser than the generic renderer this rule was written against.
   and the Dart app disagree about which column names a row. Then a label is a
   contract rather than a choice, and this record is wrong about which side of the
   line it sits on.
-- **A runtime generic renderer becomes wanted** — one binary pointed at any
-  `sqlb.json`. Every "authorable" fact above becomes undescribable-and-required
-  at once, and the rule inverts rather than bends.
+- ~~**A runtime generic renderer becomes wanted** — one binary pointed at any
+  `sqlb.json`.~~ **Fired, 2026-08-14.** The rule did not invert the way this
+  bullet predicted, because the renderer wanted turned out to be Convex's
+  uncurated grid rather than a Django-shaped one: nothing "authorable" above
+  became required, since a grid over raw rows never asked for a row label in
+  the first place. The bullet was right that this was the trigger; wrong that
+  every authorable fact would become required by it — only a curated renderer
+  would have proven that.
+- **The uncurated browser reaches for a fact `sqlb.json` doesn't have.** Same
+  admission test as the curated case, on new ground: the first missing fact is
+  the one to add.
 - **`sqlb check` stops being enough to call the manifest a contract**, because a
   consumer outside the repository broke on a shape change no gate caught.
 
@@ -110,9 +159,12 @@ for the incompatible case, and a JSON consumer ignores keys it does not read.
 additive today, near-impossible to remove once one consumer reads it.
 
 **Carrying a UI is the expensive direction and the least reversible.** Not
-technically — an emitter can be deleted — but socially: an admin that ships is
-adopted, and removing it breaks applications that built their operations around
-it. This is the asymmetry that decides the record, and it runs the useful way.
+technically — an emitter, or a separate module, can be deleted — but socially:
+an admin that ships is adopted, and removing it breaks applications that built
+their operations around it. This is the asymmetry that decided the record
+before, and it is the asymmetry now being paid deliberately for the uncurated
+browser: it ships as its own module precisely so deleting it, if the claim
+above does not hold up, costs a module rather than an unwind inside `.`.
 
 ## Open questions I had to answer myself
 
@@ -121,10 +173,25 @@ it. This is the asymmetry that decides the record, and it runs the useful way.
   the manifest, because it carries the capability lists OpenAPI is lossy about
   ([ADR-0028](0028-typescript-client.md)) — but an admin generator would plausibly
   read the OpenAPI document first, and then this record has named the wrong seam.
-- **Whether an authored admin is the only kind in scope.** The whole decision
-  rests on it. A runtime generic renderer needs the row label, and I took
-  "authored by an agent against the TS SDK" as the case to design for on one
-  sentence of intent, not on anything written down.
+- ~~**Whether an authored admin is the only kind in scope.**~~ **Answered by the
+  2026-08-14 revision: no.** It rested on the assumption that a runtime
+  renderer needs a row label; an uncurated grid does not, so the two kinds
+  coexist rather than one displacing the other.
+- **Where the browser lives.** Assumed a separate module in this repository,
+  the way `pgtest` is, so its own dependencies and build step never touch `.`'s
+  `go.mod`. Not decided against a separate repository entirely, which would cut
+  the tie further but cost the single-clone convenience `pgtest` currently
+  gives.
+- **Whether it authenticates as the caller or as a service credential that sees
+  every row.** Assumed the caller's own credentials for v1, which is what makes
+  the "inherits the hook boundary for free" claim true — an operator view that
+  sees across tenants is a different credential model this record does not
+  design, and building the browser only against caller credentials first is a
+  bet that the gap gets noticed before it gets shipped around.
+- **Whether logs belong in the browser's UI at all, even as an embed.** Assumed
+  no: pointing at Uptrace or Jaeger directly, or shipping a Grafana dashboard
+  config as an example, is cheaper than embedding a trace viewer, and neither
+  needs a decision here since neither is sqlb code.
 - **Whether the drift guard generalises past TypeScript.** `tsc` catches a
   renamed column in an authored admin. The CLI prints JSON, so an agent reading
   that output has no equivalent, and I did not check whether the Dart client's
@@ -145,3 +212,19 @@ it. This is the asymmetry that decides the record, and it runs the useful way.
   was identified as an authoring agent rather than a runtime renderer, the label
   stopped being a contract and the rule turned out to be the thing worth
   recording.
+- 2026-08-14 — **Revised**, prompted by a request for a Convex-dashboard-style
+  admin (schema, data, logs, function calling). The *What would change our
+  mind* bullet about a wanted runtime renderer fired, but did not invert the
+  rule the way it predicted: the renderer wanted was an uncurated grid, which
+  needs no row label and so needed nothing the manifest was already declining
+  to carry on the curated case's account. `ActionManifest.Body` (added by
+  [ADR-0043](0043-declared-actions.md), after this record's first version) turned
+  out to already be enough to render an action-invoke form too. Decision: sqlb
+  now carries an uncurated data/schema/action browser, as a separate module off
+  the engine's release cadence; a curated, per-application admin is still
+  authored, unchanged. Logs are explicitly out of scope for both the browser
+  and the manifest — an application traces `Executor` (already possible, see
+  `example_trace_test.go`) and points the result at whatever OTel-reading tool
+  it prefers; a Grafana dashboard config is a reasonable example to ship
+  alongside the browser, but it is config for existing tooling, not sqlb code,
+  and needs no decision here.

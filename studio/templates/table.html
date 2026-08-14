@@ -1,0 +1,124 @@
+{{define "content"}}
+{{$t := .Table}}
+<div class="mb-3">
+  <a href="/" class="btn btn-link px-0">&larr; Tables</a>
+  <h2 class="page-title mt-2">{{$t.Name}}</h2>
+  {{if $t.Comment}}<div class="text-secondary">{{$t.Comment}}</div>{{end}}
+</div>
+
+<div class="row row-cards">
+  <div class="col-12">
+    <div class="card mb-3">
+      <div class="card-header"><h3 class="card-title">Columns</h3></div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Wire</th>
+              <th>Type</th>
+              <th>Nullable</th>
+              <th>Read-only</th>
+              <th>Capabilities</th>
+              <th>References</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $t.Columns}}
+            <tr>
+              <td>
+                <code>{{.Name}}</code>
+                {{if eq .Name $t.PrimaryKey}}<span class="badge bg-blue-lt ms-1">pk</span>{{end}}
+              </td>
+              <td>{{if .Wire}}{{.Wire}}{{else}}<span class="text-secondary">—</span>{{end}}</td>
+              <td>{{.Type}}{{if .Array}}[]{{end}}</td>
+              <td>{{if .Nullable}}yes{{else}}no{{end}}</td>
+              <td>{{if .ReadOnly}}yes{{else}}no{{end}}</td>
+              <td>{{range .Capabilities}}<span class="badge bg-azure-lt me-1">{{.}}</span>{{end}}</td>
+              <td>
+                {{if .References}}
+                  <a href="/tables/{{.References.Table}}">{{.References.Table}}</a>.{{.References.Column}}
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {{if $t.REST}}
+    <div class="card mb-3">
+      <div class="card-header"><h3 class="card-title">REST</h3></div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-3">Path</dt>
+          <dd class="col-9"><code>{{$t.REST.Path}}</code></dd>
+
+          <dt class="col-3">Operations</dt>
+          <dd class="col-9">{{range $t.REST.Operations}}<span class="badge bg-secondary-lt me-1">{{.}}</span>{{end}}</dd>
+
+          {{if $t.REST.Filterable}}
+          <dt class="col-3">Filterable</dt>
+          <dd class="col-9">{{range $t.REST.Filterable}}<span class="badge bg-green-lt me-1">{{.}}</span>{{end}}</dd>
+          {{end}}
+
+          {{if $t.REST.Sortable}}
+          <dt class="col-3">Sortable</dt>
+          <dd class="col-9">{{range $t.REST.Sortable}}<span class="badge bg-green-lt me-1">{{.}}</span>{{end}}</dd>
+          {{end}}
+
+          {{if $t.REST.Searchable}}
+          <dt class="col-3">Searchable</dt>
+          <dd class="col-9">{{range $t.REST.Searchable}}<span class="badge bg-green-lt me-1">{{.}}</span>{{end}}</dd>
+          {{end}}
+
+          {{if $t.REST.Expandable}}
+          <dt class="col-3">Expandable</dt>
+          <dd class="col-9">{{range $t.REST.Expandable}}<span class="badge bg-purple-lt me-1">{{.}}</span>{{end}}</dd>
+          {{end}}
+        </dl>
+      </div>
+    </div>
+
+    {{if $t.REST.Actions}}
+    <div class="card mb-3">
+      <div class="card-header"><h3 class="card-title">Actions</h3></div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead>
+            <tr><th>Name</th><th>Route</th><th>Body</th><th>Writes</th><th>Touches</th></tr>
+          </thead>
+          <tbody>
+            {{range $t.REST.Actions}}
+            <tr>
+              <td>{{.Name}}</td>
+              <td><code>{{.Method}} {{.Path}}</code></td>
+              <td>{{range .Body}}<span class="badge bg-yellow-lt me-1">{{.Name}}: {{.Type}}</span>{{end}}</td>
+              <td>{{range .Writes}}<span class="badge bg-red-lt me-1">{{.}}</span>{{end}}</td>
+              <td>{{range .Touches}}<span class="badge bg-orange-lt me-1">{{.}}</span>{{end}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {{end}}
+    {{end}}
+
+    {{if $t.CollectedBy}}
+    <div class="card mb-3">
+      <div class="card-header"><h3 class="card-title">Collected by</h3></div>
+      <div class="card-body">
+        {{range $t.CollectedBy}}
+        <div class="mb-1">
+          <a href="/tables/{{.Table}}">{{.Table}}</a> via <code>{{.Column}}</code> as <strong>{{.Name}}</strong>
+          {{if not .Expandable}}<span class="badge bg-secondary-lt ms-1">not expandable</span>{{end}}
+        </div>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

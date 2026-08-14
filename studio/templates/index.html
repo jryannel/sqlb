@@ -1,0 +1,39 @@
+{{define "content"}}
+<div class="row row-cards">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Tables</h3>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>Table</th>
+              <th>Comment</th>
+              <th>Columns</th>
+              <th>REST</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Tables}}
+            <tr>
+              <td><a href="/tables/{{.Name}}">{{.Name}}</a></td>
+              <td class="text-secondary">{{.Comment}}</td>
+              <td>{{len .Columns}}</td>
+              <td>
+                {{if .REST}}
+                  <span class="badge bg-green-lt">{{.REST.Path}}</span>
+                {{else}}
+                  <span class="badge bg-secondary-lt">not exposed</span>
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
