@@ -32,7 +32,7 @@ equivalent of TanStack Query to bind to.
 | | |
 |---|---|
 | `runtime.gen.dart` | `Page`, `Collection`, `Problem`, `Transport`, `CursorPager` — the vocabulary an application names, and no schema-specific code. |
-| `client.gen.dart` | Row views, request bodies, the typed filter vocabulary, one function per exposed operation. Imports the runtime, and exports it. |
+| `client.gen.dart` | Row views, request bodies, the typed filter vocabulary, one function per exposed operation — plus a second row view per table that has a `Needs` column, for what `create`/`update` return, since a write cannot answer with the same shape a read can. Imports the runtime, and exports it. |
 
 The split is what Dart's nominal typing forces
 ([#110](https://github.com/jryannel/sqlb/issues/110)). Two clients each
@@ -129,6 +129,18 @@ page.items.first.status;  // throws MissingColumn: Post.status was not in the
 `row.has(PostColumn.status)` is there for code that means to branch on it, and
 `row.toJson()` gives back exactly what arrived, which is what a local cache
 wants to store.
+
+A column carrying `Needs(...)` never arrives on a create or update response —
+its expression depends on who is asking, and a write has no per-request bind to
+resolve that with, so the key is absent
+([ADR-0041](../adr/0041-computed-fields.md)). Lazy decoding means a getter for
+it would still compile against the plain row class and only fail at
+`MissingColumn` the first time something called it, which is the same
+promise-and-fail-later shape as an unselected column, only with no `select` to
+blame. So `createPost` and `updatePost` return `PostWriteResult` instead of
+`Post` whenever the table has one of these: a second, narrower row class with
+no getter for the columns a write cannot answer, generated alongside `Post`
+rather than reachable only by remembering not to call one.
 
 An expansion is nullable rather than absent, in both directions:
 

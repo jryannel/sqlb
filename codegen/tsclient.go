@@ -215,6 +215,13 @@ type tsResource struct {
 	relations  []tsRelation
 	pk         string
 
+	// needsColumns are the selectable computed columns that declare Needs. A
+	// write has no per-request bind to resolve their expression with, so
+	// mutate.go's RETURNING and the JSON response both leave the key out
+	// (ADR-0041, #163) — a read still carries it. This is what makes a write's
+	// response type different from a read's whenever it is non-empty.
+	needsColumns []string
+
 	// wire is the schema's wire case, carried on the resource so that every
 	// name this file emits goes through one function rather than each site
 	// remembering to. A client is generated *against* the wire, so the column's
@@ -271,6 +278,22 @@ func (r tsResource) canUpdate() bool {
 
 func (r tsResource) canDelete() bool { return r.ops.Has(schema.OpDelete) }
 
+// needsWriteResult reports whether create/update cannot answer with the plain
+// row type: there is a Needs column in it, and at least one of the two
+// endpoints that would omit it is actually emitted.
+func (r tsResource) needsWriteResult() bool {
+	return len(r.needsColumns) > 0 && (r.canCreate() || r.canUpdate())
+}
+
+// writeResultType is what create%s and update%s return: the row type itself,
+// unless a Needs column forces a narrower one.
+func (r tsResource) writeResultType() string {
+	if !r.needsWriteResult() {
+		return r.typeName
+	}
+	return r.typeName + "WriteResult"
+}
+
 func (r tsResource) hasMutations() bool {
 	return r.canCreate() || r.canUpdate() || r.canDelete() || len(r.table.Actions()) > 0
 }
@@ -308,6 +331,9 @@ func tsResources(reg *schema.Registry) ([]tsResource, error) {
 			}
 			if d.Searchable {
 				r.searchable = true
+			}
+			if d.Computed() && len(d.Needs) > 0 {
+				r.needsColumns = append(r.needsColumns, r.n(d.Name))
 			}
 		}
 		// The expandable set comes from the columns, exactly as the generated
@@ -521,6 +547,7 @@ func tsResourceSection(b *bytes.Buffer, r tsResource) {
 
 	tsParamTypes(b, r)
 	tsRowType(b, r)
+	tsWriteResultType(b, r)
 	tsTransport(b, r)
 	tsKeys(b, r)
 }
@@ -617,6 +644,35 @@ func tsRowType(b *bytes.Buffer, r tsResource) {
 	fmt.Fprintln(b, ";")
 }
 
+// tsWriteResultType emits the type create<Row> and update<Row> return, when
+// it is not the plain row type.
+//
+// A read and a write stopped being the same shape the moment a column
+// declared Needs: mutate.go has no per-request bind to resolve that column's
+// expression with, so its RETURNING and the JSON response both leave the key
+// out (ADR-0041, #163) — but the row type still declares it NotNull, which is
+// a claim only a read can make good on. Typing create/update as returning the
+// row type therefore types a key as present that is not there, and
+// TypeScript reports nothing, because the type itself is the thing that
+// lied (#188).
+//
+// A distinct name rather than `Omit<Row, 'needsColumn'>` at each call site:
+// the call sites would have to be told by hand which keys to drop, and a
+// column that later drops Needs would leave a stale Omit silently widening
+// the response type instead of the compile error a mismatch should be. This
+// type is generated from the same declarations the row type is, so it can
+// only ever agree with them.
+func tsWriteResultType(b *bytes.Buffer, r tsResource) {
+	if !r.needsWriteResult() {
+		return
+	}
+	fmt.Fprintf(b, "\n/**\n * A %s as create or update leaves it: every column the resource serves,\n", r.typeName)
+	fmt.Fprint(b, " * minus the ones behind `Needs(...)`. A write has no per-request bind to\n")
+	fmt.Fprint(b, " * resolve those with, so the key is absent from the response — the type\n")
+	fmt.Fprint(b, " * says so instead of promising a value that is not there (ADR-0041).\n */\n")
+	fmt.Fprintf(b, "export type %sWriteResult = Omit<%s,%s>;\n", r.typeName, r.typeName, tsUnion(r.needsColumns))
+}
+
 func tsTransport(b *bytes.Buffer, r tsResource) {
 	name := r.typeName
 
@@ -664,7 +720,7 @@ func tsTransport(b *bytes.Buffer, r tsResource) {
 	if r.ops.Has(schema.OpCreate) {
 		fmt.Fprintf(b, "\n/** `POST %s` — create a row. */\n", r.path)
 		fmt.Fprintf(b, "export function create%s(request: Transport, body: %sCreate, signal?: AbortSignal): Promise<%s> {\n",
-			name, name, name)
+			name, name, r.writeResultType())
 		fmt.Fprintf(b, "  return request({ method: 'POST', path: %s, body, signal });\n}\n", tsString(r.path))
 	}
 
@@ -672,11 +728,11 @@ func tsTransport(b *bytes.Buffer, r tsResource) {
 		fmt.Fprintf(b, "\n/** `PATCH %s` — write the columns the body names, and no others. */\n", r.itemRoute())
 		if r.singleton() {
 			fmt.Fprintf(b, "export function update%s(request: Transport, body: %sPatch, signal?: AbortSignal): Promise<%s> {\n",
-				name, name, name)
+				name, name, r.writeResultType())
 			fmt.Fprintf(b, "  return request({ method: 'PATCH', path: %s, body, signal });\n}\n", tsString(r.path))
 		} else {
 			fmt.Fprintf(b, "export function update%s(request: Transport, id: string | number, body: %sPatch, signal?: AbortSignal): Promise<%s> {\n",
-				name, name, name)
+				name, name, r.writeResultType())
 			fmt.Fprintf(b, "  return request({ method: 'PATCH', path: itemPath(%s, id), body, signal });\n}\n", tsString(r.path))
 		}
 	}
