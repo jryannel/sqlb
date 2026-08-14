@@ -922,6 +922,50 @@ func TestRawArgumentCountMismatch(t *testing.T) {
 	}
 }
 
+// invLevel is the model #173's "claim under contention" example is about: a
+// row where two columns, not one, decide whether a write may proceed.
+type invLevel struct {
+	ID       string `db:"id" sqlb:"pk"`
+	OnHand   int32  `db:"on_hand"`
+	Reserved int32  `db:"reserved"`
+}
+
+func (invLevel) TableName() string { return "inventory_levels" }
+
+// TestMatchBuildsAPredicateOverAnArbitraryExpr is #173: Field's comparisons
+// only ever compare a bare column to a parameter, which cannot express
+// `(on_hand - reserved) >= $1` — a predicate spanning two columns. Match is
+// the entry point that closes the gap without falling back to RawPred, which
+// would leave "on_hand" and "reserved" unchecked against the schema.
+func TestMatchBuildsAPredicateOverAnArbitraryExpr(t *testing.T) {
+	claim := sqlb.Match(sqlb.Binary{
+		Op:    ">=",
+		Left:  sqlb.Sub(sqlb.F("on_hand"), sqlb.F("reserved")),
+		Right: sqlb.Val(3),
+	})
+
+	sql, args, err := sqlb.UpdateRows[invLevel]().
+		Set("reserved", 8).
+		Where(sqlb.F("id").Eq("sku-1"), claim).
+		SQL()
+	if err != nil {
+		t.Fatalf("SQL() error: %v", err)
+	}
+
+	_, where, _ := strings.Cut(sql, " WHERE ")
+	where, _, _ = strings.Cut(where, " RETURNING ")
+	want := `("id" = $2) AND (("on_hand" - "reserved") >= $3)`
+	if where != want {
+		t.Errorf("WHERE\n got: %s\nwant: %s", where, want)
+	}
+	if !strings.HasPrefix(sql, `UPDATE "inventory_levels" SET "reserved" = $1`) {
+		t.Errorf("SET clause missing or reordered: %s", sql)
+	}
+	if len(args) != 3 || args[0] != 8 || args[1] != "sku-1" || args[2] != 3 {
+		t.Errorf("args = %#v, want [8 sku-1 3]", args)
+	}
+}
+
 func TestIdentifierQuotingNeutralisesInjection(t *testing.T) {
 	// F takes an arbitrary string, so a caller could pass something hostile.
 	// Quoting must contain it rather than letting it close the identifier.
