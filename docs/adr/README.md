@@ -178,7 +178,7 @@ starts with 0053.
 | [0040](0040-the-driver-is-a-dependency.md) | The driver is a dependency, not a seam | Working | High |
 | [0041](0041-computed-fields.md) | A computed field is an expression in the row, and the parameterised ones oblige a hook | Working | Medium |
 | [0042](0042-the-exit-is-generated.md) | The exit is generated, and what it does not carry is named | Working | Medium |
-| [0043](0043-declared-actions.md) | A declared action generates the envelope, and the verb stays plain Go | Working | Medium |
+| [0043](0043-declared-actions.md) | A declared action generates the envelope, and the verb stays plain Go | Revisiting | Medium |
 | [0044](0044-the-container-is-an-adapter.md) | The container is an adapter, and the adapter is glue to copy | Working | High |
 | [0045](0045-the-stream-is-a-seam.md) | The stream is a seam, and its first source is honest about being in-process | Working | Medium |
 | [0046](0046-a-negation-is-sqls.md) | A negation is SQL's, and the alternative is a second vocabulary rather than a redefinition | Working | High |
