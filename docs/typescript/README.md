@@ -29,7 +29,7 @@ Three files, because the layers are usable separately:
 | | |
 |---|---|
 | `runtime.gen.ts` | `Page`, `Collection`, `Problem`, `Transport` and the filter encoder — the part that depends on no schema. **Imports nothing.** |
-| `client.gen.ts` | Row types, request bodies, the typed parameter vocabulary, one function per exposed operation, and the cache keys. Imports the runtime, and re-exports it. |
+| `client.gen.ts` | Row types, request bodies, the typed parameter vocabulary, one function per exposed operation, and the cache keys — plus a write-result type per table that has a `Needs` column, since a create or update cannot answer with the same shape a read can. Imports the runtime, and re-exports it. |
 | `queries.gen.ts` | TanStack Query `queryOptions`, `infiniteQueryOptions` and `mutationOptions`. Takes `@tanstack/react-query` as a peer dependency. Set `TSQueriesFile: "-"` to skip it. |
 
 The runtime is a file of its own so that an application with more than one
@@ -88,6 +88,13 @@ const page = await listPosts(request, {
   be mistaken for a complete list.
 - **Hidden columns have no spelling anywhere.** Not in the row type, not in
   `select`, not in `where`.
+- **A column carrying `Needs(...)` is missing from what `create`/`update`
+  return.** Its expression depends on who is asking, and a write has no
+  per-request bind to resolve that with, so the response leaves the key out
+  ([ADR-0041](../adr/0041-computed-fields.md)). `createPost` and `updatePost`
+  are typed as returning `PostWriteResult` rather than `Post` whenever the
+  table has one of these — a distinct generated type, so a read and a write
+  cannot silently drift back into sharing the wrong one.
 
 This is [the typed column facade](../queries/typed-columns.md) carried across the wire, and it is
 why the client is generated from the schema rather than from the OpenAPI

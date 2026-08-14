@@ -68,6 +68,52 @@ func TestDartRowsAreCamelCasedOverTheWireSpelling(t *testing.T) {
 	}
 }
 
+// TestDartWriteResultExcludesNeedsColumns is #188's Dart half. A row view
+// reads its columns lazily off the raw JSON map, so before this test's fix a
+// getter for a Needs column compiled fine on a create/update response and
+// then threw MissingColumn the first time something called it — the same
+// promise-something-a-write-cannot-answer bug as the TypeScript client, just
+// caught at a different moment. computedFixture, shared with
+// computed_test.go, carries is_starred with Needs("viewer") and is_overdue
+// without it.
+func TestDartWriteResultExcludesNeedsColumns(t *testing.T) {
+	src := generateDart(t, computedFixture())
+
+	// The read view still offers both — a read has a bind to resolve
+	// isStarred with.
+	row := section(t, src, "class Project extends Row {", "\n}")
+	for _, want := range []string{"bool? get isOverdue", "bool get isStarred"} {
+		if !contains(row, want) {
+			t.Errorf("read row view is missing %q:\n%s", want, row)
+		}
+	}
+
+	// The write-result class exists because of the Needs column, and it
+	// drops only that getter — isOverdue has no bind problem and stays.
+	result := section(t, src, "class ProjectWriteResult extends Row {", "\n}")
+	if !contains(result, "bool? get isOverdue") {
+		t.Errorf("write result should still offer isOverdue:\n%s", result)
+	}
+	if contains(result, "isStarred") {
+		t.Errorf("write result must not offer isStarred:\n%s", result)
+	}
+
+	// create and update return the narrowed class, not the row view a read
+	// returns.
+	for _, want := range []string{"Future<ProjectWriteResult> createProject(", "Future<ProjectWriteResult> updateProject("} {
+		if !contains(src, want) {
+			t.Errorf("write transport missing %q:\n%s", want, src)
+		}
+	}
+
+	// Reads are unaffected: they still return the full row view.
+	for _, want := range []string{"Future<Project> getProject(", "Future<Page<Project>> listProjects("} {
+		if !contains(src, want) {
+			t.Errorf("read transport missing %q:\n%s", want, src)
+		}
+	}
+}
+
 // The condition type is what an OpenAPI document cannot express, and the whole
 // reason this is generated from the registry rather than from that document.
 func TestDartFilterVocabularyIsNarrowedByColumn(t *testing.T) {

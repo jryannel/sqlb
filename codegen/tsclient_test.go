@@ -218,6 +218,55 @@ func TestTSTransportFollowsTheExposedOperations(t *testing.T) {
 	}
 }
 
+// TestTSWriteResultExcludesNeedsColumns is #188: a create or update cannot
+// answer a Needs column — mutate.go has no per-request bind for it — so before
+// this test's fix the row type still declared it NotNull and create/update
+// were typed as returning that same row type. The lie compiled, because
+// nothing about a wrong-but-well-shaped type fails tsc.
+//
+// computedFixture, from computed_test.go, is exactly this shape: is_starred
+// carries Needs("viewer") and NotNull, is_overdue carries neither.
+func TestTSWriteResultExcludesNeedsColumns(t *testing.T) {
+	src := generateTS(t, computedFixture())["client.gen.ts"]
+
+	// The read type still promises both — a read has a bind to resolve
+	// is_starred with, so it can serve what it declares.
+	row := section(t, src, "export interface Project {", "\n}")
+	for _, want := range []string{"is_overdue", "is_starred"} {
+		if !contains(row, want) {
+			t.Errorf("read row type is missing %q:\n%s", want, row)
+		}
+	}
+
+	// The write-result type exists because the table has a Needs column, and
+	// it drops only that column — is_overdue has no bind problem and stays.
+	if want := "export type ProjectWriteResult = Omit<Project, 'is_starred'>;"; !contains(src, want) {
+		t.Errorf("write-result type missing or wrong, want %q:\n%s", want, src)
+	}
+
+	// create and update return the narrowed type, not the row type a read
+	// returns.
+	for _, want := range []string{
+		"export function createProject(request: Transport, body: ProjectCreate, signal?: AbortSignal): Promise<ProjectWriteResult> {",
+		"export function updateProject(request: Transport, id: string | number, body: ProjectPatch, signal?: AbortSignal): Promise<ProjectWriteResult> {",
+	} {
+		if !contains(src, want) {
+			t.Errorf("write transport missing %q:\n%s", want, src)
+		}
+	}
+
+	// get and list are reads: they still resolve against the full row type,
+	// narrowed only by ?select — is_starred is reachable there, unlike from a
+	// write.
+	get := section(t, src, "export function getProject", "\n}")
+	if !contains(get, "ProjectRow<ProjectColumn>") {
+		t.Errorf("get should still return the row type narrowed by selection:\n%s", get)
+	}
+	if contains(get, "WriteResult") {
+		t.Errorf("a read must not be typed as a write result:\n%s", get)
+	}
+}
+
 func TestTSKeysAreDerivedFromTheTable(t *testing.T) {
 	src := generateTS(t, tsFixture())["client.gen.ts"]
 

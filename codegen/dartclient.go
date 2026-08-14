@@ -108,7 +108,9 @@ func renderDartClient(opts Options) ([]byte, error) {
 	}
 
 	for _, r := range resources {
-		dartResourceSection(&body, r)
+		if err := dartResourceSection(&body, opts.Registry, r); err != nil {
+			return nil, err
+		}
 	}
 
 	dartTableEnum(&body, opts.Registry)
@@ -161,6 +163,16 @@ type dartResource struct {
 	relations  []dartRelation
 	hasPK      bool
 
+	// needsColumns are the selectable computed columns that declare Needs. A
+	// write has no per-request bind to resolve their expression with, so
+	// mutate.go's RETURNING and the JSON response both leave the key out
+	// (ADR-0041, #163) — a read still carries it. A row view reads columns
+	// lazily off the JSON map, so a getter for one of these on a write's
+	// response would not fail to compile; it would throw MissingColumn the
+	// first time a caller touched it. This list is what create/update's
+	// response type omits instead, so the getter is not there to call.
+	needsColumns []*schema.FieldDesc
+
 	// wire is the schema's wire case. Dart member names are camelCase either
 	// way — dartMember produces the same identifier from created_at and
 	// createdAt — so what this changes is only the strings that go on the wire.
@@ -193,6 +205,30 @@ type dartRelation struct {
 }
 
 func (r dartResource) hasExpand() bool { return len(r.relations) > 0 }
+
+func (r dartResource) canCreate() bool { return r.ops.Has(schema.OpCreate) }
+
+// canUpdate mirrors the guard dartTransport applies before it emits update%s:
+// an update with nothing writable in its body is not emitted at all.
+func (r dartResource) canUpdate() bool {
+	return r.ops.Has(schema.OpUpdate) && len(bodyFields(r.table, forUpdate)) > 0
+}
+
+// needsWriteResult reports whether create/update cannot answer with the plain
+// row view: there is a Needs column in it, and at least one of the two
+// endpoints that would omit it is actually emitted.
+func (r dartResource) needsWriteResult() bool {
+	return len(r.needsColumns) > 0 && (r.canCreate() || r.canUpdate())
+}
+
+// writeResultType is what create%s and update%s return: the row view itself,
+// unless a Needs column forces a narrower one.
+func (r dartResource) writeResultType() string {
+	if !r.needsWriteResult() {
+		return r.row
+	}
+	return r.row + "WriteResult"
+}
 
 func dartResources(reg *schema.Registry) ([]dartResource, error) {
 	var out []dartResource
@@ -229,6 +265,9 @@ func dartResources(reg *schema.Registry) ([]dartResource, error) {
 			}
 			if d.Searchable {
 				r.searchable = true
+			}
+			if d.Computed() && len(d.Needs) > 0 {
+				r.needsColumns = append(r.needsColumns, d)
 			}
 		}
 		// The expandable set comes from the columns, exactly as the generated
@@ -289,7 +328,7 @@ func dartRowSection(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) e
 		}
 	}
 
-	members, err := dartRowMembers(reg, t)
+	members, err := dartRowMembers(reg, t, nil)
 	if err != nil {
 		return err
 	}
@@ -345,7 +384,12 @@ type dartRowMember struct {
 // column, plus one per expandable relation in either direction — and refuses a
 // schema whose names collide, since two members of the same name is a compile
 // error the consumer would find rather than this generator.
-func dartRowMembers(reg *schema.Registry, t *schema.TableDef) ([]dartRowMember, error) {
+//
+// exclude names columns this particular row view leaves out; nil for the
+// ordinary case of a read, which carries all of them. It exists for
+// dartWriteResultClass, whose columns are the table's minus the ones a write
+// cannot answer (ADR-0041, #188).
+func dartRowMembers(reg *schema.Registry, t *schema.TableDef, exclude map[string]bool) ([]dartRowMember, error) {
 	wire := reg.Wire()
 	base := dartTypeBase(t)
 	taken := map[string]string{}
@@ -377,7 +421,7 @@ func dartRowMembers(reg *schema.Registry, t *schema.TableDef) ([]dartRowMember, 
 	var out []dartRowMember
 	for _, f := range t.Fields() {
 		d := f.Desc()
-		if d.Hidden || d.WriteOnly {
+		if d.Hidden || d.WriteOnly || exclude[d.Name] {
 			// Absent from the row view entirely, as it is from the response. A
 			// hidden column also has no spelling a client could use anywhere;
 			// a write-only one still has one, in the generated create/update
@@ -780,7 +824,7 @@ func dartElemType(base string, d *schema.FieldDesc) string {
 
 // dartResourceSection emits the query vocabulary, the transport functions and
 // the pager for one exposed resource.
-func dartResourceSection(b *bytes.Buffer, r dartResource) {
+func dartResourceSection(b *bytes.Buffer, reg *schema.Registry, r dartResource) error {
 	fmt.Fprintf(b, "\n// %s\n", dartRule(r.path))
 
 	dartWireEnum(b, r.base+"Column", r.table.Name(),
@@ -830,8 +874,62 @@ func dartResourceSection(b *bytes.Buffer, r dartResource) {
 		dartWhere(b, r)
 	}
 	dartParams(b, r)
+	if err := dartWriteResultClass(b, reg, r); err != nil {
+		return err
+	}
 	dartTransport(b, r)
 	dartPager(b, r)
+	return nil
+}
+
+// dartWriteResultClass emits the type create%s and update%s return, when it
+// is not the plain row view.
+//
+// A read and a write stopped being the same shape the moment a column
+// declared Needs: mutate.go has no per-request bind to resolve that column's
+// expression with, so its RETURNING and the JSON response both leave the key
+// out (ADR-0041, #163). The row view would still offer a getter for it —
+// lazy access off the raw JSON is what lets `select` narrow a read without a
+// second type per projection — so calling that getter on what a write
+// returned would compile and then throw MissingColumn the first time
+// something touched it (#188). A distinct class removes the getter instead of
+// leaving it to throw: what create/update return does not declare a member a
+// write cannot serve.
+func dartWriteResultClass(b *bytes.Buffer, reg *schema.Registry, r dartResource) error {
+	if !r.needsWriteResult() {
+		return nil
+	}
+	exclude := make(map[string]bool, len(r.needsColumns))
+	for _, d := range r.needsColumns {
+		exclude[d.Name] = true
+	}
+	members, err := dartRowMembers(reg, r.table, exclude)
+	if err != nil {
+		return err
+	}
+
+	row := r.writeResultType()
+	fmt.Fprintln(b)
+	dartDoc(b, "", fmt.Sprintf("A %s as create or update leaves it: every column the resource serves,", r.row))
+	dartDoc(b, "", "minus the ones behind `Needs(...)`. A write has no per-request bind to")
+	dartDoc(b, "", "resolve those with, so the getter is not here to call — a read still has it,")
+	dartDoc(b, "", "on ["+r.row+"].")
+	fmt.Fprintf(b, "class %s extends Row {\n", row)
+	dartDoc(b, "  ", "Wraps one decoded response object. Columns are read on access.")
+	fmt.Fprintf(b, "  %s.fromJson(super.json) : super.fromJson();\n", row)
+
+	dartDoc(b, "\n  ", "The table this row came from.")
+	fmt.Fprintf(b, "  static const String table = %s;\n", dartString(r.table.Name()))
+
+	for _, m := range members {
+		fmt.Fprintln(b)
+		if m.doc != "" {
+			dartDoc(b, "  ", m.doc)
+		}
+		fmt.Fprintf(b, "  %s\n", m.getter)
+	}
+	fmt.Fprintln(b, "}")
+	return nil
 }
 
 // dartWireEnum emits a plain vocabulary enum: members with a wire spelling and
@@ -1139,20 +1237,22 @@ func dartTransport(b *bytes.Buffer, r dartResource) {
 	if r.ops.Has(schema.OpCreate) {
 		fmt.Fprintln(b)
 		dartDoc(b, "", fmt.Sprintf("POST %s — create a row.", r.path))
-		fmt.Fprintf(b, "Future<%s> create%s(\n", r.row, r.base)
+		result := r.writeResultType()
+		fmt.Fprintf(b, "Future<%s> create%s(\n", result, r.base)
 		fmt.Fprintln(b, "  Transport request,")
 		fmt.Fprintf(b, "  %sCreate body, {\n", r.base)
 		fmt.Fprintln(b, "  Object? cancel,")
 		fmt.Fprintln(b, "}) async {")
 		fmt.Fprintf(b, "  const path = %s;\n", path)
 		fmt.Fprintln(b, "  final json = await request(_post(path, body.toJson(), cancel));")
-		fmt.Fprintf(b, "  return _row(json, %s.fromJson);\n}\n", r.row)
+		fmt.Fprintf(b, "  return _row(json, %s.fromJson);\n}\n", result)
 	}
 
 	if r.ops.Has(schema.OpUpdate) && len(bodyFields(r.table, forUpdate)) > 0 {
 		fmt.Fprintln(b)
 		dartDoc(b, "", fmt.Sprintf("PATCH %s — write the columns the body named, and no others.", r.itemRoute()))
-		fmt.Fprintf(b, "Future<%s> update%s(\n", r.row, r.base)
+		result := r.writeResultType()
+		fmt.Fprintf(b, "Future<%s> update%s(\n", result, r.base)
 		fmt.Fprintln(b, "  Transport request,")
 		if !r.singleton() {
 			fmt.Fprintln(b, "  Object id,")
@@ -1166,7 +1266,7 @@ func dartTransport(b *bytes.Buffer, r dartResource) {
 			fmt.Fprintf(b, "  final path = _itemPath(%s, id);\n", path)
 		}
 		fmt.Fprintln(b, "  final json = await request(_patch(path, body.toJson(), cancel));")
-		fmt.Fprintf(b, "  return _row(json, %s.fromJson);\n}\n", r.row)
+		fmt.Fprintf(b, "  return _row(json, %s.fromJson);\n}\n", result)
 	}
 
 	if r.ops.Has(schema.OpDelete) {
