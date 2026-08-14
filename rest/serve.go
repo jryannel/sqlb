@@ -1,0 +1,134 @@
+package rest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/jryannel/sqlb"
+)
+
+// ServeConfig configures [Serve].
+//
+// What is here is the part every application's main.go writes identically:
+// open a pool, ping it, maybe migrate, listen, shut down gracefully on
+// signal. What is not here — which resources mount, whether they need a
+// group, what a group's middleware does — cannot be, because none of it is
+// inferable from a DSN and a schema. Mount is where that goes; see [Serve].
+type ServeConfig struct {
+	// DSN is the Postgres connection string. Required.
+	DSN string
+
+	// Addr is the listen address. Defaults to ":8080".
+	Addr string
+
+	// Server configures the huma.API [Serve] builds with [NewServer].
+	Server Config
+
+	// Migrate runs against the pool before Server is built and before mount
+	// is called, so a schema mount can rely on it having already run. Nil
+	// means no migration step.
+	//
+	// It takes the pool rather than Serve owning a migration runner, on
+	// purpose: goose, atlas, a hand-rolled one — which to use is exactly the
+	// kind of decision [Options] a mount makes and Serve does not, and
+	// wiring one in would make it a dependency of every application that
+	// calls Serve, including the ones that migrate as a separate deploy
+	// step and want nothing running at boot. See
+	// [github.com/jryannel/sqlb/example/tasks2/migrations] for a goose one.
+	Migrate func(ctx context.Context, pool *pgxpool.Pool) error
+
+	// ShutdownTimeout bounds how long Serve waits for in-flight requests to
+	// finish after ctx is cancelled. Defaults to 5 seconds.
+	ShutdownTimeout time.Duration
+
+	// Log receives startup and shutdown messages. Defaults to slog.Default().
+	Log *slog.Logger
+}
+
+// Serve opens the pool, migrates if configured to, builds the server, hands
+// it to mount so the application can register its own resources — CRUD,
+// actions, mutations, queries, groups, whatever the schema needs — and then
+// runs until ctx is cancelled or the server errors, shutting down gracefully
+// either way.
+//
+// mount is the seam. Everything before it is boilerplate every sqlb
+// application writes the same way; everything mount does is the reason the
+// application exists, and Serve does not try to guess it. A minimal server:
+//
+//	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+//	defer stop()
+//	err := rest.Serve(ctx, rest.ServeConfig{
+//	    DSN:     os.Getenv("DATABASE_URL"),
+//	    Migrate: migrations.Apply,
+//	}, func(srv *rest.Server, db sqlb.Executor) error {
+//	    return myapp.Register(srv.API, db, myapp.Actions{})
+//	})
+func Serve(ctx context.Context, cfg ServeConfig, mount func(*Server, sqlb.Executor) error) error {
+	if cfg.DSN == "" {
+		return errors.New("rest: ServeConfig.DSN is required")
+	}
+	if mount == nil {
+		return errors.New("rest: Serve called with a nil mount func")
+	}
+	addr := cfg.Addr
+	if addr == "" {
+		addr = ":8080"
+	}
+	timeout := cfg.ShutdownTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	log := cfg.Log
+	if log == nil {
+		log = slog.Default()
+	}
+
+	pool, err := pgxpool.New(ctx, cfg.DSN)
+	if err != nil {
+		return fmt.Errorf("rest: opening the database: %w", err)
+	}
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("rest: connecting to the database: %w", err)
+	}
+
+	if cfg.Migrate != nil {
+		if err := cfg.Migrate(ctx, pool); err != nil {
+			return fmt.Errorf("rest: migrating: %w", err)
+		}
+		log.Info("schema is up to date")
+	}
+
+	db := sqlb.New(pool)
+	srv := NewServer(cfg.Server)
+	if err := mount(srv, db); err != nil {
+		return fmt.Errorf("rest: mounting resources: %w", err)
+	}
+
+	httpServer := &http.Server{Addr: addr, Handler: srv.Handler}
+
+	errs := make(chan error, 1)
+	go func() {
+		log.Info("listening", "addr", addr, "docs", "http://localhost"+addr+"/docs")
+		errs <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errs:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		log.Info("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return httpServer.Shutdown(shutdownCtx)
+	}
+}
