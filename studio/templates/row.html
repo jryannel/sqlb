@@ -1,0 +1,19 @@
+{{define "content"}}
+<div class="mb-3">
+  <a href="/tables/{{.Table.Name}}/rows" class="btn btn-link px-0">&larr; {{.Table.Name}}</a>
+  <h2 class="page-title mt-2">{{.Table.Name}} row</h2>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <dl class="row mb-0">
+      {{range .Fields}}
+      <dt class="col-3">{{.Name}}</dt>
+      <dd class="col-9">
+        {{if .Link}}<a href="{{.Link}}">{{.Value}}</a>{{else}}{{.Value}}{{end}}
+      </dd>
+      {{end}}
+    </dl>
+  </div>
+</div>
+{{end}}

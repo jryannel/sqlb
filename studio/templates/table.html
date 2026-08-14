@@ -1,9 +1,12 @@
 {{define "content"}}
 {{$t := .Table}}
-<div class="mb-3">
-  <a href="/" class="btn btn-link px-0">&larr; Tables</a>
-  <h2 class="page-title mt-2">{{$t.Name}}</h2>
-  {{if $t.Comment}}<div class="text-secondary">{{$t.Comment}}</div>{{end}}
+<div class="mb-3 d-flex align-items-start justify-content-between">
+  <div>
+    <a href="/" class="btn btn-link px-0">&larr; Tables</a>
+    <h2 class="page-title mt-2">{{$t.Name}}</h2>
+    {{if $t.Comment}}<div class="text-secondary">{{$t.Comment}}</div>{{end}}
+  </div>
+  {{if .CanBrowse}}<a href="/tables/{{$t.Name}}/rows" class="btn btn-primary mt-2">Browse data &rarr;</a>{{end}}
 </div>
 
 <div class="row row-cards">
