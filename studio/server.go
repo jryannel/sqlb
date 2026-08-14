@@ -15,7 +15,7 @@ import (
 	"github.com/jryannel/sqlb/schema"
 )
 
-//go:embed templates/base.html templates/index.html templates/table.html templates/login.html templates/rows.html templates/row.html
+//go:embed templates/base.html templates/index.html templates/table.html templates/login.html templates/rows.html templates/row.html templates/form.html
 var templateFS embed.FS
 
 //go:embed static
@@ -39,6 +39,7 @@ type Server struct {
 	login *template.Template
 	rows  *template.Template
 	row   *template.Template
+	form  *template.Template
 }
 
 // NewServer parses the embedded templates and pairs them with m. apiBase is
@@ -60,6 +61,7 @@ func NewServer(m *schema.Manifest, apiBase string) (*Server, error) {
 	s.login = parse("templates/base.html", "templates/login.html")
 	s.rows = parse("templates/base.html", "templates/rows.html")
 	s.row = parse("templates/base.html", "templates/row.html")
+	s.form = parse("templates/base.html", "templates/form.html")
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +81,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /tables/{name}", s.handleTable)
 	mux.HandleFunc("GET /tables/{name}/rows", s.handleRows)
+	mux.HandleFunc("GET /tables/{name}/rows/new", s.handleRowNewForm)
+	mux.HandleFunc("POST /tables/{name}/rows/new", s.handleRowNewSubmit)
 	mux.HandleFunc("GET /tables/{name}/rows/{id}", s.handleRowDetail)
+	mux.HandleFunc("GET /tables/{name}/rows/{id}/edit", s.handleRowEditForm)
+	mux.HandleFunc("POST /tables/{name}/rows/{id}/edit", s.handleRowEditSubmit)
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)
 	mux.HandleFunc("POST /logout", s.handleLogout)
@@ -193,6 +199,7 @@ type rowsPage struct {
 	Rows          []displayRow
 	Page, PerPage int
 	HasMore       bool
+	CanCreate     bool
 }
 
 func (s *Server) handleRows(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +234,7 @@ func (s *Server) handleRows(w http.ResponseWriter, r *http.Request) {
 		Page:       result.Page,
 		PerPage:    result.PerPage,
 		HasMore:    result.HasMore,
+		CanCreate:  containsOp(t.REST.Operations, "create"),
 	}
 	for _, row := range result.Items {
 		dr := displayRow{}
@@ -256,8 +264,10 @@ type fieldValue struct {
 
 type rowPage struct {
 	pageHeader
-	Table  schema.TableManifest
-	Fields []fieldValue
+	Table    schema.TableManifest
+	Fields   []fieldValue
+	CanEdit  bool
+	EditLink string
 }
 
 func (s *Server) handleRowDetail(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +287,13 @@ func (s *Server) handleRowDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := rowPage{pageHeader: s.header(r), Table: *t}
+	id := r.PathValue("id")
+	data := rowPage{
+		pageHeader: s.header(r),
+		Table:      *t,
+		CanEdit:    containsOp(t.REST.Operations, "update"),
+		EditLink:   "/tables/" + t.Name + "/rows/" + id + "/edit",
+	}
 	for _, col := range t.Columns {
 		wire := wireOf(col)
 		val := row[wire]
@@ -288,6 +304,157 @@ func (s *Server) handleRowDetail(w http.ResponseWriter, r *http.Request) {
 		data.Fields = append(data.Fields, fieldValue{Name: col.Name, Value: dispValue(val), Link: link})
 	}
 	s.render(w, s.row, data)
+}
+
+type formPage struct {
+	pageHeader
+	Table  schema.TableManifest
+	Fields []formField
+	Action string
+	Title  string
+	Back   string
+	Error  string
+}
+
+func (s *Server) handleRowNewForm(w http.ResponseWriter, r *http.Request) {
+	t := s.findTable(r.PathValue("name"))
+	if t == nil || t.REST == nil || !containsOp(t.REST.Operations, "create") {
+		http.NotFound(w, r)
+		return
+	}
+	s.render(w, s.form, formPage{
+		pageHeader: s.header(r),
+		Table:      *t,
+		Fields:     buildFormFields(t, nil),
+		Action:     "/tables/" + t.Name + "/rows/new",
+		Title:      "New " + t.Name + " row",
+		Back:       "/tables/" + t.Name + "/rows",
+	})
+}
+
+func (s *Server) handleRowNewSubmit(w http.ResponseWriter, r *http.Request) {
+	t := s.findTable(r.PathValue("name"))
+	if t == nil || t.REST == nil || !containsOp(t.REST.Operations, "create") {
+		http.NotFound(w, r)
+		return
+	}
+	client, ok := s.clientFor(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	action, title, back := "/tables/"+t.Name+"/rows/new", "New "+t.Name+" row", "/tables/"+t.Name+"/rows"
+
+	body, err := parseFormBody(t, r.PostForm)
+	if err != nil {
+		s.renderFormError(w, r, t, r.PostForm, action, title, back, err.Error())
+		return
+	}
+	created, err := client.Create(r.Context(), t.REST.Path, body)
+	if err != nil {
+		s.renderFormAPIError(w, r, t, r.PostForm, action, title, back, err)
+		return
+	}
+
+	dest := back
+	if pk := findColumn(t.Columns, t.PrimaryKey); pk != nil {
+		if v := dispValue(created[wireOf(*pk)]); v != "" && v != "—" {
+			dest = "/tables/" + t.Name + "/rows/" + v
+		}
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+func (s *Server) handleRowEditForm(w http.ResponseWriter, r *http.Request) {
+	t := s.findTable(r.PathValue("name"))
+	if t == nil || t.REST == nil || !containsOp(t.REST.Operations, "update") {
+		http.NotFound(w, r)
+		return
+	}
+	client, ok := s.clientFor(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	row, err := client.Get(r.Context(), t.REST.Path+"/"+id)
+	if err != nil {
+		s.renderAPIError(w, r, err)
+		return
+	}
+	s.render(w, s.form, formPage{
+		pageHeader: s.header(r),
+		Table:      *t,
+		Fields:     buildFormFields(t, row),
+		Action:     "/tables/" + t.Name + "/rows/" + id + "/edit",
+		Title:      "Edit " + t.Name + " row",
+		Back:       "/tables/" + t.Name + "/rows/" + id,
+	})
+}
+
+func (s *Server) handleRowEditSubmit(w http.ResponseWriter, r *http.Request) {
+	t := s.findTable(r.PathValue("name"))
+	if t == nil || t.REST == nil || !containsOp(t.REST.Operations, "update") {
+		http.NotFound(w, r)
+		return
+	}
+	client, ok := s.clientFor(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	id := r.PathValue("id")
+	action := "/tables/" + t.Name + "/rows/" + id + "/edit"
+	title := "Edit " + t.Name + " row"
+	back := "/tables/" + t.Name + "/rows/" + id
+
+	body, err := parseFormBody(t, r.PostForm)
+	if err != nil {
+		s.renderFormError(w, r, t, r.PostForm, action, title, back, err.Error())
+		return
+	}
+	if _, err := client.Patch(r.Context(), t.REST.Path+"/"+id, body); err != nil {
+		s.renderFormAPIError(w, r, t, r.PostForm, action, title, back, err)
+		return
+	}
+	http.Redirect(w, r, back, http.StatusFound)
+}
+
+func (s *Server) renderFormError(w http.ResponseWriter, r *http.Request, t *schema.TableManifest, form url.Values, action, title, back, errMsg string) {
+	s.render(w, s.form, formPage{
+		pageHeader: s.header(r),
+		Table:      *t,
+		Fields:     formFieldsFromForm(t, form),
+		Action:     action,
+		Title:      title,
+		Back:       back,
+		Error:      errMsg,
+	})
+}
+
+// renderFormAPIError is renderAPIError's counterpart for a form submission: a
+// stale token still bounces to /login, but every other failure re-renders the
+// form with what the operator typed rather than losing it behind a generic
+// error page.
+func (s *Server) renderFormAPIError(w http.ResponseWriter, r *http.Request, t *schema.TableManifest, form url.Values, action, title, back string, err error) {
+	var ae *apiError
+	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
+		clearTokenCookie(w)
+		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+	msg := err.Error()
+	if errors.As(err, &ae) {
+		msg = fmt.Sprintf("%d from API: %s", ae.Status, ae.Body)
+	}
+	s.renderFormError(w, r, t, form, action, title, back, msg)
 }
 
 type loginPage struct {

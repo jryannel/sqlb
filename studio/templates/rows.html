@@ -1,8 +1,11 @@
 {{define "content"}}
 {{$table := .Table.Name}}
-<div class="mb-3">
-  <a href="/tables/{{$table}}" class="btn btn-link px-0">&larr; {{$table}}</a>
-  <h2 class="page-title mt-2">{{$table}} — data</h2>
+<div class="mb-3 d-flex align-items-start justify-content-between">
+  <div>
+    <a href="/tables/{{$table}}" class="btn btn-link px-0">&larr; {{$table}}</a>
+    <h2 class="page-title mt-2">{{$table}} — data</h2>
+  </div>
+  {{if .CanCreate}}<a href="/tables/{{$table}}/rows/new" class="btn btn-primary mt-2">New row</a>{{end}}
 </div>
 
 <div class="card">

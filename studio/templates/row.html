@@ -1,7 +1,10 @@
 {{define "content"}}
-<div class="mb-3">
-  <a href="/tables/{{.Table.Name}}/rows" class="btn btn-link px-0">&larr; {{.Table.Name}}</a>
-  <h2 class="page-title mt-2">{{.Table.Name}} row</h2>
+<div class="mb-3 d-flex align-items-start justify-content-between">
+  <div>
+    <a href="/tables/{{.Table.Name}}/rows" class="btn btn-link px-0">&larr; {{.Table.Name}}</a>
+    <h2 class="page-title mt-2">{{.Table.Name}} row</h2>
+  </div>
+  {{if .CanEdit}}<a href="{{.EditLink}}" class="btn btn-primary mt-2">Edit</a>{{end}}
 </div>
 
 <div class="card">
