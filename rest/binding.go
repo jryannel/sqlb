@@ -198,7 +198,7 @@ func bind[T any](opts Options) (*binding[T], error) {
 	// spellings ADR-0036 exists to prevent, so it refuses to mount rather than
 	// serving an API whose own document is wrong about it.
 	for _, col := range m.Columns {
-		if col.Hidden {
+		if col.Hidden || col.WriteOnly {
 			continue
 		}
 		if name := jsonName[col.Name]; name != "" && name != col.Wire {
@@ -210,13 +210,17 @@ func bind[T any](opts Options) (*binding[T], error) {
 		}
 	}
 
-	// A hidden column carrying a JSON name would be serialised by any code
-	// that marshalled the struct directly — a debug log, a hand-written
-	// handler — so the mismatch is worth reporting where it is introduced.
+	// A hidden or write-only column carrying a JSON name on the row struct
+	// would be serialised by any code that marshalled the struct directly —
+	// a debug log, a hand-written handler — so the mismatch is worth
+	// reporting where it is introduced. This is about the row struct only:
+	// a write-only column's separate create/update body struct carries a
+	// real json tag, since that is how the value gets in.
 	for _, col := range m.Columns {
-		if col.Hidden && jsonName[col.Name] != "" {
+		if (col.Hidden || col.WriteOnly) && jsonName[col.Name] != "" {
 			return nil, fmt.Errorf(
-				"rest: %s.%s is hidden but has json tag %q; hidden columns need `json:\"-\"` so they cannot be marshalled by accident",
+				"rest: %s.%s is hidden or write-only but has json tag %q on the row struct; "+
+					"both need `json:\"-\"` there so they cannot be marshalled by accident",
 				m.Type, col.Field, jsonName[col.Name])
 		}
 	}
@@ -337,7 +341,7 @@ func (b *binding[T]) columnsFor(selected []string) []*sqlb.ColumnInfo {
 	}
 	out := make([]*sqlb.ColumnInfo, 0, len(selected))
 	for _, name := range selected {
-		if col := b.model.Column(name); col != nil && !col.Hidden {
+		if col := b.model.Column(name); col != nil && !col.Hidden && !col.WriteOnly {
 			out = append(out, col)
 		}
 	}

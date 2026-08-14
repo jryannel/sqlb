@@ -410,14 +410,16 @@ func goType(typeName, table string, d *schema.FieldDesc, ov *overrides) string {
 	return d.GoType()
 }
 
-// jsonTag renders the `json` struct tag.
+// jsonTag renders the `json` struct tag for the row struct.
 //
-// A hidden column gets `json:"-"`. The REST layer already excludes it from
-// every projection, but a hidden column that could still be marshalled is one
-// stray json.Marshal away from leaking — a debug log, a hand-written handler —
-// and the tag closes that off at the type.
+// A hidden or write-only column gets `json:"-"`. The REST layer already
+// excludes both from every projection, but a column that could still be
+// marshalled is one stray json.Marshal away from leaking — a debug log, a
+// hand-written handler — and the tag closes that off at the type. This is the
+// row struct's own tag; a write-only column's separate create/update body
+// struct gets a real tag elsewhere, since that is how the value gets in.
 func jsonTag(d *schema.FieldDesc, wire schema.WireCase) string {
-	if d.Hidden {
+	if d.Hidden || d.WriteOnly {
 		return `json:"-"`
 	}
 	return fmt.Sprintf("json:%q", wire.WireName(d.Name))

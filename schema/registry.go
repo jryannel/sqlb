@@ -206,6 +206,9 @@ func (r *Registry) Validate() error {
 				if d.Hidden {
 					report(t.name, d.Name, "primary key cannot be Hidden: REST responses need it to address the row")
 				}
+				if d.WriteOnly {
+					report(t.name, d.Name, "primary key cannot be WriteOnly: REST responses need it to address the row")
+				}
 			}
 			if d.Scoped {
 				scoped++
@@ -248,6 +251,20 @@ func (r *Registry) Validate() error {
 			}
 			if d.Hidden && d.Filterable {
 				report(t.name, d.Name, "column is both Hidden and Filterable, which leaks its contents through filter probing")
+			}
+			if d.WriteOnly {
+				if d.Hidden {
+					report(t.name, d.Name, "column is both Hidden and WriteOnly; they say the same thing about reads and disagree about writes — pick one")
+				}
+				if d.ReadOnly {
+					report(t.name, d.Name, "column is both WriteOnly and ReadOnly: never settable and only ever settable")
+				}
+				if d.Filterable {
+					report(t.name, d.Name, "column is both WriteOnly and Filterable, which leaks its contents through filter probing")
+				}
+				if d.Sortable {
+					report(t.name, d.Name, "column is both WriteOnly and Sortable, which leaks its contents through the order it puts rows in")
+				}
 			}
 			// LookupKey only ever *keeps* a facade entry Hidden would have
 			// removed. On a visible column the entry is there either way, so
@@ -451,6 +468,8 @@ func (r *Registry) Validate() error {
 					report(t.name, "", "DefaultSort %q names no column of this table", term)
 				case f.Desc().Hidden:
 					report(t.name, name, "DefaultSort %q names a Hidden column; a resource cannot order by a column it never serves", term)
+				case f.Desc().WriteOnly:
+					report(t.name, name, "DefaultSort %q names a WriteOnly column; a resource cannot order by a column it never serves", term)
 				case !f.Desc().Sortable:
 					report(t.name, name, "DefaultSort %q names a column that is not Sortable; "+
 						"capabilities are opt-in, so an ordering nothing declared is one no ?sort could ask for either", term)

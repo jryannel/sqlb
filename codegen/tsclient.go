@@ -293,7 +293,7 @@ func tsResources(reg *schema.Registry) ([]tsResource, error) {
 		}
 		for _, f := range t.Fields() {
 			d := f.Desc()
-			if d.Hidden {
+			if d.Hidden || d.WriteOnly {
 				continue
 			}
 			if d.PrimaryKey {
@@ -379,10 +379,11 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 	rels := tsForwardRelations(t)
 	for _, f := range t.Fields() {
 		d := f.Desc()
-		if d.Hidden {
-			// Absent from the row type entirely, as it is from the response
-			// and from the typed column facade. A hidden column has no
-			// spelling a client could use.
+		if d.Hidden || d.WriteOnly {
+			// Absent from the row type entirely, as it is from the response.
+			// A hidden column also has no spelling a client could use
+			// anywhere; a write-only one still has one, in the generated
+			// create/update body, just not here.
 			continue
 		}
 		tsDoc(b, "  ", d.Comment)

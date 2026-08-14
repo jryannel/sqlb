@@ -85,6 +85,51 @@ func TestExpandOmitsHiddenColumnsOfTheTarget(t *testing.T) {
 	}
 }
 
+// A standalone pair rather than adding a writeonly field to expList/expTask:
+// those two are scanned directly by several other tests through harnesses
+// with a fixed column list, and a new mapped column would have to be added to
+// every one of them to keep the mock in sync. WriteOnly needs its own guard
+// proven regardless (#195), so it gets its own small fixture instead.
+type expWOTarget struct {
+	ID     string `db:"id" json:"id" sqlb:"pk"`
+	Name   string `db:"name" json:"name"`
+	Answer string `db:"answer" json:"-" sqlb:"writeonly"`
+}
+
+func (expWOTarget) TableName() string { return "wo_targets" }
+
+type expWOSource struct {
+	ID     string       `db:"id" json:"id" sqlb:"pk"`
+	TID    string       `db:"t_id" json:"t_id" sqlb:"filter,expand"`
+	Target *expWOTarget `db:"-" json:"target,omitempty" sqlb:"expands=t_id"`
+}
+
+func (expWOSource) TableName() string { return "wo_sources" }
+
+// The WriteOnly analogue of TestExpandOmitsHiddenColumnsOfTheTarget: a column
+// settable only through create/update must not leak through an expansion
+// either, exactly as a Hidden one must not (#195).
+func TestExpandOmitsWriteOnlyColumnsOfTheTarget(t *testing.T) {
+	sql, _, err := sqlb.Query[expWOSource]().Expand("target").SQL()
+	if err != nil {
+		t.Fatalf("SQL: %v", err)
+	}
+	if strings.Contains(sql, "answer") {
+		t.Errorf("a write-only column of the expanded target reached the statement:\n%s", sql)
+	}
+}
+
+// The WriteOnly analogue of the ExpandOnly refusal on a Hidden column.
+func TestExpandOnlyRefusesAWriteOnlyColumn(t *testing.T) {
+	_, _, err := sqlb.Query[expWOSource]().ExpandOnly("target", "answer").SQL()
+	if err == nil {
+		t.Fatal("ExpandOnly accepted a write-only column")
+	}
+	if !strings.Contains(err.Error(), "never serves") {
+		t.Errorf("error does not say %q: %v", "never serves", err)
+	}
+}
+
 func TestExpandScansIntoTheRelationField(t *testing.T) {
 	h := newHarness(t,
 		[]string{"id", "list_id", "title", "__expand_list"},

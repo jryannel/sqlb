@@ -207,11 +207,11 @@ func (b *Builder[T]) ExpandOnly(name string, columns ...string) *Builder[T] {
 		case info == nil:
 			return b.fail("ExpandOnly(%q) names %q, which is not a column of %s (have: %s)",
 				name, col, target.Table, strings.Join(target.ColumnNames(), ", "))
-		case info.Hidden:
-			// Refused rather than skipped. A hidden column dropped quietly would
-			// read as "this expansion carries what I asked for" right up until
-			// someone tried to use the key that is not there.
-			return b.fail("ExpandOnly(%q) names %q, which %s hides; an expanded row never carries it",
+		case info.Hidden || info.WriteOnly:
+			// Refused rather than skipped. A hidden or write-only column dropped
+			// quietly would read as "this expansion carries what I asked for"
+			// right up until someone tried to use the key that is not there.
+			return b.fail("ExpandOnly(%q) names %q, which %s never serves; an expanded row never carries it",
 				name, col, target.Table)
 		case info.Computed():
 			return b.fail("ExpandOnly(%q) names %q, which %s computes; an expanded row carries stored "+
@@ -384,7 +384,7 @@ func writeRowObject(c *compiler, target *Model, alias string, only map[string]bo
 	c.write("json_build_object(")
 	first := true
 	for _, col := range target.Columns {
-		if col.Hidden {
+		if col.Hidden || col.WriteOnly {
 			continue
 		}
 		if only != nil && !only[col.Name] {

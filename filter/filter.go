@@ -531,11 +531,12 @@ func (p *parser) filterableColumn(name string) *sqlb.ColumnInfo {
 	// spells a column the way the wire does. They are the same string unless
 	// the schema declared a WireCase (ADR-0036's amendment).
 	col := p.model.ColumnByWire(name)
-	// A hidden column is reported as unknown rather than as un-filterable, so
-	// that its existence cannot be probed by reading the rejection. A computed
-	// column this resource does not select is unknown in the plainer sense:
-	// it is declared on the model, and this endpoint does not have it (#92).
-	if col == nil || col.Hidden || !p.opts.reachable(col) {
+	// A hidden or write-only column is reported as unknown rather than as
+	// un-filterable, so that its existence cannot be probed by reading the
+	// rejection. A computed column this resource does not select is unknown
+	// in the plainer sense: it is declared on the model, and this endpoint
+	// does not have it (#92).
+	if col == nil || col.Hidden || col.WriteOnly || !p.opts.reachable(col) {
 		p.errAllowed(name, "", "unknown parameter", p.capable(capFilter))
 		return nil
 	}
@@ -563,7 +564,7 @@ func (p *parser) capable(c capability) []string {
 		// surface, so it is absent from the "allowed" lists too — naming it in
 		// a rejection would advertise a column every request for it is about
 		// to be refused for (#92).
-		if col.Hidden || !p.opts.reachable(col) {
+		if col.Hidden || col.WriteOnly || !p.opts.reachable(col) {
 			continue
 		}
 		// Wire, not Name: this list is what a caller is told it may type, and
@@ -1103,7 +1104,7 @@ func (p *parser) parseSearch(term string) (sqlb.Pred, bool) {
 	}
 	var preds []sqlb.Pred
 	for _, col := range p.model.Columns {
-		if col.Searchable && !col.Hidden && p.opts.reachable(col) {
+		if col.Searchable && !col.Hidden && !col.WriteOnly && p.opts.reachable(col) {
 			preds = append(preds, sqlb.F(col.Name).Contains(term))
 		}
 	}
@@ -1166,7 +1167,7 @@ func (p *parser) sortTerms(terms []string, declared bool) []sqlb.Order {
 			col = p.model.Column(term)
 		}
 		switch {
-		case col == nil || col.Hidden || !p.opts.reachable(col):
+		case col == nil || col.Hidden || col.WriteOnly || !p.opts.reachable(col):
 			p.errAllowed("sort", term, blame(declared)+"unknown column", p.capable(capSort))
 			continue
 		case !col.Sortable:
@@ -1260,7 +1261,7 @@ func (p *parser) parseSelect(raw string) []string {
 			continue
 		}
 		col := p.model.ColumnByWire(name)
-		if col == nil || col.Hidden || !p.opts.reachable(col) {
+		if col == nil || col.Hidden || col.WriteOnly || !p.opts.reachable(col) {
 			p.errAllowed("select", name, "unknown column", p.selectableNames())
 			continue
 		}

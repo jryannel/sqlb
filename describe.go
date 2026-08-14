@@ -234,6 +234,14 @@ func (d *Description[T]) Hidden(columns ...string) *Description[T] {
 	return d.each("Hidden", columns, func(c *ColumnInfo) { c.Hidden = true })
 }
 
+// WriteOnly omits the columns from every REST response, the same guarantee
+// Hidden makes — but, unlike Hidden, leaves them settable through a generated
+// create or update and present in the typed column facade. It is the runtime
+// form of schema.Field.WriteOnly, for models sqlb did not generate.
+func (d *Description[T]) WriteOnly(columns ...string) *Description[T] {
+	return d.each("WriteOnly", columns, func(c *ColumnInfo) { c.WriteOnly = true })
+}
+
 // Scoped declares that the column confines the model's rows to one tenant, and
 // so that every operation a resource exposes over it must be constrained by a
 // hook. It is the runtime form of schema.Field.Scoped, for models sqlb did not
