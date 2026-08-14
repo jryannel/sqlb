@@ -103,6 +103,33 @@ func (r *Registry) Lint() Diagnostics {
 				continue
 			}
 
+			// TypeText with no Default and no Nullable is NOT NULL with no
+			// fallback, which the generated create body renders as required
+			// (codegen.optionalOnCreate: !Nullable && !DatabaseSupplied()).
+			// That is correct far more often than not, so this says nothing
+			// about the column being wrong. It exists because the first
+			// place a porting author (coming from a framework where a blank
+			// string is the unmarked default, e.g. Django's blank=True)
+			// discovers the requirement is a 422 at request time, not a line
+			// in the schema. Scoped to TypeText rather than every
+			// string-shaped column, because Text is the free-form
+			// body/description/notes case the mismatch actually comes from;
+			// Varchar's declared size already reads as a structured field (a
+			// name, a slug, an email) where "required" is unambiguous and
+			// this note would be pure noise.
+			if t.rest != nil && t.rest.Ops.Has(OpCreate) &&
+				d.Type == TypeText && !d.Nullable && !d.DatabaseSupplied() &&
+				!d.ReadOnly && !d.Hidden && !d.PrimaryKey {
+				add(Diagnostic{
+					Rule: "text-required-on-create", Table: t.name, Column: d.Name,
+					Severity: SeverityInfo,
+					Message: "no .Default(...) and not nullable, so this column is required on create; " +
+						"this is correct if a value must always be given, and worth a second look only if " +
+						"callers were expected to be able to leave it blank",
+					Fix: `if blank should be allowed, add .Default(schema.Value("")) or .Nullable(); otherwise no change is needed`,
+				})
+			}
+
 			// A filterable column with no index leading a btree means every
 			// request that uses it scans the table.
 			if d.Filterable && !d.Hidden && !indexed[d.Name] && !isLowCardinality(d) {

@@ -125,6 +125,64 @@ func TestLintSeparatesWarningsFromInfo(t *testing.T) {
 	}
 }
 
+// A Text column with no Default and no Nullable is required on the generated
+// create body — correct, but the first symptom a porting author sees is a 422
+// on a field they assumed behaved like Django's blank=True. The rule is
+// scoped to TypeText, exposed via OpCreate, and excludes ReadOnly, Hidden and
+// PrimaryKey columns, none of which are part of the ordinary create body.
+func TestLintNotesARequiredTextColumnWithNoDefault(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("body"),
+	).Expose(schema.REST{Ops: schema.OpCreate | schema.OpRead})
+
+	got := rules(r.Lint())
+	if !got["text-required-on-create"] {
+		t.Error("a required Text column with no default should get a note")
+	}
+	for _, d := range r.Lint() {
+		if d.Rule == "text-required-on-create" {
+			if d.Severity != schema.SeverityInfo {
+				t.Errorf("text-required-on-create should be info, not %s", d.Severity)
+			}
+			if d.Fix == "" {
+				t.Error("the diagnostic should carry a concrete fix")
+			}
+		}
+	}
+}
+
+// The negative case matters more here than usual: a required Text column is
+// the common, correct case, not the exception, so the rule must stay quiet
+// once the schema already answers "is this deliberately required" — a
+// Default, Nullable, ReadOnly, Hidden or PrimaryKey column, a table that
+// never exposes OpCreate, or a Varchar rather than a Text column.
+func TestLintIsQuietOnDeliberatelyRequiredOrNonTextColumns(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("posts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("title").Default(schema.Value("untitled")),
+		schema.Text("subtitle").Nullable(),
+		schema.Text("rendered_html").ReadOnly(),
+		schema.Text("internal_note").Hidden(),
+		schema.Varchar("slug", 64),
+	).Expose(schema.REST{Ops: schema.OpCreate | schema.OpRead})
+
+	if got := rules(r.Lint())["text-required-on-create"]; got {
+		t.Errorf("none of these columns should be flagged, got: %s", r.Lint())
+	}
+
+	noCreate := schema.NewRegistry()
+	noCreate.Table("drafts",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Text("body"),
+	).Expose(schema.REST{Ops: schema.OpRead})
+	if got := rules(noCreate.Lint())["text-required-on-create"]; got {
+		t.Error("a table with no OpCreate has no create body to warn about")
+	}
+}
+
 func TestLintIsQuietOnAWellFormedSchema(t *testing.T) {
 	r := schema.NewRegistry()
 	r.Table("h",
