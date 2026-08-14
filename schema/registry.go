@@ -471,6 +471,8 @@ func (r *Registry) Validate() error {
 		}
 
 		r.validateActions(t, report)
+		r.validateQueries(t, report)
+		r.validateMutations(t, report)
 	}
 
 	// Duplicate REST paths would make routing order-dependent.

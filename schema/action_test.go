@@ -15,7 +15,7 @@ func tasksWith(a schema.Action) *schema.Registry {
 		schema.Text("title"),
 		schema.Enum("status", "open", "done").Default(schema.Value("open")),
 		schema.Computed("is_open", schema.TypeBool, schema.FromSQL("status = 'open'")),
-	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList}).Action(a)
+	).Expose(schema.REST{Ops: schema.CRUD | schema.OpList}).AddAction(a)
 	return r
 }
 
@@ -106,8 +106,8 @@ func TestTwoActionsCannotShareAPath(t *testing.T) {
 		schema.UUIDv7("id").PrimaryKey(),
 		schema.Text("title"),
 	).Expose(schema.REST{Ops: schema.OpRead}).
-		Action(schema.Action{Name: "complete"}).
-		Action(schema.Action{Name: "finish", Path: "/{id}/complete"})
+		AddAction(schema.Action{Name: "complete"}).
+		AddAction(schema.Action{Name: "finish", Path: "/{id}/complete"})
 
 	refusal(t, r, "same path")
 }
@@ -117,7 +117,7 @@ func TestAnActionNeedsAnExposedTable(t *testing.T) {
 	r.Table("tasks",
 		schema.UUIDv7("id").PrimaryKey(),
 		schema.Text("title"),
-	).Action(schema.Action{Name: "complete"})
+	).AddAction(schema.Action{Name: "complete"})
 
 	refusal(t, r, "is not exposed", "add Expose")
 }
@@ -171,7 +171,7 @@ func TestASingletonsGetIsTakenToo(t *testing.T) {
 		schema.UUID("tenant_id").ReadOnly().Scoped(),
 		schema.Text("theme"),
 	).Expose(schema.REST{Ops: schema.OpSingleton}).
-		Action(schema.Action{Name: "get", Path: "/get"})
+		AddAction(schema.Action{Name: "get", Path: "/get"})
 
 	refusal(t, r, "OpSingleton")
 }
@@ -186,8 +186,8 @@ func TestAVerbIsFreeWhenTheOpIsNotExposed(t *testing.T) {
 		schema.UUIDv7("id").PrimaryKey(),
 		schema.Text("title").Sortable(),
 	).Expose(schema.REST{Ops: schema.Reads}).
-		Action(schema.Action{Name: "create", Path: "/create"}).
-		Action(schema.Action{Name: "delete"})
+		AddAction(schema.Action{Name: "create", Path: "/create"}).
+		AddAction(schema.Action{Name: "delete"})
 
 	if err := r.Validate(); err != nil {
 		t.Fatalf("verbs naming unexposed operations were refused: %v", err)
@@ -202,7 +202,7 @@ func TestAnItemActionNeedsAPrimaryKey(t *testing.T) {
 	r.Table("events",
 		schema.Text("name").Filterable(),
 	).Expose(schema.REST{Ops: schema.OpList}).
-		Action(schema.Action{Name: "replay"})
+		AddAction(schema.Action{Name: "replay"})
 
 	refusal(t, r, "no primary key")
 }

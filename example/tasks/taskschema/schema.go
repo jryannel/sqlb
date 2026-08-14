@@ -277,7 +277,7 @@ var Task = schema.Table("tasks",
 	// body becomes a comment row through sqlb.TxFrom, and the write set above
 	// cannot say so. Two columns on one row is what the envelope persists, not
 	// what the route reaches (#149).
-	Action(schema.Action{
+	AddAction(schema.Action{
 		Name: "complete",
 		Body: schema.Body(
 			schema.Text("note").Nullable().

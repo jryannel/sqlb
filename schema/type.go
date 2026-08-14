@@ -132,7 +132,7 @@ func (a Auto) Identity() bool {
 // RefAction is a foreign key referential action.
 //
 // It was spelled Action until a table needed that noun for a domain verb
-// ([TableDef.Action], ADR-0043). Two meanings of "action" in one package is
+// ([TableDef.AddAction], ADR-0043). Two meanings of "action" in one package is
 // the kind of ambiguity that outlives everyone who could explain it, and this
 // is the side almost nobody writes by name — the constants below carry the
 // meaning at every call site.

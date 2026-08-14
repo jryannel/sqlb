@@ -19,9 +19,13 @@ import "strings"
 
 // Action is a domain verb exposed on a table.
 //
-// Declare one with [TableDef.Action]:
+// Declare one with [TableDef.AddAction] — renamed from Action after
+// [TableDef.AddQuery] and [TableDef.AddMutation] settled the family: an ADR
+// fixes the architecture a name sits in, not the name itself, and the three
+// declaration methods reading alike matters more than this one keeping the
+// spelling ADR-0043 happened to pick before it had siblings to agree with.
 //
-//	Task.Action(schema.Action{
+//	Task.AddAction(schema.Action{
 //	    Name:   "complete",
 //	    Body:   schema.Body(schema.Text("note").Nullable()),
 //	    Writes: []string{"status", "closed_at"},
@@ -89,7 +93,7 @@ type Action struct {
 	// prints a two-column write set while opening eleven tables' worth of
 	// transaction, with nothing in the generated surfaces to say so (#149).
 	//
-	//	Order.Action(schema.Action{
+	//	Order.AddAction(schema.Action{
 	//	    Name:    "place",
 	//	    Writes:  []string{"status", "placed_at"},
 	//	    Touches: []string{"order_lines", "inventory_reservations", "payments"},
@@ -153,12 +157,12 @@ func Body(specs ...FieldSpec) []*Field {
 	return out
 }
 
-// Action declares a domain verb on the table and returns the table, so that
-// declarations chain the way Expose and AddIndex already do.
+// AddAction declares a domain verb on the table and returns the table, so
+// that declarations chain the way Expose and AddIndex already do.
 //
 // The table must also be exposed: an action is a route on the resource, and a
 // table with no resource has nowhere to put one.
-func (t *TableDef) Action(a Action) *TableDef {
+func (t *TableDef) AddAction(a Action) *TableDef {
 	if a.Path == "" {
 		a.Path = "/{id}/" + a.Name
 	}
