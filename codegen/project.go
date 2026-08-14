@@ -91,6 +91,14 @@ type Project struct {
 	// (ADR-0039) — so it belongs in the repository like the migration history.
 	ContractFile string
 
+	// FeaturesFile is where `sqlb docs` writes the feature checklist, relative
+	// to the module root. Empty defaults to "FEATURES.md" beside the generated
+	// code (Options.Dir). Unlike every other artefact, a rerun does not treat
+	// this file as fully owned: it keeps whatever notes the file already
+	// carries for an endpoint that still exists, so it is meant to be
+	// committed and hand-edited, not regenerated and diffed against.
+	FeaturesFile string
+
 	// EjectDir is where `sqlb eject` writes, relative to the module root.
 	//
 	// Empty defaults to "ejected" beside the generated code, which is the
@@ -247,6 +255,12 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		// it stands rather than as it was when someone last remembered to run
 		// this.
 		return runEject(p, opts, rest, stdout, stderr)
+
+	case "docs":
+		// The feature checklist: one section per endpoint, derived from the
+		// schema, with a notes block a coding agent or a teammate fills in and
+		// a rerun preserves. See docs.go.
+		return runDocs(p, opts, opts.Registry, stdout, stderr)
 
 	default:
 		say(stderr, "sqlb: driver does not know the verb %q\n", verb)
