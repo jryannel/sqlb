@@ -3573,3 +3573,61 @@ credential" nor cleanly "unreachable." No real adapter exists yet as of
 this writing; those are separate follow-on plans and will be the evidence
 that answers this.
 
+### Fx wiring is generated, not a runtime library
+
+sqlb emits models, the manifest, the REST resource, three clients and a
+skill from a schema declaration, but nothing that makes a schema-owning
+module a *unit* in the host's dependency-injection graph — even though two
+of the three things a module contributes there are already fully
+determined by the declaration: the migration history and the resource
+mount. A real 38-module uber-go/fx consumer measured what that costs by
+hand: 78 byte-identical migration providers, 183 operation-set literals,
+209 `fx.Module(...)` declarations. This was tried once already as a
+runtime library, and rejected on the merits rather than the idea: its
+value-group vocabulary matched the consumer's contracts name for name, but
+importing it pulled chi, goose and huma into a graph that already had
+them, duplicating contracts the platform already held — a runtime
+dependency can't avoid dragging sqlb's own choice of router and migration
+runner along, no matter how well the vocabulary lines up. A generated file
+doesn't have that problem: it references the host's own types by a
+fully-qualified string and imports only what the consuming module already
+depends on, at the cost of sqlb needing to be told two names a schema
+can't derive — which fx value group a mount joins (an access-surface
+decision, not a schema property), and a module's fx identity when its
+registry is genuinely unnamed on purpose.
+
+`codegen.Options` grows `WiringMigrations` and `WiringOperations`, each a
+`WiringSet{Type, Group, Name, EmbedDir}` — two named fields rather than a
+slice, because the two contributions have different shapes (`EmbedDir`
+means "the directory of `.sql` files to embed" on one and is refused on
+the other) and one `codegen.Options` never has a second migration history
+or a second resource mount to contribute. `Type` is a fully-qualified
+`"import/path.TypeName"` string, so a wrong name is a compile error in the
+generated file rather than a provider that silently joins no group. What's
+emitted is one `fx.Option` value, `FxModule`, never a wrapped
+`fx.Module(name, ...)` — the hand-written module composes it
+(`fx.Module("store", FxModule)`), so a module with more to say adds it
+beside the generated value instead of inside it, and `FxModule` never
+carries a hand edit to lose when the schema changes and it regenerates.
+Nothing is emitted for hooks, since a `Scoped` column already refuses to
+mount without one and generating hook wiring would mean sqlb generating
+unreviewed authorization policy; nothing is emitted when the schema
+declares actions or queries either, since `Register` would need
+hand-written funcs the emitter has no way to supply — an honest refusal
+rather than a generated call that fails to compile.
+
+The measured result was `example/fxapp`'s `store/module.go` shrinking from
+a hand-written provider pair to one line composing `FxModule`, the exact
+shape the 38-module consumer's copies were measured at. The cost is a
+fifth emitter over the same declaration, a documented limitation in
+`WiringSet.Type`'s assumption that a package's name is its import path's
+last segment, and coverage that's partial by design — a module declaring
+actions or queries wires its resource mount by hand and gets no operations
+contribution at all. Revisit if a second DI container shows up in a real
+consumer wanting the same two contributions, if the actions/queries
+refusal turns out to be reachable often enough that most modules with a
+REST surface hit it, or if a host package's name diverging from its
+directory turns up in practice — untested against a real consumer, and the
+failure today is an import that doesn't exist rather than a clean
+rejection at generate time.
+

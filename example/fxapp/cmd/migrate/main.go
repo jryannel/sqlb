@@ -30,7 +30,7 @@ import (
 )
 
 func main() {
-	dir := flag.String("dir", "migrations", "output directory")
+	dir := flag.String("dir", "store/migrations", "output directory")
 	force := flag.Bool("force", false, "delete and rewrite existing migrations (development only)")
 	flag.Parse()
 
