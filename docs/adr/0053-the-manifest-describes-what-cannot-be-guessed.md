@@ -228,3 +228,20 @@ above does not hold up, costs a module rather than an unwind inside `.`.
   it prefers; a Grafana dashboard config is a reasonable example to ship
   alongside the browser, but it is config for existing tooling, not sqlb code,
   and needs no decision here.
+- 2026-08-14 — **Checked against a real consumer.** Hidden columns excluded
+  correctly, row-scoping held under the same hooks the API enforces, bearer-
+  token login worked as designed — the two low-confidence claims from the
+  entry above (the manifest is sufficient; a curated admin and an uncurated
+  one coexist without one displacing the other) both held. The review also
+  named what "uncurated browser" does not buy: `list_display`/`list_filter`/
+  `fieldsets`-equivalent curation, inline/nested editing, bulk actions,
+  history/audit, and a permission-configuration screen — none of which this
+  record ever claimed, but the phrase "uncurated data/schema/action browser"
+  was carrying that claim by omission for a reader comparing it to Django's
+  admin. Recorded explicitly in `studio/README.md` rather than here, because
+  the gap is a statement about what studio is not, not a new decision about
+  what the manifest carries — this record's scope (curated vs. uncurated) is
+  unchanged. One item is a plausible near-term follow-up rather than a
+  non-goal: the durable change feed ([`outbox`](../../outbox), ADR-0012) is
+  built, but its `Event` carries no actor and no field-level diff, and studio
+  does not read it — an audit trail is closer than the others, not close.
