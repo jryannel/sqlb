@@ -233,7 +233,7 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		return runMigrate(p, opts.Registry, rest, stdout, stderr)
 
 	case "generate":
-		written, err := Generate(opts)
+		written, changed, err := generate(opts)
 		if err != nil {
 			line(stderr, err)
 			return 1
@@ -242,6 +242,14 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 			line(stdout, f)
 		}
 		say(stderr, "sqlb: wrote %d files\n", len(written))
+		// The nudge that closes #204: `go mod tidy` run before generate had
+		// no way to see an import generate is only now writing — outbox's
+		// SSE handler pulling in huma's adapters/sse package is the case
+		// that surfaced it. Fired on any content change rather than only a
+		// new import; see generate's doc comment in codegen.go for why.
+		if changed {
+			say(stderr, "sqlb: generated output changed — dependencies may have changed too; run `go mod tidy` again\n")
+		}
 		return 0
 
 	case "check":

@@ -467,29 +467,51 @@ func isSkillName(s string) bool {
 // authoring error would produce plausible-looking Go that encodes the mistake,
 // which is harder to debug than refusing.
 func Generate(opts Options) ([]string, error) {
+	written, _, err := generate(opts)
+	return written, err
+}
+
+// generate is Generate's implementation, with one extra return Generate
+// throws away: whether any file it wrote differs from what was on disk before
+// this call, a missing file counting as different.
+//
+// The driver's "generate" verb (Run, in project.go) uses that bit to warn
+// that dependencies may have changed — the case in point being a schema that
+// newly reaches for outbox/events, which pulls huma's SSE adapter package
+// into rest_gen.go only once this call has produced code that imports it.
+// `go mod tidy` run before generate had no way to see that; nothing after
+// `go generate ./...` prompts a second one (#204). The check is "did any
+// generated file's bytes change", not "did an import specifically appear":
+// parsing import diffs across Go, TypeScript, Dart and CLI output for one bit
+// of signal is a lot of surface for a warning that is cheap to over-fire — a
+// generate that only reformats a comment nudges once for nothing, which costs
+// far less than staying silent the time it matters.
+func generate(opts Options) (written []string, changed bool, err error) {
 	files, err := render(opts)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var written []string
 	for _, name := range sortedKeys(files) {
 		path := filepath.Join(opts.Dir, name)
 		// A name may carry a subdirectory — the TypeScript client is emitted
 		// into one — so the parent is created per file rather than once above.
 		if dir := filepath.Dir(path); dir != opts.Dir {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
+		if existing, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(existing, files[name]) {
+			changed = true
+		}
 		if err := os.WriteFile(path, files[name], 0o644); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		written = append(written, path)
 	}
-	return written, nil
+	return written, changed, nil
 }
 
 // Check reports which generated files are missing or out of date, without

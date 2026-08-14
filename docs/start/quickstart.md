@@ -146,6 +146,19 @@ someone edits a schema and forgets to regenerate. The
 [Dart client](../dart/README.md) and the [Go CLI](../cli/README.md) are three
 more options on this same call.
 
+**Run `go mod tidy` again after generating, not just before.** A schema
+feature can pull in a package only the code generate just wrote imports — the
+outbox/events feature reaching for huma's SSE adapter is the case that has
+bitten a real port. `go mod tidy` before generate cannot see a dependency that
+does not exist yet, and nothing runs it again for you, so a plain `go build`
+right after `go generate` can fail on an import nobody wrote by hand. The
+`sqlb generate` command (what `sqlb init`'s scaffold wires a `//go:generate`
+directive to) prints a line saying so whenever the files it just wrote differ
+from what was there before; a hand-rolled `gen/main.go` like the one above,
+calling `codegen.Generate` directly, does not, so treat "run `go mod tidy`
+again" as the default after any generate that touched files, not only when
+told to.
+
 ## 3. Query
 
 ```go

@@ -139,6 +139,8 @@ Next:
     cd %s
     go mod tidy
     go generate ./...
+    # if that printed "run go mod tidy again", do — a schema feature can pull
+    # in a dependency go generate only now writes an import for
     go run github.com/jryannel/sqlb/cmd/sqlb migrate -name initial_schema ./%s
     export %s_DATABASE_URL='postgres://user:pass@localhost:5432/%s?sslmode=disable'
     go run ./cmd/server
