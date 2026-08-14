@@ -356,7 +356,18 @@ run = '''
 # is that taking the REST layer is the step where a project accepts a web
 # framework it did not choose, so the example that says so has to pay it too.
 # Stages 1 through 3 of that package take nothing beyond pgx.
-huma_ok='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/example/blog github.com/jryannel/sqlb/example/withsqlc github.com/jryannel/sqlb/example/evolve'
+#
+# outbox is here for a narrower reason and it is worth stating, because "it
+# imports rest" is not on its own an argument — that is how every unwanted
+# dependency arrives. It implements rest.Source and rest.TxPublisher over
+# rest.Event, and there is no use of it that does not also mount rest.Events:
+# an outbox feeding nothing is a table nobody reads. So it inherits huma from a
+# package its own consumers already have, and adds nothing of its own. The day
+# somebody wants the durable feed without the HTTP surface, the fix is to move
+# the four event types to a leaf package and this entry comes back out — which
+# is a real possibility and the reason this paragraph exists rather than a name
+# quietly added to the list above.
+huma_ok='github.com/jryannel/sqlb/rest github.com/jryannel/sqlb/outbox github.com/jryannel/sqlb/example/blog github.com/jryannel/sqlb/example/withsqlc github.com/jryannel/sqlb/example/evolve'
 
 # third_party lists the non-stdlib, non-sqlb packages one package imports,
 # transitively. A stdlib path has no dot in its first element, which is what

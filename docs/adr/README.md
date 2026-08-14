@@ -136,7 +136,7 @@ starts with 0053.
 | [0009](0009-typed-column-facade.md) | A generated typed column facade; predicates stay untyped | Working | Medium |
 | [0010](0010-codegen-is-optional.md) | Code generation is optional | Working | Medium |
 | [0011](0011-actionable-errors.md) | Rejections name what would have been accepted | Working | High |
-| [0012](0012-change-feed-outbox.md) | Change notification via a transactional outbox † | Exploring | Low |
+| [0012](0012-change-feed-outbox.md) | Change notification via a transactional outbox | Working | High (the design) / Low (what the lock costs) |
 | [0013](0013-no-internal-split.md) | No public/internal package split | Working | Medium |
 | [0014](0014-migrations-and-import.md) | Migrations by diff, adoption by import | Working | High |
 | [0015](0015-module-isolation.md) | Modules own their tables, and do not reference each other's | Working | Medium |
