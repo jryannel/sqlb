@@ -14,6 +14,27 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.13.1
+
+2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.13.1)
+
+One bug, found the same day `v0.13.0` shipped it: the `CREATE EXTENSION`
+statement `migrate.Diff` generates had no trailing semicolon. goose splits a
+migration file's ungrouped statements on `;`, so the statement ran together
+with whatever the file printed next rather than failing loudly — a real port
+had to hand-edit the generated file before it would apply.
+
+Predates `v0.13.0`'s own `btree_gist` detection
+([#194](https://github.com/jryannel/sqlb/issues/194)): the `vector` extension
+change had the identical gap, undetected because both tests asserting on it
+used `strings.Contains`, which a missing trailing character is invisible to.
+Both are now exact-equality checks, confirmed to fail without the fix before
+being restored ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+
+No API change. A schema already on `v0.13.0` that declares `AddExclude` with
+a scalar `=` inside a gist index, or a `Vector` column, regenerates a correct
+migration on `sqlb migrate`; nothing else in a generated file changes.
+
 ## v0.13.0
 
 2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.13.0)
