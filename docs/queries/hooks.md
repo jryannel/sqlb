@@ -435,3 +435,5 @@ wiring, not from every call site that happens to hold a handle.
 - [Mounting resources](../rest/README.md) — the handlers these hooks reach
 - [Capabilities](../schema/capabilities.md) — `ReadOnly` plus a hook, and
   `Scoped`
+- [A cross-tenant admin surface](../rest/admin.md) — a released scope, plus
+  the route guard `WithoutScope` alone does not give you

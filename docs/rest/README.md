@@ -93,6 +93,60 @@ OpenAPI document. The thing to notice is what the generated half does *not*
 contain — no mention of tenants, tokens or roles anywhere in it, because the
 hooks cover those for every read the handlers issue.
 
+## Serve: the whole server
+
+`rest.NewServer` gets you the HTTP layer. Everything around it — opening the
+pool, pinging it, running migrations, listening, shutting down gracefully on
+`SIGINT`/`SIGTERM` — is boilerplate every sqlb server writes identically, and
+`rest.Serve` owns that part too:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+defer stop()
+
+err := rest.Serve(ctx, rest.ServeConfig{
+    DSN:     os.Getenv("DATABASE_URL"),
+    Migrate: migrations.Apply,
+}, func(srv *rest.Server, db sqlb.Executor) error {
+    return blog.Register(srv.API, db)   // generated, or hand-written — whatever mounts
+})
+```
+
+`mount` — the function's last argument — is the whole seam: which resources,
+whether they need a `huma.Group`, what that group's middleware does. None of
+it is inferable from a schema value alone, and `Serve` does not try to guess
+it; everything before `mount` runs the same way in every application.
+
+| `ServeConfig` field | Default | |
+|---|---|---|
+| `DSN` | — | required |
+| `Addr` | `:8080` | |
+| `Server` | zero `Config` | passed through to `NewServer` |
+| `Migrate` | `nil` | `func(ctx, *pgxpool.Pool) error`, runs before `mount`; nil means no migration step |
+| `ShutdownTimeout` | 5s | how long `Serve` waits for in-flight requests after `ctx` is cancelled |
+| `Log` | `slog.Default()` | receives startup and shutdown messages |
+
+`Migrate` stays a plain callback rather than `rest` shipping a migration
+runner, on purpose: goose, atlas, a hand-rolled one, or nothing because your
+deploy migrates as a separate step — that choice is exactly the kind `Serve`
+does not make for you. `Options.DisableTransactions` and the rest of a
+resource's own options are unaffected; `Serve` only wraps what sits outside
+any one mount.
+
+**What it does not fit.** `Serve` is one pool, one `*Server`, one
+`http.Server` on one address. An application that wants two independent
+`huma.API`s in one process — a consumer surface and an admin one, each with
+its own OpenAPI document — opens the pool and wires both servers by hand, the
+way every application did before `Serve` existed.
+
+`sqlb init` scaffolds a `cmd/server/main.go` built on `Serve`, so the fastest
+way to see it running is [scaffolding a
+project](../start/quickstart.md#or-scaffold-it). This is younger than
+`NewServer` — measured byte-identical against a hand-rolled `main` in
+`example/tasks2`, but not yet adopted by a second application — so expect
+`ServeConfig` to grow fields sooner than it changes shape under you. See
+[ADR-0058](../adr/0058-serve-owns-the-boilerplate-mount-is-the-seam.md).
+
 ## What each operation gives you
 
 | Operation | Endpoint | Notes |
@@ -242,6 +296,7 @@ quietest wrong answer in the system. See
 - [Pagination](pagination.md) — offset, cursors, and `total`
 - [Expanding relations](expand.md) — `?expand`, both directions
 - [Actions](actions.md) — a domain verb with a generated envelope
+- [A cross-tenant admin surface](admin.md) — releasing a scope, and guarding the route it needs
 - [Change events](events.md) — an SSE stream of invalidations, and what it does not promise
 - [Rejections](errors.md) — what a refusal says and why
 - [API compatibility](compatibility.md) — what a schema edit does to the contract

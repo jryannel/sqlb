@@ -1,6 +1,8 @@
 // Command sqlb keeps a project's generated code and migration history in step
 // with its schema declaration, and reports when either has drifted from it.
 //
+//	sqlb init -module github.com/you/app     write a new project: a schema with
+//	                                        one table, a server, a migration runner
 //	sqlb generate ./taskschema              write every artefact the project declares
 //	sqlb check ./taskschema                 report stale artefacts, write nothing
 //	sqlb migrate -name adds_priority ./taskschema   write the next migration
@@ -37,6 +39,12 @@
 // its registry by introspecting a live database rather than by importing a
 // declaration, so there is nothing to link in and nothing to compile. It takes
 // two DSNs and runs in this process. See survey.go.
+//
+// `init` compiles nothing either, for the opposite reason: there is no schema
+// package yet to import. It writes one — go.mod, a one-table schema, a server
+// built on rest.Serve — and prints the commands you run next rather than
+// running them itself, since each needs something init cannot promise. See
+// init.go.
 //
 // # What it costs
 //
