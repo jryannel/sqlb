@@ -1,12 +1,13 @@
 // Package tasks2schema is the schema for the tasks2 example: a from-scratch
 // rebuild of example/tasks with the auth and multi-tenancy stripped out, so
-// that what is left is only what defining a schema, a mutation and a query
-// actually costs.
+// that what is left is only what defining a schema, a declared action and a
+// declared query actually costs.
 //
 // example/tasks answers "what does a real application look like". This one
 // answers a narrower question: starting from nothing, how many decisions does
-// declaring a table, a declared action (a mutation) and a declared query
-// (schema.Query, the ADR-0043 read-side prototype) actually take.
+// declaring a table, a declared action (in both its item and collection
+// forms) and a declared query (schema.Query, the ADR-0043 read-side
+// prototype) actually take.
 package tasks2schema
 
 import "github.com/jryannel/sqlb/schema"
@@ -56,11 +57,13 @@ var Task = schema.Table("tasks",
 		MaxPageSize:     100,
 		MaxFilters:      8,
 	}).
-	// The mutation: row-scoped, so schema.Mutation rather than schema.Action —
-	// a transition PATCH cannot express, because two columns have to move
-	// together and a task already done must be refused rather than silently
-	// re-completed. See mutations.go for CompleteTask.
-	AddMutation(schema.Mutation{
+	// The item-form action: row-scoped by having "{id}" in its path (the
+	// default), which a transition PATCH cannot express — two columns have to
+	// move together and a task already done must be refused rather than
+	// silently re-completed. See mutations.go for CompleteTask. (ADR-0057
+	// tried a separate schema.Mutation type for this shape and retired it the
+	// same day: an item-form Action was always the same envelope.)
+	AddAction(schema.Action{
 		Name: "complete",
 		Body: schema.Body(
 			schema.Text("note").Nullable().Comment("Ignored in this example; kept to show a body works."),
@@ -68,12 +71,13 @@ var Task = schema.Table("tasks",
 		Writes:      []string{"status", "completed_at"},
 		Description: "Marks the task done and stamps its completion time. A task that is already done is refused with a 409.",
 	}).
-	// The action: no {id} in the path, so there is no row to fetch and none
-	// of Mutation's envelope applies — no BeforeQuery, no lock, no Writes to
-	// persist afterward. The transaction is still there (this runs inside the
-	// same write() the item form does), but confining what it touches is
-	// entirely the func's own job, the position sqlb.Query in application
-	// code is already in. See mutations.go for ClearCompleted.
+	// The collection-form action: no {id} in the path, so there is no row to
+	// fetch and none of the item form's envelope applies — no BeforeQuery, no
+	// lock, no Writes to persist afterward. The transaction is still there
+	// (this runs inside the same write() the item form does), but confining
+	// what it touches is entirely the func's own job, the position
+	// sqlb.Query in application code is already in. See mutations.go for
+	// ClearCompleted.
 	AddAction(schema.Action{
 		Name: "clear-completed",
 		Path: "/clear-completed",

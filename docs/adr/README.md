@@ -192,7 +192,7 @@ starts with 0053.
 | [0054](0054-a-named-scope-is-releasable-at-the-mount.md) | A named scope is releasable at the mount, and only a named one, so two surfaces over one table can differ in rows | Working | High |
 | [0055](0055-a-nested-query-runs-nobodys-hooks.md) | A query nests inside another, and a nested one is refused unless it has been resolved | Working | Medium |
 | [0056](0056-a-junction-is-a-table.md) | A junction is a table, and many-to-many is not a declaration | Working | High (junction) / Medium (no sugar) |
-| [0057](0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md) | A read is a declared Query, and a row-scoped write is a declared Mutation | Working | Medium |
+| [0057](0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md) | A read is a declared Query, and a row-scoped write stays a declared Action | Working | High |
 | [0058](0058-serve-owns-the-boilerplate-mount-is-the-seam.md) | `rest.Serve` owns the boilerplate every server repeats, and `mount` is where an application's opinions begin | Exploring | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of

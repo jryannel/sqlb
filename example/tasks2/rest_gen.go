@@ -159,6 +159,14 @@ func (u TaskPatch) Changes() (map[string]any, error) {
 	return out, nil
 }
 
+// CompleteTaskInput is the request body for /tasks/{id}/complete.
+//
+// A property with a default or one that may be null is a pointer, so that
+// leaving it out is distinguishable from sending its zero value.
+type CompleteTaskInput struct {
+	Note *string `json:"note,omitempty"` // Ignored in this example; kept to show a body works.
+}
+
 // ClearCompletedTaskInput is the request body for /tasks/clear-completed.
 //
 // A property with a default or one that may be null is a pointer, so that
@@ -176,29 +184,6 @@ type ClearCompletedTaskInput struct {
 // A field left nil is refused when Register mounts the resource, not by
 // the request that would have called it.
 type Actions struct {
-	// ClearCompletedTask runs POST /tasks/clear-completed.
-	//
-	// Deletes every task whose status is done, optionally scoped to one list.
-	ClearCompletedTask func(context.Context, ClearCompletedTaskInput) error
-}
-
-// CompleteTaskInput is the request body for /tasks/{id}/complete.
-//
-// A property with a default or one that may be null is a pointer, so that
-// leaving it out is distinguishable from sending its zero value.
-type CompleteTaskInput struct {
-	Note *string `json:"note,omitempty"` // Ignored in this example; kept to show a body works.
-}
-
-// Mutations carries the domain funcs the declared mutations call.
-//
-// Each field is the verb of one mutation, and the envelope around it —
-// the id, the scoped fetch, the lock, the transaction, the write set and
-// the response — is generated, byte for byte what an item Action's is.
-//
-// A field left nil is refused when Register mounts the resource, not by
-// the request that would have called it.
-type Mutations struct {
 	// CompleteTask runs POST /tasks/{id}/complete.
 	//
 	// Marks the task done and stamps its completion time. A task that is already done is refused with a 409.
@@ -208,6 +193,11 @@ type Mutations struct {
 	// is yours through sqlb.TxFrom, and statements issued there take
 	// their own locks, in an order this code owns.
 	CompleteTask func(context.Context, *Task, CompleteTaskInput) error
+
+	// ClearCompletedTask runs POST /tasks/clear-completed.
+	//
+	// Deletes every task whose status is done, optionally scoped to one list.
+	ClearCompletedTask func(context.Context, ClearCompletedTaskInput) error
 }
 
 // OverdueTaskParams is the query parameters for /tasks/overdue.
@@ -246,14 +236,10 @@ type Queries struct {
 // an action added to the schema fails the build here rather than serving a
 // route nobody wired.
 //
-// The schema declares mutations too, so this also takes the funcs that
-// run inside their envelopes — Mutations, kept separate from Actions
-// because a mutation is declared under its own name in the schema.
-//
 // The schema declares queries too, so this also takes the funcs that
-// answer them. Unlike Actions and Mutations there is no envelope behind
-// a query — see Queries' own doc comment for what that means.
-func Register(api huma.API, db sqlb.Executor, actions Actions, mutations Mutations, queries Queries) error {
+// answer them. Unlike Actions there is no envelope behind a query — see
+// Queries' own doc comment for what that means.
+func Register(api huma.API, db sqlb.Executor, actions Actions, queries Queries) error {
 	if err := rest.Resource[List, ListCreate, ListPatch](api, db, rest.Options{
 		Path:            "/lists",
 		Name:            "list",
@@ -278,6 +264,17 @@ func Register(api huma.API, db sqlb.Executor, actions Actions, mutations Mutatio
 	if err := rest.Resource[Task, TaskCreate, TaskPatch](api, db, tasksOptions); err != nil {
 		return err
 	}
+	if err := rest.Action[Task, CompleteTaskInput](api, db, tasksOptions, rest.ActionSpec{
+		Name:        "complete",
+		Path:        "/tasks/{id}/complete",
+		Field:       "CompleteTask",
+		Summary:     "Complete a task",
+		Description: "Marks the task done and stamps its completion time. A task that is already done is refused with a 409.",
+		Writes:      []string{"status", "completed_at"},
+		HasBody:     true,
+	}, actions.CompleteTask); err != nil {
+		return err
+	}
 	if err := rest.CollectionAction[ClearCompletedTaskInput](api, db, tasksOptions, rest.ActionSpec{
 		Name:        "clear-completed",
 		Path:        "/tasks/clear-completed",
@@ -286,17 +283,6 @@ func Register(api huma.API, db sqlb.Executor, actions Actions, mutations Mutatio
 		Description: "Deletes every task whose status is done, optionally scoped to one list.",
 		HasBody:     true,
 	}, actions.ClearCompletedTask); err != nil {
-		return err
-	}
-	if err := rest.Mutation[Task, CompleteTaskInput](api, db, tasksOptions, rest.MutationSpec{
-		Name:        "complete",
-		Path:        "/tasks/{id}/complete",
-		Field:       "CompleteTask",
-		Summary:     "Complete a task",
-		Description: "Marks the task done and stamps its completion time. A task that is already done is refused with a 409.",
-		Writes:      []string{"status", "completed_at"},
-		HasBody:     true,
-	}, mutations.CompleteTask); err != nil {
 		return err
 	}
 	if err := rest.Query[OverdueTaskParams, []Task](api, db, tasksOptions, rest.QuerySpec{
