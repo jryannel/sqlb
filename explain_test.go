@@ -100,6 +100,51 @@ func TestExplainIgnoresSmallSequentialScans(t *testing.T) {
 	}
 }
 
+// #176: a sequential scan's "Plan Rows" is what its own filter lets through,
+// not what it read to get there. These two plans are Postgres's real answer
+// (captured against a 20,000-row unindexed table) for a selective filter and
+// an unselective one — both scan every row, and only the row *estimate*
+// differs, because that estimate is taken after the filter runs. Gating the
+// diagnostic on that estimate made it fire for the unselective query and stay
+// silent for the selective one, which is backwards: the selective query is
+// the textbook missing-index case.
+const selectiveSeqScanPlan = `[{"Plan":{
+  "Node Type":"Limit","Total Cost":437.0,"Plan Rows":1,
+  "Plans":[{"Node Type":"Seq Scan","Relation Name":"posts",
+            "Filter":"(title = 'P17'::text)","Total Cost":437.0,"Plan Rows":1}]}}]`
+
+const unselectiveSeqScanPlan = `[{"Plan":{
+  "Node Type":"Seq Scan","Relation Name":"posts",
+  "Filter":"(title <> ''::text)","Total Cost":437.0,"Plan Rows":19999}}]`
+
+func TestExplainCatchesASeqScanRegardlessOfFilterSelectivity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		plan string
+	}{
+		{"selective filter, one row out of 20000", selectiveSeqScanPlan},
+		{"unselective filter, nearly every row", unselectiveSeqScanPlan},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := explainHarness(t, tc.plan)
+			defer h.close()
+
+			plan, err := sqlb.Explain(context.Background(), h.db, sqlb.Query[User]())
+			if err != nil {
+				t.Fatalf("Explain: %v", err)
+			}
+			d := plan.Diagnostics()
+			if len(d) == 0 {
+				t.Fatalf("both queries read the whole 20,000-row table; want a seq-scan diagnostic, got none")
+			}
+			text := sqlb.Diagnostics(d)
+			if !strings.Contains(text, "seq-scan") {
+				t.Errorf("diagnostics should mention seq-scan:\n%s", text)
+			}
+		})
+	}
+}
+
 func TestExplainAnalyzeOptsInExplicitly(t *testing.T) {
 	h := explainHarness(t, `[{"Plan":{"Node Type":"Seq Scan","Relation Name":"users",
 	                                  "Total Cost":1.0,"Plan Rows":2,"Actual Rows":2},
