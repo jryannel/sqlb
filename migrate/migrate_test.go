@@ -259,6 +259,44 @@ func TestGolangMigrateFormatUsesSeparateFiles(t *testing.T) {
 	}
 }
 
+// Handwritten is how a Migration composed by hand — rather than produced by
+// Diff — says its file should not claim Header. codegen's provenance scan
+// (issue #178) trusts a header-bearing file enough to flag DDL sqlb never
+// emits inside it, and a hand-composed migration (docs/migrations/README.md's
+// worked example, example/tasks/cmd/migrate) legitimately contains exactly
+// that DDL — a trigger, typically — so it must never carry the header in the
+// first place.
+func TestHandwrittenSkipsTheHeader(t *testing.T) {
+	m := migrate.Migration{
+		Version: "1", Name: "triggers",
+		Changes: []migrate.Change{{Up: "CREATE TRIGGER t BEFORE UPDATE ON x FOR EACH ROW EXECUTE FUNCTION f();"}},
+	}
+
+	for _, format := range []migrate.Format{migrate.Goose, migrate.GolangMigrate, migrate.Plain} {
+		files, err := migrate.Render(m, migrate.Options{Format: format, Handwritten: true})
+		if err != nil {
+			t.Fatalf("%s: Render: %v", format.Name(), err)
+		}
+		for name, body := range files {
+			if strings.Contains(body, migrate.Header) {
+				t.Errorf("%s: %s carries Header despite Handwritten:\n%s", format.Name(), name, body)
+			}
+		}
+	}
+
+	// The default is unchanged: nothing regresses for every existing caller
+	// that never sets Handwritten.
+	files, err := migrate.Render(m, migrate.Options{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for name, body := range files {
+		if !strings.Contains(body, migrate.Header) {
+			t.Errorf("%s: missing Header with Handwritten left at its zero value:\n%s", name, body)
+		}
+	}
+}
+
 func TestByName(t *testing.T) {
 	for name, want := range map[string]string{
 		"": "goose", "goose": "goose", "golang-migrate": "golang-migrate", "plain": "plain",

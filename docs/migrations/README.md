@@ -126,6 +126,15 @@ fork, and hand-written SQL is rendered, ordered and split by the same code as
 generated SQL. A multi-statement body gets goose's
 `StatementBegin`/`StatementEnd` without being asked.
 
+That second migration renders with `migrate.Options{Handwritten: true}`, which
+skips the header above. The header is a claim that sqlb wrote everything in the
+file, and `sqlb check` (issue #178) trusts it enough to fail if a header-bearing
+file contains DDL none of sqlb's emitters write — `CREATE TRIGGER`,
+`CREATE FUNCTION` or a `DO $$` block, the largest class of thing the DSL cannot
+express. A migration whose `Changes` were composed by hand rather than produced
+by `Diff` cannot make that claim honestly, so it should not carry the header in
+the first place; `Handwritten` is how a caller says so.
+
 It also shows the cost of `Write` refusing to overwrite — right, because a
 migration already applied somewhere must not change under the runner's feet.
 Regenerating during development means deleting first, and that example deletes
