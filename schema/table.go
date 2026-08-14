@@ -360,22 +360,21 @@ type Exclusion struct {
 // TableDef is a table declaration. Build one with Table, which also registers
 // it in the default registry.
 type TableDef struct {
-	name      string // storage name, including any module prefix
-	local     string // name as declared, without the prefix
-	module    string
-	comment   string
-	pkName    string
-	oldName   string // previous storage name, from RenamedFrom
-	fields    []*Field
-	indexes   []Index
-	checks    []Check
-	uniques   []Unique
-	excls     []Exclusion
-	pkCols    []string // a composite PRIMARY KEY, when the key is not one column
-	rest      *REST
-	actions   []Action
-	queries   []Query
-	mutations []Mutation
+	name    string // storage name, including any module prefix
+	local   string // name as declared, without the prefix
+	module  string
+	comment string
+	pkName  string
+	oldName string // previous storage name, from RenamedFrom
+	fields  []*Field
+	indexes []Index
+	checks  []Check
+	uniques []Unique
+	excls   []Exclusion
+	pkCols  []string // a composite PRIMARY KEY, when the key is not one column
+	rest    *REST
+	actions []Action
+	queries []Query
 }
 
 // Table declares a table and registers it in the default registry. This is the
@@ -487,12 +486,12 @@ func (t *TableDef) Field(name string) *Field {
 // statement:
 //
 //	status := Task.AddField(schema.Enum("status", "todo", "done").Default(schema.Value("todo")))
-//	Task.AddMutation(schema.Mutation{Writes: []string{status.Name()}})
+//	Task.AddAction(schema.Action{Writes: []string{status.Name()}})
 //
 // It exists beside schema.Table's variadic form rather than instead of it.
 // Most columns want the compact, one-expression declaration every table in
 // this codebase already uses; AddField is for the rare column something
-// else — a Mutation.Writes, a cross-table reference — needs a handle to,
+// else — an Action.Writes, a cross-table reference — needs a handle to,
 // without pulling every column in the table out to a named var to get one.
 //
 // Unlike AddIndex and the other Add* methods it returns the field rather

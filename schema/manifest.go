@@ -105,15 +105,21 @@ type ColumnManifest struct {
 	// it — the same split the declaration uses, so a consumer reading the
 	// manifest sees the enum values and the varchar length attached to the
 	// thing that has them.
-	Type         string       `json:"type"`
-	Array        bool         `json:"array,omitempty"`
-	GoType       string       `json:"goType"`
-	Nullable     bool         `json:"nullable,omitempty"`
-	Comment      string       `json:"comment,omitempty"`
-	Enum         []string     `json:"enum,omitempty"`
-	HasDefault   bool         `json:"hasDefault,omitempty"`
-	ReadOnly     bool         `json:"readOnly,omitempty"`
-	Immutable    bool         `json:"immutable,omitempty"`
+	Type       string   `json:"type"`
+	Array      bool     `json:"array,omitempty"`
+	GoType     string   `json:"goType"`
+	Nullable   bool     `json:"nullable,omitempty"`
+	Comment    string   `json:"comment,omitempty"`
+	Enum       []string `json:"enum,omitempty"`
+	HasDefault bool     `json:"hasDefault,omitempty"`
+	ReadOnly   bool     `json:"readOnly,omitempty"`
+	Immutable  bool     `json:"immutable,omitempty"`
+	// WriteOnly reports that the column is settable through create and update
+	// but never appears in a response. Unlike a Hidden column — omitted from
+	// the manifest entirely, because a name is itself information for a true
+	// secret — a write-only column is listed: the fact that it can be written
+	// is exactly what a caller assembling a request needs to know.
+	WriteOnly    bool         `json:"writeOnly,omitempty"`
 	Capabilities []string     `json:"capabilities,omitempty"`
 	References   *RefManifest `json:"references,omitempty"`
 
@@ -306,6 +312,7 @@ func (t *TableDef) manifest(inverses []InverseRelation, wire WireCase) TableMani
 			HasDefault: d.DatabaseSupplied(),
 			ReadOnly:   d.ReadOnly,
 			Immutable:  d.Immutable,
+			WriteOnly:  d.WriteOnly,
 			Scoped:     d.Scoped,
 			SoftDelete: d.SoftDelete,
 			Computed:   d.Computed(),

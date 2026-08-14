@@ -221,6 +221,22 @@
         ],
         "actions": [
           {
+            "name": "complete",
+            "path": "/tasks/{id}/complete",
+            "method": "POST",
+            "body": [
+              {
+                "name": "note",
+                "type": "text",
+                "nullable": true
+              }
+            ],
+            "writes": [
+              "status",
+              "completed_at"
+            ]
+          },
+          {
             "name": "clear-completed",
             "path": "/tasks/clear-completed",
             "method": "POST",

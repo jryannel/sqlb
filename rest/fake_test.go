@@ -92,6 +92,37 @@ type Leaky struct {
 
 func (Leaky) TableName() string { return "leaky" }
 
+// LeakyWriteOnly is Leaky's WriteOnly counterpart: the same mistake — a
+// column that should never reach a response, carrying a real json tag on the
+// row struct instead of `json:"-"` — but on the capability that is still
+// supposed to be settable rather than the one that never is.
+type LeakyWriteOnly struct {
+	ID     string `db:"id" json:"id" sqlb:"pk"`
+	Answer string `db:"answer" json:"answer" sqlb:"writeonly"`
+}
+
+func (LeakyWriteOnly) TableName() string { return "leaky_write_only" }
+
+// QuizOption is the worked case #195 was filed over: is_correct is authored
+// by whoever creates the option and must never be served back to whoever is
+// taking the quiz.
+type QuizOption struct {
+	ID        string `db:"id" json:"id" sqlb:"pk,default,readonly"`
+	Body      string `db:"body" json:"body"`
+	IsCorrect bool   `db:"is_correct" json:"-" sqlb:"writeonly"`
+}
+
+func (QuizOption) TableName() string { return "quiz_options" }
+
+type QuizOptionCreate struct {
+	Body      string `json:"body"`
+	IsCorrect bool   `json:"isCorrect"`
+}
+
+func (c QuizOptionCreate) Row() (*QuizOption, error) {
+	return &QuizOption{Body: c.Body, IsCorrect: c.IsCorrect}, nil
+}
+
 // Archived is what schema.SoftDelete produces: a nullable, read-only deleted_at
 // column and nothing else. It exists to hold the runtime to that "nothing else".
 type Archived struct {

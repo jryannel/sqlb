@@ -532,6 +532,56 @@ func TestResourceRefusesAHiddenColumnThatWouldSerialise(t *testing.T) {
 	}
 }
 
+// The WriteOnly analogue: the row struct's tag has to be json:"-" too, since a
+// write-only column is exactly as absent from the response as a hidden one.
+func TestResourceRefusesAWriteOnlyColumnThatWouldSerialise(t *testing.T) {
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+
+	err := rest.Resource[LeakyWriteOnly, rest.None[LeakyWriteOnly], rest.None[LeakyWriteOnly]](api, db.db, rest.Options{
+		Path: "/leaky-write-only",
+		Ops:  rest.OpList,
+	})
+	if err == nil || !strings.Contains(err.Error(), "write-only") {
+		t.Fatalf("error = %v, want a complaint about the write-only column's json tag", err)
+	}
+}
+
+// The worked case #195 was filed over: is_correct is set at create and never
+// comes back on the create response.
+func TestWriteOnlyColumnIsSettableButNeverServed(t *testing.T) {
+	db := newFakeDB(t, reply{cols: []string{"id", "body"}, rows: [][]any{{"q1", "2+2=4"}}})
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	if err := rest.Resource[QuizOption, QuizOptionCreate, rest.None[QuizOption]](api, db.db, rest.Options{
+		Path: "/quiz-options",
+		Name: "quiz-option",
+		Ops:  rest.OpCreate | rest.OpRead | rest.OpList,
+	}); err != nil {
+		t.Fatalf("mounting: %v", err)
+	}
+
+	resp := api.Post("/quiz-options", map[string]any{"body": "2+2=4", "isCorrect": true})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.Code, resp.Body)
+	}
+
+	stmt := db.lastStatement()
+	if !strings.Contains(strings.SplitN(stmt, "VALUES", 2)[0], `"is_correct"`) {
+		t.Errorf("write-only column did not reach the insert:\n%s", stmt)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if _, ok := body["isCorrect"]; ok {
+		t.Errorf("write-only column was served in the create response: %s", resp.Body)
+	}
+	if _, ok := body["is_correct"]; ok {
+		t.Errorf("write-only column was served in the create response: %s", resp.Body)
+	}
+}
+
 func TestResourceRefusesAnEmptyOpSet(t *testing.T) {
 	db := newFakeDB(t)
 	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
@@ -539,6 +589,26 @@ func TestResourceRefusesAnEmptyOpSet(t *testing.T) {
 	err := rest.Resource[Post, PostCreate, PostUpdate](api, db.db, rest.Options{Path: "/posts"})
 	if err == nil {
 		t.Fatal("a resource exposing nothing should not mount")
+	}
+}
+
+// CRUD reads as the complete set, and every one of them names create, read,
+// update and delete — a caller reaching for "the fully exposed collection"
+// this constant's name suggests gets a 405 on GET /posts instead, discovered
+// by testing rather than by anything failing at mount (#193).
+func TestResourceRefusesBareCRUDWithNoOpList(t *testing.T) {
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+
+	err := rest.Resource[Post, PostCreate, PostUpdate](api, db.db, rest.Options{
+		Path: "/posts",
+		Ops:  rest.CRUD,
+	})
+	if err == nil {
+		t.Fatal("expected mounting to fail: CRUD alone has no collection route")
+	}
+	if !strings.Contains(err.Error(), "OpList") {
+		t.Errorf("error = %v, want it to name the missing OpList", err)
 	}
 }
 

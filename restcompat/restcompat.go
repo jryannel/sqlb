@@ -320,7 +320,7 @@ func diffField(path string, o, n *fieldView, add func(Break)) {
 	switch {
 	case o.inResponse() && !n.inResponse():
 		add(Break{LevelBreaking, path, FacetResponse, n.name,
-			"now hidden; readers that selected it lose it"})
+			"no longer in the response (now hidden or write-only); readers that selected it lose it"})
 	case !o.inResponse() && n.inResponse():
 		add(Break{LevelAdditive, path, FacetResponse, n.name, "now returned in responses"})
 	}
@@ -568,6 +568,7 @@ type FieldSnap struct {
 	Nullable    bool     `json:"nullable,omitempty"`
 	HasDefault  bool     `json:"has_default,omitempty"`
 	Hidden      bool     `json:"hidden,omitempty"`
+	WriteOnly   bool     `json:"write_only,omitempty"`
 	ReadOnly    bool     `json:"read_only,omitempty"`
 	Immutable   bool     `json:"immutable,omitempty"`
 	Filterable  bool     `json:"filterable,omitempty"`
@@ -622,6 +623,7 @@ func Capture(r *schema.Registry) Snapshot {
 				Nullable:    d.Nullable,
 				HasDefault:  d.DatabaseSupplied(),
 				Hidden:      d.Hidden,
+				WriteOnly:   d.WriteOnly,
 				ReadOnly:    d.ReadOnly,
 				Immutable:   d.Immutable,
 				Filterable:  d.Filterable,
@@ -673,6 +675,7 @@ type fieldView struct {
 	hasDefault bool
 
 	hidden     bool
+	writeOnly  bool
 	readOnly   bool
 	immutable  bool
 	filterable bool
@@ -686,7 +689,7 @@ type fieldView struct {
 	renamedFrom string
 }
 
-func (f *fieldView) inResponse() bool       { return !f.hidden }
+func (f *fieldView) inResponse() bool       { return !f.hidden && !f.writeOnly }
 func (f *fieldView) settableAtCreate() bool { return !f.readOnly }
 
 // settableAtPatch is the create rule plus Immutable, which is exactly what
@@ -720,6 +723,7 @@ func index(s Snapshot) map[string]resource {
 				nullable:    fs.Nullable,
 				hasDefault:  fs.HasDefault,
 				hidden:      fs.Hidden,
+				writeOnly:   fs.WriteOnly,
 				readOnly:    fs.ReadOnly,
 				immutable:   fs.Immutable,
 				filterable:  fs.Filterable,

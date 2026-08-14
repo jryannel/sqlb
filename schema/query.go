@@ -5,8 +5,8 @@ import "strings"
 // A query is a domain read the table exposes: GET /tasks/overdue.
 //
 // What is declared here is the *envelope* — the route and the request
-// parameters — the same split ADR-0043 made for a mutation. What runs inside
-// it is a plain Go func, bound at registration rather than here.
+// parameters — the same split ADR-0043 made for a row-scoped write. What
+// runs inside it is a plain Go func, bound at registration rather than here.
 //
 // Two things a query deliberately does not declare, both for reasons
 // ADR-0043 already argued through for Action. The result shape is not here:
@@ -199,6 +199,7 @@ func (r *Registry) validateQueryParams(t *TableDef, q Query, report func(string,
 			{d.ReadOnly, "ReadOnly"},
 			{d.Immutable, "Immutable"},
 			{d.Hidden, "Hidden"},
+			{d.WriteOnly, "WriteOnly"},
 			{d.Scoped, "Scoped"},
 			{d.Ref != nil, "Ref"},
 			{d.Computed(), "Computed"},

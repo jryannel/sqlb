@@ -87,7 +87,7 @@ func TestExpandOnlyRefusals(t *testing.T) {
 			// asked for" right up until someone used the key that is not there.
 			name:    "a hidden column",
 			build:   func() *sqlb.Builder[expTask] { return sqlb.Query[expTask]().ExpandOnly("list", "secret") },
-			wantErr: "hides",
+			wantErr: "never serves",
 		},
 		{
 			name:    "no columns at all",

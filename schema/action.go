@@ -20,10 +20,13 @@ import "strings"
 // Action is a domain verb exposed on a table.
 //
 // Declare one with [TableDef.AddAction] — renamed from Action after
-// [TableDef.AddQuery] and [TableDef.AddMutation] settled the family: an ADR
-// fixes the architecture a name sits in, not the name itself, and the three
-// declaration methods reading alike matters more than this one keeping the
-// spelling ADR-0043 happened to pick before it had siblings to agree with.
+// [TableDef.AddQuery] settled the family: an ADR fixes the architecture a
+// name sits in, not the name itself, and the declaration methods reading
+// alike matters more than this one keeping the spelling ADR-0043 happened to
+// pick before it had a sibling to agree with. ADR-0057 also tried
+// TableDef.AddMutation, a same-shaped second name for this type's item form,
+// and retired it the same day it shipped: an item-form Action is what a
+// row-scoped write is, in this schema.
 //
 //	Task.AddAction(schema.Action{
 //	    Name:   "complete",
@@ -336,6 +339,7 @@ func (r *Registry) validateActionBody(t *TableDef, a Action, report func(string,
 			{d.ReadOnly, "ReadOnly"},
 			{d.Immutable, "Immutable"},
 			{d.Hidden, "Hidden"},
+			{d.WriteOnly, "WriteOnly"},
 			{d.Scoped, "Scoped"},
 			{d.Ref != nil, "Ref"},
 			{d.Computed(), "Computed"},

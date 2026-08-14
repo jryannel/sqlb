@@ -80,6 +80,12 @@ type FieldDesc struct {
 	Immutable bool // settable at create, rejected on update
 	Hidden    bool // never serialised into a REST response
 
+	// WriteOnly is Hidden's converse: never serialised into a REST response,
+	// but — unlike Hidden — still settable through the generated create and
+	// update bodies, and still present in the typed column facade so trusted
+	// Go code can read and query it. See [Field.WriteOnly].
+	WriteOnly bool
+
 	// LookupKey says a Hidden column is found by its own value, and so keeps
 	// its entry in the generated typed-column facade.
 	//
@@ -1060,6 +1066,34 @@ func (f *Field) Hidden() *Field {
 	return f
 }
 
+// WriteOnly omits the column from every REST response, the same guarantee
+// Hidden makes — but leaves it settable through the generated create and
+// update bodies, and leaves it in the generated typed-column facade, which
+// Hidden removes.
+//
+// Hidden conflates two questions that come apart for a secret one specific
+// caller has to write and nobody ever reads back: a password hash answers
+// "never" to both, but an authored answer key — a QuizOption.is_correct only
+// the authoring coach should set, and the grading code needs to read back
+// through the query engine to compare against a submission — answers "never"
+// to serving it and "yes" to writing it (#195). Before this, that shape had
+// no generated create or update at all: Hidden blocked the write along with
+// the read, and the only way out was hand-writing the endpoint from scratch.
+//
+//	schema.Bool("is_correct").WriteOnly()
+//
+// It is refused together with Hidden, ReadOnly, Filterable and Sortable on
+// the same column — the first two are contradictory (a column cannot be both
+// always-absent-from-writes and only-ever-written, or both never-served and
+// differently-never-served), and the second two are the oracle Hidden's own
+// Filterable refusal exists to close: a client that cannot read a value back
+// can still learn it by watching which rows a `?is_correct=eq.true` filter
+// returns, or which rows a `?sort=is_correct` puts first.
+func (f *Field) WriteOnly() *Field {
+	f.d.WriteOnly = true
+	return f
+}
+
 // LookupKey keeps a [Field.Hidden] column in the generated typed-column facade,
 // for a secret whose stored form is the thing you look the row up by.
 //
@@ -1258,6 +1292,7 @@ func (d *FieldDesc) Capabilities() string {
 	add(d.ReadOnly, "readonly")
 	add(d.Immutable, "immutable")
 	add(d.Hidden, "hidden")
+	add(d.WriteOnly, "writeonly")
 	add(d.Scoped, "scope")
 	add(d.SoftDelete, "softdelete")
 	return strings.Join(out, ",")

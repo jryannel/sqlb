@@ -146,9 +146,12 @@ func ejectColumnTable(b *bytes.Buffer, t *schema.TableDef, lower string) {
 	fmt.Fprintf(b, "var %sColumns = []Column{\n", lower)
 	for _, f := range t.Fields() {
 		d := f.Desc()
-		if d.Hidden {
+		if d.Hidden || d.WriteOnly {
 			// A hidden column has no spelling a request could use, in either
-			// direction. Leaving it out of this table is what enforces that.
+			// direction. A write-only one still has a spelling in the create
+			// and update bodies — this table is the read-side filter/sort/
+			// search/select vocabulary only, so it stays out of here either
+			// way.
 			continue
 		}
 		fmt.Fprintf(b, "\t{Name: %q, Filterable: %t, Sortable: %t, Searchable: %t, Parse: %s},\n",

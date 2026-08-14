@@ -9,7 +9,7 @@
 //	    schema.Int("age").Nullable().Filterable(),
 //	    schema.Ref("org", Org).OnDelete(schema.Cascade),
 //	    schema.Timestamps(),
-//	).Expose(schema.REST{Path: "/users", Ops: schema.CRUD | schema.List})
+//	).Expose(schema.REST{Path: "/users", Ops: schema.CRUD | schema.OpList})
 //
 // Capabilities such as Filterable and Sortable are opt-in per column. A column
 // that does not declare a capability can never be reached through it from the

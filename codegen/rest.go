@@ -76,18 +76,14 @@ func renderREST(opts Options) ([]byte, error) {
 	}
 
 	acts := actionsOf(exposed)
-	muts := mutationsOf(exposed)
 	qs := queriesOf(exposed)
-	if len(acts) > 0 || len(muts) > 0 || len(qs) > 0 {
-		// Actions, Mutations and Queries all name their funcs by signature,
-		// and every one of those signatures says context.Context.
+	if len(acts) > 0 || len(qs) > 0 {
+		// Actions and Queries both name their funcs by signature, and every
+		// one of those signatures says context.Context.
 		imports["context"] = true
 	}
 	if len(acts) > 0 {
 		actionBodyImports(imports, acts)
-	}
-	if len(muts) > 0 {
-		mutationBodyImports(imports, muts)
 	}
 	if len(qs) > 0 {
 		queryParamImports(imports, qs)
@@ -105,19 +101,13 @@ func renderREST(opts Options) ([]byte, error) {
 	if len(acts) > 0 {
 		renderActions(b, acts)
 	}
-	for _, m := range muts {
-		renderMutationInput(b, m)
-	}
-	if len(muts) > 0 {
-		renderMutations(b, muts)
-	}
 	for _, q := range qs {
 		renderQueryParams(b, q)
 	}
 	if len(qs) > 0 {
 		renderQueries(b, qs)
 	}
-	renderRegister(b, opts.Registry, exposed, len(acts) > 0, len(muts) > 0, len(qs) > 0)
+	renderRegister(b, opts.Registry, exposed, len(acts) > 0, len(qs) > 0)
 
 	return gofmt(opts.restFile(), b.Bytes())
 }
@@ -373,7 +363,7 @@ func omitEmpty(optional bool) string {
 	return ""
 }
 
-func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.TableDef, hasActions, hasMutations, hasQueries bool) {
+func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.TableDef, hasActions, hasQueries bool) {
 	fmt.Fprintf(b, "\n// Register mounts every exposed resource on api.\n")
 	fmt.Fprintf(b, "//\n// The handlers are rest.Resource, instantiated per model. Registration is\n")
 	fmt.Fprintf(b, "// generic rather than reflective because query hooks are keyed by type: a\n")
@@ -387,16 +377,10 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 		fmt.Fprintf(b, "// route nobody wired.\n")
 		params = append(params, "actions Actions")
 	}
-	if hasMutations {
-		fmt.Fprintf(b, "//\n// The schema declares mutations too, so this also takes the funcs that\n")
-		fmt.Fprintf(b, "// run inside their envelopes — Mutations, kept separate from Actions\n")
-		fmt.Fprintf(b, "// because a mutation is declared under its own name in the schema.\n")
-		params = append(params, "mutations Mutations")
-	}
 	if hasQueries {
 		fmt.Fprintf(b, "//\n// The schema declares queries too, so this also takes the funcs that\n")
-		fmt.Fprintf(b, "// answer them. Unlike Actions and Mutations there is no envelope behind\n")
-		fmt.Fprintf(b, "// a query — see Queries' own doc comment for what that means.\n")
+		fmt.Fprintf(b, "// answer them. Unlike Actions there is no envelope behind a query — see\n")
+		fmt.Fprintf(b, "// Queries' own doc comment for what that means.\n")
 		params = append(params, "queries Queries")
 	}
 	sig := "func Register(api huma.API, db sqlb.Executor"
@@ -416,14 +400,12 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 		}
 
 		// A table with verbs binds its options to a name, because the resource
-		// and every action, mutation or query on it are one exposure and must
-		// not be able to disagree about the path, the tag or the transaction
-		// policy.
+		// and every action or query on it are one exposure and must not be
+		// able to disagree about the path, the tag or the transaction policy.
 		acts := actionsOf([]*schema.TableDef{t})
-		muts := mutationsOf([]*schema.TableDef{t})
 		qs := queriesOf([]*schema.TableDef{t})
 		optsVar := ""
-		if len(acts) > 0 || len(muts) > 0 || len(qs) > 0 {
+		if len(acts) > 0 || len(qs) > 0 {
 			optsVar = unexportedGoName(t.LocalName()) + "Options"
 			fmt.Fprintf(b, "\t%s := rest.Options{\n", optsVar)
 		} else {
@@ -481,7 +463,7 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 			}
 			fmt.Fprintf(b, "\t\tComputed: []string{%s},\n", strings.Join(quoted, ", "))
 		}
-		if len(acts) == 0 && len(muts) == 0 && len(qs) == 0 {
+		if len(acts) == 0 && len(qs) == 0 {
 			fmt.Fprintf(b, "\t}); err != nil {\n\t\treturn err\n\t}\n")
 			continue
 		}
@@ -489,7 +471,6 @@ func renderRegister(b *bytes.Buffer, reg *schema.Registry, exposed []*schema.Tab
 		fmt.Fprintf(b, "\tif err := rest.Resource[%s, %s, %s](api, db, %s); err != nil {\n\t\treturn err\n\t}\n",
 			typeName, create, update, optsVar)
 		renderActionCalls(b, optsVar, acts)
-		renderMutationCalls(b, optsVar, muts)
 		renderQueryCalls(b, optsVar, qs)
 	}
 	fmt.Fprintln(b, "\treturn nil\n}")

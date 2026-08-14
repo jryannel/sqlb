@@ -1248,7 +1248,11 @@ func TestExclusionDDL(t *testing.T) {
 			Where:    "status = 'confirmed'",
 		})
 	})
-	c := only(t, diff(t, schema.NewRegistry(), target))
+	// Two changes, not one: the scalar `=` inside a gist exclusion needs
+	// btree_gist, and it is emitted alongside the table rather than left for
+	// an adopter to order by hand (#194) — see btree_gist_test.go for that
+	// behaviour on its own.
+	c := find(t, diff(t, schema.NewRegistry(), target), "CREATE TABLE")
 	want := `CONSTRAINT "bookings_no_double_booking" EXCLUDE USING gist ` +
 		`(coach_id WITH =, tstzrange(starts_at, ends_at) WITH &&) WHERE (status = 'confirmed')`
 	if !strings.Contains(c.Up, want) {
@@ -1266,7 +1270,9 @@ func TestExclusionAddedAndDropped(t *testing.T) {
 			AddExclude(schema.Exclusion{Name: "rooms_excl", Using: "gist", Elements: "room_id WITH ="})
 	}
 
-	add := only(t, diff(t, build(plain), build(withExcl)))
+	// Two changes here too: rooms already exists, but this is still the first
+	// exclusion the schema declares, so btree_gist still has to arrive with it.
+	add := find(t, diff(t, build(plain), build(withExcl)), "ADD CONSTRAINT")
 	if !strings.Contains(add.Up, `ADD CONSTRAINT "rooms_excl" EXCLUDE USING gist (room_id WITH =)`) {
 		t.Fatalf("adding is not an ALTER ... ADD CONSTRAINT:\n%s", add.Up)
 	}

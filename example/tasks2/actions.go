@@ -9,15 +9,15 @@ import (
 	"github.com/jryannel/sqlb/rest"
 )
 
-// CompleteTask is the verb behind the declared "complete" mutation.
+// CompleteTask is the verb behind the declared "complete" action, in its
+// item form.
 //
-// CompleteTaskInput is generated now (rest_gen.go, from Mutation.Body) —
-// codegen caught up to schema.Mutation, so this file only writes the verb.
+// CompleteTaskInput is generated (rest_gen.go, from Action.Body), so this
+// file only writes the verb.
 //
 // The envelope — fetch the row, decode the body, run this inside the
-// transaction, persist Writes, answer with the row — is identical to what an
-// Action's item form generates; this is the whole application-side cost of
-// the mutation.
+// transaction, persist Writes, answer with the row — is the whole
+// application-side cost of an item-form action.
 //
 // The CallerFrom check is the other half of what main.go wires: this is a
 // POST, so RequireAuthForWrites already refused the request if it had no

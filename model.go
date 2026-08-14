@@ -53,6 +53,10 @@ type ColumnInfo struct {
 	ReadOnly   bool
 	Immutable  bool
 	Hidden     bool
+	// WriteOnly is Hidden's converse: never served in a REST response, but
+	// still settable through a generated create or update and still present
+	// here in the typed column facade.
+	WriteOnly bool
 
 	// SortNulls is where NULLs sit whenever this column is sorted on, in either
 	// direction. The zero value leaves Postgres's own default, which follows
@@ -200,11 +204,11 @@ func (m *Model) ColumnNames() []string {
 }
 
 // Selectable returns the columns a REST response may contain: everything not
-// marked hidden.
+// marked Hidden or WriteOnly.
 func (m *Model) Selectable() []*ColumnInfo {
 	out := make([]*ColumnInfo, 0, len(m.Columns))
 	for _, c := range m.Columns {
-		if !c.Hidden {
+		if !c.Hidden && !c.WriteOnly {
 			out = append(out, c)
 		}
 	}
@@ -582,6 +586,8 @@ func applyCapabilities(c *ColumnInfo, tag string) {
 			c.Immutable = true
 		case "hidden":
 			c.Hidden = true
+		case "writeonly":
+			c.WriteOnly = true
 		case "scope":
 			c.Scoped = true
 		case "softdelete":

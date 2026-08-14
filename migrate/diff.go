@@ -166,33 +166,42 @@ func Diff(current, target *schema.Registry, opts ...Option) ([]Change, error) {
 // extensionsNeeded emits the CREATE EXTENSION statements the target schema
 // requires and the current one does not already have.
 //
-// Only pgvector so far. It is emitted when a vector column appears and not on
-// every migration afterwards, which is what makes it a change rather than a
-// preamble — the statement is idempotent, so repeating it would be harmless and
-// would also be noise in every file forever.
+// pgvector and btree_gist so far. Each is emitted when its trigger first
+// appears and not on every migration afterwards, which is what makes it a
+// change rather than a preamble — the statement is idempotent, so repeating
+// it would be harmless and would also be noise in every file forever.
 //
 // The collision argument that keeps CREATE TYPE out of this generator does not
 // apply. An extension is one global name, owned by nobody, and installing it
 // twice is defined to do nothing; a type name is a thing two schemas can each
 // believe they own (ADR-0026).
 //
-// There is no Down. Dropping the extension would drop every vector column in
-// the database, including those belonging to schemas this migration has never
-// heard of, and an extension nobody is using costs nothing to leave installed.
-// An empty Down renders as a note saying it is not automatically reversible,
-// which is the honest answer.
+// This runs in the same diff — and so the same migration file — as the table
+// or constraint that needs it (see phase ordering in changes()), which is
+// what closes the ordering hazard issue #194 named: a schema-first bootstrap
+// that put AddExclude's inline EXCLUDE in migration one and a hand-written
+// CREATE EXTENSION btree_gist in migration two failed outright on a fresh
+// database, because the extension has to exist before that first CREATE
+// TABLE runs, not merely before the app starts.
+//
+// There is no Down. Dropping the extension would remove it for every table in
+// the database that depends on it, including those belonging to schemas this
+// migration has never heard of, and an extension nobody is using costs
+// nothing to leave installed. An empty Down renders as a note saying it is not
+// automatically reversible, which is the honest answer.
 func (d *differ) extensionsNeeded() {
 	for _, ext := range []struct {
 		name string
 		used func(*schema.Registry) bool
 	}{
 		{"vector", usesVector},
+		{"btree_gist", usesBtreeGist},
 	} {
 		if !ext.used(d.target) || ext.used(d.current) {
 			continue
 		}
 		d.extensions = append(d.extensions, Change{
-			Comment: ext.name + " extension, required by a column type declared below",
+			Comment: ext.name + " extension, required by a column type or constraint declared below",
 			Up:      "CREATE EXTENSION IF NOT EXISTS " + quoteIdent(ext.name),
 			Hazard: "CREATE EXTENSION usually needs privileges the migration role does not have. " +
 				"If this fails it fails on the first statement, which is the best place for it to: " +
@@ -210,6 +219,32 @@ func usesVector(r *schema.Registry) bool {
 	for _, t := range r.Tables() {
 		for _, f := range t.Fields() {
 			if f.Desc().Type == schema.TypeVector {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// usesBtreeGist reports whether any table declares a gist EXCLUDE constraint
+// over an equality operator. A gist index natively covers ranges and
+// geometric types; comparing a scalar with = inside one — the common case,
+// pairing "coach_id WITH =" against "tstzrange(...) WITH &&" to scope an
+// overlap check per coach — needs the operator classes btree_gist adds. This
+// is a heuristic over the constraint's free-form Elements SQL (schema.Table's
+// own [schema.Exclusion] doc comment says why Elements stays a string rather
+// than a structured form), not a parse: it can miss an equality spelled with
+// unusual whitespace, and it says nothing about a gist exclusion that needs
+// no extension at all (ranges and geometric types alone). Both are false
+// negatives, not false positives — the failure mode this exists to prevent
+// (a migration that 500s on a fresh database) is not made worse by it.
+func usesBtreeGist(r *schema.Registry) bool {
+	if r == nil {
+		return false
+	}
+	for _, t := range r.Tables() {
+		for _, e := range t.Exclusions() {
+			if strings.EqualFold(e.Using, "gist") && strings.Contains(e.Elements, "WITH =") {
 				return true
 			}
 		}

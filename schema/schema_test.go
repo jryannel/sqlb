@@ -146,6 +146,41 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			want: "leaks its contents",
 		},
 		{
+			name: "write-only and filterable leaks through probing",
+			build: func(r *schema.Registry) {
+				r.Table("e2", schema.UUIDv7("id").PrimaryKey(), schema.Text("answer").WriteOnly().Filterable())
+			},
+			want: "leaks its contents",
+		},
+		{
+			name: "write-only and sortable leaks through ordering",
+			build: func(r *schema.Registry) {
+				r.Table("e3", schema.UUIDv7("id").PrimaryKey(), schema.Text("answer").WriteOnly().Sortable())
+			},
+			want: "leaks its contents",
+		},
+		{
+			name: "write-only and hidden say the same thing about reads and disagree about writes",
+			build: func(r *schema.Registry) {
+				r.Table("e4", schema.UUIDv7("id").PrimaryKey(), schema.Text("answer").WriteOnly().Hidden())
+			},
+			want: "pick one",
+		},
+		{
+			name: "write-only and read-only is never settable and only ever settable",
+			build: func(r *schema.Registry) {
+				r.Table("e5", schema.UUIDv7("id").PrimaryKey(), schema.Text("answer").WriteOnly().ReadOnly())
+			},
+			want: "never settable and only ever settable",
+		},
+		{
+			name: "primary key cannot be write-only",
+			build: func(r *schema.Registry) {
+				r.Table("e6", schema.UUIDv7("id").PrimaryKey().WriteOnly())
+			},
+			want: "primary key cannot be WriteOnly",
+		},
+		{
 			name: "index over an unknown column",
 			build: func(r *schema.Registry) {
 				r.Table("f", schema.UUIDv7("id").PrimaryKey()).Index("nonexistent")

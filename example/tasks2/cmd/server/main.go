@@ -1,6 +1,6 @@
 // Command server runs tasks2: a from-scratch rebuild of example/tasks with
 // the auth and multi-tenancy stripped out, to measure what defining a
-// schema, a mutation and a query costs on its own.
+// schema, a declared action and a declared query cost on their own.
 //
 //	export TASKS2_DATABASE_URL='postgres://sqlb:sqlb@localhost:15432/tasks2?sslmode=disable'
 //	go run ./cmd/server
@@ -77,9 +77,9 @@ func mount(srv *rest.Server, db sqlb.Executor) error {
 		return fmt.Errorf("mounting lists: %w", err)
 	}
 
-	// The group: every /tasks route — generated CRUD, the mutation, the
-	// query, the collection action — mounts through this instead of srv.API,
-	// so RequireAuthForWrites applies to all of them at once. No prefix: the
+	// The group: every /tasks route — generated CRUD, the item-form action,
+	// the query, the collection-form action — mounts through this instead of
+	// srv.API, so RequireAuthForWrites applies to all of them at once. No prefix: the
 	// Path below is already absolute, the group exists for UseMiddleware
 	// alone. See auth.go for why gating on Method rather than a path or a
 	// tag is what makes this agree with the schema without either naming the
@@ -118,18 +118,19 @@ func mount(srv *rest.Server, db sqlb.Executor) error {
 		return fmt.Errorf("mounting clear-completed: %w", err)
 	}
 
-	// The prototype for a declared mutation — not wired into codegen yet, so
-	// mounted the way an application would mount anything codegen has not
-	// caught up to. Byte-for-byte the same envelope an Action's item form
-	// generates.
-	if err := rest.Mutation[tasks2.Task, tasks2.CompleteTaskInput](tasksGroup, db, tasksOptions, rest.MutationSpec{
+	// The item-form action, mounted the same way the collection form above
+	// is — an application reconstructing a table's rest.Resource call by
+	// hand reconstructs everything declared on it the same way, generated or
+	// not.
+	if err := rest.Action[tasks2.Task, tasks2.CompleteTaskInput](tasksGroup, db, tasksOptions, rest.ActionSpec{
 		Name:    "complete",
 		Path:    "/tasks/{id}/complete",
+		Field:   "CompleteTask",
 		Writes:  []string{"status", "completed_at"},
 		Summary: "Marks the task done",
 		HasBody: true,
 	}, tasks2.CompleteTask); err != nil {
-		return fmt.Errorf("mounting the complete mutation: %w", err)
+		return fmt.Errorf("mounting the complete action: %w", err)
 	}
 
 	// The prototype for a declared query — same story. GET, so

@@ -183,8 +183,10 @@ func cliResources(reg *schema.Registry, bin string) ([]cliResource, error) {
 			// A hidden column has no spelling here at all: not as a filter, not
 			// in the projection vocabulary, not as a flag on a write. This is
 			// the guarantee ADR-0006 makes, and the CLI is one more place it
-			// would be easy to leak from.
-			if d.Hidden {
+			// would be easy to leak from. A write-only column is narrower: it
+			// still gets a write flag, from bodyFields, just not a place in
+			// this read-side projection list.
+			if d.Hidden || d.WriteOnly {
 				continue
 			}
 			if d.PrimaryKey {

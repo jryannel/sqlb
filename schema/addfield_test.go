@@ -44,7 +44,7 @@ func TestATableCanBeBuiltEntirelyWithAddField(t *testing.T) {
 }
 
 // The mixed case the whole method exists for: most columns declared the
-// compact way, one pulled out because a Mutation needs to name it.
+// compact way, one pulled out because an Action needs to name it.
 func TestAddFieldCoexistsWithTheCompactForm(t *testing.T) {
 	r := schema.NewRegistry()
 	tasks := r.Table("tasks",
@@ -53,7 +53,7 @@ func TestAddFieldCoexistsWithTheCompactForm(t *testing.T) {
 	)
 	status := tasks.AddField(schema.Enum("status", "todo", "done").Default(schema.Value("todo")))
 	tasks.Expose(schema.REST{Ops: schema.CRUD | schema.OpList}).
-		AddMutation(schema.Mutation{Name: "complete", Writes: []string{status.Name()}})
+		AddAction(schema.Action{Name: "complete", Writes: []string{status.Name()}})
 
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a mixed compact/procedural table was refused: %v", err)

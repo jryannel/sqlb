@@ -214,7 +214,7 @@ func dartResources(reg *schema.Registry) ([]dartResource, error) {
 		}
 		for _, f := range t.Fields() {
 			d := f.Desc()
-			if d.Hidden {
+			if d.Hidden || d.WriteOnly {
 				continue
 			}
 			if d.PrimaryKey {
@@ -377,10 +377,11 @@ func dartRowMembers(reg *schema.Registry, t *schema.TableDef) ([]dartRowMember, 
 	var out []dartRowMember
 	for _, f := range t.Fields() {
 		d := f.Desc()
-		if d.Hidden {
-			// Absent from the row view entirely, as it is from the response and
-			// from the typed column facade. A hidden column has no spelling a
-			// client could use.
+		if d.Hidden || d.WriteOnly {
+			// Absent from the row view entirely, as it is from the response. A
+			// hidden column also has no spelling a client could use anywhere;
+			// a write-only one still has one, in the generated create/update
+			// body, just not here.
 			continue
 		}
 		name := dartMember(d.Name)
@@ -1271,7 +1272,7 @@ func dartTableEnum(b *bytes.Buffer, reg *schema.Registry) {
 func dartSelectable(t *schema.TableDef) []*schema.FieldDesc {
 	var out []*schema.FieldDesc
 	for _, f := range t.Fields() {
-		if d := f.Desc(); !d.Hidden {
+		if d := f.Desc(); !d.Hidden && !d.WriteOnly {
 			out = append(out, d)
 		}
 	}

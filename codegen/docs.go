@@ -5,8 +5,8 @@ package codegen
 // hand-edited rather than regenerated and thrown away.
 //
 // It works like every other verb — the driver has already linked the schema
-// package in, so opts.Registry holds every exposed table, action, mutation and
-// query — but it does one thing none of the other emitters do: a rerun does
+// package in, so opts.Registry holds every exposed table, action and query —
+// but it does one thing none of the other emitters do: a rerun does
 // not overwrite what a human or an agent wrote. Every endpoint's notes live in
 // an HTML comment pair keyed by method and path, and a rerun reads the old
 // file, keeps whatever it finds under a key that still exists, and files
@@ -72,8 +72,8 @@ func runDocs(p Project, opts Options, reg *schema.Registry, stdout, stderr io.Wr
 // — a coding agent, a teammate — replaces it.
 const notesPlaceholder = "_Describe what this endpoint does: request/response shape, side effects, invariants._"
 
-// endpoint is one row a resource exposes, or one declared action, mutation or
-// query — enough to render a heading and, where the schema authored one, a
+// endpoint is one row a resource exposes, or one declared action or query —
+// enough to render a heading and, where the schema authored one, a
 // description.
 type endpoint struct {
 	method      string
@@ -122,14 +122,6 @@ func renderFeatures(reg *schema.Registry, existing []byte) ([]byte, int) {
 			ep := endpoint{
 				method: http.MethodPost, path: a.FullPath(path),
 				kind: "action: " + a.Name, description: a.Description,
-			}
-			used[ep.key()] = true
-			writeEndpoint(&b, ep, notes[ep.key()])
-		}
-		for _, m := range t.Mutations() {
-			ep := endpoint{
-				method: http.MethodPost, path: m.FullPath(path),
-				kind: "mutation: " + m.Name, description: m.Description,
 			}
 			used[ep.key()] = true
 			writeEndpoint(&b, ep, notes[ep.key()])
