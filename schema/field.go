@@ -47,6 +47,13 @@ type FieldDesc struct {
 	Default    *Default
 	EnumValues []string
 
+	// SharedAs names the Go type codegen emits for an enum column, and
+	// declares that type shared: every other enum column in the registry
+	// carrying the same SharedAs name emits no type of its own and uses this
+	// one instead, rather than the table-and-column name codegen derives by
+	// default. See [Field.SharedAs].
+	SharedAs string
+
 	// UniqueDeferrable is when the column's own unique constraint is checked.
 	// The zero value is NOT DEFERRABLE. See [Field.Deferred] and, for the
 	// table-level constraint this mirrors, [Unique.Deferrable].
@@ -550,6 +557,44 @@ func (f *Field) Needs(keys ...string) *Field {
 func Enum(name string, values ...string) *Field {
 	f := newField(name, TypeEnum)
 	f.d.EnumValues = values
+	return f
+}
+
+// SharedAs names the Go type codegen emits for this enum column, and opts
+// into sharing it: any other enum column in the registry that declares the
+// same SharedAs name uses this type too, instead of a type of its own.
+//
+// Left undeclared, codegen names an enum's type after the table and column —
+// LessonStatus, CourseStatus — even when two columns declare the identical
+// value set. That is two structurally identical, nominally incompatible Go
+// types, and reusing the value between them costs a needless string(x) round
+// trip for no reason the schema expresses (issue #197). SharedAs is the
+// answer, and an explicit one rather than an inferred one: two columns
+// happening to declare the same values today does not mean they are the same
+// enum — a lesson's status and a notification's priority could both be
+// {"low","medium","high"} and mean nothing in common — so nothing here
+// deduplicates by matching value sets on its own. The author says once, on
+// every column meant to share:
+//
+//	schema.Enum("status", "draft", "published", "archived").SharedAs("Status")
+//
+// declared identically — same values, same order — on each participating
+// column. codegen emits exactly one `type Status string` and one block of
+// `StatusDraft`, `StatusPublished`, `StatusArchived` constants, and every
+// column's model field is typed Status; [Registry.Validate] refuses the
+// schema, naming both columns, if two declarations under the same SharedAs
+// name disagree about the order or the values.
+//
+// name must be an exported Go identifier: it becomes a type name in the
+// generated package, alongside every other type codegen names for you.
+//
+// This is a codegen-only declaration (ADR-0010). It changes no DDL and
+// nothing about how the column is reached through sqlb.F, a struct tag, or
+// the filter grammar — a Go string is a Go string with or without a shared
+// name on it, and the type this names only comes to exist once `sqlb
+// generate` runs.
+func (f *Field) SharedAs(name string) *Field {
+	f.d.SharedAs = name
 	return f
 }
 
