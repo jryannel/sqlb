@@ -52,7 +52,9 @@ func (f gooseFormat) Render(m Migration, opts Options) (map[string]string, error
 		b.WriteString("-- Index changes cannot run inside a transaction, so this file is not\n")
 		b.WriteString("-- wrapped in one. It contains only index changes for that reason.\n")
 	}
-	b.WriteString(header + "\n\n")
+	if !opts.Handwritten {
+		b.WriteString(Header + "\n\n")
+	}
 
 	b.WriteString("-- +goose Up\n")
 	for _, c := range m.Changes {
@@ -109,8 +111,10 @@ func (golangMigrateFormat) Name() string { return "golang-migrate" }
 
 func (golangMigrateFormat) Render(m Migration, opts Options) (map[string]string, error) {
 	var up, down strings.Builder
-	up.WriteString(header + "\n\n")
-	down.WriteString(header + "\n\n")
+	if !opts.Handwritten {
+		up.WriteString(Header + "\n\n")
+		down.WriteString(Header + "\n\n")
+	}
 
 	for _, c := range m.Changes {
 		writeSection(&up, statement(c.Up, c, opts), upComment(c), false)
@@ -136,7 +140,9 @@ func (plainFormat) Name() string { return "plain" }
 
 func (plainFormat) Render(m Migration, opts Options) (map[string]string, error) {
 	var b strings.Builder
-	b.WriteString(header + "\n\n")
+	if !opts.Handwritten {
+		b.WriteString(Header + "\n\n")
+	}
 	for _, c := range m.Changes {
 		writeSection(&b, statement(c.Up, c, opts), upComment(c), false)
 	}
