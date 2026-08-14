@@ -92,6 +92,8 @@ Usage:
     sqlb eject [flags] <package>     write the exit: the schema as SQL and the
                                      resources as plain handlers, importing pgx
                                      and the standard library and nothing else
+    sqlb docs <package>              write the feature checklist: one section per
+                                     endpoint, with a notes block a rerun preserves
     sqlb survey [flags] <src> <dst>  report which of an existing database's tables
                                      sqlb could describe, and why not — the
                                      adoption probe, run against two DSNs
@@ -151,8 +153,8 @@ takes — usually ./schema or ./taskschema. It must export:
 Paths in that Project resolve against the module root, so the commands above
 mean the same thing from a shell, from a //go:generate directive and from CI.
 
-generate, impact and eject need no database, and neither does check until it is
-given one. migrate reads the current schema by
+generate, impact, eject and docs need no database, and neither does check until
+it is given one. migrate reads the current schema by
 replaying the committed history into a scratch Postgres, so it needs the
 Project's ShadowDB — except for the first migration, which diffs against
 nothing and needs no database at all.
@@ -194,7 +196,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// The same shape again, and the opposite reason: there is nothing yet
 		// to import because nothing has been written yet.
 		return initCmd(args[1:], stdout, stderr)
-	case "generate", "check", "migrate", "impact", "eject":
+	case "generate", "check", "migrate", "impact", "eject", "docs":
 	default:
 		_, _ = fmt.Fprintf(stderr, "sqlb: unknown command %q\n\n", verb)
 		_, _ = fmt.Fprint(stderr, usage)
