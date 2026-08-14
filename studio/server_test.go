@@ -42,6 +42,20 @@ func testManifest() *schema.Manifest {
 					Operations: []string{"create", "read", "update", "list"},
 					Filterable: []string{"title"},
 					Sortable:   []string{"title"},
+					Actions: []schema.ActionManifest{
+						{
+							Name:   "publish",
+							Path:   "/widgets/{id}/publish",
+							Method: "POST",
+							Body:   []schema.ActionProperty{{Name: "note", Type: "text", Nullable: true}},
+							Writes: []string{"status"},
+						},
+						{
+							Name:   "purge",
+							Path:   "/widgets/purge",
+							Method: "POST",
+						},
+					},
 				},
 			},
 			{
@@ -136,6 +150,32 @@ func fakeAPI(t *testing.T, wantToken string) *httptest.Server {
 			row[k] = v
 		}
 		_ = json.NewEncoder(w).Encode(row)
+	})
+	mux.HandleFunc("POST /widgets/{id}/publish", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		row, ok := store[r.PathValue("id")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		row["status"] = "published"
+		if note, ok := body["note"]; ok {
+			row["note"] = note
+		}
+		_ = json.NewEncoder(w).Encode(row)
+	})
+	mux.HandleFunc("POST /widgets/purge", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(w, r) {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"purged": true})
 	})
 	mux.HandleFunc("POST /widgets", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
@@ -376,6 +416,128 @@ func TestEditUpdatesRowEncodesNumbersAndClearsNullable(t *testing.T) {
 	}
 	if !strings.Contains(got, "<dd class=\"col-9\">\n        —\n") {
 		t.Fatalf("note__clear did not clear note to null:\n%s", got)
+	}
+}
+
+func TestItemActionInvokeUpdatesRowAndShowsResult(t *testing.T) {
+	const token = "secret-token"
+	api := fakeAPI(t, token)
+	defer api.Close()
+	srv, err := NewServer(testManifest(), api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	client := loggedInClient(t, ts.URL, token)
+
+	form, err := client.Get(ts.URL + "/tables/widgets/rows/w1/actions/publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer form.Body.Close()
+	if form.StatusCode != http.StatusOK {
+		t.Fatalf("action form status = %d, want 200", form.StatusCode)
+	}
+	formBody, err := io.ReadAll(form.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(formBody), `name="note"`) {
+		t.Fatalf("action form missing its declared body field:\n%s", formBody)
+	}
+
+	resp, err := client.PostForm(ts.URL+"/tables/widgets/rows/w1/actions/publish", url.Values{"note": {"ready to ship"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("action submit status = %d, want 200 (result rendered inline)", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Action succeeded") || !strings.Contains(string(body), "published") {
+		t.Fatalf("action page did not show the succeeded response:\n%s", body)
+	}
+
+	detail, err := client.Get(ts.URL + "/tables/widgets/rows/w1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer detail.Body.Close()
+	detailBody, err := io.ReadAll(detail.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(detailBody), "published") {
+		t.Fatalf("row's status was not actually persisted by the action:\n%s", detailBody)
+	}
+}
+
+func TestCollectionActionInvoke(t *testing.T) {
+	const token = "secret-token"
+	api := fakeAPI(t, token)
+	defer api.Close()
+	srv, err := NewServer(testManifest(), api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	client := loggedInClient(t, ts.URL, token)
+
+	resp, err := client.PostForm(ts.URL+"/tables/widgets/actions/purge", url.Values{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// html/template escapes the quotes in the pretty-printed JSON response.
+	if !strings.Contains(string(body), `&#34;purged&#34;: true`) {
+		t.Fatalf("collection action's response missing from the page:\n%s", body)
+	}
+}
+
+func TestActionRouteShapeMismatchIs404(t *testing.T) {
+	const token = "secret-token"
+	api := fakeAPI(t, token)
+	defer api.Close()
+	srv, err := NewServer(testManifest(), api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	client := loggedInClient(t, ts.URL, token)
+
+	// purge is a collection action; reaching it through a row's URL is not
+	// the route it declared.
+	resp, err := client.Get(ts.URL + "/tables/widgets/rows/w1/actions/purge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a collection action reached via a row URL", resp.StatusCode)
+	}
+
+	// publish is an item action; reaching it without a row id is not either.
+	resp2, err := client.Get(ts.URL + "/tables/widgets/actions/publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for an item action reached without a row id", resp2.StatusCode)
 	}
 }
 

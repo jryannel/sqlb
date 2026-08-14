@@ -11,19 +11,21 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/jryannel/sqlb/schema"
 )
 
-//go:embed templates/base.html templates/index.html templates/table.html templates/login.html templates/rows.html templates/row.html templates/form.html
+//go:embed templates/base.html templates/index.html templates/table.html templates/login.html templates/rows.html templates/row.html templates/form.html templates/action.html
 var templateFS embed.FS
 
 //go:embed static
 var staticFS embed.FS
 
 var templateFuncs = template.FuncMap{
-	"add": func(a, b int) int { return a + b },
-	"sub": func(a, b int) int { return a - b },
+	"add":          func(a, b int) int { return a + b },
+	"sub":          func(a, b int) int { return a - b },
+	"isCollection": func(path string) bool { return !strings.Contains(path, "{id}") },
 }
 
 // Server renders a Manifest as a browsable data/schema explorer. Schema
@@ -34,12 +36,13 @@ type Server struct {
 	manifest *schema.Manifest
 	apiBase  string
 
-	index *template.Template
-	table *template.Template
-	login *template.Template
-	rows  *template.Template
-	row   *template.Template
-	form  *template.Template
+	index  *template.Template
+	table  *template.Template
+	login  *template.Template
+	rows   *template.Template
+	row    *template.Template
+	form   *template.Template
+	action *template.Template
 }
 
 // NewServer parses the embedded templates and pairs them with m. apiBase is
@@ -62,6 +65,7 @@ func NewServer(m *schema.Manifest, apiBase string) (*Server, error) {
 	s.rows = parse("templates/base.html", "templates/rows.html")
 	s.row = parse("templates/base.html", "templates/row.html")
 	s.form = parse("templates/base.html", "templates/form.html")
+	s.action = parse("templates/base.html", "templates/action.html")
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +90,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /tables/{name}/rows/{id}", s.handleRowDetail)
 	mux.HandleFunc("GET /tables/{name}/rows/{id}/edit", s.handleRowEditForm)
 	mux.HandleFunc("POST /tables/{name}/rows/{id}/edit", s.handleRowEditSubmit)
+	mux.HandleFunc("GET /tables/{name}/actions/{action}", s.handleActionForm)
+	mux.HandleFunc("POST /tables/{name}/actions/{action}", s.handleActionSubmit)
+	mux.HandleFunc("GET /tables/{name}/rows/{id}/actions/{action}", s.handleActionForm)
+	mux.HandleFunc("POST /tables/{name}/rows/{id}/actions/{action}", s.handleActionSubmit)
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)
 	mux.HandleFunc("POST /logout", s.handleLogout)
@@ -262,12 +270,17 @@ type fieldValue struct {
 	Name, Value, Link string
 }
 
+type actionLink struct {
+	Name, InvokeLink string
+}
+
 type rowPage struct {
 	pageHeader
 	Table    schema.TableManifest
 	Fields   []fieldValue
 	CanEdit  bool
 	EditLink string
+	Actions  []actionLink
 }
 
 func (s *Server) handleRowDetail(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +306,14 @@ func (s *Server) handleRowDetail(w http.ResponseWriter, r *http.Request) {
 		Table:      *t,
 		CanEdit:    containsOp(t.REST.Operations, "update"),
 		EditLink:   "/tables/" + t.Name + "/rows/" + id + "/edit",
+	}
+	for _, a := range t.REST.Actions {
+		if !isCollectionActionPath(a.Path) {
+			data.Actions = append(data.Actions, actionLink{
+				Name:       a.Name,
+				InvokeLink: "/tables/" + t.Name + "/rows/" + id + "/actions/" + a.Name,
+			})
+		}
 	}
 	for _, col := range t.Columns {
 		wire := wireOf(col)
@@ -455,6 +476,139 @@ func (s *Server) renderFormAPIError(w http.ResponseWriter, r *http.Request, t *s
 		msg = fmt.Sprintf("%d from API: %s", ae.Status, ae.Body)
 	}
 	s.renderFormError(w, r, t, form, action, title, back, msg)
+}
+
+func (s *Server) findAction(t *schema.TableManifest, name string) *schema.ActionManifest {
+	if t.REST == nil {
+		return nil
+	}
+	for i := range t.REST.Actions {
+		if t.REST.Actions[i].Name == name {
+			return &t.REST.Actions[i]
+		}
+	}
+	return nil
+}
+
+// resolveActionPath substitutes a row's primary key into a declared item
+// action's {id} placeholder; a collection action (id == "") is returned as
+// declared.
+func resolveActionPath(path, id string) string {
+	if id == "" {
+		return path
+	}
+	return strings.Replace(path, "{id}", id, 1)
+}
+
+type actionPage struct {
+	pageHeader
+	Table  schema.TableManifest
+	Action schema.ActionManifest
+	Fields []formField
+	Back   string
+	Result string
+	Error  string
+}
+
+// actionRoute resolves the {name}/{action}/{id?} triple and rejects a
+// mismatch between the URL shape and what the action itself declares — a
+// collection action reached through a /rows/{id}/ URL, or an item action
+// reached without one, is a 404 rather than a call with a broken path.
+func (s *Server) actionRoute(r *http.Request) (t *schema.TableManifest, action *schema.ActionManifest, id, back string, ok bool) {
+	t = s.findTable(r.PathValue("name"))
+	if t == nil {
+		return nil, nil, "", "", false
+	}
+	action = s.findAction(t, r.PathValue("action"))
+	if action == nil {
+		return nil, nil, "", "", false
+	}
+	id = r.PathValue("id")
+	if isCollectionActionPath(action.Path) != (id == "") {
+		return nil, nil, "", "", false
+	}
+	back = "/tables/" + t.Name
+	if id != "" {
+		back = "/tables/" + t.Name + "/rows/" + id
+	}
+	return t, action, id, back, true
+}
+
+func isCollectionActionPath(path string) bool { return !strings.Contains(path, "{id}") }
+
+func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
+	t, action, _, back, ok := s.actionRoute(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.render(w, s.action, actionPage{
+		pageHeader: s.header(r),
+		Table:      *t,
+		Action:     *action,
+		Fields:     buildActionFields(action.Body),
+		Back:       back,
+	})
+}
+
+func (s *Server) handleActionSubmit(w http.ResponseWriter, r *http.Request) {
+	t, action, id, back, ok := s.actionRoute(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	client, ok := s.clientFor(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	wire := schema.WireCase(s.manifest.WireCase)
+	body, err := parseActionBody(wire, action.Body, r.PostForm)
+	if err != nil {
+		s.renderActionError(w, r, t, action, back, r.PostForm, err.Error())
+		return
+	}
+
+	result, err := client.Create(r.Context(), resolveActionPath(action.Path, id), body)
+	if err != nil {
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
+			clearTokenCookie(w)
+			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			return
+		}
+		msg := err.Error()
+		if errors.As(err, &ae) {
+			msg = fmt.Sprintf("%d from API: %s", ae.Status, ae.Body)
+		}
+		s.renderActionError(w, r, t, action, back, r.PostForm, msg)
+		return
+	}
+
+	pretty, _ := json.MarshalIndent(result, "", "  ")
+	s.render(w, s.action, actionPage{
+		pageHeader: s.header(r),
+		Table:      *t,
+		Action:     *action,
+		Fields:     buildActionFields(action.Body),
+		Back:       back,
+		Result:     string(pretty),
+	})
+}
+
+func (s *Server) renderActionError(w http.ResponseWriter, r *http.Request, t *schema.TableManifest, action *schema.ActionManifest, back string, form url.Values, errMsg string) {
+	s.render(w, s.action, actionPage{
+		pageHeader: s.header(r),
+		Table:      *t,
+		Action:     *action,
+		Fields:     actionFieldsFromForm(action.Body, form),
+		Back:       back,
+		Error:      errMsg,
+	})
 }
 
 type loginPage struct {

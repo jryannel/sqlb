@@ -90,7 +90,7 @@
       <div class="table-responsive">
         <table class="table table-vcenter card-table">
           <thead>
-            <tr><th>Name</th><th>Route</th><th>Body</th><th>Writes</th><th>Touches</th></tr>
+            <tr><th>Name</th><th>Route</th><th>Body</th><th>Writes</th><th>Touches</th><th></th></tr>
           </thead>
           <tbody>
             {{range $t.REST.Actions}}
@@ -100,6 +100,10 @@
               <td>{{range .Body}}<span class="badge bg-yellow-lt me-1">{{.Name}}: {{.Type}}</span>{{end}}</td>
               <td>{{range .Writes}}<span class="badge bg-red-lt me-1">{{.}}</span>{{end}}</td>
               <td>{{range .Touches}}<span class="badge bg-orange-lt me-1">{{.}}</span>{{end}}</td>
+              <td>
+                {{if isCollection .Path}}<a href="/tables/{{$t.Name}}/actions/{{.Name}}" class="btn btn-sm btn-outline-primary">Invoke</a>
+                {{else}}<span class="text-secondary">from a row</span>{{end}}
+              </td>
             </tr>
             {{end}}
           </tbody>

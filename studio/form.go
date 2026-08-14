@@ -166,6 +166,86 @@ func encodeFieldValue(c schema.ColumnManifest, raw string) (any, error) {
 	return out, nil
 }
 
+// actionHint mirrors hintFor for an action body property. ActionProperty has
+// no Array field (ADR-0043's body vocabulary doesn't carry one), so there is
+// no array case to add here.
+func actionHint(p schema.ActionProperty) string {
+	h := p.Type
+	if p.Nullable {
+		h += ", optional"
+	}
+	return h
+}
+
+func buildActionFields(body []schema.ActionProperty) []formField {
+	var fields []formField
+	for _, p := range body {
+		f := formField{Name: p.Name, Nullable: p.Nullable, Hint: actionHint(p)}
+		switch {
+		case p.Type == "bool":
+			f.Kind = "checkbox"
+		case len(p.Enum) > 0:
+			f.Kind = "select"
+			f.Options = p.Enum
+		default:
+			f.Kind = "text"
+		}
+		fields = append(fields, f)
+	}
+	return fields
+}
+
+func actionFieldsFromForm(body []schema.ActionProperty, form url.Values) []formField {
+	var fields []formField
+	for _, p := range body {
+		f := formField{Name: p.Name, Nullable: p.Nullable, Hint: actionHint(p)}
+		switch {
+		case p.Type == "bool":
+			f.Kind = "checkbox"
+			f.Checked = form.Has(p.Name)
+		case len(p.Enum) > 0:
+			f.Kind = "select"
+			f.Options = p.Enum
+			f.Value = form.Get(p.Name)
+		default:
+			f.Kind = "text"
+			f.Value = form.Get(p.Name)
+		}
+		fields = append(fields, f)
+	}
+	return fields
+}
+
+// parseActionBody encodes a submitted form into the JSON body a declared
+// action expects, keyed by the property's wire spelling. ActionProperty
+// carries no precomputed Wire the way ColumnManifest does, so this derives
+// it the same way a client with only this manifest would have to: the
+// declared WireCase applied to the property's name (schema/wire.go).
+func parseActionBody(wire schema.WireCase, body []schema.ActionProperty, form url.Values) (map[string]any, error) {
+	out := map[string]any{}
+	for _, p := range body {
+		key := wire.WireName(p.Name)
+		if p.Type == "bool" {
+			out[key] = form.Has(p.Name)
+			continue
+		}
+		if p.Nullable && form.Has(p.Name+"__clear") {
+			out[key] = nil
+			continue
+		}
+		raw := form.Get(p.Name)
+		if raw == "" {
+			continue
+		}
+		val, err := scalarValue(p.Type, raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", p.Name, err)
+		}
+		out[key] = val
+	}
+	return out, nil
+}
+
 // parseFormBody turns a submitted form into a JSON body keyed by wire name.
 // A bool is always present (a checkbox has no "unchanged" state). A blank
 // text/select value is omitted — "no change" on edit, "use the column's own

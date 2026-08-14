@@ -19,4 +19,13 @@
     </dl>
   </div>
 </div>
+
+{{if .Actions}}
+<div class="card mt-3">
+  <div class="card-header"><h3 class="card-title">Actions</h3></div>
+  <div class="card-body d-flex gap-2">
+    {{range .Actions}}<a href="{{.InvokeLink}}" class="btn btn-outline-primary">{{.Name}}</a>{{end}}
+  </div>
+</div>
+{{end}}
 {{end}}

@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="mb-3">
+  <a href="{{.Back}}" class="btn btn-link px-0">&larr; back</a>
+  <h2 class="page-title mt-2">{{.Table.Name}}: {{.Action.Name}}</h2>
+  <div class="text-secondary"><code>{{.Action.Method}} {{.Action.Path}}</code></div>
+</div>
+
+{{if .Error}}<div class="alert alert-danger">{{.Error}}</div>{{end}}
+
+{{if .Result}}
+<div class="alert alert-success mb-2">Action succeeded.</div>
+<div class="card mb-3">
+  <div class="card-header"><h3 class="card-title">Response</h3></div>
+  <div class="card-body"><pre class="mb-0">{{.Result}}</pre></div>
+</div>
+{{end}}
+
+{{if or .Action.Writes .Action.Touches}}
+<div class="mb-3 text-secondary">
+  {{if .Action.Writes}}Writes: {{range .Action.Writes}}<span class="badge bg-red-lt me-1">{{.}}</span>{{end}}{{end}}
+  {{if .Action.Touches}}Touches: {{range .Action.Touches}}<span class="badge bg-orange-lt me-1">{{.}}</span>{{end}}{{end}}
+</div>
+{{end}}
+
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="">
+      {{range .Fields}}
+      <div class="mb-3">
+        <label class="form-label">{{.Name}} <span class="text-secondary">({{.Hint}})</span></label>
+
+        {{if eq .Kind "checkbox"}}
+        <label class="form-check">
+          <input type="checkbox" class="form-check-input" name="{{.Name}}" {{if .Checked}}checked{{end}}>
+          <span class="form-check-label"></span>
+        </label>
+
+        {{else if eq .Kind "select"}}
+        {{$cur := .Value}}
+        <select class="form-select" name="{{.Name}}">
+          <option value=""></option>
+          {{range .Options}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+
+        {{else}}
+        <input type="text" class="form-control" name="{{.Name}}" value="{{.Value}}">
+        {{end}}
+
+        {{if .Nullable}}
+        <label class="form-check mt-1">
+          <input type="checkbox" class="form-check-input" name="{{.Name}}__clear">
+          <span class="form-check-label text-secondary">clear to null</span>
+        </label>
+        {{end}}
+      </div>
+      {{end}}
+
+      {{if not .Fields}}
+      <p class="text-secondary">This action takes no body.</p>
+      {{end}}
+
+      <button type="submit" class="btn btn-primary">Invoke</button>
+    </form>
+  </div>
+</div>
+{{end}}
