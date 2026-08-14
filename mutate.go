@@ -211,6 +211,7 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 	}
 
 	c := newCompiler(i.dialect)
+	c.overflow = i.overflowErr(len(cols))
 	c.write("INSERT INTO ")
 	c.table(i.model.Table)
 	c.write(" (")
@@ -307,6 +308,30 @@ func (i *Insert[T]) SQL() (string, []any, error) {
 
 	writeReturning(c, i.model, i.computed)
 	return c.result()
+}
+
+// overflowErr explains a batch too wide for one statement in terms of the batch
+// rather than of the protocol.
+//
+// The ceiling is reported as a row count because rows are what the caller
+// controls: they chose the batch size, not the column count. It is derived from
+// the values actually bound rather than from rows × columns, because the two
+// differ — a column left to its database default writes the DEFAULT keyword and
+// binds nothing — and a suggestion computed from the wider figure would name a
+// batch size that still does not fit.
+//
+// Integer division floors, which is the safe direction: the answer is a batch
+// that fits, and rounding up would name one that does not.
+func (i *Insert[T]) overflowErr(width int) func(int) error {
+	rows := len(i.rows)
+	return func(need int) error {
+		fits := rows * maxBindParams / need
+		return fmt.Errorf(
+			"sqlb: inserting %d rows into %s binds %d values across %d columns, "+
+				"and one statement can carry %d; insert at most %d rows at a time, "+
+				"in a transaction if they have to land together",
+			rows, i.model.Table, need, width, maxBindParams, fits)
+	}
 }
 
 // columns picks the columns to write: everything mapped, minus Only/Omit, and
@@ -625,6 +650,16 @@ func (u *Update[T]) Resolved(ctx context.Context, db Executor) (*Update[T], erro
 	if err := hooksFor[T](db).runBeforeUpdate(ctx, stmt, releasedFrom(db)); err != nil {
 		return nil, err
 	}
+	// A WHERE may name a nested query, and one over a confined model has to have
+	// run that model's hooks before it can decide which rows this write touches.
+	// See [Subquery].
+	exprs := make([]Expr, 0, len(stmt.sets))
+	for _, a := range stmt.sets {
+		exprs = append(exprs, a.value)
+	}
+	if err := guardNested(ctx, db, stmt.where, exprs); err != nil {
+		return nil, err
+	}
 	return stmt, nil
 }
 
@@ -805,6 +840,11 @@ func (d *Delete[T]) Resolved(ctx context.Context, db Executor) (*Delete[T], erro
 	// between a bare DELETE and one that scans every row it removed, which is a
 	// difference an inspection exists to show.
 	stmt.returning = hooks.wantsDeletedRows()
+	// See [Update.Resolved]: a nested query choosing which rows a write removes
+	// is the position where a missing scope matters most.
+	if err := guardNested(ctx, db, stmt.where, nil); err != nil {
+		return nil, err
+	}
 	return stmt, nil
 }
 

@@ -30,6 +30,10 @@ type Builder[T any] struct {
 	having []Pred
 	orders []Order
 	expand []string
+	// expandOnly narrows an expanded row to the columns a caller named, one set
+	// per relation. An absent entry means the whole row, which is what Expand
+	// alone asks for. See ExpandOnly.
+	expandOnly map[string]map[string]bool
 	// expandScope holds the target's BeforeQuery predicates for each expanded
 	// relation, already requalified onto the join alias. It is filled on the
 	// execution path rather than at Expand(), because the predicates depend on
@@ -47,6 +51,10 @@ type Builder[T any] struct {
 	limit    *int
 	offset   *int
 	lock     string
+	// resolved records that this query has run its model's BeforeQuery hooks,
+	// which is what makes it safe to nest inside another statement. See
+	// [Subquery]. It survives Clone because the predicates the hooks added do.
+	resolved bool
 	err      error
 }
 
@@ -108,6 +116,16 @@ func (b *Builder[T]) Clone() *Builder[T] {
 		c.expandScope = make(map[string][]Pred, len(b.expandScope))
 		for k, v := range b.expandScope {
 			c.expandScope[k] = append([]Pred(nil), v...)
+		}
+	}
+	if b.expandOnly != nil {
+		c.expandOnly = make(map[string]map[string]bool, len(b.expandOnly))
+		for k, v := range b.expandOnly {
+			cols := make(map[string]bool, len(v))
+			for col := range v {
+				cols[col] = true
+			}
+			c.expandOnly[k] = cols
 		}
 	}
 	if b.computed != nil {

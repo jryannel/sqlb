@@ -236,22 +236,22 @@ func TestAnUpsertCopiesTheProposedRowAndCannotDoAnythingElseToIt(t *testing.T) {
 	}
 }
 
-// InsertRows renders one VALUES list with one bind per column per row, and
-// checks nothing. The ceiling is the wire protocol's, and it is exact.
+// InsertRows renders one VALUES list with one bind per column per row, and the
+// ceiling on that is the wire protocol's, exactly.
 //
 // A Postgres bind message carries an int16 parameter count, so a statement
-// holds at most 65,535 of them. At ten columns that is 6,553 rows. Below it
-// everything works; above it the statement is refused — by pgx, in terms of
-// parameters rather than rows, which pgtest/subjectgo_test.go measures. Every test
+// holds at most 65,535 of them. At ten columns that is 6,553 rows. Every test
 // anyone writes is below it and the first large document in production is above
 // it.
 //
-// This test pins the arithmetic and the absence of the check. Refusing here —
-// naming the row count, the column count and the maximum — is the two-line
-// version and meets the bar ADR-0011 sets; batching inside a transaction is the
-// larger option and changes atomicity, so it cannot be done quietly.
-// pgtest/subjectgo_test.go is where that is measured.
-func TestBulkInsertRendersPastTheBindParameterCeilingWithoutSayingSo(t *testing.T) {
+// This test used to pin the *absence* of the check, and said what closing it
+// would take: refusing here, naming the row count, the column count and the
+// maximum, is the ADR-0011 answer, while batching inside a transaction is the
+// larger option and changes atomicity so it cannot be done quietly. That is
+// what was built, so the test is now its assertion rather than its description.
+// Both directions are asserted, because a refusal that also refuses the largest
+// working batch would be a regression wearing a check's clothes (ADR-0016).
+func TestBulkInsertIsRefusedInTermsOfRowsAtTheBindParameterCeiling(t *testing.T) {
 	const (
 		maxParams = 65535
 		columns   = 10
@@ -262,34 +262,36 @@ func TestBulkInsertRendersPastTheBindParameterCeilingWithoutSayingSo(t *testing.
 		t.Fatalf("subjectChunk has %d columns, want %d — the arithmetic below is about the shape", got, columns)
 	}
 
-	for _, tc := range []struct {
-		name string
-		rows int
-	}{
-		{"the last statement Postgres will accept", maxRows},
-		{"one row past it", maxRows + 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rows := make([]*subjectChunk, tc.rows)
-			for i := range rows {
-				rows[i] = &subjectChunk{ID: "c", OrgID: "acme", DocID: "d", Ordinal: int64(i),
-					Content: "chunk", Tokens: 1, Hash: "h", Source: "upload", Lang: "en", Revision: 1}
-			}
+	rows := func(n int) []*subjectChunk {
+		out := make([]*subjectChunk, n)
+		for i := range out {
+			out[i] = &subjectChunk{ID: "c", OrgID: "acme", DocID: "d", Ordinal: int64(i),
+				Content: "chunk", Tokens: 1, Hash: "h", Source: "upload", Lang: "en", Revision: 1}
+		}
+		return out
+	}
 
-			_, args, err := sqlb.InsertRows(rows...).SQL()
-			if err != nil {
-				t.Fatalf("SQL: %v", err)
-			}
-			if got, want := len(args), tc.rows*columns; got != want {
-				t.Fatalf("bound %d parameters for %d rows, want %d", got, tc.rows, want)
-			}
-			// The assertion that matters is the one that does not fire: at
-			// 65,540 parameters sqlb still returns a statement and no error.
-			if len(args) > maxParams {
-				t.Logf("%d parameters, %d over the protocol maximum, and no refusal from sqlb",
-					len(args), len(args)-maxParams)
-			}
-		})
+	// The last statement the protocol carries. 65,530 parameters.
+	_, args, err := sqlb.InsertRows(rows(maxRows)...).SQL()
+	if err != nil {
+		t.Fatalf("the largest batch that fits was refused: %v", err)
+	}
+	if got, want := len(args), maxRows*columns; got != want {
+		t.Fatalf("bound %d parameters for %d rows, want %d", got, maxRows, want)
+	}
+
+	// One row more. 65,540 parameters, and the statement never leaves sqlb.
+	_, _, err = sqlb.InsertRows(rows(maxRows + 1)...).SQL()
+	if err == nil {
+		t.Fatal("a batch of 65,540 parameters compiled; the ceiling is no longer checked")
+	}
+	// The units are the whole point. pgx's own message counts parameters, which
+	// is not what anybody wrote — a caller who inserted 6,554 rows has to divide
+	// to find out what happened.
+	for _, want := range []string{"6554 rows", "10 columns", "65535", "insert at most 6553 rows"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q, so it does not name what the caller did: %v", want, err)
+		}
 	}
 }
 
