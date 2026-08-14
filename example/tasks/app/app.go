@@ -134,6 +134,13 @@ func New(cfg Config) (*Server, error) {
 			"/docs/",
 			"/health",
 		),
+		// A second, narrower gate on top of the first: every /admin/* request
+		// already carries valid claims by the time this runs, and this is the
+		// one place that checks whether those claims say PlatformAdmin. The
+		// row-visibility half of the boundary is app/admin.go's Unscoped
+		// release; this is the route half, and neither is the boundary alone
+		// — see RequireAdmin's doc comment.
+		auth.RequireAdmin("/admin/"),
 	)
 
 	router.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -155,6 +162,13 @@ func New(cfg Config) (*Server, error) {
 
 	registerAuthRoutes(api, &authAPI{sys: sys, hooks: hooked.Hooks(), signer: signer})
 	registerSoftDeleteRoutes(api, hooked)
+
+	// The hand-written admin half — see app/admin.go's doc comment for why it
+	// is hand-written rather than generated, and RequireAdmin above for the
+	// route guard that keeps it from being reachable by an ordinary token.
+	if err := registerAdminRoutes(api, hooked); err != nil {
+		return nil, fmt.Errorf("app: mounting the admin resources: %w", err)
+	}
 
 	if err := registerEvents(api, broker); err != nil {
 		return nil, fmt.Errorf("app: mounting the change feed: %w", err)
