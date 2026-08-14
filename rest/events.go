@@ -141,8 +141,43 @@ type Source interface {
 
 // Publisher is what a write announces itself to. [Broker] is one; a test
 // double or an adapter onto an existing message bus is another.
+//
+// It takes no context and returns no error because [Broker] is in-process and
+// at-most-once: the write is already durable when it is called, and a change
+// feed that could fail a committed request would be worse than one that drops an
+// event and tells the client that missed it. A publisher that can do better than
+// at-most-once implements [TxPublisher] as well.
 type Publisher interface {
 	Publish(events ...Event)
+}
+
+// TxPublisher is a [Publisher] that can record an event inside the transaction
+// that made the change, rather than after it commits.
+//
+// It is an optional interface, asserted for rather than required, the way
+// [sqlb.Beginner] extends [sqlb.Executor] ([ADR-0040]). That is what makes the
+// durable feed a swap rather than a migration: [PublishChanges] finds Record and
+// uses it, so replacing a [Broker] with an outbox is one constructor call and no
+// change to any registration, the endpoint, the wire format or a client.
+//
+// The contract is the part worth reading before implementing one:
+//
+//   - Record runs **inside** the mutation, not after it. The transaction is on
+//     the context, reachable with [sqlb.TxFrom].
+//   - Its error rolls the write back. That is the point: a change nobody can be
+//     told about should not be a change. An implementation that would rather
+//     lose the event than the write must return nil and report the failure some
+//     other way.
+//   - [Publisher.Publish] remains the path for a write that ran outside a
+//     transaction, where there is no transaction to record into and the change
+//     is already durable. Both methods therefore have to work.
+//
+// [ADR-0040]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0040-the-driver-is-a-dependency.md
+type TxPublisher interface {
+	Publisher
+
+	// Record writes the events into the transaction carried by ctx.
+	Record(ctx context.Context, events ...Event) error
 }
 
 // EventsOptions describes the change-feed endpoint.
