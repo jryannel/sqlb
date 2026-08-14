@@ -54,6 +54,45 @@ func TestProjectGenerateThenCheckIsClean(t *testing.T) {
 	}
 }
 
+// #204: a schema that newly reaches for a feature can make generate write an
+// import `go mod tidy`, run before generate produced anything, had no way to
+// see — outbox/events pulling in huma's SSE adapter package is the case that
+// surfaced it. A first generate into an empty directory writes every file for
+// the first time, which is exactly that shape, so it is the cheap way to
+// prove the nudge fires without needing a schema that actually adds a new
+// package import.
+func TestProjectGenerateNudgesWhenOutputChanges(t *testing.T) {
+	p := project(t)
+	code, out := run(t, p, "generate")
+	if code != 0 {
+		t.Fatalf("generate: exit %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "go mod tidy") {
+		t.Errorf("a first generate — every file newly written — did not nudge to run "+
+			"`go mod tidy` again:\n%s", out)
+	}
+}
+
+// The other half of #204: a rerun that writes exactly what was already on
+// disk changed nothing about the dependency graph, so nagging about it every
+// time generate runs would train people to ignore the message by the time it
+// matters.
+func TestProjectGenerateDoesNotNudgeWhenOutputIsUnchanged(t *testing.T) {
+	p := project(t)
+	if code, out := run(t, p, "generate"); code != 0 {
+		t.Fatalf("first generate: exit %d, output:\n%s", code, out)
+	}
+
+	code, out := run(t, p, "generate")
+	if code != 0 {
+		t.Fatalf("second generate: exit %d, output:\n%s", code, out)
+	}
+	if strings.Contains(out, "go mod tidy") {
+		t.Errorf("a second generate against unchanged output nudged to run `go mod tidy` "+
+			"again anyway:\n%s", out)
+	}
+}
+
 // The other direction, which is the one that matters: ADR-0016. A check that
 // cannot fail is not a gate, and this one is about to become the gate every
 // sqlb project runs in CI.
