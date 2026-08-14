@@ -99,6 +99,16 @@ type Project struct {
 	// committed and hand-edited, not regenerated and diffed against.
 	FeaturesFile string
 
+	// HandwrittenOps names the endpoints `sqlb docs` cannot see on its own —
+	// mounted by hand with huma.Register alongside the resources codegen
+	// generates, rather than declared in the schema. Left empty, FEATURES.md
+	// covers only the generated slice of the REST surface; a project with a
+	// hand-written register/login/invite flow lists those routes here once so
+	// the checklist covers what it is actually meant to (#211) — exactly the
+	// endpoints with no Describe() to fall back on, and so the ones a written
+	// note is most needed for.
+	HandwrittenOps []HandwrittenOp
+
 	// EjectDir is where `sqlb eject` writes, relative to the module root.
 	//
 	// Empty defaults to "ejected" beside the generated code, which is the
