@@ -176,6 +176,14 @@ go build -o /dev/null ./cmd/taskctl
 go test ./cli/...
 '''
 
+[tasks.test-studio]
+description = "Build the uncurated data/schema/action browser (docs/adr/0053) and run its tests. No Docker and no Postgres: it speaks REST, so its tests drive the routes against an httptest fake standing in for a generated API, the same way test-cli's does for the CLI. Not part of `ci` yet — see the module's README for what full CI wiring would still need to decide (the layout doc's 'four modules' claim, mainly)."
+dir = "studio"
+run = '''
+go build -o /dev/null ./cmd/sqlb-studio
+go test ./...
+'''
+
 [tasks.demo-migrate]
 description = "Regenerate the task-manager example's migrations from its schema. Rewrites the checked-in files, which is safe only because they are a baseline nobody has applied to a database that matters."
 dir = "example/tasks"

@@ -1,9 +1,3 @@
-// Package studio is a generic, uncurated browser over a sqlb schema: it reads
-// a sqlb.json manifest and (in later stages) calls the generated REST API for
-// data and actions. It carries no per-application knowledge — no row label,
-// no field order, no widget hints — because a raw grid over declared columns
-// needs none of that. See docs/adr/0053 in the parent module for the decision
-// this package exists to test.
 package studio
 
 import (
