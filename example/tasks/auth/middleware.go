@@ -58,6 +58,49 @@ func Middleware(s *Signer, public ...string) func(http.Handler) http.Handler {
 	}
 }
 
+// RequireAdmin refuses any request under prefix unless the caller's claims
+// carry PlatformAdmin, and runs after Middleware — which has already
+// rejected an unauthenticated request — so this is the second, independent
+// check the package doc already argues for, applied to a boundary wider than
+// a single workspace rather than narrower.
+//
+// The row-visibility half of this boundary is separate and lives in
+// app/hooks.go: naming the tenant-scoping hooks "tenant" and releasing that
+// name for the handle app/admin.go mounts on. Neither half alone is the
+// boundary. A released scope with no route guard would let any authenticated
+// user reach every workspace by knowing the path; a route guard with no
+// released scope would 200 with an empty page, since the ordinary hooks
+// would still filter to a workspace nothing in an admin token names
+// meaningfully.
+func RequireAdmin(prefix string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasPrefix(r.URL.Path, prefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			claims, err := Require(r.Context())
+			if err != nil || !claims.PlatformAdmin {
+				forbidden(w, "this route needs a platform-admin token")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// forbidden mirrors unauthorized's shape at 403: the caller is authenticated,
+// and is not who this route needs them to be.
+func forbidden(w http.ResponseWriter, detail string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"title":  http.StatusText(http.StatusForbidden),
+		"status": http.StatusForbidden,
+		"detail": detail,
+	})
+}
+
 // isPublic matches a path against the public list. An entry ending in "/"
 // matches by prefix — "/docs/" covers the assets a docs page pulls in — and
 // anything else must match exactly, so "/tasks" cannot be opened up by an entry

@@ -57,6 +57,15 @@ type Claims struct {
 	Workspace string `json:"wsp"`
 	Role      string `json:"role"`
 
+	// PlatformAdmin marks a token that may reach the /admin/* routes
+	// (app/admin.go), which release the "tenant" scope (hooks.go) and read
+	// every workspace's rows rather than the one named above. It is never
+	// set by the public register/login flow — see cmd/mint-admin in the
+	// example's README for how one gets minted — because the only safe way
+	// to hand out cross-tenant read access is out of band, not through a
+	// field a caller could ask for.
+	PlatformAdmin bool `json:"padm,omitempty"`
+
 	Issuer    string `json:"iss,omitempty"`
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`

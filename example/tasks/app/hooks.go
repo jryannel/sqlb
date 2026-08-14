@@ -61,6 +61,13 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// adds the column and stops there — so a model that declares one and does
 	// not filter it returns deleted rows from every list endpoint. Doing it here
 	// means it is done once, for reads issued by anyone.
+	//
+	// The workspace predicate is registered under the name "tenant" — see
+	// [Hooks.Scope] — and the soft-delete predicate deliberately is not: they
+	// are two different questions ("which tenant" and "which lifecycle state"),
+	// and app/admin.go releases only the first. A platform-admin token sees
+	// every workspace's rows; it does not, by that alone, see rows a user
+	// deleted. scopeWrites has the same split for BeforeUpdate/BeforeDelete.
 	scopeReads[tasks.List](reg, softDeleted)
 	scopeReads[tasks.Task](reg, softDeleted)
 	scopeReads[tasks.Comment](reg, softDeleted)
@@ -70,7 +77,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// the row *is* the tenant. Without this, GET /workspaces would list every
 	// tenant in the installation, which is the kind of hole that a schema-level
 	// convention silently leaves behind when one table does not follow it.
-	sqlb.On[tasks.Workspace](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.Workspace]) error {
+	sqlb.On[tasks.Workspace](reg).Scope("tenant").BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.Workspace]) error {
 		workspace, err := workspaceOf(ctx)
 		if err != nil {
 			return err
@@ -78,6 +85,14 @@ func Register(log *slog.Logger) *sqlb.Registry {
 		q.Where(sqlb.F("id").Eq(workspace))
 		return nil
 	})
+	// Workspace.id is Scoped in the schema (taskschema/schema.go) and this was
+	// the only BeforeQuery hook confining it; releasing "tenant" for the admin
+	// mount would leave rest.Resource nothing to find and it would refuse to
+	// mount ADR-0030's obligation check "asks that a hook exists, not that it
+	// does anything" (rest/scope.go) — which is exactly what this satisfies,
+	// permanently and un-releasably, once for the model rather than at every
+	// mount that wants to see every workspace.
+	noopQuery[tasks.Workspace](reg)
 
 	// Users are global — one account reaches every workspace it is a member of
 	// — so "which users may I see" is a question about memberships, and the
@@ -90,7 +105,7 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// version of the alternative — fetching the member ids first and passing
 	// them to In() — which is the same query split in two with a race in the
 	// middle.
-	sqlb.On[tasks.User](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.User]) error {
+	sqlb.On[tasks.User](reg).Scope("tenant").BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.User]) error {
 		workspace, err := workspaceOf(ctx)
 		if err != nil {
 			return err
@@ -100,6 +115,9 @@ func Register(log *slog.Logger) *sqlb.Registry {
 			workspace))
 		return nil
 	})
+	// Same reason as Workspace's: User.id is Scoped and this was its only
+	// confining hook.
+	noopQuery[tasks.User](reg)
 
 	// Writes. An UPDATE or DELETE gets the same workspace predicate, which is a
 	// separate registration because it is a separate statement: a BeforeQuery
@@ -109,6 +127,12 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	scopeWrites[tasks.Task](reg)
 	scopeWrites[tasks.Comment](reg)
 	scopeWrites[tasks.Membership](reg)
+	// app/admin.go exposes Update for lists and tasks, and Delete for
+	// memberships — the same "tenant" release, same reason noopQuery exists
+	// for the read side.
+	noopUpdate[tasks.List](reg)
+	noopUpdate[tasks.Task](reg)
+	noopDelete[tasks.Membership](reg)
 
 	// Creates. The columns a client is not allowed to assert are stamped from
 	// the token. They are ReadOnly in the schema, so they are absent from the
@@ -235,28 +259,59 @@ const (
 	hardDeleted = false
 )
 
-// scopeReads confines every SELECT against T to the caller's workspace.
+// scopeReads confines every SELECT against T to the caller's workspace, under
+// the releasable name "tenant" (see the note above this function's call
+// site). soft additionally filters deleted_at, as a second, permanently
+// unreleased hook — a platform-admin token releases "tenant" and still does
+// not see a row a user deleted.
 //
 // It is generic over the model because the predicate is the same for all of
 // them — the column is called workspace_id everywhere, which is a convention
 // this schema keeps deliberately so that the boundary can be one function
 // instead of four near-copies.
 func scopeReads[T any](reg *sqlb.Registry, soft bool) {
-	sqlb.On[T](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[T]) error {
+	sqlb.On[T](reg).Scope("tenant").BeforeQuery(func(ctx context.Context, q *sqlb.Builder[T]) error {
 		workspace, err := workspaceOf(ctx)
 		if err != nil {
 			return err
 		}
 		q.Where(sqlb.F("workspace_id").Eq(workspace))
-		if soft {
-			q.Where(sqlb.F("deleted_at").IsNull())
-		}
 		return nil
 	})
+	if soft {
+		sqlb.On[T](reg).BeforeQuery(func(_ context.Context, q *sqlb.Builder[T]) error {
+			q.Where(sqlb.F("deleted_at").IsNull())
+			return nil
+		})
+	} else {
+		// No soft-delete hook to fall back on once "tenant" is released — see
+		// noopQuery's doc comment.
+		noopQuery[T](reg)
+	}
+}
+
+// noopQuery, noopUpdate and noopDelete register a hook that does nothing, so
+// that a model whose only confining hook is named "tenant" still has *a*
+// BeforeQuery/BeforeUpdate/BeforeDelete hook once app/admin.go releases that
+// name — rest.Resource's obligation check (ADR-0030) asks only that a hook
+// exists, not that it restricts anything ("A BeforeQuery hook that logs and
+// returns nil satisfies it," rest/scope.go) — and without one of these, the
+// admin mount for that model and operation would refuse to start rather than
+// serve every workspace's rows, which is the point of mounting it.
+func noopQuery[T any](reg *sqlb.Registry) {
+	sqlb.On[T](reg).BeforeQuery(func(context.Context, *sqlb.Builder[T]) error { return nil })
+}
+
+func noopUpdate[T any](reg *sqlb.Registry) {
+	sqlb.On[T](reg).BeforeUpdate(func(context.Context, *sqlb.Update[T]) error { return nil })
+}
+
+func noopDelete[T any](reg *sqlb.Registry) {
+	sqlb.On[T](reg).BeforeDelete(func(context.Context, *sqlb.Delete[T]) error { return nil })
 }
 
 // scopeWrites confines every UPDATE and DELETE against T to the caller's
-// workspace.
+// workspace, under the releasable name "tenant".
 //
 // The predicate is added rather than checked, so a PATCH naming a task id in
 // another workspace matches no rows and comes back 404 — the same answer the
@@ -269,7 +324,7 @@ func scopeReads[T any](reg *sqlb.Registry, soft bool) {
 // no WHERE is refused rather than executed, so a handler that forgets its own
 // predicate is stopped by this one rather than rewriting the table.
 func scopeWrites[T any](reg *sqlb.Registry) {
-	hooks := sqlb.On[T](reg)
+	hooks := sqlb.On[T](reg).Scope("tenant")
 
 	hooks.BeforeUpdate(func(ctx context.Context, u *sqlb.Update[T]) error {
 		workspace, err := workspaceOf(ctx)

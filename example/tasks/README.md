@@ -52,6 +52,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | [`app/auth_routes.go`](app/auth_routes.go) | Register and login: the endpoints that establish the identity everything else is scoped by. |
 | [`app/hooks.go`](app/hooks.go) | Also where the comment invariant lives: two writes in one transaction, and `AfterCommit` for the side effect. |
 | [`app/events.go`](app/events.go) | The change feed. The one path a `BeforeQuery` hook does not reach, and the filter that closes it. |
+| [`app/admin.go`](app/admin.go) | A worked cross-tenant admin surface: `/admin/*`, hand-mounted per [ADR-0050](../../docs/adr/0050-reachability-is-a-property-of-the-mount.md), over a handle that releases the `"tenant"` scope [ADR-0054](../../docs/adr/0054-a-named-scope-is-releasable-at-the-mount.md) names hooks.go's workspace predicate under. `auth.RequireAdmin` is the route half of the boundary; `cmd/mint-admin` is how the token gets minted. Not schema-declared — see the file's doc comment for why `studio` can't browse it yet. |
 | [`cmd/migrate/main.go`](cmd/migrate/main.go) | The generated baseline, plus three things the DSL cannot express. |
 | [`web/`](web/) | The generated TypeScript client, and the hand-written transport it takes. The schema reaches the browser without a second declaration. |
 | [`mobile/`](mobile/) | The generated Dart client, plus the cursor pager an infinite-scrolling list needs. The same schema reaches a phone. |
