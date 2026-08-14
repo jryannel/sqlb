@@ -67,8 +67,9 @@ is the trigger, not documentation. "Use this when working with sqlb" does not
 fire on "add a due date to invoices", which is the sentence that actually
 arrives.
 
-**Two static skills, and only two.** The adoption procedure — `survey`, the
-route and query census, the ratio, the pilot — which today is spread across
+**Two static skills, and only two — later three; see the 2026-08-14 revision.**
+The adoption procedure — `survey`, the route and query census, the ratio, the
+pilot — which today is spread across
 [surveying-a-codebase.md](../surveying-a-codebase.md),
 [with-sqlc.md](../with-sqlc.md),
 [refactoring-from-sqlc.md](../refactoring-from-sqlc.md) and four adoption
@@ -470,3 +471,37 @@ expensive to get wrong later.
   mid-session and the harness picked it up immediately — and so did the session
   above. One harness and one version each, so the doc comment now describes it as
   a possibility rather than a rule, and the question stays open.
+- 2026-08-14 — **A third static skill, `sqlb-authoring`, and a decision this
+  record's "two, and only two" line did not anticipate needing to be revisited.**
+  [Issue #203](https://github.com/jryannel/sqlb/issues/203) named a gap the
+  generated half cannot close by construction: an agent *writing* a schema needs
+  the DSL's general vocabulary — does `Col[T]` have `Lt`, what does `Scoped`
+  enforce, how does `sqlb.F` reach a `Hidden` column, how does a hook get an
+  unhooked handle — and every one of those is a fact about the DSL, not about any
+  project's registry. `codegen/skill.go` answers "what does *this* schema
+  expose"; nothing answered "what can the DSL express at all", and each
+  session was paying a full source read to rediscover it.
+
+  The choice this record's own argument had already made was between generating
+  a second, DSL-wide skill and hand-maintaining one, and the reasoning above
+  settles it without new argument: **the whole case for generating the
+  consumption half is that capabilities are per-project and therefore drift out
+  from under a static document.** The DSL's vocabulary is neither — `Col[T]`'s
+  method set changes at the rate of a minor release, which is the same
+  drift-risk class `sqlb-queries` already lives in safely. Generating a "menu of
+  every capability the DSL supports" from a *registry* would also have been the
+  wrong shape of problem: `BuildManifest()` reports what a project's schema
+  *uses*, and a skill enumerating the DSL's full surface needs the opposite —
+  everything the DSL *could* declare, most of which no single project's registry
+  exercises. So `sqlb-authoring` joined `sqlb-queries` and `sqlb-adoption` as a
+  third hand-maintained skill under `skills/`, not a second `codegen` emitter.
+
+  It carries the same discipline `sqlb-queries` earned itself rather than a
+  weaker one: every method, capability flag and doc-comment claim is grounded at
+  a file:line (`field.go`, `expr.go`, `hooks.go`, `db.go`, `registry.go`,
+  `rest/scope.go`, `rest/rest.go`), checked against the source at write time —
+  because a hand-maintained skill still rots on a rename, it only avoids the
+  per-project drift a generated one exists to close. `skills/README.md`'s "Why
+  these are written down at all" section now argues this third skill's case
+  separately from the other two's, since "no check is possible" is not why this
+  one is static — "nothing about it is a per-project fact" is.
