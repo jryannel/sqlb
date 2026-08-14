@@ -43,6 +43,17 @@ So:
   explain.
 - **Do not add process.** No approvals, no quorum, no status meetings. If you
   changed something architectural, write down why.
+- **A code example is the architecture's pseudocode, not its contract.** A
+  method's name, an argument's order, which struct a value is spelled as —
+  that is implementation, not the decision. A rename does not earn a
+  Revisions entry, and a record whose code block would not compile against
+  today's identifiers is not thereby wrong: a reader who wants the exact
+  current signature has the source. What earns an edit is the *shape*
+  changing — a different split of responsibility, a new failure mode, an
+  argument the decision turned out to be wrong to ignore. The test: restate
+  the example with different names but the same shape — if the argument
+  still holds, it was implementation; if the argument itself would have to
+  change, it was architecture.
 
 Only write a new record instead of editing when the *problem* changed, not the
 answer — that is genuinely a different decision, and the old one stays as
@@ -174,13 +185,15 @@ starts with 0053.
 | [0047](0047-no-default-hook-registry.md) | There is no default hook registry, and the short name takes the registry | Working | High |
 | [0048](0048-auto-incrementing-keys.md) | An auto-incrementing key is a property of the column, and both of Postgres's spellings are declarable | Working | High |
 | [0049](0049-the-skill-is-generated.md) | The agent skill is generated where it can be gated, and static only where no check is possible | Working | Medium |
-| [0050](0050-reachability-is-a-property-of-the-mount.md) | Reachability is a property of the mount, so one table can serve a public surface and a privileged one | Working | Medium |
+| [0050](0050-reachability-is-a-property-of-the-mount.md) | Reachability is a property of the mount, so one table can serve a public surface and a privileged one | Revisiting | Medium |
 | [0051](0051-a-gap-in-the-declaration-is-reported.md) | A gap below the declaration is reported, not silent | Working | Medium |
 | [0052](0052-a-singleton-is-an-op-that-removes-the-id.md) | A singleton is an operation that removes the {id}, and it is legal only on a Scoped table | Working | Medium |
 | [0053](0053-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and a UI is authored rather than carried | Working | High (no UI) / Low (sufficiency) |
 | [0054](0054-a-named-scope-is-releasable-at-the-mount.md) | A named scope is releasable at the mount, and only a named one, so two surfaces over one table can differ in rows | Working | High |
 | [0055](0055-a-nested-query-runs-nobodys-hooks.md) | A query nests inside another, and a nested one is refused unless it has been resolved | Working | Medium |
 | [0056](0056-a-junction-is-a-table.md) | A junction is a table, and many-to-many is not a declaration | Working | High (junction) / Medium (no sugar) |
+| [0057](0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md) | A read is a declared Query, and a row-scoped write is a declared Mutation | Working | Medium |
+| [0058](0058-serve-owns-the-boilerplate-mount-is-the-seam.md) | `rest.Serve` owns the boilerplate every server repeats, and `mount` is where an application's opinions begin | Exploring | Medium |
 
 † **Deliberately not in 1.0.** The decision is recorded; the feature is out of
 scope for the first tag. [The road to 1.0](../release-1.0.md) says why for each.

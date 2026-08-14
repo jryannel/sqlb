@@ -1,9 +1,10 @@
 # ADR-0050: Reachability is a property of the mount
 
-- **Status:** Working
+- **Status:** Revisiting — the trigger named in *What would change our mind*
+  has been observed outside this repository; see the 2026-08-14 revision
 - **Confidence:** Medium
 - **Decided:** 2026-08-05
-- **Last reviewed:** 2026-08-05
+- **Last reviewed:** 2026-08-14
 
 ## Context
 
@@ -115,3 +116,41 @@ thing codegen writes into the generated mount, which is the arrangement
   answer was taken first: the reporter had no view on which of the three options
   was right, and this is the one whose cost is a paragraph rather than a
   redesign of every emitter.
+- 2026-08-14 — **The trigger fired**, outside this repository rather than in
+  it. An external Huma-based application (not using sqlb — plain pgx, Huma
+  registered directly) hit the consumer/superadmin split this record's
+  Context section describes almost exactly, and did not stop at narrowing a
+  mount: it built a second, independent `huma.API`, with its own
+  `Title`, `ServerURL` and OpenAPI document, mounted on the same underlying
+  router as the first so hand-written and Huma-registered routes on that
+  plane coexist the way they do on the consumer one. Two documents, two
+  client-generation surfaces, for the reason this record's *What would
+  change our mind* named first: a security boundary that a client generated
+  from a shared document cannot express, however narrow the mount, because
+  the *type carrying the wide shape* is still the one schema in the response
+  the document points at.
+
+  What this does and does not settle. It does not mean `Options.Columns` was
+  the wrong mechanism — the two are answering different questions. Columns
+  narrows *one* table's disclosure inside *one* document; the case observed
+  is a whole second plane, most of whose tables differ from the consumer one
+  in ways no per-column allowlist would state cleanly (different `Ops`,
+  different actions, often a different shape of the same underlying row).
+  That is closer to "two schemas sharing tables" than to "one schema, one
+  narrowed mount," and it is the shape *Expose appending* — sketched in
+  Consequences, never built — would have to take: not one more field on
+  `Options`, but a second declared surface per table, each with its own
+  `Columns`/`Ops`, each on the drift gate, each feeding its own client
+  emission.
+
+  Worth being honest about what is *not* evidence here: the external
+  application reached for two `huma.API`s directly, with no sqlb underneath
+  it, in a codebase this project does not control — it is not a report that
+  someone tried `Options.Columns` and found it wanting, and this record's own
+  mechanism has not failed anywhere it has actually been used. What it is
+  evidence of is the *shape* of the need — narrow-vs-wide as two whole
+  surfaces rather than as two column lists — arriving independently of this
+  repository, which is the specific thing the trigger asked to be watched
+  for. Status moves to Revisiting on that basis: not because the built answer
+  broke, but because the record said watch for this, and this is what
+  watching for it looked like.
