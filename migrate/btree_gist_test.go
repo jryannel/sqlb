@@ -30,8 +30,12 @@ func TestBtreeGistExtensionComesFirst(t *testing.T) {
 	if len(changes) < 2 {
 		t.Fatalf("expected an extension and a table, got %d change(s):\n%s", len(changes), render(changes))
 	}
-	if !strings.Contains(changes[0].Up, `CREATE EXTENSION IF NOT EXISTS "btree_gist"`) {
-		t.Errorf("the first statement is not the btree_gist extension:\n%s", changes[0].Up)
+	// Exact, not Contains: goose splits a migration file's ungrouped
+	// statements on ";", so a missing one is not cosmetic — the extension
+	// statement runs together with whatever text follows it. A prior version
+	// of this test used Contains and passed against exactly that bug.
+	if want := `CREATE EXTENSION IF NOT EXISTS "btree_gist";`; changes[0].Up != want {
+		t.Errorf("the first statement is not the btree_gist extension:\n got:  %q\n want: %q", changes[0].Up, want)
 	}
 	if !strings.Contains(changes[1].Up, "CREATE TABLE") {
 		t.Errorf("the table does not follow the extension:\n%s", changes[1].Up)

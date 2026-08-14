@@ -202,7 +202,7 @@ func (d *differ) extensionsNeeded() {
 		}
 		d.extensions = append(d.extensions, Change{
 			Comment: ext.name + " extension, required by a column type or constraint declared below",
-			Up:      "CREATE EXTENSION IF NOT EXISTS " + quoteIdent(ext.name),
+			Up:      "CREATE EXTENSION IF NOT EXISTS " + quoteIdent(ext.name) + ";",
 			Hazard: "CREATE EXTENSION usually needs privileges the migration role does not have. " +
 				"If this fails it fails on the first statement, which is the best place for it to: " +
 				"install the extension as a superuser once, and this statement becomes a no-op.",
