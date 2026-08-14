@@ -203,3 +203,63 @@ func TestPlanDiagnosticsAreReadable(t *testing.T) {
 	// that asking is cheap and does not error.
 	_ = plan.Diagnostics()
 }
+
+// explainProbe is a standalone model — no schema package, no codegen — for the
+// case below, which needs an unindexed column at a size a live planner will
+// actually seq-scan, rather than a fixture typed by hand. ADR-0010: the DSL is
+// optional, so a struct with db/sqlb tags is a complete model on its own.
+type explainProbe struct {
+	ID    int64  `db:"id" sqlb:"pk"`
+	Title string `db:"title" sqlb:"filter"`
+}
+
+func (explainProbe) TableName() string { return "explain_probes" }
+
+// #176: Diagnostics gated a sequential scan on the row count the scan node
+// *emits*, which is the count after its own filter has already thrown rows
+// away. That count shrinks as a filter gets more selective, so the rule went
+// quiet exactly backwards — a WHERE clause matching one row in 20,000 read
+// every one of those 20,000 rows to find it, and reported nothing.
+//
+// This proves the fix against a real planner rather than a hand-typed plan:
+// two queries against the same unindexed 20,000-row table, one whose filter
+// keeps nearly everything and one whose filter keeps almost nothing. Both
+// scan the whole table, so both must be reported.
+func TestSeqScanDiagnosticFiresRegardlessOfFilterSelectivity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pool := freshDB(t)
+	db := sqlb.New(pool)
+
+	mustExec(t, pool, `CREATE TABLE explain_probes (id bigint PRIMARY KEY, title text NOT NULL)`)
+	mustExec(t, pool, `INSERT INTO explain_probes (id, title)
+		SELECT gs, 'P' || gs FROM generate_series(1, 20000) gs`)
+	mustExec(t, pool, `ANALYZE explain_probes`)
+
+	// Selective: one row out of 20,000. Under the pre-#176 rule this reported
+	// nothing, because Plan Rows — the post-filter estimate — was ~1.
+	selective, err := sqlb.Explain(ctx, db,
+		sqlb.Query[explainProbe]().Where(sqlb.F("title").Eq("P17")).Limit(24))
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if !selective.UsesSeqScan("explain_probes") {
+		t.Fatalf("expected a sequential scan (no index exists to avoid one), got:\n%s", selective)
+	}
+	if d := selective.Diagnostics(); len(d) == 0 {
+		t.Errorf("a selective WHERE still reads every row of an unindexed table; "+
+			"want a seq-scan diagnostic, got none. plan:\n%s", selective)
+	}
+
+	// Unselective: keeps nearly every row. This direction already worked
+	// before the fix; kept here so the fix is not shown to just move which
+	// query goes unreported.
+	unselective, err := sqlb.Explain(ctx, db,
+		sqlb.Query[explainProbe]().Where(sqlb.F("title").Neq("")))
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if d := unselective.Diagnostics(); len(d) == 0 {
+		t.Errorf("want a seq-scan diagnostic, got none. plan:\n%s", unselective)
+	}
+}

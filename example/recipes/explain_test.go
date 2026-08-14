@@ -71,7 +71,7 @@ func Example_explainDiagnostics() {
 
 	fmt.Print(sqlb.Diagnostics(plan.Diagnostics()))
 	// Output:
-	// [seq-scan] Seq Scan on posts: sequential scan over ~4200 rows filtering on (status = 'published'::text)
+	// [seq-scan] Seq Scan on posts: sequential scan (cost ~1421) over ~4200 rows filtering on (status = 'published'::text)
 	//     fix: add an index covering the filtered columns on "posts"
 }
 

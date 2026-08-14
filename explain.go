@@ -271,10 +271,27 @@ func Diagnostics(ds []PlanDiagnostic) string {
 	return strings.Join(parts, "\n")
 }
 
-// SeqScanRowThreshold is the estimated row count above which a sequential scan
-// is reported. Small tables are legitimately scanned, so flagging every one
-// would be noise that trains readers to ignore the output.
+// SeqScanRowThreshold is the estimated row count above which a nested loop
+// join is reported as likely doing per-row rescans. Small joins are
+// legitimately implemented this way, so flagging every one would be noise
+// that trains readers to ignore the output.
+//
+// Sequential scans are gated by [SeqScanCostThreshold] instead, not this. A
+// scan node's row count is what its own filter lets through, not what it read
+// off disk to get there — a WHERE clause that only lets one row through in a
+// 20,000-row table still read all 20,000 to find it, and a threshold on that
+// row count went quiet exactly when the filter got more selective (#176). A
+// join's row count doesn't have that problem: it is the join's own output,
+// not a downstream filter's leftovers.
 var SeqScanRowThreshold int64 = 1000
+
+// SeqScanCostThreshold is the planner's cost estimate, in Postgres's own
+// units, above which a sequential scan is reported. Cost tracks pages read
+// rather than rows returned, so — unlike a row count — it stays correct no
+// matter how selective the scan's own filter is (#176). Small tables are
+// legitimately scanned, so flagging every one would be noise that trains
+// readers to ignore the output.
+var SeqScanCostThreshold float64 = 20
 
 // Diagnostics reports plan shapes that usually mean a missing index or a query
 // that will not scale. They are advisory: a sequential scan over a lookup table
@@ -289,10 +306,10 @@ func (p *Plan) Diagnostics() []PlanDiagnostic {
 		}
 
 		switch {
-		case strings.Contains(n.Type, "Seq Scan") && rows >= SeqScanRowThreshold:
+		case strings.Contains(n.Type, "Seq Scan") && n.TotalCost >= SeqScanCostThreshold:
 			out = append(out, PlanDiagnostic{
 				Rule: "seq-scan", Node: nodeName(n),
-				Message: fmt.Sprintf("sequential scan over ~%d rows%s", rows, filterSuffix(n)),
+				Message: fmt.Sprintf("sequential scan (cost ~%.0f) over ~%d rows%s", n.TotalCost, rows, filterSuffix(n)),
 				Fix:     fmt.Sprintf("add an index covering the filtered columns on %q", n.Relation),
 			})
 
