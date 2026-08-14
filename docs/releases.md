@@ -14,6 +14,115 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.12.0
+
+2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.12.0)
+
+Three separate pieces of work, not one shape. The change feed's durable half
+got built. Four gaps a comparison against bun found got closed. And a read got
+a name of its own — a declared `Query`, alongside a row-scoped write as a
+declared `Mutation` — with the boilerplate every server's `main.go` repeated by
+hand collapsed into one call. No breaking changes in this tag.
+
+### The change feed is durable
+
+[ADR-0012](adr/0012-change-feed-outbox.md) has been *Exploring* since
+2026-07-27, the largest unbuilt item in the vision: what shipped instead was
+only the half downstream of it ([ADR-0045](adr/0045-the-stream-is-a-seam.md))
+— the SSE endpoint, the wire format, `rest.Broker` — which holds events in
+memory and is therefore at-most-once and correct on exactly one replica. Both
+limits produce the same failure, a client that never learns a row changed and
+displays it forever, invisible from the outside.
+
+The `outbox` package is the other half: a table written in the same
+transaction as the change, and a dispatcher that tails it. The swap is one
+constructor call — `rest.TxPublisher` is a new optional interface, so an
+existing `rest.PublishChanges` records into the writing transaction when it
+can and announces after commit when it cannot. Nothing else in an application
+changes: not the registration, not the endpoint, not the wire, not either
+generated client. The visible difference is the failure — an `Outbox` that
+cannot record an event rolls the mutation back, because a row that exists
+while every subscriber believes it does not is exactly what this feed exists
+to prevent.
+
+Ordering needed an answer this record could not have had before there was an
+implementation: a `bigserial` does not promise rows become visible in id
+order, so `Record` takes a transaction-scoped advisory lock before it appends,
+held to the commit. Gating the tail on `pg_snapshot_xmin` instead was rejected
+— it has no write-path cost and is wrong in a way that took a while to see,
+since a transaction can hold an earlier id and a later xid. What the lock
+costs is stated rather than discovered: writes to published models serialise
+from the outbox insert to the commit, and ADR-0012 carries the trigger to
+revisit it — nothing here has measured what the ceiling actually is, which is
+this record's stated low confidence.
+
+### Four things worth taking from a comparison against bun
+
+**A batch too wide for one statement is refused in rows, not in parameters.**
+`InsertRows` checked nothing before this, so 12,000 rows of a six-column model
+silently compiled to 72,000 bind parameters and failed with a driver error
+naming a unit nobody wrote. The refusal is now sqlb's own and actionable: the
+row count, the column count, the ceiling, and the largest batch that would
+work. Chunking the batch into several statements was rejected — it stops being
+atomic outside a transaction, and how to divide the work is the caller's
+decision.
+
+**A query nests inside another.** `Exists`, `NotExists`, `Field.InQuery` and
+`Field.NotInQuery` compile a nested query into the surrounding statement's own
+compiler. The obstacle was never the SQL — hooks apply when a query runs, so a
+model confined by a `BeforeQuery` scope could contribute its rows to somebody
+else's `WHERE` clause with the confinement silently absent. A nested query
+whose model would run confined is refused unless it has been `Resolved`
+first; auto-resolving it during compile was rejected, since resolution
+produces a new value and a rewriter that misses a node type fails open exactly
+where this guard exists to prevent that.
+[ADR-0055](adr/0055-a-nested-query-runs-nobodys-hooks.md).
+
+**A caller may narrow an expanded row.** `ExpandOnly("author", "id", "name")`
+takes columns off an expanded row and can put none on — `Hidden` stays hidden,
+a computed column stays absent, both refused by name rather than silently
+skipped. Opt-in, per query, narrowing only.
+
+**A junction is a table, stated in one place instead of three.** sqlb has no
+many-to-many keyword and none is planned: a junction is an ordinary table with
+two references, reached by querying it directly, because a junction is almost
+never empty and a declared traversal would hide the row that holds
+`added_at`, `role`, `position`. [ADR-0056](adr/0056-a-junction-is-a-table.md)
+says so; the position existed already, split across
+[ADR-0034](adr/0034-one-column-addresses-a-row.md), `best-practices.md` and
+`schema/references.md`, none of which answered the question somebody arriving
+from bun actually asks first.
+
+### A read is a declared Query, a row-scoped write is a declared Mutation
+
+Both new, both still *Exploring* in the ways that matter — only one example
+application, and the naming and the typing of `Mutation.Writes` both changed
+shape while building this.
+[ADR-0057](adr/0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md).
+
+`Query` is a `GET` with no fetch, no lock and no obligation check; `Do` runs
+against whatever `Executor` it is handed and inherits its hooks. `Mutation` is
+`Action`'s item-form envelope under its own name.
+[ADR-0043](adr/0043-declared-actions.md)'s `Action` is unchanged and keeps its
+item form — deliberately not deprecated, since a table can declare the same
+shape two ways today and nothing refuses the redundant one, left open until
+there is evidence rather than a guess.
+
+`codegen` wires both: `Register` grows `mutations` and `queries` parameters
+alongside `actions`, each present only if a table declares one. A generated
+`Query`'s result is fixed at `[]T`, every row of the table it reads, filtered
+— a query wanting a different result stays hand-mounted.
+
+`rest.Serve(ctx, ServeConfig, mount)`
+([ADR-0058](adr/0058-serve-owns-the-boilerplate-mount-is-the-seam.md))
+collapses the pool-open, ping, migrate, listen and graceful-shutdown
+boilerplate every server's `main.go` wrote identically into one call, leaving
+`mount(*Server, sqlb.Executor) error` as the one seam that cannot be generic.
+`sqlb init -module <path>` scaffolds a new project on it — `go.mod`, a
+one-table schema, `sqlb.go`, `cmd/server/main.go` — verified against the real
+published module on the proxy: init, tidy, generate, migrate, run produces a
+working CRUD API from an empty directory in five commands.
+
 ## v0.11.0
 
 2026-08-09 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.11.0)
