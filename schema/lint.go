@@ -253,6 +253,22 @@ func (r *Registry) Lint() Diagnostics {
 			})
 		}
 
+		// DefaultPageSize and MaxPageSize only mean anything on a list route —
+		// there is no page to bound without one. A table that sets either while
+		// OpList is absent from Ops compiles fine and does nothing: this is the
+		// inverse of no-max-page-size above, one register down from the
+		// mount-time refusal on Ops == CRUD, and it is the exact shape that hit
+		// every one of sixteen tables in a real port, found only by end-to-end
+		// testing because nothing flagged it first (#201).
+		if !t.rest.Ops.Has(OpList) && (t.rest.DefaultPageSize != 0 || t.rest.MaxPageSize != 0) {
+			add(Diagnostic{
+				Rule: "page-size-without-list", Table: t.name,
+				Severity: SeverityInfo,
+				Message:  "DefaultPageSize or MaxPageSize is set but OpList is not in Ops, so there is no list route for it to bound",
+				Fix:      "add schema.OpList to Ops, or drop DefaultPageSize/MaxPageSize",
+			})
+		}
+
 		// Writable endpoints on a table with no key cannot address a row.
 		if t.rest.Ops.Has(OpCreate) && t.PrimaryKey() == nil {
 			add(Diagnostic{

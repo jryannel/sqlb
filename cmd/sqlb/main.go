@@ -82,7 +82,9 @@ Usage:
     sqlb init -module <path> [dir]   write a new project: a schema with one
                                      table, a server, a migration runner
     sqlb generate <package>          write every artefact the project declares
-    sqlb check [flags] <package>     report stale artefacts, write nothing; with
+    sqlb check [flags] <package>     report stale artefacts, write nothing; also
+                                     runs Lint and prints its diagnostics, which
+                                     are advisory and never fail the command; with
                                      -database, also report a declaration that no
                                      longer describes the live database
     sqlb migrate [flags] <package>   write the migration that closes the gap

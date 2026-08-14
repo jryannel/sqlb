@@ -78,6 +78,19 @@ func runCheck(p Project, opts Options, args []string, stdout, stderr io.Writer) 
 		line(stderr, "sqlb: generated files are current")
 	}
 
+	// Lint answers a different question than staleness or drift: not "is this
+	// wrong" but "will this behave badly in production" (schema/lint.go).
+	// Advisory by the same rule the introspection report and the unprobed-check
+	// list above it already follow in this function — printed, never added to
+	// code — because #201 found the cost of silence here is real (every one of
+	// sixteen tables in a port carried the same unflagged mistake) but a schema
+	// can have a good reason to keep any one diagnostic, and a gate that cannot
+	// be right about that should not fail the build over it.
+	if diags := opts.Registry.Lint(); len(diags) > 0 {
+		line(stderr, "sqlb: lint found:")
+		line(stderr, diags)
+	}
+
 	if *dsn == "" {
 		return code
 	}

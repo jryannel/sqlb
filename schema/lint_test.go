@@ -76,6 +76,29 @@ func TestLintCatchesUnstablePagination(t *testing.T) {
 	}
 }
 
+// #201: every one of sixteen tables in a real port set DefaultPageSize and
+// MaxPageSize with Ops == CRUD, no OpList in sight, and nothing said so until
+// end-to-end testing found it. This is the same trap as no-max-page-size, one
+// register down: page-size fields configured with no list route to bound.
+func TestLintCatchesPageSizeWithoutList(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("e", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.CRUD, DefaultPageSize: 20, MaxPageSize: 50})
+	got := rules(r.Lint())
+	if !got["page-size-without-list"] {
+		t.Error("page-size fields set without OpList should be flagged")
+	}
+}
+
+func TestLintIsQuietOnPageSizeWithList(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("e", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.CRUD | schema.OpList, DefaultPageSize: 20, MaxPageSize: 50})
+	if rules(r.Lint())["page-size-without-list"] {
+		t.Error("page-size fields with OpList present should not be flagged")
+	}
+}
+
 func TestLintCatchesUnindexedExpansion(t *testing.T) {
 	r := schema.NewRegistry()
 	org := r.Table("orgs", schema.UUIDv7("id").PrimaryKey())

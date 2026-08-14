@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jryannel/sqlb/codegen"
+	"github.com/jryannel/sqlb/schema"
 )
 
 // run drives the driver half of the sqlb command the way cmd/sqlb does, and
@@ -84,6 +85,39 @@ func TestProjectCheckReportsADriftedFile(t *testing.T) {
 	// not in the directory and did not write the generator.
 	if !strings.Contains(out, "sqlb generate") {
 		t.Errorf("check failed without naming the command that fixes it:\n%s", out)
+	}
+}
+
+// `check` runs schema.Lint() as a second, advisory pass — issue #201. Nothing
+// here should ever fail the command over a diagnostic: exit 0 with the
+// message printed is the claim, and this is the test that would catch a
+// change that turned it into a gate by accident.
+func TestProjectCheckReportsLintDiagnostics(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	// Ops == CRUD with DefaultPageSize/MaxPageSize set and no OpList: the exact
+	// shape #201 found on all sixteen tables of a real port, unflagged until
+	// end-to-end testing found it.
+	r := schema.NewRegistry()
+	r.Table("widgets", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.CRUD, DefaultPageSize: 20, MaxPageSize: 50})
+
+	p := codegen.Project{
+		Options: codegen.Options{Registry: r, Dir: "out", Package: "gen"},
+	}
+	if code, out := run(t, p, "generate"); code != 0 {
+		t.Fatalf("generate: exit %d, output:\n%s", code, out)
+	}
+
+	code, out := run(t, p, "check")
+	if code != 0 {
+		t.Fatalf("check must not fail on an advisory lint diagnostic: exit %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "page-size-without-list") {
+		t.Errorf("check did not report the lint diagnostic:\n%s", out)
+	}
+	if !strings.Contains(out, "widgets") {
+		t.Errorf("check did not name the table the diagnostic is about:\n%s", out)
 	}
 }
 
