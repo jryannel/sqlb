@@ -2,11 +2,11 @@
 {{$t := .Table}}
 <div class="mb-3 d-flex align-items-start justify-content-between">
   <div>
-    <a href="/" class="btn btn-link px-0">&larr; Tables</a>
+    <a href="{{url "/"}}" class="btn btn-link px-0">&larr; Tables</a>
     <h2 class="page-title mt-2">{{$t.Name}}</h2>
     {{if $t.Comment}}<div class="text-secondary">{{$t.Comment}}</div>{{end}}
   </div>
-  {{if .CanBrowse}}<a href="/tables/{{$t.Name}}/rows" class="btn btn-primary mt-2">Browse data &rarr;</a>{{end}}
+  {{if .CanBrowse}}<a href="{{url (printf "/tables/%s/rows" $t.Name)}}" class="btn btn-primary mt-2">Browse data &rarr;</a>{{end}}
 </div>
 
 <div class="row row-cards">
@@ -40,7 +40,7 @@
               <td>{{range .Capabilities}}<span class="badge bg-azure-lt me-1">{{.}}</span>{{end}}</td>
               <td>
                 {{if .References}}
-                  <a href="/tables/{{.References.Table}}">{{.References.Table}}</a>.{{.References.Column}}
+                  <a href="{{url (printf "/tables/%s" .References.Table)}}">{{.References.Table}}</a>.{{.References.Column}}
                 {{end}}
               </td>
             </tr>
@@ -101,7 +101,7 @@
               <td>{{range .Writes}}<span class="badge bg-red-lt me-1">{{.}}</span>{{end}}</td>
               <td>{{range .Touches}}<span class="badge bg-orange-lt me-1">{{.}}</span>{{end}}</td>
               <td>
-                {{if isCollection .Path}}<a href="/tables/{{$t.Name}}/actions/{{.Name}}" class="btn btn-sm btn-outline-primary">Invoke</a>
+                {{if isCollection .Path}}<a href="{{url (printf "/tables/%s/actions/%s" $t.Name .Name)}}" class="btn btn-sm btn-outline-primary">Invoke</a>
                 {{else}}<span class="text-secondary">from a row</span>{{end}}
               </td>
             </tr>
@@ -119,7 +119,7 @@
       <div class="card-body">
         {{range $t.CollectedBy}}
         <div class="mb-1">
-          <a href="/tables/{{.Table}}">{{.Table}}</a> via <code>{{.Column}}</code> as <strong>{{.Name}}</strong>
+          <a href="{{url (printf "/tables/%s" .Table)}}">{{.Table}}</a> via <code>{{.Column}}</code> as <strong>{{.Name}}</strong>
           {{if not .Expandable}}<span class="badge bg-secondary-lt ms-1">not expandable</span>{{end}}
         </div>
         {{end}}

@@ -18,7 +18,7 @@
           <tbody>
             {{range .Tables}}
             <tr>
-              <td><a href="/tables/{{.Name}}">{{.Name}}</a></td>
+              <td><a href="{{url (printf "/tables/%s" .Name)}}">{{.Name}}</a></td>
               <td class="text-secondary">{{.Comment}}</td>
               <td>{{len .Columns}}</td>
               <td>

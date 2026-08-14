@@ -37,6 +37,26 @@ go build -o sqlb-studio ./studio/cmd/sqlb-studio && \
 against a running [`example/tasks`](../example/tasks) server is the fastest
 way to see it against a real schema.
 
+## Mounting it on your own mux
+
+`studio.Server.Handler()` is a plain `http.Handler`, and `rest.Server.Mux`'s
+own doc comment says to mount application routes on it. Pass a third argument
+to `NewServer` and mount at the same prefix — no `http.StripPrefix`, because
+every href, redirect and asset reference the handlers and templates build
+already carries the prefix:
+
+```go
+studioSrv, err := studio.NewServer(m, apiBase, "/studio")
+if err != nil {
+    log.Fatal(err)
+}
+restSrv.Mux.Handle("/studio/", studioSrv.Handler())
+```
+
+The two-argument form, `studio.NewServer(m, apiBase)`, still works exactly as
+before — an empty base path, root-mounted, which is what
+[`cmd/sqlb-studio`](cmd/sqlb-studio) uses for its own standalone port.
+
 ## What to read, and in what order
 
 | | |

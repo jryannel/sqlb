@@ -5,7 +5,7 @@
       <div class="card-body">
         <h2 class="card-title mb-3">Sign in</h2>
         {{if .Error}}<div class="alert alert-danger">{{.Error}}</div>{{end}}
-        <form method="post" action="/login">
+        <form method="post" action="{{url "/login"}}">
           <input type="hidden" name="next" value="{{.Next}}">
           <div class="mb-3">
             <label class="form-label">Bearer token</label>

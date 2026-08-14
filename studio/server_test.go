@@ -669,6 +669,126 @@ func TestEditWithUnparsableNumberRedisplaysFormWithoutCallingTheAPI(t *testing.T
 	}
 }
 
+// TestBasePathMountsUnderAPrefix is the issue-217 case: mount Handler() on a
+// real ServeMux at "/studio/" — the way rest.Server.Mux would, with no
+// http.StripPrefix — and prove every link, redirect and asset reference
+// carries the prefix, then drive a full sign-in/browse/edit round trip
+// through the mount to prove it isn't just strings that look right in
+// isolation. Run this against basePath="" mounted the same way (or the
+// pre-#217 server) and it fails on the very first assertion — every href
+// below is root-absolute rather than basePath-absolute, so the browser's own
+// "/" is what a click resolves to, not "/studio/".
+func TestBasePathMountsUnderAPrefix(t *testing.T) {
+	const token = "secret-token"
+	api := fakeAPI(t, token)
+	defer api.Close()
+	srv, err := NewServer(testManifest(), api.URL, "/studio")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/studio/", srv.Handler())
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/studio/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+	if !strings.Contains(got, `href="/studio/tables/widgets"`) {
+		t.Fatalf("index page's table link is not prefixed with basePath:\n%s", got)
+	}
+	if strings.Contains(got, `href="/tables/widgets"`) {
+		t.Fatalf("index page still has a bare, unprefixed table link:\n%s", got)
+	}
+	if !strings.Contains(got, `href="/studio/static/css/tabler.min.css"`) {
+		t.Fatalf("index page's stylesheet reference is not prefixed with basePath:\n%s", got)
+	}
+	if !strings.Contains(got, `href="/studio/login"`) {
+		t.Fatalf("index page's sign-in link is not prefixed with basePath:\n%s", got)
+	}
+
+	// The static asset itself resolves through the prefixed mount, not just
+	// the href pointing at it.
+	css, err := http.Get(ts.URL + "/studio/static/css/tabler.min.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css.Body.Close()
+	if css.StatusCode != http.StatusOK {
+		t.Fatalf("static asset status = %d, want 200", css.StatusCode)
+	}
+
+	// An unauthenticated data page redirects to the prefixed login, not the
+	// bare root one.
+	client := newTestClient(t)
+	loginRedirect, err := client.Get(ts.URL + "/studio/tables/widgets/rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRedirect.Body.Close()
+	if loginRedirect.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", loginRedirect.StatusCode)
+	}
+	if loc := loginRedirect.Header.Get("Location"); !strings.HasPrefix(loc, "/studio/login?next=") {
+		t.Fatalf("Location = %q, want a /studio/login redirect", loc)
+	}
+
+	// End to end: sign in, follow the redirect to the grid, and confirm the
+	// row link and a form submission both work mounted under the prefix.
+	client.CheckRedirect = nil
+	loginResp, err := client.PostForm(ts.URL+"/studio/login", url.Values{
+		"token": {token},
+		"next":  {"/studio/tables/widgets/rows"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("post-login page status = %d, want 200 (grid, after following the redirect)", loginResp.StatusCode)
+	}
+	gridBody, err := io.ReadAll(loginResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(gridBody), "First widget") {
+		t.Fatalf("grid after following the login redirect missing the fake row:\n%s", gridBody)
+	}
+	if !strings.Contains(string(gridBody), `href="/studio/tables/widgets/rows/w1"`) {
+		t.Fatalf("grid's row link is not prefixed with basePath:\n%s", gridBody)
+	}
+
+	editResp, err := client.PostForm(ts.URL+"/studio/tables/widgets/rows/w1/edit", url.Values{
+		"title": {"First widget"},
+		"count": {"5"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer editResp.Body.Close()
+	if editResp.StatusCode != http.StatusOK {
+		t.Fatalf("edit submit (after following its redirect) status = %d, want 200", editResp.StatusCode)
+	}
+	editBody, err := io.ReadAll(editResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(editBody), "<dd class=\"col-9\">\n        5\n") {
+		t.Fatalf("edit submitted through the prefixed mount did not persist:\n%s", editBody)
+	}
+}
+
 func TestNewRowCreatesAndRedirectsToItsDetailPage(t *testing.T) {
 	const token = "secret-token"
 	api := fakeAPI(t, token)
