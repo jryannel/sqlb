@@ -542,6 +542,26 @@ func TestResourceRefusesAnEmptyOpSet(t *testing.T) {
 	}
 }
 
+// CRUD reads as the complete set, and every one of them names create, read,
+// update and delete — a caller reaching for "the fully exposed collection"
+// this constant's name suggests gets a 405 on GET /posts instead, discovered
+// by testing rather than by anything failing at mount (#193).
+func TestResourceRefusesBareCRUDWithNoOpList(t *testing.T) {
+	db := newFakeDB(t)
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+
+	err := rest.Resource[Post, PostCreate, PostUpdate](api, db.db, rest.Options{
+		Path: "/posts",
+		Ops:  rest.CRUD,
+	})
+	if err == nil {
+		t.Fatal("expected mounting to fail: CRUD alone has no collection route")
+	}
+	if !strings.Contains(err.Error(), "OpList") {
+		t.Errorf("error = %v, want it to name the missing OpList", err)
+	}
+}
+
 // TestCreateKeepsWhatAHookPutInAReadOnlyColumn is the regression test for the
 // bug this pattern hides behind.
 //

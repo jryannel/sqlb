@@ -397,6 +397,10 @@ func (o Options) validate() error {
 	case o.Ops.Has(OpSingleton) && o.Ops.Has(OpRead):
 		return fmt.Errorf("rest: %s exposes both OpSingleton and OpRead; OpSingleton removes the {id} "+
 			"segment from this resource, so a read by id is the question it exists to delete — drop OpRead", o.Path)
+	case o.Ops == CRUD:
+		return fmt.Errorf("rest: %s exposes exactly CRUD (create, read, update, delete) with no OpList, "+
+			"so GET %s has no collection route and 405s — CRUD is the conventional single-row set, not "+
+			"the fully-exposed collection its name suggests; combine it with OpList: CRUD|OpList", o.Path, o.Path)
 	}
 	return nil
 }
