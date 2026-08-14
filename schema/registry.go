@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -143,6 +144,11 @@ func (r *Registry) Validate() error {
 	// Keyed by target table and name; the value is where it was claimed from.
 	inverses := make(map[string]string)
 
+	// SharedAs names are claimed across the whole registry — that is the point
+	// of the declaration — so the first column to use one fixes what every
+	// later column claiming it must match. Keyed by the SharedAs name.
+	sharedEnums := make(map[string]sharedEnumClaim)
+
 	// Before anything else: if the schema's wire case cannot spell one of its
 	// own columns reversibly, nothing generated from it is trustworthy.
 	r.validateWireNames(report)
@@ -248,6 +254,9 @@ func (r *Registry) Validate() error {
 			}
 			if d.Type == TypeEnum && len(d.EnumValues) == 0 {
 				report(t.name, d.Name, "Enum declares no values")
+			}
+			if d.SharedAs != "" {
+				r.validateSharedEnum(t, d, sharedEnums, report)
 			}
 			if d.Hidden && d.Filterable {
 				report(t.name, d.Name, "column is both Hidden and Filterable, which leaks its contents through filter probing")
@@ -931,6 +940,95 @@ func (r *Registry) validateInverse(t *TableDef, d *FieldDesc, claimed map[string
 // two agree — a schema package that disagreed with the runtime would publish a
 // number the responses do not honour.
 const DefaultExpandLimit = 50
+
+// sharedEnumClaim is where a SharedAs name was first declared, so a second
+// declaration under the same name can be reported against it.
+type sharedEnumClaim struct {
+	table, column string
+	values        []string
+}
+
+// validateSharedEnum checks a column's SharedAs declaration against every
+// other column already claiming the same name.
+//
+// The first column to use a name fixes the value set every later one must
+// match — same values, in the same order. Order is part of the agreement and
+// not just the set, because codegen emits the shared type and its constants
+// exactly once, off the first declaration it renders; a second column with the
+// same values in a different order would be asking for constants that do not
+// exist under the names it expects, silently, since nothing about a mismatched
+// order fails to compile.
+func (r *Registry) validateSharedEnum(t *TableDef, d *FieldDesc, claimed map[string]sharedEnumClaim, report func(string, string, string, ...any)) {
+	if d.Type != TypeEnum {
+		report(t.name, d.Name, "SharedAs is only meaningful on an Enum column")
+		return
+	}
+	if !isExportedGoIdent(d.SharedAs) {
+		report(t.name, d.Name, "SharedAs(%q) is not an exported Go identifier; it becomes a type name in the generated package, so it needs a capital letter to start and letters, digits or underscores after that", d.SharedAs)
+		return
+	}
+
+	prev, dup := claimed[d.SharedAs]
+	if !dup {
+		claimed[d.SharedAs] = sharedEnumClaim{table: t.name, column: d.Name, values: d.EnumValues}
+		return
+	}
+	if !equalStrings(prev.values, d.EnumValues) {
+		report(t.name, d.Name,
+			"SharedAs(%q) is also declared on %s.%s, with a different value set: %s.%s has %s, %s.%s has %s — "+
+				"every column sharing a SharedAs name must declare identical values in the identical order",
+			d.SharedAs, prev.table, prev.column,
+			prev.table, prev.column, quoteList(prev.values),
+			t.name, d.Name, quoteList(d.EnumValues))
+	}
+}
+
+// isExportedGoIdent reports whether s can name an exported Go type: a
+// capital-letter start, and letters, digits or underscores after that.
+//
+// It is a small, deliberate duplicate of codegen's own identifier check rather
+// than a shared one — schema cannot import codegen without a cycle, since
+// codegen already imports schema, and the rule is four lines that is not
+// worth inventing an import path for.
+func isExportedGoIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return s[0] >= 'A' && s[0] <= 'Z'
+}
+
+// equalStrings reports whether a and b hold the same values in the same
+// order.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// quoteList renders a value set the way an error message wants it: quoted,
+// comma-separated, and in the declared order — the order is part of what a
+// SharedAs mismatch is reporting.
+func quoteList(vs []string) string {
+	quoted := make([]string, len(vs))
+	for i, v := range vs {
+		quoted[i] = strconv.Quote(v)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
 
 // InverseRelation is a reverse relation seen from the target's side: the rows
 // of another table that point at this one, and the name this table knows them

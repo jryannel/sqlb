@@ -413,6 +413,41 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 			},
 			want: `has an unknown Deferrable "maybe"`,
 		},
+		{
+			name: "SharedAs on a non-enum column",
+			build: func(r *schema.Registry) {
+				r.Table("q", schema.UUIDv7("id").PrimaryKey(), schema.Text("x").SharedAs("X"))
+			},
+			want: "SharedAs is only meaningful on an Enum column",
+		},
+		{
+			name: "SharedAs name is not an exported Go identifier",
+			build: func(r *schema.Registry) {
+				r.Table("q2", schema.UUIDv7("id").PrimaryKey(),
+					schema.Enum("status", "draft", "published").SharedAs("status"))
+			},
+			want: "is not an exported Go identifier",
+		},
+		{
+			// Two tables opting into the same shared type but drifting on what
+			// it means — issue #197's whole reason for requiring the name to be
+			// declared rather than inferred from matching values. The message
+			// names both columns and both value sets, so the fix is legible
+			// without opening either schema file.
+			//
+			// Registry.Tables() sorts by name, so "courses" is validated before
+			// "lessons" regardless of the order they are declared in below, and
+			// is the one the second declaration is reported against.
+			name: "SharedAs value sets disagree",
+			build: func(r *schema.Registry) {
+				r.Table("lessons", schema.UUIDv7("id").PrimaryKey(),
+					schema.Enum("status", "draft", "published", "archived").SharedAs("Status"))
+				r.Table("courses", schema.UUIDv7("id").PrimaryKey(),
+					schema.Enum("status", "draft", "published").SharedAs("Status"))
+			},
+			want: `SharedAs("Status") is also declared on courses.status, with a different value set: ` +
+				`courses.status has ["draft", "published"], lessons.status has ["draft", "published", "archived"]`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -427,6 +462,22 @@ func TestValidationCatchesAuthoringMistakes(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// The counterpart to the "SharedAs value sets disagree" case above: two
+// columns declaring the identical value set, in the identical order, under one
+// SharedAs name validate cleanly. codegen is what turns this agreement into
+// one Go type — this only checks that Validate has nothing to say about it.
+func TestSharedAsAcceptsIdenticalValueSets(t *testing.T) {
+	r := schema.NewRegistry()
+	r.Table("lessons", schema.UUIDv7("id").PrimaryKey(),
+		schema.Enum("status", "draft", "published", "archived").SharedAs("Status"))
+	r.Table("courses", schema.UUIDv7("id").PrimaryKey(),
+		schema.Enum("status", "draft", "published", "archived").SharedAs("Status"))
+
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
 	}
 }
 

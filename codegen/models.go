@@ -81,6 +81,26 @@ func renderModels(opts Options) ([]byte, error) {
 	b := header(opts.Package, sortedSet(imports))
 	wire := opts.Registry.Wire()
 
+	// sharedEnumUsers maps a SharedAs name to every "table.column" that
+	// declares it, in table order — collected ahead of the render loop below
+	// so the type's doc comment can name every column it serves, not only the
+	// first one to render.
+	sharedEnumUsers := map[string][]string{}
+	for _, t := range tables {
+		for _, f := range t.Fields() {
+			if d := f.Desc(); d.Type == schema.TypeEnum && d.SharedAs != "" {
+				sharedEnumUsers[d.SharedAs] = append(sharedEnumUsers[d.SharedAs], t.Name()+"."+d.Name)
+			}
+		}
+	}
+	// emittedShared tracks which SharedAs names have already produced a type
+	// and const block, so the second and later columns claiming one render
+	// their struct field against it without emitting it again — Go does not
+	// allow a type or a const to be declared twice, and Registry.Validate
+	// already refused two declarations of the same name with different values,
+	// so every column reaching here for a given name agrees on what it means.
+	emittedShared := map[string]bool{}
+
 	for _, t := range tables {
 		typeName := TypeName(t.LocalName())
 
@@ -91,11 +111,23 @@ func renderModels(opts Options) ([]byte, error) {
 				continue
 			}
 			enum := typeName + GoName(d.Name)
+			if d.SharedAs != "" {
+				enum = d.SharedAs
+				if emittedShared[enum] {
+					continue
+				}
+				emittedShared[enum] = true
+			}
 			consts, err := enumConsts(t.Name(), d)
 			if err != nil {
 				return nil, err
 			}
-			fmt.Fprintf(b, "\n// %s is the %s.%s column's value set.\n", enum, t.Name(), d.Name)
+			if others := otherSharedUsers(sharedEnumUsers[enum], t.Name()+"."+d.Name); len(others) > 0 {
+				fmt.Fprintf(b, "\n// %s is the %s.%s column's value set, shared with %s.\n",
+					enum, t.Name(), d.Name, strings.Join(others, ", "))
+			} else {
+				fmt.Fprintf(b, "\n// %s is the %s.%s column's value set.\n", enum, t.Name(), d.Name)
+			}
 			fmt.Fprintf(b, "type %s string\n\n", enum)
 			fmt.Fprintln(b, "const (")
 			for i, v := range d.EnumValues {
@@ -397,6 +429,9 @@ func goType(typeName, table string, d *schema.FieldDesc, ov *overrides) string {
 	}
 	if d.Type == schema.TypeEnum && len(d.EnumValues) > 0 {
 		enum := typeName + GoName(d.Name)
+		if d.SharedAs != "" {
+			enum = d.SharedAs
+		}
 		switch {
 		case d.Array:
 			// A nil slice already says NULL, so an array is the plain slice
@@ -479,5 +514,17 @@ func sortedSet(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// otherSharedUsers returns every "table.column" in users besides self, in the
+// order they were collected, for the doc comment a shared enum type gets.
+func otherSharedUsers(users []string, self string) []string {
+	var out []string
+	for _, u := range users {
+		if u != self {
+			out = append(out, u)
+		}
+	}
 	return out
 }
