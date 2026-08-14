@@ -224,11 +224,21 @@ var Task = schema.Table("tasks",
 	})
 `
 
-const initSqlbGo = `package {{.SchemaPkg}}
-
-//go:generate go run github.com/jryannel/sqlb/cmd/sqlb generate .
-
-import (
+// The go:generate line is split across two string literals so that this
+// file's own `go generate ./...` at the repository root does not find it.
+// go generate's directive scanner is a plain line-based text scan — it does
+// not parse Go syntax, so it cannot tell that a "//go:generate" line inside
+// a raw string literal here is a template being written out, not a real
+// directive. Before this split, `go generate ./...` found the line below,
+// inside its own source, and tried to run it from cmd/sqlb — which is
+// package main and cannot be imported as a schema package (issues #200,
+// #205). Splitting the literal keeps "//go:generate" off of any single
+// physical line in this file while leaving the rendered value — what
+// actually lands in a new project's sqlb.go, where it must work as a real
+// directive — byte-identical to before.
+const initSqlbGo = "package {{.SchemaPkg}}\n\n" +
+	"//" + "go:generate go run github.com/jryannel/sqlb/cmd/sqlb generate .\n\n" +
+	`import (
 	"context"
 	"fmt"
 	"os"
