@@ -141,6 +141,13 @@ Four gaps, all deliberate and all documented where they bite:
 
 ## Read next
 
+A hook is where a rule on CRUD is *stated*. Two related seams sit beside it,
+for logic a hook does not fit:
+
+- [Actions](../rest/actions.md) — a transition beyond CRUD, with its own route
+  and a generated envelope around a plain Go func
+- [Mounting resources](../rest/README.md) — `rest.Reads` and hand-written
+  endpoints, for writes that stay outside the generated surface entirely
 - [Hooks](../queries/hooks.md) — registration, scoping, `AfterCommit`, testing
 - [ADR-0008](../adr/0008-hooks-as-domain-seam.md) — the decision record
 - [ADR-0030](../adr/0030-declared-scope-is-required.md) — why a schema can oblige
