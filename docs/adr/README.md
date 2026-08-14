@@ -188,7 +188,7 @@ starts with 0053.
 | [0050](0050-reachability-is-a-property-of-the-mount.md) | Reachability is a property of the mount, so one table can serve a public surface and a privileged one | Revisiting | Medium |
 | [0051](0051-a-gap-in-the-declaration-is-reported.md) | A gap below the declaration is reported, not silent | Working | Medium |
 | [0052](0052-a-singleton-is-an-op-that-removes-the-id.md) | A singleton is an operation that removes the {id}, and it is legal only on a Scoped table | Working | Medium |
-| [0053](0053-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and a UI is authored rather than carried | Working | High (no UI) / Low (sufficiency) |
+| [0053](0053-the-manifest-describes-what-cannot-be-guessed.md) | The manifest describes what a client cannot guess, and an uncurated browser is carried while a curated admin stays authored | Working | High (curated admin) / Low (uncurated browser) |
 | [0054](0054-a-named-scope-is-releasable-at-the-mount.md) | A named scope is releasable at the mount, and only a named one, so two surfaces over one table can differ in rows | Working | High |
 | [0055](0055-a-nested-query-runs-nobodys-hooks.md) | A query nests inside another, and a nested one is refused unless it has been resolved | Working | Medium |
 | [0056](0056-a-junction-is-a-table.md) | A junction is a table, and many-to-many is not a declaration | Working | High (junction) / Medium (no sugar) |

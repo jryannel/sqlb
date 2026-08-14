@@ -1,0 +1,25 @@
+{{define "content"}}
+<div class="row justify-content-center">
+  <div class="col-md-4 mt-6">
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title mb-3">Sign in</h2>
+        {{if .Error}}<div class="alert alert-danger">{{.Error}}</div>{{end}}
+        <form method="post" action="/login">
+          <input type="hidden" name="next" value="{{.Next}}">
+          <div class="mb-3">
+            <label class="form-label">Bearer token</label>
+            <input type="password" name="token" class="form-control" autofocus autocomplete="off">
+            <div class="form-hint">
+              Sent as <code>Authorization: Bearer …</code> on every request to
+              {{if .APIBase}}<code>{{.APIBase}}</code>{{else}}<span class="text-danger">no API configured</span>{{end}}.
+              This is your own credential — the browser shows exactly what it can already fetch, nothing more.
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">Sign in</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

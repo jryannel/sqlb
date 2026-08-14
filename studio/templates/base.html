@@ -1,0 +1,38 @@
+{{define "base"}}<!doctype html>
+<html lang="en" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>sqlb studio{{if .Module}} — {{.Module}}{{end}}</title>
+  <link rel="stylesheet" href="/static/css/tabler.min.css">
+</head>
+<body>
+  <div class="page">
+    <header class="navbar navbar-expand-md navbar-light d-print-none">
+      <div class="container-xl d-flex align-items-center">
+        <a href="/" class="navbar-brand d-flex align-items-center">
+          <svg class="icon icon-2 me-2"><use href="/static/icons/tabler-sprite.svg#tabler-database"/></svg>
+          sqlb studio{{if .Module}}<span class="text-secondary ms-2">{{.Module}}</span>{{end}}
+        </a>
+        <div class="ms-auto">
+          {{if .LoggedIn}}
+          <form method="post" action="/logout" class="d-inline">
+            <button type="submit" class="btn btn-link">Sign out</button>
+          </form>
+          {{else}}
+          <a href="/login" class="btn btn-link">Sign in</a>
+          {{end}}
+        </div>
+      </div>
+    </header>
+    <div class="page-wrapper">
+      <div class="page-body">
+        <div class="container-xl">
+          {{template "content" .}}
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/js/tabler.min.js"></script>
+</body>
+</html>{{end}}
