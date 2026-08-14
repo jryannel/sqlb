@@ -35,6 +35,7 @@ var templateFuncs = template.FuncMap{
 type Server struct {
 	manifest *schema.Manifest
 	apiBase  string
+	basePath string
 
 	index  *template.Template
 	table  *template.Template
@@ -48,15 +49,35 @@ type Server struct {
 // NewServer parses the embedded templates and pairs them with m. apiBase is
 // the running application's REST API root; empty disables the data pages and
 // leaves the schema-only view (stage one) working on its own.
-func NewServer(m *schema.Manifest, apiBase string) (*Server, error) {
-	s := &Server{manifest: m, apiBase: apiBase}
+//
+// basePath is optional and defaults to "" (root-mounted, cmd/sqlb-studio's
+// own use — every href, redirect and asset reference is root-absolute). Pass
+// one path segment, e.g. NewServer(m, apiBase, "/studio"), to mount the
+// result under a prefix on someone else's mux; see Handler's doc comment for
+// how. Passing more than one is a programming error and panics — the
+// variadic form exists only to keep the two-argument call compiling, not to
+// take a list.
+func NewServer(m *schema.Manifest, apiBase string, basePath ...string) (*Server, error) {
+	bp := ""
+	switch len(basePath) {
+	case 0:
+	case 1:
+		bp = normalizeBasePath(basePath[0])
+	default:
+		panic("studio.NewServer: at most one basePath argument")
+	}
+	s := &Server{manifest: m, apiBase: apiBase, basePath: bp}
 	var err error
+	funcs := template.FuncMap{"url": s.url}
+	for name, fn := range templateFuncs {
+		funcs[name] = fn
+	}
 	parse := func(files ...string) *template.Template {
 		if err != nil {
 			return nil
 		}
 		var t *template.Template
-		t, err = template.New(files[0]).Funcs(templateFuncs).ParseFS(templateFS, files...)
+		t, err = template.New(files[0]).Funcs(funcs).ParseFS(templateFS, files...)
 		return t
 	}
 	s.index = parse("templates/base.html", "templates/index.html")
@@ -72,7 +93,37 @@ func NewServer(m *schema.Manifest, apiBase string) (*Server, error) {
 	return s, nil
 }
 
-// Handler returns the studio's HTTP handler.
+// normalizeBasePath strips a trailing slash and ensures a non-empty path
+// starts with one, so the rule lives here once rather than being re-derived
+// at every call site that joins it against a route.
+func normalizeBasePath(p string) string {
+	p = strings.TrimSuffix(p, "/")
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
+}
+
+// url prefixes path with the server's mount point. Every hardcoded
+// root-absolute href, redirect target and asset reference — in server.go and
+// in templates/*.html via the "url" template func — goes through this (or
+// r.URL.RequestURI(), which already reflects the real request path) rather
+// than concatenating a leading "/" directly, so the result is correct
+// whether Handler is mounted at the root or under basePath.
+func (s *Server) url(path string) string {
+	return s.basePath + path
+}
+
+// Handler returns the studio's HTTP handler, routed under the basePath given
+// to NewServer (the empty string by default). Mount it directly at that same
+// prefix — e.g. mux.Handle("/studio/", studioSrv.Handler()) after
+// NewServer(m, apiBase, "/studio") — with no http.StripPrefix: every route
+// registered here, every asset path and every link or redirect the handlers
+// build already carries basePath, so stripping it before the request reaches
+// this mux would make every route fail to match.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -80,23 +131,33 @@ func (s *Server) Handler() http.Handler {
 	if err != nil {
 		panic(err) // embedded at build time; a failure here is a build bug
 	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	staticPrefix := s.basePath + "/static/"
+	mux.Handle("GET "+staticPrefix, http.StripPrefix(staticPrefix, http.FileServerFS(static)))
 
-	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.HandleFunc("GET /tables/{name}", s.handleTable)
-	mux.HandleFunc("GET /tables/{name}/rows", s.handleRows)
-	mux.HandleFunc("GET /tables/{name}/rows/new", s.handleRowNewForm)
-	mux.HandleFunc("POST /tables/{name}/rows/new", s.handleRowNewSubmit)
-	mux.HandleFunc("GET /tables/{name}/rows/{id}", s.handleRowDetail)
-	mux.HandleFunc("GET /tables/{name}/rows/{id}/edit", s.handleRowEditForm)
-	mux.HandleFunc("POST /tables/{name}/rows/{id}/edit", s.handleRowEditSubmit)
-	mux.HandleFunc("GET /tables/{name}/actions/{action}", s.handleActionForm)
-	mux.HandleFunc("POST /tables/{name}/actions/{action}", s.handleActionSubmit)
-	mux.HandleFunc("GET /tables/{name}/rows/{id}/actions/{action}", s.handleActionForm)
-	mux.HandleFunc("POST /tables/{name}/rows/{id}/actions/{action}", s.handleActionSubmit)
-	mux.HandleFunc("GET /login", s.handleLoginForm)
-	mux.HandleFunc("POST /login", s.handleLoginSubmit)
-	mux.HandleFunc("POST /logout", s.handleLogout)
+	routes := []struct {
+		pattern string
+		handler http.HandlerFunc
+	}{
+		{"GET /{$}", s.handleIndex},
+		{"GET /tables/{name}", s.handleTable},
+		{"GET /tables/{name}/rows", s.handleRows},
+		{"GET /tables/{name}/rows/new", s.handleRowNewForm},
+		{"POST /tables/{name}/rows/new", s.handleRowNewSubmit},
+		{"GET /tables/{name}/rows/{id}", s.handleRowDetail},
+		{"GET /tables/{name}/rows/{id}/edit", s.handleRowEditForm},
+		{"POST /tables/{name}/rows/{id}/edit", s.handleRowEditSubmit},
+		{"GET /tables/{name}/actions/{action}", s.handleActionForm},
+		{"POST /tables/{name}/actions/{action}", s.handleActionSubmit},
+		{"GET /tables/{name}/rows/{id}/actions/{action}", s.handleActionForm},
+		{"POST /tables/{name}/rows/{id}/actions/{action}", s.handleActionSubmit},
+		{"GET /login", s.handleLoginForm},
+		{"POST /login", s.handleLoginSubmit},
+		{"POST /logout", s.handleLogout},
+	}
+	for _, rt := range routes {
+		method, path, _ := strings.Cut(rt.pattern, " ")
+		mux.HandleFunc(method+" "+s.basePath+path, rt.handler)
+	}
 
 	return mux
 }
@@ -305,13 +366,13 @@ func (s *Server) handleRowDetail(w http.ResponseWriter, r *http.Request) {
 		pageHeader: s.header(r),
 		Table:      *t,
 		CanEdit:    containsOp(t.REST.Operations, "update"),
-		EditLink:   "/tables/" + t.Name + "/rows/" + id + "/edit",
+		EditLink:   s.url("/tables/" + t.Name + "/rows/" + id + "/edit"),
 	}
 	for _, a := range t.REST.Actions {
 		if !isCollectionActionPath(a.Path) {
 			data.Actions = append(data.Actions, actionLink{
 				Name:       a.Name,
-				InvokeLink: "/tables/" + t.Name + "/rows/" + id + "/actions/" + a.Name,
+				InvokeLink: s.url("/tables/" + t.Name + "/rows/" + id + "/actions/" + a.Name),
 			})
 		}
 	}
@@ -320,7 +381,7 @@ func (s *Server) handleRowDetail(w http.ResponseWriter, r *http.Request) {
 		val := row[wire]
 		link := ""
 		if col.References != nil && !col.References.External && val != nil {
-			link = "/tables/" + col.References.Table + "/rows/" + dispValue(val)
+			link = s.url("/tables/" + col.References.Table + "/rows/" + dispValue(val))
 		}
 		data.Fields = append(data.Fields, fieldValue{Name: col.Name, Value: dispValue(val), Link: link})
 	}
@@ -347,9 +408,9 @@ func (s *Server) handleRowNewForm(w http.ResponseWriter, r *http.Request) {
 		pageHeader: s.header(r),
 		Table:      *t,
 		Fields:     buildFormFields(t, nil),
-		Action:     "/tables/" + t.Name + "/rows/new",
+		Action:     s.url("/tables/" + t.Name + "/rows/new"),
 		Title:      "New " + t.Name + " row",
-		Back:       "/tables/" + t.Name + "/rows",
+		Back:       s.url("/tables/" + t.Name + "/rows"),
 	})
 }
 
@@ -368,7 +429,7 @@ func (s *Server) handleRowNewSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	action, title, back := "/tables/"+t.Name+"/rows/new", "New "+t.Name+" row", "/tables/"+t.Name+"/rows"
+	action, title, back := s.url("/tables/"+t.Name+"/rows/new"), "New "+t.Name+" row", s.url("/tables/"+t.Name+"/rows")
 
 	body, err := parseFormBody(t, r.PostForm)
 	if err != nil {
@@ -384,7 +445,7 @@ func (s *Server) handleRowNewSubmit(w http.ResponseWriter, r *http.Request) {
 	dest := back
 	if pk := findColumn(t.Columns, t.PrimaryKey); pk != nil {
 		if v := dispValue(created[wireOf(*pk)]); v != "" && v != "—" {
-			dest = "/tables/" + t.Name + "/rows/" + v
+			dest = s.url("/tables/" + t.Name + "/rows/" + v)
 		}
 	}
 	http.Redirect(w, r, dest, http.StatusFound)
@@ -410,9 +471,9 @@ func (s *Server) handleRowEditForm(w http.ResponseWriter, r *http.Request) {
 		pageHeader: s.header(r),
 		Table:      *t,
 		Fields:     buildFormFields(t, row),
-		Action:     "/tables/" + t.Name + "/rows/" + id + "/edit",
+		Action:     s.url("/tables/" + t.Name + "/rows/" + id + "/edit"),
 		Title:      "Edit " + t.Name + " row",
-		Back:       "/tables/" + t.Name + "/rows/" + id,
+		Back:       s.url("/tables/" + t.Name + "/rows/" + id),
 	})
 }
 
@@ -432,9 +493,9 @@ func (s *Server) handleRowEditSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	action := "/tables/" + t.Name + "/rows/" + id + "/edit"
+	action := s.url("/tables/" + t.Name + "/rows/" + id + "/edit")
 	title := "Edit " + t.Name + " row"
-	back := "/tables/" + t.Name + "/rows/" + id
+	back := s.url("/tables/" + t.Name + "/rows/" + id)
 
 	body, err := parseFormBody(t, r.PostForm)
 	if err != nil {
@@ -467,8 +528,8 @@ func (s *Server) renderFormError(w http.ResponseWriter, r *http.Request, t *sche
 func (s *Server) renderFormAPIError(w http.ResponseWriter, r *http.Request, t *schema.TableManifest, form url.Values, action, title, back string, err error) {
 	var ae *apiError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
-		clearTokenCookie(w)
-		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		s.clearTokenCookie(w)
+		http.Redirect(w, r, s.url("/login")+"?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 		return
 	}
 	msg := err.Error()
@@ -527,9 +588,9 @@ func (s *Server) actionRoute(r *http.Request) (t *schema.TableManifest, action *
 	if isCollectionActionPath(action.Path) != (id == "") {
 		return nil, nil, "", "", false
 	}
-	back = "/tables/" + t.Name
+	back = s.url("/tables/" + t.Name)
 	if id != "" {
-		back = "/tables/" + t.Name + "/rows/" + id
+		back = s.url("/tables/" + t.Name + "/rows/" + id)
 	}
 	return t, action, id, back, true
 }
@@ -577,8 +638,8 @@ func (s *Server) handleActionSubmit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ae *apiError
 		if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
-			clearTokenCookie(w)
-			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			s.clearTokenCookie(w)
+			http.Redirect(w, r, s.url("/login")+"?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
 		msg := err.Error()
@@ -640,16 +701,16 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	setTokenCookie(w, token)
+	s.setTokenCookie(w, token)
 	if next == "" {
-		next = "/"
+		next = s.url("/")
 	}
 	http.Redirect(w, r, next, http.StatusFound)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	clearTokenCookie(w)
-	http.Redirect(w, r, "/", http.StatusFound)
+	s.clearTokenCookie(w)
+	http.Redirect(w, r, s.url("/"), http.StatusFound)
 }
 
 // clientFor returns an apiClient using the caller's own cookie-stored token,
@@ -657,7 +718,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) clientFor(w http.ResponseWriter, r *http.Request) (*apiClient, bool) {
 	token := tokenFromRequest(r)
 	if token == "" {
-		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		http.Redirect(w, r, s.url("/login")+"?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 		return nil, false
 	}
 	return newAPIClient(s.apiBase, token), true
@@ -670,8 +731,8 @@ func (s *Server) renderAPIError(w http.ResponseWriter, r *http.Request, err erro
 	var ae *apiError
 	if errors.As(err, &ae) {
 		if ae.Status == http.StatusUnauthorized {
-			clearTokenCookie(w)
-			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			s.clearTokenCookie(w)
+			http.Redirect(w, r, s.url("/login")+"?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
 		http.Error(w, fmt.Sprintf("%d from API: %s", ae.Status, ae.Body), http.StatusBadGateway)

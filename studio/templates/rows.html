@@ -2,10 +2,10 @@
 {{$table := .Table.Name}}
 <div class="mb-3 d-flex align-items-start justify-content-between">
   <div>
-    <a href="/tables/{{$table}}" class="btn btn-link px-0">&larr; {{$table}}</a>
+    <a href="{{url (printf "/tables/%s" $table)}}" class="btn btn-link px-0">&larr; {{$table}}</a>
     <h2 class="page-title mt-2">{{$table}} — data</h2>
   </div>
-  {{if .CanCreate}}<a href="/tables/{{$table}}/rows/new" class="btn btn-primary mt-2">New row</a>{{end}}
+  {{if .CanCreate}}<a href="{{url (printf "/tables/%s/rows/new" $table)}}" class="btn btn-primary mt-2">New row</a>{{end}}
 </div>
 
 <div class="card">
@@ -21,7 +21,7 @@
         {{$row := .}}
         <tr>
           {{range $i, $cell := $row.Cells}}
-          <td>{{if eq $i 0}}<a href="/tables/{{$table}}/rows/{{$row.PK}}">{{$cell}}</a>{{else}}{{$cell}}{{end}}</td>
+          <td>{{if eq $i 0}}<a href="{{url (printf "/tables/%s/rows/%s" $table $row.PK)}}">{{$cell}}</a>{{else}}{{$cell}}{{end}}</td>
           {{end}}
         </tr>
         {{end}}
