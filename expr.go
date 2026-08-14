@@ -105,6 +105,18 @@ func (p Pred) Expr() Expr { return p.e }
 
 func pred(e Expr) Pred { return Pred{e: e} }
 
+// Match turns a boolean-valued expression into a predicate.
+//
+// Field's comparison methods (Gte, Eq, and the rest) only ever compare a bare
+// column against a parameter, so a predicate spanning more than one column —
+// `(on_hand - reserved) >= $1`, the shape a "claim under contention" check
+// needs — has no entry point through Field. Match is that entry point: build
+// the Expr with Binary, Sub, Add and the rest, then hand it here instead of
+// reaching for [RawPred], which does not check its column names against the
+// schema (ADR-0009's typed facade covers Field; it stops there). It is the
+// same gap [Not] closed for negation, one operator over (#173).
+func Match(e Expr) Pred { return pred(e) }
+
 // If returns p when cond holds and the zero Pred otherwise.
 func If(cond bool, p Pred) Pred {
 	if cond {
