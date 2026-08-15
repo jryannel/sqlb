@@ -665,7 +665,83 @@ to the OpenAPI document rather than dropping them outright.
 
 ### Change feed outbox
 
-_(pending merge from `docs/adr/0012-change-feed-outbox.md`)_
+Dynamic data views need to know when their data changed, and the reference
+points — Convex especially — set the expectation that a view can be live
+rather than polled. Firing a notification from an in-process `AfterCommit`
+hook loses events when the process dies between commit and publish, and
+delivers phantom events when a transaction commits the notification but
+rolls back the data. So every mutation that goes through sqlb writes a row
+to an outbox table in the *same* transaction as the change. A dispatcher
+tails that table — woken by `LISTEN/NOTIFY` rather than polling — and fans
+out to subscribers. Subscribers receive invalidation events (table plus row
+key), not recomputed results; clients refetch. The fan-out endpoint, event
+shape and reconnection contract are a separate decision behind a
+`rest.Source` seam; what belongs here is the outbox table, the trigger that
+wakes the dispatcher, and the ordering guarantee underneath both.
+
+The outbox row *is* the event; `NOTIFY` is only a doorbell carrying no
+payload, which is why a lost notification degrades to latency rather than
+lost data — the dispatcher also polls on a slow fallback interval, which is
+what keeps the feed correct behind a connection pooler that silently
+swallows `LISTEN`. An `AFTER INSERT` trigger on the outbox table rings that
+doorbell, deliberately not a call from sqlb's own mutation path: issuing
+`NOTIFY` from Go is one fewer database object but is forgettable — a new
+mutation path that writes the outbox and omits the notify would work in
+tests and lag in production. It's also deliberately not a trigger on every
+domain table, since that captures row changes rather than domain events and
+floods during backfills.
+
+The hardest problem only appeared once there was something to be correct
+about rather than describe: a bigserial primary key does not promise commit
+order. Two transactions can take ids 5 and 6 and commit in the other order,
+and a dispatcher reading `id > cursor ORDER BY id` would see 6, advance past
+5, and lose it silently — exactly the failure the whole design exists to
+prevent, arriving from inside the mechanism meant to prevent it. The fix is
+`pg_advisory_xact_lock`, held from the outbox insert until commit, so id
+order *is* commit order by construction and the dispatcher needs no
+reasoning about visibility at all. The alternative considered and rejected
+was gating the tail on a snapshot watermark (`pg_snapshot_xmin`), which has
+no write-path cost but is wrong in a way that took a while to see: the xid
+is assigned at a transaction's *first* write while the sequence value is
+assigned at the outbox insert, so a transaction can hold an earlier id and
+a later xid, and the watermark then admits the higher id first. Repairing
+that means dispatching in `(xid, id)` order, which is no longer an order a
+client's `Last-Event-ID` can name — the lock buys a position that is a
+plain row id, and a row id is what makes replay across a restart possible
+at all.
+
+That correctness has a stated cost: writes to published models serialise
+from the outbox insert to roughly the commit, bounding write throughput on
+those models at about one transaction per commit latency — a real ceiling,
+even though it's the same order Postgres's own WAL flush already imposes.
+An application that publishes a write-heavy table pays for a feature its
+clients may not even subscribe to, and the only remedy today is not
+publishing that model. Retention (24 hours by default) is a delivery
+guarantee rather than a disk setting — a subscriber resuming from a pruned
+position gets a reset rather than a replay — and it's the piece of the
+design chosen with the least confidence, since it was picked without a real
+consumer. The dispatcher probes its own `LISTEN` at startup, ringing the
+doorbell from a separate connection and reporting if it never hears back:
+a pooled `LISTEN` is silently accepted and useless, which otherwise leaves
+the feed correct, slow, and looking fine to everyone — the exact shape of
+failure that earns a check rather than a paragraph. This is distinct from
+`sqlb.AfterCommit`, which is in-process and at-most-once — fine for
+invalidating a local cache, silently lossy as a change feed.
+
+What's bought is at-least-once delivery that survives a process restart,
+where only the dispatcher itself needs to be highly available; replay that
+survives a rolling deployment, since a reconnecting client is caught up out
+of the table rather than needing a full refetch; and two dispatchers over
+one table both delivering, which is the horizontal-scaling story. Revisit
+if the advisory lock turns out to be the binding constraint on write
+throughput — the likeliest reason this gets revised, and unmeasured either
+way — trading it against the `(xid, id)` dispatch order, which costs
+exactly the row-id position that makes replay-across-a-restart possible.
+Also revisit if outbox write volume becomes a measurable drag, which points
+at logical replication (`pgoutput`, no write cost, but a replication slot
+and decoded rows instead of typed domain events) — and if retention proves
+the wrong knob, where the fix is likely a cheaper reset rather than a
+bigger window.
 
 ### No internal split
 
