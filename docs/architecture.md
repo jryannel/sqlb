@@ -862,7 +862,57 @@ hardest, and the fix would be a raw-DDL passthrough.
 
 ### Module isolation
 
-_(pending merge from `docs/adr/0015-module-isolation.md`)_
+A target codebase arranged as independent fx modules — `auth`, `billing`,
+`tenants`, `rag` — with a rule that no module imports another, each owning
+its own migration directory, and cross-module foreign keys forbidden
+outright, collided with sqlb in three ways: `schema.Table` registered into
+one global registry, so two modules couldn't both own a table called
+`events`; table names had no namespace, leaving prefixing to a discipline
+that had already drifted; and `Ref` took a `*TableDef`, requiring exactly
+the Go import the architecture forbids.
+
+The fix makes a registry the unit of module isolation:
+`schema.NewModule("billing")` returns a registry whose tables are prefixed
+with the module name, while declarations use the local name —
+`Table("invoices")` — so the prefix can never be forgotten and moving a
+table between modules is a one-line change. Prefixing uses plain names
+(`billing_invoices`), not Postgres schemas, and there's no abstraction
+layered over the two: a Postgres schema is a deployment model, not a
+rendering strategy, since only one of its four practical requirements is
+about how a name renders — the others are `search_path` management,
+ordering `CREATE SCHEMA` ahead of each module's first migration, and
+per-schema goose version tables. A strategy interface covering rendering
+alone would suggest switching between the two is just configuration, while
+the hard parts stay entirely unbuilt. The prefix stays a storage concern
+and never reaches the URL — a REST path defaults to the local name, so
+moving a table between modules isn't a breaking API change — and
+cross-module relationships are declared rather than enforced:
+`ExternalRef("tenant", "tenants.id")` produces the column and a join index
+but no `FOREIGN KEY`, with the target left as free text because resolving
+it would require the very dependency this design avoids. A reference built
+this way can't be `Expandable`.
+
+Modules get to migrate and deploy independently this way, and either side
+of a soft reference can move to its own database without dropping a
+constraint; the relationship still shows up in the manifest as
+`enforced: false`, so tooling and readers can see what the database itself
+cannot. The cost is that referential integrity becomes the application's
+job — nothing stops a `tenant_id` pointing at a deleted tenant, and no
+cascade cleans it up — prefixed names run longer, and `ExternalRef` targets
+are unchecked strings that rot silently when the other side renames its
+table. Namespacing is the expensive half to reverse: adding a prefix to an
+existing table is a rename, meaning a migration per table and a
+coordinated deploy, though it's free before a module's tables exist.
+Revisit if orphaned rows become a real operational problem (the answer is
+likely a periodic reconciliation job per module, not foreign keys, which
+would reintroduce the coupling this avoids), if a module needs to move to
+a genuinely separate database (at which point prefixes stop helping and
+Postgres schemas become worth their operational cost — the compiler
+already renders qualified names, but `search_path`, schema-creation
+ordering and per-schema version tables would still need building), or if
+`ExternalRef` targets rot often enough to matter, which would justify a
+lint pass checking them against a per-module manifest without adding a
+compile-time dependency.
 
 ### Guards proven both ways
 
