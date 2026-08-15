@@ -3350,7 +3350,43 @@ instead.
 
 ### A junction is a table
 
-_(pending merge from `docs/adr/0056-a-junction-is-a-table.md`)_
+Every ORM in this space has a many-to-many keyword — bun's `m2m` tag, ent's
+and GORM's and Drizzle's own spellings — and sqlb deliberately has none. A
+reference is a column with a declared inverse, so relations are one hop
+and forward-or-inverse; a junction table is an ordinary table with two
+references, and the far side is reached by querying the junction directly,
+either by expanding the relation on the junction row or by selecting the
+far-side foreign key out of it and nesting that as a subquery against the
+target table. There is no plan to add sugar over that two-hop. A junction
+is almost never empty in practice — `added_at`, `role`, `position`,
+`added_by` are the columns that are the actual reason the relationship is
+a table rather than an array, and every one becomes filterable, sortable
+and projectable the moment the junction is modelled as what it is. An
+`m2m` tag would hide that table and then need its own way to say "let me
+at the junction row after all" — the table it just hid — so modelling it
+directly costs one struct and buys the whole grammar rather than a second,
+narrower one. It also sidesteps a second version of the opt-in-capability
+argument: a declared traversal across the junction would make the far
+table reachable through the near one as a capability nobody wrote down,
+and the scope obligations that apply to a mounted table would then need
+to apply to a path no declaration names.
+
+The real cost is that a post can't reach its tags in one hop — expansion
+is one level, so `Expand("tagged.tag")` is an error, and a post's tags in
+one response is either two queries or one query returning junction rows
+rather than tag rows. A caller arriving from bun or ent writes a struct
+where they expected a tag and has to learn why. This was written down
+because the position had been implicit and split across other records
+that each stated part of it without ever answering the question someone
+new actually asks — how do I get from a post to its tags — which had led
+a comparison document to wrongly list many-to-many as something sqlb
+lacks. Revisit if nested expansion is ever built, which would turn the
+second hop into part of the same query rather than a separate one; if
+several adopters model a junction with no columns beyond its two keys,
+weakening the "a junction is always more than a link" premise this rests
+on; or if forgetting the scope obligation across a junction turns out to
+be common in practice, which would argue for a declaration specifically
+so a check has something to attach to.
 
 ### A read is a query and a row scoped write is a mutation
 
