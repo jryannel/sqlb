@@ -1697,7 +1697,53 @@ documentation value along with it.
 
 ### Dart client
 
-_(pending merge from `docs/adr/0031-dart-client.md`)_
+The TypeScript client's argument — generate from the registry, not the lossy
+OpenAPI document — is about the schema and the wire, so it transfers to Dart.
+Three things about the language do not. Dart has no structural types, so a
+projected row cannot merely carry an absent field the way a TypeScript row
+typed as the full row does — a strict data class with `required String
+title` cannot be constructed from a response that omitted it, so a
+compile-time `select` narrowing is not just unwritten here, it's unwritable.
+Dart has no implicit deserialisation, so mapping a wire key to a member isn't
+a layer to add, it's the string literal already being hand-written, and
+snake_case members fail the language's own naming lint. And Dart has no
+keyed query cache — Riverpod and BLoC have no registry to invalidate
+against — so a key factory would be vocabulary with no consumer.
+
+So the emitted vocabulary is the TypeScript one, unchanged: `where` admits
+only filterable columns with operators narrowed by type, `sort`/`select`/
+`expand` are closed sets, hidden columns have no spelling. Four things
+differ. Members are camelCase with the wire spelling kept beside them as a
+string constant — the one place this contradicts the TypeScript client,
+because the argument against a mapping layer doesn't hold once the mapping
+is unavoidable string literals either way. A row is a view over the decoded
+response rather than a copy of it: it reads columns on access, and a column
+the request didn't select throws `MissingColumn`, naming the row, the
+column and the fix, rather than silently returning null — which is what
+makes a projection representable at all, at the cost of moving that failure
+from compile time to runtime. The framework layer is a cursor pager,
+`CursorPager<Task>`, holding rows and position and nothing about how
+they're shown, so it drops into Riverpod, BLoC or a bare `StatefulWidget`
+without preferring one — generating framework-specific providers would be
+the same rejected idea as generating fetch hooks, under a different name.
+And the emitter reproduces `dart format`'s output rather than deferring to
+it, since this module carries no Dart toolchain to run the formatter with.
+
+This buys the producer with the least type safety in this API's surface the
+most from a generated client — every column, operator, sort term and enum
+value in a mobile filter UI is now checked by the analyser, and a cursor
+walk collapses to one function instead of several hand-rolled offset loops.
+The cost is a third toolchain (a pinned Dart SDK, `pub get` in CI, a gate),
+a runtime rather than compile-time failure for an over-narrow `select`, and
+format stability asserted against one formatter version rather than
+delegated to it. Revisit if applications end up wrapping every generated
+call in a repository class anyway, which would mean the free-function shape
+is wrong; if `MissingColumn` starts showing up in production rather than
+being caught in development, meaning `select` is too sharp a tool for this
+language; or if a Flutter app finds the row view awkward next to a
+`freezed`-style value class, at which point plain constructor-built data
+classes win and `select` leaves the client as a capability rather than a
+spelling.
 
 ### Sqlb command
 
