@@ -13,6 +13,13 @@ import (
 	"github.com/jryannel/sqlb"
 )
 
+// maxBackoff caps Fail's exponential retry delay. Without a cap, 2^attempts
+// seconds outgrows a sane retry window long before max_attempts is reached
+// for any table that raises its own threshold above the default — and
+// math.Pow(2, big) overflowing into an unrepresentable time.Duration is a
+// worse failure than a delay that stopped growing.
+const maxBackoff = 5 * time.Minute
+
 // Claim selects up to n pending, due events and marks them processing, all
 // inside one transaction, then hands them to the caller to work on.
 //
@@ -86,9 +93,9 @@ func Complete(ctx context.Context, db *sqlb.DB, id int64) error {
 
 // Fail records a failed attempt at a claimed event. Below max_attempts it
 // goes back to pending with available_at pushed out by an exponential
-// backoff (2^attempts seconds, uncapped — see ../README.md's "one opinion"
-// section); at or past max_attempts it is dead-lettered instead, and Claim
-// will never return it again regardless of available_at.
+// backoff (2^attempts seconds, capped at maxBackoff — see ../README.md's
+// "one opinion" section); at or past max_attempts it is dead-lettered
+// instead, and Claim will never return it again regardless of available_at.
 //
 // The row is read with ForUpdate inside the same transaction that writes it
 // back, so a Fail racing a concurrent Fail on the same id (which should not
@@ -118,6 +125,9 @@ func Fail(ctx context.Context, db *sqlb.DB, id int64) error {
 		// instant this row becomes claimable again has to be computed
 		// against the clock Claim compares it to.
 		backoff := time.Duration(math.Pow(2, float64(attempts))) * time.Second
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 		_, err = UpdateOutboxEvent().
 			SetAttempts(attempts).
 			SetStatus(OutboxEventStatusPending).
