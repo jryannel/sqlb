@@ -586,7 +586,48 @@ single `T`.
 
 ### Codegen is optional
 
-_(pending merge from `docs/adr/0010-codegen-is-optional.md`)_
+Making the Go schema DSL the source of truth is a good end state and a poor
+starting position: adopting it in an existing project would mean importing
+the schema, handing over DDL control, and regenerating models that already
+exist. The engine needs none of that — it reflects over struct tags and
+derives column names from field names when no tag is present — so the
+schema DSL and the generator are both optional. Metadata the builder cannot
+infer is supplied at runtime instead:
+
+```go
+sqlb.Describe[Invoice]().
+    PrimaryKey("id").
+    Defaulted("id").
+    Filterable("customer_id", "paid").
+    Sortable("amount_due").
+    Hidden("memo")
+```
+
+Descriptions merge onto struct tags, so a partly tagged model can be
+completed, and naming a column that does not exist panics at startup,
+listing the ones that do. Every capability the generator can emit has a
+runtime form, including relations — `Relation("Customer", "customer_id")`
+is the no-codegen half of `?expand` — which is the test this decision has
+to keep passing: a capability reachable only from generated tags would
+quietly make the generator mandatory again. This is what lets sqlb be
+layered over structs another generator produced, without editing them,
+turning adoption into something incremental rather than a migration; it
+also keeps the engine honest, since anything it needs must be expressible
+without importing the schema package at all.
+
+The two routes can disagree, and nothing checks either against the
+database. One consequence of allowing `Describe` at runtime was a real data
+race: an early guard flag was read when a `Description` was constructed but
+the writes happened in the chained calls after that, so a query built in
+between could pass the guard and race the writes to the fields the request
+path reads to decide what a caller may see. The fix keeps this decision's
+constraint of no lock on the read path by inverting where the cost lands —
+`Describe` now copies the model, writes the copy, and publishes it into the
+model cache, so a published `*Model` is never written again and a statement
+in flight always sees a consistent snapshot. Describing costs a copy once,
+at startup; reading costs nothing. Revisit if the two routes drift
+confusingly in practice — the fix would be having the generator emit
+`Describe` calls rather than tags, collapsing to one mechanism.
 
 ### Actionable errors
 
