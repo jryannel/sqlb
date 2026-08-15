@@ -1128,7 +1128,54 @@ once it's actually happened.
 
 ### Hooks receive an event
 
-_(pending merge from `docs/adr/0021-hooks-receive-an-event.md`)_
+`BeforeQuery` gives a hook the builder itself, and that half of the hook
+design held under a real worked example: a multi-tenant task manager scopes
+six tables across twenty-five endpoints in one file, and no handler mentions a
+tenant. The write hooks hadn't gotten the same treatment, and building that
+example found three domain rules that couldn't be expressed as hooks at all —
+a rule needing the row's data checked against the database, since
+`BeforeCreate` receives the row and no executor; a rule needing `BeforeUpdate`
+to read the assignments already staged on the update rather than only add to
+them; and a rule needing two writes in one transaction, when nothing wrapped
+generated writes in one, so every generated write ran under autocommit and
+`AfterCommit` was unreachable from generated CRUD. The original proposal to
+fix this reached for an event type carrying an executor and the pending
+assignments — but wrapping every generated write in a transaction was built
+first, and answered most of the complaint on its own.
+
+So `rest.Resource` wraps every generated write in a transaction, and that's
+the whole of what got decided: the hook's context now carries the
+transaction, so an explicit `TxFrom` call finds it, answering the executor
+half wherever a generated write is running, with no new event types. The
+option controlling this defaults on, refusing to mount a resource whose
+executor can't begin a transaction rather than silently falling back to
+autocommit, since a silent fallback would restore the original gap in exactly
+the callback meant to be the durable half. A callback failure after commit
+must not become a server error, since the row is already durable and a retry
+would write it twice — the framework logs it and returns the success it
+achieved. Reads are left unwrapped, since a single `SELECT` is already atomic.
+The event types themselves stay closed: no event value, no way to read the
+executor off it, no way to read the pending changes — of the three motivating
+rules, two are now expressible as hooks with the transaction in context, and
+the third (reading an update's own staged assignments) is the one piece left
+unaddressed, deliberately, since only one consumer ever asked for it.
+
+This buys `AfterCommit` reachable from generated CRUD, which is the
+difference between a documented feature and a decorative one, and
+database-backed validation with no new API surface. The cost is a
+begin/commit round trip on every generated write, holding a connection longer
+— a real, unmeasured cost under transaction pooling, since it changes
+server-connection occupancy rather than just latency. A hook that can query
+the database is also a hook that can query it badly, since a per-request round
+trip is now easy to write and invisible at the call site. Closing the events
+question cost nothing, which is the argument for closing it now rather than
+leaving it open on spec — nothing was built, no signature changed, no
+consumer wrote against an event. The transaction is the expensive half to
+reverse: shipping it default-on means off→on is harmless but on→off silently
+breaks anyone whose `AfterCommit` callback stops running. Revisit the event
+design if a second application hits the same `BeforeUpdate` gap — add a way to
+read pending changes first, not the whole event — or if a hook genuinely needs
+before-and-after correlation across a write, which nothing has produced yet.
 
 ### References declare their inverse
 
