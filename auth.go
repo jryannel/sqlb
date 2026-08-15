@@ -55,6 +55,13 @@ type Verifier[T any] interface {
 // This is opt-in. A Verifier with no network call to fail — local JWT
 // verification, for instance — never has a transient failure mode and never
 // needs to return one; every error it returns is correctly a 401.
+//
+// Return this BY VALUE — TransientError{Err: err}, not &TransientError{Err:
+// err}. Middleware recognizes it with errors.As against a TransientError
+// (not *TransientError) target; a pointer does not match that check and
+// silently falls through to the 401 branch, which is precisely the
+// provider-outage-looks-like-bad-credential conflation this type exists to
+// prevent.
 type TransientError struct{ Err error }
 
 func (e TransientError) Error() string { return e.Err.Error() }
