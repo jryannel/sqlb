@@ -2205,7 +2205,77 @@ the two features is worth reconsidering together.
 
 ### A schema edit is an api edit
 
-_(pending merge from `docs/adr/0039-a-schema-edit-is-an-api-edit.md`)_
+Two things called "compatibility" have to be kept apart: `compatibility.md`
+freezes sqlb's own surface, while this decision is about the *generated
+application's* REST contract — since sqlb re-derives that contract from a
+schema on every edit, editing the schema is editing the API, and sqlb is
+the one component that knows how. DB-safe and API-safe turn out to be
+different judgments, and often inverted ones: a declared column rename is
+the cleanest migration this project can emit — a reversible `RENAME` — and
+a hard break for every client reading or writing the old name; unexposing
+a column or dropping an operation produces no DDL at all and breaks
+clients regardless; a nullable column going `NOT NULL` is safe for readers
+and breaks the create body for writers; widening `int4` to `int8` is safe
+in the database and can overflow a narrow client. That inversion is the
+whole argument for a separate check: the cleanest migration can be the
+sharpest API break, and the sharpest breaks emit no DDL a migration diff
+could ever see.
+
+So the contract check is a registry diff, `restcompat.Diff(old, new)`, a
+sibling of `migrate.Diff` rather than built on it — a pure, DB-free
+function over two registries that walks every exposed model's response
+fields, filter and sort parameters, the create-body required/optional
+split, the patch-body fields and the operation set, classifying each delta
+`Breaking`, `Additive` or `Neutral`. It has to be a sibling rather than a
+layer on top, because the load-bearing word is *capabilities*: a DDL diff
+ignores them since they emit no SQL, which is exactly where the
+un-expose-a-column and drop-an-operation breaks live, and building on top
+of `migrate.Diff` would inherit that blindness. The check is scoped the
+way migration generation is scoped, too — the moment a consumer writes a
+custom handler, reshapes a response in a hook, or fronts the surface with
+a gateway, the true contract stops being a function of the schema and
+stops being sqlb's to judge. A break is stated by default rather than
+gated, the same choice made for migration lock hazards: whether an API
+break matters depends on whether there are deployed clients and whether
+the deployment versions its API, something the schema itself can't know,
+so a flag turns a `Breaking` result into a CI failure rather than the tool
+assuming it always should. What "compatible" is measured against is a
+checked-in contract snapshot, diffed against the current registry on
+every codegen run — the same move the shadow database makes for migration
+drift, checked in so the comparison is something a reviewer actually
+reads rather than a claim taken on faith.
+
+The classification has to be proven correct in both directions or it
+lies: a nullable column going `NOT NULL` is compatible for readers and
+breaking for writers, and a classifier reporting only one side "fires
+sometimes" — the shape a guard takes when it looks like coverage it
+doesn't have, since a green report that missed the writer-side break is
+worse than no check at all, because it gets believed. Two real regressions
+were caught by exactly that discipline rather than avoided by design:
+`WireCase` — a schema-level property, not a per-resource one — passed the
+early per-resource walk silently, since both snapshots being compared
+recorded the same column names either way, which is what led to breaks
+carrying an optional empty resource path and the snapshot recording the
+schema's wire case directly; and a `ReadOnly`/`Immutable` change and
+sort-null placement both slipped through the same way before being added
+as their own facets. What's bought is that the break a schema edit causes
+is legible at edit time, with no server running and no client deployed to
+discover it later — including the two kinds of break nothing else can
+catch, the clean-migration wire break and the no-migration-at-all break.
+The cost is a second diff engine that must not quietly drift from
+`migrate.Diff` over the same registries, and a checked-in snapshot format
+that becomes a permanent artefact the moment any real team gates CI on it,
+the same freeze cost a migration history carries. Revisit if nobody ends
+up consuming the snapshot and teams just regenerate past a reported break
+anyway, which would collapse the check to a warning printed at codegen
+time with no file to maintain; if
+gating by default should have been the answer because a real port shipped
+a breaking change that scrolled past in a report, weighed against a
+greenfield schema that breaks its own contract constantly and would train
+people to pass the failure flag reflexively; or if the two diff engines
+are ever found to have drifted on a shared kind of change, which would
+mean their shared core should be one function both call rather than two
+that happen to agree.
 
 ### The driver is a dependency
 
