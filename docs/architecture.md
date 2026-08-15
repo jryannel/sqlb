@@ -1034,7 +1034,49 @@ standing behind it.
 
 ### Pgbouncer in the path
 
-_(pending merge from `docs/adr/0019-pgbouncer-in-the-path.md`)_
+The target deployment runs PgBouncer in transaction pooling mode, and sqlb had
+assumed a direct connection everywhere without ever saying so — an assumption
+invisible in the code, since sqlb takes an `Executor` from the caller and
+would not notice a pooled one until it misbehaved in production. Transaction
+pooling returns the server connection at transaction end, so anything whose
+state outlives a transaction breaks: `LISTEN` for the change feed, session
+advisory locks and `CREATE INDEX CONCURRENTLY` in migration runners, and the
+driver's prepared-statement cache — the last being the entire query path, not
+a corner case. Measured against a real PgBouncer in front of Postgres: the
+query path works, but only because the pooler's default `max_prepared_statements`
+happens to be non-zero, a deployment setting rather than a property of the
+driver; `LISTEN` is accepted and the notification never arrives, silently;
+`NOTIFY` works fine, including from inside a transaction, because it's
+fire-and-forget with nothing to hold onto.
+
+So the pooler is the default path, and the query path may assume nothing
+session-scoped — no feature may rely on a `SET` outliving its transaction, a
+session advisory lock, a temp table, or a cursor held across transactions.
+Two components are named exceptions and connect direct rather than being
+discovered by trial: the change-feed dispatcher's `LISTEN` connection, and the
+migration runner. `NOTIFY` needs no exception, since it's transactional and
+works from any pooled connection — the blast radius of getting it wrong is one
+connection, not the application. sqlb does not manage any of this itself: it
+takes a handle from the caller and does not grow a pooled-versus-direct
+abstraction, since a pooler-aware sqlb would be deciding a deployment topology
+it cannot see. What it owes users is documentation of which component needs
+which connection, not a seam pretending to arrange it.
+
+This buys an assumption that's now visible and testable instead of latent, and
+forbidding session state is good hygiene independent of the pooler, since it's
+what keeps the query path horizontally scalable with or without one. The cost
+is two connection paths to operate, and a misconfiguration is silent: point
+the dispatcher at the pooler and it never wakes, and the change feed's
+fallback poll turns that into latency rather than data loss — which also means
+it can hide the mistake indefinitely unless the dispatcher asserts its own
+`LISTEN` at startup. Revisit if the deployment ever moves to session pooling
+or a pooler that supports `LISTEN`, at which point every carve-out here
+collapses; if a deployment turns up on a PgBouncer that doesn't track prepared
+statements, which would make the driver's exec mode something sqlb sets in
+code rather than a DSN setting every consumer has to get right; or if
+generated writes opening a transaction around every mutation measurably raises
+server-connection occupancy under the pooler, which is a real risk that was
+identified but never measured.
 
 ### Transaction scoped handle
 
