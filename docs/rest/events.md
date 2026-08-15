@@ -12,7 +12,7 @@ data: {"table":"posts","key":"p1","op":"update"}
 
 The client refetches through the ordinary `GET` endpoints. That is the whole
 protocol, and the reason for it is in
-[ADR-0045](../adr/0045-the-stream-is-a-seam.md): a payload would have to be built
+[ADR-0045](../architecture.md#the-stream-is-a-seam): a payload would have to be built
 per subscriber under that subscriber's context, or the `BeforeQuery` hook that
 scopes every other read of that table would not run on it — and a change feed
 that skips the scope hands one tenant's rows to another. Sending the address
@@ -41,7 +41,7 @@ a changelog, because the failure they produce — a client showing stale data
 forever — is invisible from the outside.
 
 **`outbox.Dispatcher` is the durable version**
-([ADR-0012](../adr/0012-change-feed-outbox.md)), and swapping to it is a
+([ADR-0012](../architecture.md#change-feed-outbox)), and swapping to it is a
 constructor call: the endpoint, the wire format, the `Last-Event-ID` contract and
 both generated clients are unchanged. Skip to [the outbox](#the-outbox) for what
 it costs.
@@ -122,7 +122,7 @@ transaction-scoped advisory lock, held to the commit. That bounds write
 throughput on published models at roughly one transaction per commit latency. For
 a filterable-list application it is not the binding constraint; for a write-heavy
 ingest path it may be, and the remedy is to not publish that model.
-[ADR-0012](../adr/0012-change-feed-outbox.md) carries the argument and the
+[ADR-0012](../architecture.md#change-feed-outbox) carries the argument and the
 revisit trigger.
 
 **The table needs pruning, and retention is a delivery setting.** A client whose
@@ -133,7 +133,7 @@ a worker fleet that publishes and serves no stream.
 
 **The dispatcher needs a direct connection.** PgBouncer in transaction pooling
 *accepts* a `LISTEN` and then silently never delivers on it
-([ADR-0019](../adr/0019-pgbouncer-in-the-path.md)), which leaves the feed correct
+([ADR-0019](../architecture.md#pgbouncer-in-the-path)), which leaves the feed correct
 and running entirely on its fallback poll. Everything else — including every
 write — is fine through a pooler, because `NOTIFY` is transactional.
 
@@ -240,7 +240,7 @@ does not run here.
 request's context, so it can reach whatever your authentication middleware put
 there — and the event tells it which tenant the change belonged to, because the
 schema already declared which column confines the rows
-([ADR-0030](../adr/0030-declared-scope-is-required.md)):
+([ADR-0030](../architecture.md#declared-scope-is-required)):
 
 ```go
 rest.Must(rest.Events(srv.API, rest.EventsOptions{
@@ -255,7 +255,7 @@ rest.Must(rest.Events(srv.API, rest.EventsOptions{
 `Event.Scope` is the value of the `.Scoped()` column on the row that changed, and
 it is **not on the wire**. It exists for this decision. A subscriber gains
 nothing from being told its own tenant id, and the wire is the half
-[ADR-0045](../adr/0045-the-stream-is-a-seam.md) records as expensive to change.
+[ADR-0045](../architecture.md#the-stream-is-a-seam) records as expensive to change.
 
 It is empty when the model declares no scope. It used to be empty on a hard
 delete too — which meant a tenant filter had to let every delete through to

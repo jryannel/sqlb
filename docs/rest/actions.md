@@ -6,7 +6,7 @@ and the way to say one through a PATCH is to send the columns the transition
 would have written and hope the server agrees.
 
 A declared action gives the transition a route, and generates everything around
-it except the transition itself ([ADR-0043](../adr/0043-declared-actions.md)):
+it except the transition itself ([ADR-0043](../architecture.md#declared-actions)):
 
 ```go
 Task.AddAction(schema.Action{
@@ -70,7 +70,7 @@ compile.
 
 `rest.Action` refuses it a second time, against what is actually mounted rather
 than against what was declared, and returns an error where Huma would panic.
-The DSL is optional ([ADR-0010](../adr/0010-codegen-is-optional.md)), so a guard
+The DSL is optional ([ADR-0010](../architecture.md#codegen-is-optional)), so a guard
 that lived only in the schema would leave the hand-written mount as the
 unguarded one — and the mount-time check sees collisions the declaration cannot,
 such as two resources sharing a `Name`.
@@ -97,7 +97,7 @@ will call. That is the compiler's half: adding an action to the schema fails the
 next build at this call site rather than serving a route nobody wired. The other
 half is at startup — `Actions{}` compiles, so a nil field is refused when the
 resource mounts, naming the field to go and set
-([ADR-0030](../adr/0030-declared-scope-is-required.md)'s shape).
+([ADR-0030](../architecture.md#declared-scope-is-required)'s shape).
 
 ## The write set is enforced
 
@@ -126,7 +126,7 @@ Read those two sections together and the gap is obvious: `Writes` is what the
 *envelope* persists — columns, on one row — and the paragraph above hands the
 same verb a transaction it can write anything through. The three surfaces that
 print `Writes` cannot see the difference, and a caller with no compile step,
-which is the caller [ADR-0029](../adr/0029-go-cli.md) has in mind,
+which is the caller [ADR-0029](../architecture.md#go-cli) has in mind,
 reads `status, completed_at` and concludes the route is confined to one row
 ([#149](https://github.com/jryannel/sqlb/issues/149)).
 

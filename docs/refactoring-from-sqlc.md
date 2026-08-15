@@ -69,7 +69,7 @@ Three costs, and only the first is cosmetic:
 - **The handler is the security boundary and nothing marks it as one.** That
   `status` is filterable and `password_hash` is not is a fact about which lines
   someone wrote in [stage1.go](../example/withsqlc/stage1.go), so reviewing the
-  API surface means reading handlers ([ADR-0006](adr/0006-capabilities-are-opt-in.md)).
+  API surface means reading handlers ([ADR-0006](architecture.md#capabilities-are-opt-in)).
 
 One detail worth noticing, because it is the kind of thing that survives a
 review: the `ILIKE` above interpolates the search term without escaping `%` or
@@ -107,7 +107,7 @@ cost**, and it is why stage 2 is the only step here that makes the code longer.
 
 One thing that does not change: both sides still share a transaction. A
 `pgx.Tx` satisfies `sqlb.Executor` and sqlc's `DBTX` at once
-([ADR-0040](adr/0040-the-driver-is-a-dependency.md)), so the dashboard query and
+([ADR-0040](architecture.md#the-driver-is-a-dependency)), so the dashboard query and
 this list can run in one unit of work throughout.
 
 ### Stage 3 — the schema owns the capabilities
@@ -135,13 +135,13 @@ return filter.Apply(q, parsed).All(ctx, db)
 
 - **The allow-list is gone.** `?sort=body` is refused because `body` never
   declared `Sortable`, and the rejection names the columns that would have
-  worked ([ADR-0011](adr/0011-actionable-errors.md)) — which stage 2's map
+  worked ([ADR-0011](architecture.md#actionable-errors)) — which stage 2's map
   could not do without a second list.
 - **The per-parameter unpacking is gone**, operators included.
   `?view_count=gte.100` needed a branch of its own in both earlier stages.
 - **A misspelled column stops compiling.** `blog.PostCols.OrgID` is a
   `Col[string]`; `sqlb.F("org_id")` was a string that had to be right
-  ([ADR-0009](adr/0009-typed-column-facade.md)).
+  ([ADR-0009](architecture.md#typed-column-facade)).
 
 Where the declaration comes from, if you do not have one: `introspect.Registry`
 reads `pg_catalog` and `codegen.RenderSchema` turns it into the `schema.go` you
@@ -159,7 +159,7 @@ err := blog.Register(srv.API, db)
 `Register` is generated from the declaration and mounts every resource the
 schema exposes, with the filter grammar, sorting, search, pagination and the
 OpenAPI document derived from the capabilities the columns declared
-([ADR-0007](adr/0007-generated-rest-handlers.md)). The list endpoint stage 3
+([ADR-0007](architecture.md#generated-rest-handlers)). The list endpoint stage 3
 hand-wrote is one of them.
 
 The part worth more than the deleted handler is the hook:
@@ -178,7 +178,7 @@ sqlb.On[blog.Post](reg).BeforeQuery(func(ctx context.Context, q *sqlb.Builder[bl
 The tenant scope has been an argument threaded through every call site since
 stage 1. One registration constrains every read of `Post` instead — the
 generated list, the generated read, the queries the expand machinery issues, and
-anything written by hand later ([ADR-0008](adr/0008-hooks-as-domain-seam.md)).
+anything written by hand later ([ADR-0008](architecture.md#hooks-as-domain-seam)).
 Stage 3's handler could have forgotten the org predicate, compiled, and tested
 green against a single-tenant fixture.
 

@@ -172,7 +172,7 @@ sorting, projection, paging and `?expand` all work on it unchanged, and it is th
 same request a capped `?expand` tells a caller to follow for the rest of the
 children. The one real cost is that a parent which does not exist yields an empty
 page rather than a 404
-([ADR-0038](https://github.com/jryannel/sqlb/blob/main/docs/adr/0038-collections-are-flat.md)).
+([ADR-0038](https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#collections-are-flat)).
 
 ### A table with one row per caller
 

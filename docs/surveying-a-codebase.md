@@ -321,7 +321,7 @@ by convention — enforced, if you are careful, by an architecture test that gre
 for it — becomes a `BeforeQuery` registration that the query builder cannot be
 asked to skip. This is the part of an adoption that is a safety argument rather
 than a line-count argument, and it is why
-[ADR-0030](adr/0030-declared-scope-is-required.md) makes a model whose schema
+[ADR-0030](architecture.md#declared-scope-is-required) makes a model whose schema
 declares its rows confined refuse to mount without one.
 
 **The 229 need reading, not counting.** Some are legitimately global — lookup

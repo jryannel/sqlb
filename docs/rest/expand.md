@@ -110,7 +110,7 @@ An expanded row carries every column of the target that is not `Hidden`, and a
 request cannot ask for fewer. That is deliberate: the wire shape of an expansion
 is derived from the schema, and a client choosing which keys come back would
 make one endpoint answer with rows of varying shape
-([ADR-0039](../adr/0039-a-schema-edit-is-an-api-edit.md)).
+([ADR-0039](../architecture.md#a-schema-edit-is-an-api-edit)).
 
 In Go, where the caller is the application rather than a client, `ExpandOnly`
 narrows it:
@@ -186,9 +186,9 @@ foreign key, and that is still the arrangement to reach for. It makes a
 cross-tenant reference **unrepresentable in the data** rather than merely
 unreachable through this query path — a stronger property, and one that survives
 a statement someone writes by hand
-([ADR-0030](../adr/0030-declared-scope-is-required.md#consequences)).
+([ADR-0030](../architecture.md#declared-scope-is-required)).
 
-[ADR-0025](../adr/0025-expansion-is-one-statement.md) records why it is one
+[ADR-0025](../architecture.md#expansion-is-one-statement) records why it is one
 statement, why the columns are listed rather than taken wholesale, and what
 would make either worth revisiting.
 

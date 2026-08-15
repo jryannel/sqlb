@@ -94,7 +94,7 @@ column alone would have streamed; the fix is a composite index on
 `(sort_column, id)`, which is what `unindexed-sort` now suggests and the index
 cursor paging wants anyway.
 
-[ADR-0027](../adr/0027-keyset-pagination.md) has the boundary predicate, the
+[ADR-0027](../architecture.md#keyset-pagination) has the boundary predicate, the
 NULL handling and why the cursor is opaque by convention rather than signed.
 
 ## The same thing from Go

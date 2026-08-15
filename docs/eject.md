@@ -43,7 +43,7 @@ conveniences:
   being true after the framework is gone.
 - **The obligation stays compulsory.** A table that declared `Scoped` or
   `SoftDelete` refuses to register without a `Confine` function
-  ([ADR-0030](adr/0030-declared-scope-is-required.md) with the machinery
+  ([ADR-0030](architecture.md#declared-scope-is-required) with the machinery
   removed), and a scoped table with a create endpoint refuses without an
   `Assign` one.
 
@@ -111,5 +111,5 @@ on the code is yours to edit and drift is the point.
 
 It is not a migration path, and not a dual-run mode. Nothing keeps the ejected
 package and the sqlb resources in step after you take it; the emitted code
-assumes it will be edited. [ADR-0042](adr/0042-the-exit-is-generated.md) records
+assumes it will be edited. [ADR-0042](architecture.md#the-exit-is-generated) records
 why the line is drawn there, and what would move it.
