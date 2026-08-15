@@ -613,6 +613,21 @@ func TestInverseValidation(t *testing.T) {
 			want: "is not a column of",
 		},
 		{
+			// ExpandOrder/ExpandLimit only mean something when more than one row
+			// could match; a unique FK rules that out structurally.
+			name: "ExpandOrder on a unique-backed inverse is meaningless",
+			build: func(r *schema.Registry) {
+				users := r.Table("users", schema.UUIDv7("id").PrimaryKey())
+				r.Table("profiles",
+					schema.UUIDv7("id").PrimaryKey(),
+					schema.Ref("user", users).Unique().
+						Inverse("profile").
+						InverseExpandable(schema.ExpandOrder("id")),
+				)
+			},
+			want: "has no effect",
+		},
+		{
 			// The one place the library used to silently do the opposite of
 			// what the table declares: nothing reads deleted_at, so the
 			// generated DELETE removed the row and the column meant to record
@@ -699,6 +714,47 @@ func TestTwoInversesOnOneTargetAreFineWhenNamedApart(t *testing.T) {
 	}
 	if found != 2 {
 		t.Errorf("the manifest describes %d reverse relations on authors, want 2", found)
+	}
+}
+
+func TestInversesReportsOneToOneFromUniqueFK(t *testing.T) {
+	r := schema.NewRegistry()
+	users := r.Table("users", schema.UUIDv7("id").PrimaryKey())
+	r.Table("profiles",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("user", users).Unique().Inverse("profile").InverseExpandable(),
+	)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	invs := r.Inverses(users)
+	if len(invs) != 1 {
+		t.Fatalf("got %d inverses, want 1", len(invs))
+	}
+	if !invs[0].OneToOne {
+		t.Errorf("OneToOne = false, want true for a Ref().Unique() FK")
+	}
+}
+
+// The guard-proven-both-ways companion to the test above: a non-unique FK
+// must still report OneToOne = false, or every reverse relation in the
+// codebase would silently start rendering as a single object.
+func TestInversesReportsCollectionForNonUniqueFK(t *testing.T) {
+	r := schema.NewRegistry()
+	lists := r.Table("lists", schema.UUIDv7("id").PrimaryKey())
+	r.Table("tasks",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("list", lists).Inverse("tasks").InverseExpandable(),
+	)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	invs := r.Inverses(lists)
+	if len(invs) != 1 {
+		t.Fatalf("got %d inverses, want 1", len(invs))
+	}
+	if invs[0].OneToOne {
+		t.Errorf("OneToOne = true, want false for a non-unique FK")
 	}
 }
 

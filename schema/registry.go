@@ -933,6 +933,12 @@ func (r *Registry) validateInverse(t *TableDef, d *FieldDesc, claimed map[string
 			"ExpandOrder %q is not a column of %q — an expanded collection is ordered by the rows it collects, which are this table's",
 			col, t.name)
 	}
+	if d.Unique && (ref.InverseOrder != "" || ref.InverseLimit != 0) {
+		report(t.name, d.Name,
+			"ExpandOrder/ExpandLimit on Inverse %q has no effect: %s.%s is unique, "+
+				"so at most one row can ever match; remove ExpandOrder/ExpandLimit",
+			ref.Inverse, t.name, d.Name)
+	}
 }
 
 // DefaultExpandLimit is the cap an expanded collection takes when it declares
@@ -1045,6 +1051,11 @@ type InverseRelation struct {
 	Order      string    // ordering column, with a leading "-" for descending
 	Limit      int       // cap as declared; zero means DefaultExpandLimit
 	Expandable bool      // reachable through ?expand on the target
+	// OneToOne reports that Column carries a single-column unique
+	// constraint, so at most one row of Table can ever point back here. It
+	// is derived, never declared: a unique foreign key is structurally
+	// one-to-one whether or not the schema names it that way.
+	OneToOne bool
 }
 
 // Cap is how many rows one expansion returns at most, with the default
@@ -1077,6 +1088,7 @@ func (r *Registry) Inverses(t *TableDef) []InverseRelation {
 				Order:      d.Ref.InverseOrder,
 				Limit:      d.Ref.InverseLimit,
 				Expandable: d.Ref.InverseExpandable,
+				OneToOne:   d.Unique,
 			})
 		}
 	}
