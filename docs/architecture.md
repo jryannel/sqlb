@@ -3431,5 +3431,49 @@ hand-mounted today, the same as before codegen knew about `Query` at all.
 
 ### Serve owns the boilerplate mount is the seam
 
-_(pending merge from `docs/adr/0058-serve-owns-the-boilerplate-mount-is-the-seam.md`)_
+Every sqlb server's `main.go` repeated the same ~134 lines — open a pool,
+ping it, run migrations, start an `http.Server`, shut it down gracefully
+on `SIGINT`/`SIGTERM` — none of which depends on the schema; measuring a
+real application found only the resource-mounting half (which tables,
+which `huma.Group`, which middleware) was actually application-specific.
+This is the same seam an earlier decision drew for the fx container case —
+publish only what needs no opinion attached, keep opinionated glue like
+"which router" or "which migration runner" as copy-paste rather than an
+import — applied here to the plain, no-DI-container path most sqlb
+applications actually take. `rest.Serve(ctx, ServeConfig, mount)` owns the
+boilerplate: it opens the pool, pings it, runs `ServeConfig.Migrate` if
+one was supplied, builds a `*Server`, calls the caller's `mount(*Server,
+sqlb.Executor) error`, and serves until the context is cancelled. `Migrate`
+is deliberately a caller-supplied function rather than a migration runner
+`rest` owns — owning one (goose, atlas, anything) would be exactly the
+opinion that stays out of a published import, and a project that migrates
+as a separate deploy step passes `nil` and pays nothing for the feature.
+`mount` is the entire seam: which resources get registered, whether they
+need a `huma.Group`, what that group's middleware does is not inferable
+from a schema value alone, and `Serve` doesn't try to infer it.
+`sqlb init` applies the identical boundary to project scaffolding — it
+writes a working `go.mod`, schema, and `main.go` built on `rest.Serve`,
+but deliberately does not run `go mod tidy`, `go generate`, or
+`sqlb migrate` itself, since each depends on something a scaffolding step
+can't promise, like network resolution or a prior step's output.
+
+The measured result was a real application's `main()` shrinking from
+~134 lines to 29, with no pool code, HTTP server setup, or signal handling
+left in application code at all. The cost is that `Serve` fixes the shape
+of what it owns — one pool, one `*Server`, one `http.Server` on one
+address — so an application wanting two independent `huma.API`s in one
+process, the shape a related decision about mount-time reachability
+flagged as a real pattern, doesn't fit inside one `Serve` call and has to
+wire both servers by hand, exactly the boilerplate `Serve` exists to
+remove. This decision carries lower confidence than most here and says so
+plainly: the mechanism itself is a mechanical, measured-equivalent
+extraction, but it has been built and live-tested against exactly one
+application, so the open question isn't whether it works but whether the
+seam is drawn in the right place. Revisit if a second application's
+`main.go` needs a shape `Serve` can't express — two servers, two ports, a
+non-HTTP listener — often enough that the single-server assumption is the
+wrong default rather than the common case, or if every real project's
+`Migrate` function turns out to be the same ten lines, which would mean
+withholding a shipped migration adapter is optimizing against a dependency
+nobody actually minded.
 
