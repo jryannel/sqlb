@@ -2532,7 +2532,126 @@ reconsidering if asked for twice.
 
 ### Declared actions
 
-_(pending merge from `docs/adr/0043-declared-actions.md`)_
+The generated surface stops exactly where applications spend their code:
+an adoption review measured a real application's domain verbs —
+`POST /{id}/<verb>` routes like completing a task — at 780 lines against
+464 for all of CRUD combined, because every verb opens the same way
+before any actual domain logic runs: parse the id, fetch the row under
+the tenant predicate, 404, decode an optional body, all written four
+times over across the handler, the OpenAPI document, and two generated
+clients. It's also the feature most likely to be the reason someone
+leaves, because domain verbs are where logic is most idiosyncratic — the
+place a DSL's expressiveness runs out first and most visibly — so a
+feature that tried to *express* the transition itself, not just its
+envelope, would get fought, worked around, and eventually ejected, taking
+the parts that were working with it. The seam this needs already exists
+and is already used: `BeforeCreate` is a plain Go function the generated
+path calls, and an action is that arrangement moved one level out — the
+framework owns the request, the fetch, the transaction and the response,
+and calls a function the application wrote for the transition itself.
+
+Three constraints from Go and this project's own rules forced the actual
+shape more than the original proposal anticipated. A generic `.Body[T]()`
+method isn't legal Go, so the question of whether an action's body comes
+from a reflected application type or a declared one was never optional —
+and it's declared, in the same field vocabulary a table's columns use,
+because the value of this feature is reaching the client emitters, and a
+body sqlb can't see produces a TypeScript method typed `unknown`, which is
+exactly the drift this feature exists to close. A domain function can't
+live in the schema declaration itself, since the schema is a value five
+emitters read and `sqlb.json` serialises, and a function is neither
+readable nor serialisable — so an action declares its envelope on the
+table (name, an optional declared body, the columns it's allowed to
+write) and binds its verb separately, at registration: codegen emits a
+`Register(api, db, actions Actions) error` with one struct field per
+action, so the compiler demands the exact function signature and an
+action added to the schema is a build error at the call site rather than
+a route answering 501 — though it can't demand the field be non-nil, so a
+nil action refuses at mount instead, the same compiler-then-startup shape
+already used for a table's scoping obligation. And the request path may
+not import the schema package, so the action declaration crosses that
+boundary as data the way exposure already does, never as code.
+
+The generated envelope does everything an application wrote by hand
+before: parse the id, fetch the row through the query hooks with a
+row lock when the action declares writes — not optional, since a
+read-modify-write across a network round trip is the classic lost update
+this removes by construction rather than adds as a convenience — 404 on
+no match (which, on a scoped table, is also the correct answer for a row
+belonging to someone else), decode the declared body, call the
+application's function *inside* the same transaction the envelope opened
+so it can reach other tables through the transaction-scoped handle and
+trigger its own `AfterCommit`, persist exactly the declared write columns
+from the mutated row, then respond with it. `Writes` is enforced rather
+than merely documented — the envelope persists those columns and no
+others, so a verb that tries to mutate an undeclared column finds it
+silently unwritten, a bug the first test catches rather than an
+undocumented widening of what a route touches. A verb declaring an error
+returns a typed problem answered with its own status — refusing "cannot
+complete an archived task" is one line, deliberately the whole of what
+this feature offers for preconditions, since a DSL that could express
+*when* a transition is legal would be expressing the transition itself,
+exactly the failure mode this design exists to avoid. A collection action
+— no `{id}` in the path — gets none of this generated fetch, and
+therefore none of the scoping safety a row-addressed action inherits from
+the query hooks; it's plain Go with a transaction, the same position a
+hand-written query already occupies, and roughly two in five of a real
+application's verbs turned out to be exactly this shape — worth stating
+plainly, since the safety argument doesn't reach the whole feature. A
+later addition, `Touches`, names tables an action's escape hatch writes to
+beside the declared column list, purely as documentation with no
+enforcement behind it — added once it became clear that `--help`, the
+OpenAPI document and the impact report all reported `Writes` as if it
+were complete, inviting exactly the wrong inference that a verb touching
+ten tables through the transaction was confined to the one row it fetched.
+
+What's bought is route coverage rising from roughly 40% to roughly 90% of
+a real application's endpoints, with the part that matters more being
+that verbs now reach the generated clients and OpenAPI document, which is
+where the drift was actually measured living; and the scoped, locked fetch
+stops being remembered by hand on the majority of routes that CRUD alone
+never covered. What it costs: the schema gains a second kind of
+non-column thing after computed fields, a declared body wanting a shape
+the column vocabulary can't hold is a real and expected future pressure,
+and a verb's function runs inside the transaction the envelope opened, so
+a slow third-party call inside it holds a connection under transaction
+pooling — the answer is the same `AfterCommit` escape every write hook
+already has, but it needs saying before someone discovers it the hard
+way. Adding an action is additive — a schema declaring none generates
+exactly what it generated before — but removing one isn't, once it's a
+wire-format promise a deployed client is calling by name, the same
+asymmetry every REST-facing capability in this project carries. Revisit
+when a third real application declares actions, or on the first one whose
+body genuinely can't be expressed in the column vocabulary, whichever
+comes first — those are the two events actually capable of telling
+whether the declaration's shape is right.
+
+That revisit trigger fired on 2026-08-14: a quiz-grading action
+(`Lesson.submit`, evidence from a real port, tracked by
+[#196](https://github.com/jryannel/sqlb/issues/196)) grades a
+`QuizAttempt` and wants to answer `{passed, score}` in the same round
+trip, and it can't — `do` always returns the mutated row, never a
+computed report beside it. The door opens, but only as far as the write
+side needs it: a `GET` action is still declined, since the caching and
+query-key questions a read RPC surface would raise are real and this
+record still isn't answering them. A `POST`'s response outgrowing the row
+is a smaller thing — the request was already a write, already uncacheable,
+and the envelope already has the transaction open and the mutated row in
+hand at the moment it marshals the answer, so "let the write's answer say
+more than the row" is a report attached to a verb, not a new RPC surface.
+The shape mirrors the read side's own widening: `do` becomes
+`func(ctx, *T, In) (Out, error)` in place of `func(ctx, *T, In) error`,
+with `Out` defaulting to `row[T]` so every action declared today keeps
+compiling and keeps answering exactly what it answers now. Still
+unsettled and left for the second and third action that actually reach
+for it: whether `Out` needs a declaration in the field vocabulary the way
+a body does, or stays outside the schema's reach at the cost of the
+TypeScript client typing it `unknown`; whether `Writes` still persists
+from the mutated `*T` when `do` also returns a separate `Out`, or the two
+become one value; and whether a widened action is still one surface next
+to CRUD or the first crack in that boundary.
+[#218](https://github.com/jryannel/sqlb/issues/218) tracks the
+implementation.
 
 ### The container is an adapter
 
