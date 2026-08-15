@@ -3237,7 +3237,63 @@ and this record sits on the wrong side of its own line.
 
 ### A named scope is releasable at the mount
 
-_(pending merge from `docs/adr/0054-a-named-scope-is-releasable-at-the-mount.md`)_
+[Reachability at the mount](#reachability-is-a-property-of-the-mount)
+settled which columns a mount may reach and admitted what it didn't
+solve: the same public/admin split also differs in *rows*, not just
+columns — a storefront reads published products, an admin panel reads
+drafts of the same table — and row visibility lives in a `BeforeQuery`
+hook keyed by the model's Go type, reaching every statement against that
+type including the ones an `?expand` issues. A rule registered to confine
+the storefront confines the admin panel too, and the only way out used to
+be a second Go type over the same table — the exact alternative that gives
+up the model, the typed facade, the manifest and the drift gate all at
+once. This was never a missing knob, though: the global reach of a scoping
+hook is the feature, since one registration confining every generated
+handler and every hand-written query is what makes the scoping guarantee
+worth anything, and an escape hatch a mount could simply omit would hand
+back the same ergonomics as the confinement — the failure mode a `Scoped`
+model's mount-time obligation check exists to close.
+
+So a rule is releasable only if it was named at registration, and only by
+that name — `sqlb.On[Product](reg).Scope("storefront").BeforeQuery(...)`
+can later be dropped with `handle.WithoutScope("storefront")` or, at a
+mount, `rest.Options{Unscoped: []string{"storefront"}}`; an unnamed
+`BeforeQuery` registration stays absolute, unreleasable by anybody, and
+the short spelling — the one every existing registration in every codebase
+already uses — stays the safe one by construction. The author of a rule
+decides whether it can ever be escaped, by choosing whether to name it,
+and that decision sits next to the rule rather than at whichever mount
+would like to be out from under it. The obligation check that refuses to
+mount an unconfined `Scoped` model runs *after* release, against the
+handle a resource will actually serve from, so releasing one of two
+confining rules still leaves the other counted — this is what keeps the
+mechanism from being the flag an earlier decision already declined to
+add, since it doesn't get a resource past the check, it changes what the
+check can see. A scope name is a property of the registry, not of a
+single model, deliberately: "a shopper sees the published catalog" is one
+rule spanning products, variants, categories and collections, and naming
+it once lets one release reach all four — including models a request
+reaches only through `?expand` — rather than requiring the admin handle to
+name the same rule four separate times and silently miss a fifth table
+that joins in later. `BeforeCreate` is not releasable at all, on purpose:
+it stamps a row on the way in rather than confining a set, so there's
+nothing for a reader to be released from.
+
+The cost is a second way to spell a hook, so reading a registration now
+means checking whether it's named to know whether some mount can opt out
+of it — `Registry.ScopeNames` and `DB.Released` exist so that's answerable
+without a grep — and two more ways a mount can fail to come up at startup,
+which is the right place for that failure to land. `sqlb.Query[T]()`
+issued directly against a released handle in application code is released
+too, exactly as a bare pool is unscoped today; the obligation check lives
+at the REST mount, not on the query path, and that boundary is unchanged.
+Revisit if scope names in practice collide across modules in a
+multi-registry deployment — they're registry-wide, so two modules both
+naming a rule `"tenant"` share it for release purposes, which is right for
+one application and wrong for a library shipping its own hooks — or if
+codebases start naming every scope, which would erode the asymmetry the
+whole design leans on and argue for a registry-level assertion that a
+`Scoped` model keeps at least one unnamed, unreleasable rule.
 
 ### A nested query runs nobodys hooks
 
