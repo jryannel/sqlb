@@ -1456,7 +1456,65 @@ an opaque passthrough type at a tenth of the code.
 
 ### Keyset pagination
 
-_(pending merge from `docs/adr/0027-keyset-pagination.md`)_
+`LIMIT n OFFSET k` was the only paging on offer, and its two defects are one
+defect: Postgres has to produce and discard `k` rows to answer an offset
+query, so page 500 costs five hundred times page 1 on exactly the endpoint
+whose purpose is walking a filtered set, and because a page is addressed by
+its distance from the start, a row inserted mid-walk shifts every later page
+— the client sees a row twice or never, with nothing wrong with either the
+query or the insert. Naming the boundary directly instead of by distance is
+harder than it looks. An ordering that isn't total can't answer "the rows
+after this one," and the same ambiguity was already silently making offset
+paging skip and repeat rows. NULLs don't compare, so a naive boundary
+predicate is wrong twice over — it drops every NULL row when NULLs sort past
+the boundary, and a NULL boundary value makes the whole comparison NULL,
+silently truncating the walk with no error. And the textbook-correct
+boundary predicate, a full lexicographic expansion, is always correct and
+also defeats the entire point: it's an `OR` of conjunctions that Postgres
+answers with a bitmap of index scans rather than the single seek that was
+the reason to page this way at all.
+
+So a cursor names a position in an ordering, and the ordering is always
+forced to be total: appending the primary key as an implicit final tiebreaker
+happens automatically on every list request, so deterministic paging isn't
+something a caller opts into — it's true of the very first page, since that
+page's last row is what becomes the next cursor. The boundary predicate
+compiles two different ways depending on what it can prove about the
+ordering: when every term shares direction and no ordering column is
+nullable, it compiles to a single row comparison — `(view_count, id) <
+($1, $2)` — that Postgres turns into one index seek; otherwise it falls back
+to the lexicographic expansion with NULL handled term by term, and that
+fallback is triggered by a nullable *column* in the ordering, not by a null
+*value* in a particular cursor, since the values being compared live in the
+rows, not only in the cursor. The cursor itself is opaque by convention — a
+plain, unencrypted encoding — rather than by encryption, and that's safe
+because the boundary is validated against the ordering the current request
+actually asked for, so an edited cursor can only move the boundary along a
+column the caller could already sort by anyway. An ordering by anything other
+than a plain column is refused for cursor paging by name, since the boundary
+has to be read back off a returned column value — which is also why an
+approximate nearest-neighbor ordering can never be cursor-paged: it isn't a
+total order in the first place, so a boundary in it could skip or repeat
+results no matter how carefully the distance were encoded. Paging is forward
+only — there's no `?before=`.
+
+This buys paging that costs the same at any depth and makes a concurrent
+insert land unambiguously behind or ahead of the cursor rather than
+duplicating, and it closes a determinism defect that predated cursor paging
+entirely, since every list is now deterministically ordered whether or not a
+caller uses cursors. The cost is that the forced tiebreaker can force a sort
+an index on the primary sort column alone would have avoided — some list
+endpoints got measurably slower in order to stop being wrong, and the fix is
+the same composite index cursor paging wants anyway. There are also
+genuinely two predicate-compilation paths rather than one, and the boundary
+between them is a correctness argument about NULLs, not a style preference; a
+cursor is coupled to the ordering it was issued under, so changing the sort
+parameter while holding an old cursor is a rejected request rather than a
+silently wrong one. Revisit if a client needs a genuine back button it can't
+build by holding cursors, which offset paging still serves and a `?before=`
+parameter could add additively; or if a cursor ever needs to carry something
+a client shouldn't be able to choose for itself, such as a tenant or a
+snapshot id, which would reopen the question of signing it.
 
 ### Typescript client
 
