@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -252,5 +253,28 @@ func TestVerify_RejectsMalformedToken(t *testing.T) {
 
 	if _, err := v.Verify(t.Context(), "not-a-jwt-at-all"); err == nil {
 		t.Fatal("Verify accepted a malformed token")
+	}
+}
+
+// TestNewDefaultOverrideCtx_FailsWhenJWKSUnreachable proves that the exact
+// mechanism New uses — keyfunc.NewDefaultOverrideCtx with
+// NoErrorReturnFirstHTTPReq: false — genuinely fails on an unreachable
+// endpoint. New itself cannot be tested end-to-end against a fake JWKS URL
+// because workos.GetJWKSURL("", clientID) always derives the real WorkOS
+// domain URL with no injectable override, and hitting the real domain is
+// forbidden by the Global Constraints. This test demonstrates the mechanism
+// New relies on works as documented: the initial fetch fails and is not
+// swallowed.
+func TestNewDefaultOverrideCtx_FailsWhenJWKSUnreachable(t *testing.T) {
+	srv := httptest.NewServer(nil)
+	unreachableURL := srv.URL + "/sso/jwks/client_test123"
+	srv.Close() // closed before any request reaches it
+
+	noErrorReturnFirst := false
+	_, err := keyfunc.NewDefaultOverrideCtx(t.Context(), []string{unreachableURL}, keyfunc.Override{
+		NoErrorReturnFirstHTTPReq: &noErrorReturnFirst,
+	})
+	if err == nil {
+		t.Fatal("keyfunc.NewDefaultOverrideCtx succeeded against a closed server despite NoErrorReturnFirstHTTPReq: false")
 	}
 }

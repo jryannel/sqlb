@@ -106,7 +106,12 @@ func New[T any](ctx context.Context, clientID string, mapper func(Claims) T) (*V
 		return nil, errors.New("authworkos: mapper is nil")
 	}
 	jwksURL := workos.GetJWKSURL("", clientID)
-	jwks, err := keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
+	// false so New's initial JWKS fetch surfaces an error instead of being
+	// silently swallowed — keyfunc.NewDefaultCtx defaults this to true.
+	noErrorReturnFirst := false
+	jwks, err := keyfunc.NewDefaultOverrideCtx(ctx, []string{jwksURL}, keyfunc.Override{
+		NoErrorReturnFirstHTTPReq: &noErrorReturnFirst,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("authworkos: fetching JWKS from %s: %w", jwksURL, err)
 	}
