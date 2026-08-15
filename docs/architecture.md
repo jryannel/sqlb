@@ -549,7 +549,40 @@ enough that registration order needs to become explicit priorities.
 
 ### Typed column facade
 
-_(pending merge from `docs/adr/0009-typed-column-facade.md`)_
+Making the query engine reflective means `sqlb.F("titel")` is a runtime
+error, and that's the design's largest cost — it bites hardest in the
+workflow sqlb targets, where an agent is writing the queries and a compile
+error is a fast correction signal while a runtime error is a slow one.
+Since codegen already emits models, a typed facade over them is nearly
+free: sqlb generates a typed column set per table, so `PostCols.Status` is a
+`sqlb.Col[PostStatus]` and `PostCols.Title` is a `sqlb.TextCol[string]`.
+Predicate construction is type-checked; the builder underneath stays
+generic.
+
+A few choices sharpen the facade. `Col[T]` does not embed `Field`, because
+embedding promoted every operator onto every column and made `Contains`
+callable on an integer column — pattern operators live only on
+`TextCol[T ~string]`. Nullable columns are typed as their base type, so the
+comparand is a plain value and NULL is expressed with `IsNull` rather than
+threading through the type parameter. Hidden columns are omitted from the
+generated set entirely, so a predicate against one cannot even be written.
+Update statements are wrapped too, since `Set(string, any)` checks neither
+name nor type, but the select builder itself is not — its twenty-odd
+chainable methods would each need a re-wrapped return type for safety the
+column set already provides elsewhere.
+
+Misspelled columns, wrong comparand types, and text operators on non-text
+columns all fail at compile time now, for one small generated file per
+table. What's given up is that predicates stay untyped — `sqlb.Pred`, not
+`Pred[T]` — so a column from the wrong table still compiles and only fails
+at the database, and the facade is a second artefact the generator has to
+keep in step with the model. Removing it later is cheap, since it's purely
+additive; `Pred[T]` would be the expensive direction, touching the AST,
+every combinator, and the filter package's intermediate representation.
+Revisit if cross-table column mixing turns out to be a common mistake
+rather than a theoretical one — though `Pred[T]` still has to answer how a
+join condition, which references two tables, could ever be `Pred[T]` for a
+single `T`.
 
 ### Codegen is optional
 
