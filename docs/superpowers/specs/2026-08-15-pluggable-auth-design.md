@@ -31,6 +31,10 @@ trigger being pulled for auth specifically.
   cookie) as a separate, composable piece from verification.
 - Worked examples wiring WorkOS, Clerk, and Zitadel through this shape, plus
   promoting `example/tasks/auth/jwt.go` to the reference self-hosted example.
+- A worked pattern for composing multiple principal types in one app (e.g.
+  a user realm and a superadmin realm, each with its own provider) — see
+  "Composing multiple principal types" below. This needs no new primitive;
+  it is one `Middleware[T]` per realm, mounted on separate route groups.
 - An ADR recording this decision, extending ADR-0044 rather than standing
   alone.
 
@@ -40,9 +44,11 @@ trigger being pulled for auth specifically.
   the schema DSL and generated clients stay auth-agnostic, matching how
   `rest.Resource` already treats auth as the app's concern via hooks reading
   `PrincipalFrom[T]`.
-- Multi-provider chaining (e.g. "accept WorkOS OR an API key" in one app).
-  An app needing that composes its own `Verifier[T]`; sqlb does not need to
-  model composition.
+- Multi-provider chaining *within a single realm* (e.g. "accept WorkOS OR an
+  API key for the same user identity" in one app). An app needing that
+  composes its own `Verifier[T]`; sqlb does not need to model composition.
+  This is distinct from multiple realms each with their own single
+  provider, which is in scope — see below.
 - A default, bundled auth service shipped with sqlb (the "Supabase way" —
   sqlb owning its own GoTrue-equivalent). This design's `Verifier[T]` seam
   does not preclude that later, but building it is a separate spec.
@@ -165,6 +171,70 @@ Each example adapter gets a lightweight test against a fake HTTP response
 standing in for the provider (a canned JWKS document, a canned
 introspection response) — no live WorkOS/Clerk/Zitadel calls in CI, matching
 how the rest of the repo keeps database-free tests database-free.
+
+## Composing multiple principal types
+
+Real apps built on this design need more than one auth realm in the same
+process — a customer-facing surface and a separate admin surface, or three
+or more distinct identities with different access shapes. `Verifier[T]` and
+`Middleware[T]` already compose for this without any new primitive: each
+realm is its own principal type `T`, its own `Verifier[T]`, and its own
+`Middleware[T]` mounted on its own route group. `PrincipalFrom[T]` is keyed
+by the type of `T`, not by name, so two realms in the same process never
+collide, and `rest.Resource` already supports mounting the same or
+different resources more than once with per-mount reachability
+([ADR-0050](../../adr/0050-reachability-is-a-property-of-the-mount.md)).
+
+**Two realms — customer users and superadmins**, each with their own
+provider:
+
+```go
+type UserPrincipal struct{ ID, OrgID string }
+type AdminPrincipal struct{ ID string; PlatformAdmin bool }
+
+userMW := sqlb.Middleware[UserPrincipal](workosVerifier, sqlb.BearerToken)
+adminMW := sqlb.Middleware[AdminPrincipal](internalJWTVerifier, sqlb.BearerToken)
+
+api.UseOn("/api/*", userMW)
+api.UseOn("/admin/*", adminMW)
+
+// hooks on user-facing resources read PrincipalFrom[UserPrincipal];
+// hooks on admin resources read PrincipalFrom[AdminPrincipal].
+// Neither hook can accidentally read the other realm's principal —
+// the type itself is the boundary.
+```
+
+**Three realms with overlapping access — users bound to one org, coaches
+with their own auth and access to a set of *assigned* orgs, and superusers
+managing the whole instance**:
+
+```go
+type UserPrincipal struct{ ID, OrgID string }
+type CoachPrincipal struct{ ID string; AssignedOrgIDs []string }
+type SuperuserPrincipal struct{ ID string }
+```
+
+This is still three `Verifier[T]`/`Middleware[T]` pairs on three mounts —
+authentication is unchanged from the two-realm case above. What's new is
+*authorization*: a coach's assigned-org set is not a single foreign key, so
+confining a coach's reads/writes to it is a job for
+`Hooks[T].BeforeQuery`/`BeforeCreate`/etc. reading `PrincipalFrom[CoachPrincipal]`
+and filtering by `AssignedOrgIDs`, exactly as any other row-scoping hook
+does today ([ADR-0008](../../adr/0008-hooks-as-domain-seam.md),
+[ADR-0030](../../adr/0030-declared-scope-is-required.md)). A superuser mount
+either uses a hook that scopes to nothing (unrestricted) or, if the same
+resource is also mounted for users/coaches with a named scope, releases
+that scope for the superuser mount specifically via
+[ADR-0054](../../adr/0054-a-named-scope-is-releasable-at-the-mount.md)'s
+`Unscoped` mechanism. None of this requires touching `Verifier[T]` or
+`Middleware[T]` — it is the existing hooks seam doing what it already does,
+composed with three independently-authenticated realms rather than one.
+
+**What this does not need:** a single `Verifier[T]` that tries multiple
+providers for one principal type (that remains out of scope, see above); a
+registry or naming scheme for realms (the Go type system already
+distinguishes them); or any change to how `rest.Resource` mounts work
+(ADR-0050 already covers per-mount reachability).
 
 ## Documentation
 
