@@ -916,7 +916,39 @@ compile-time dependency.
 
 ### Guards proven both ways
 
-_(pending merge from `docs/adr/0016-guards-proven-both-ways.md`)_
+Three guards in this repository reported success while checking nothing, and
+each was written deliberately and looked right on review: a dependency check
+that grepped package paths for a dot and matched the standard library's own
+vendored code, filtering everything away; a later version of the same check
+that let `go list -m all` fail to stderr, so empty output read as "no
+dependencies"; and a bisect check running under `set -e`, where the first
+commit — legitimately without Go packages — killed the script before it
+printed anything. A guard's failure path runs far less often than its success
+path, so it can go unexercised until the day it matters, and a guard that
+cannot fail is worse than no guard: absent tooling prompts caution, broken
+tooling prevents it.
+
+So a guard is not trusted until it has been observed failing on purpose.
+Before a check joins the gate, both directions get demonstrated: it passes on
+a clean tree, and it fails — naming the problem — on a tree broken in exactly
+the way it exists to catch. Where the broken state is cheap to construct, a
+test constructs it, so the failing branch runs on every CI run rather than
+only once at review time; the migration diff engine's destructive-change guard
+and codegen's dry-run check both work this way. Two narrower rules follow from
+the specific failures above: a command whose own failure would empty its
+result must have its exit status checked, since silence is not evidence of
+cleanliness, and under `set -e` an expected failure must be guarded by `if`,
+not read from `$?` afterward.
+
+This buys the only real evidence that a green pipeline means something — every
+guard's failing branch has run at least once under conditions someone chose —
+at the cost of a slower add-a-check workflow, since the demonstration is
+manual wherever the broken state isn't cheap to construct. Mechanically it's
+cheap to abandon, since it's a practice rather than a structure; what dropping
+it costs is confidence, and only gradually, because a guard that rots into
+uselessness is invisible by construction. Revisit if a guard is found silently
+passing despite this — the manual demonstration isn't working on its own, and
+guards need a shared harness that constructs the failure for them.
 
 ### Enums as text and check
 
