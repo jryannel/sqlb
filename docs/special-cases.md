@@ -14,6 +14,20 @@ rather than read; four of them came back different from what reading the source
 suggested, and those are collected under [What the tests
 changed](#what-the-tests-changed).*
 
+*Revised again 2026-08-15. All six proposed examples are now built —
+[`tasks-evolved`](../example/tasks-evolved), [`meter`](../example/meter),
+[`outbox`](../example/outbox), [`rooms`](../example/rooms),
+[`vault`](../example/vault), [`catalog`](../example/catalog) — each entry below
+says what its example confirmed and what it corrected. Three corrections are
+worth reading before the rest of this document, because they are exactly the
+kind of drift the introduction above warns will happen: the arithmetic upsert
+(§2) closed in [#90](https://github.com/jryannel/sqlb/issues/90), the `EXCLUDE`
+constraint (§4) shipped in [#121](https://github.com/jryannel/sqlb/issues/121),
+and the self-referencing `Ref` (§6) is now expressible via `TableDef.AddField`.
+This document's own age is the demonstration of its first sentence: fifteen
+days was enough for three of the six "not expressible" verdicts below to stop
+being true.*
+
 ## Why this document
 
 The evidence behind sqlb's coverage claims is four builds — `blog`, `tasks`,
@@ -212,6 +226,17 @@ items on the list. Each entry below says what remains.
 
 ### 1. `tasks-evolved` — the second year
 
+**Built:** [`example/tasks-evolved`](../example/tasks-evolved) — but not this
+entry alone. `example/evolve` already existed, undiscovered when this document
+was written, and independently settles the additive-plus-rename-plus-destructive
+shapes described here. `tasks-evolved` covers what `evolve` doesn't: an enum
+widened against existing rows, a `NOT NULL` addition with a hand-written
+backfill, an array column split into a join table, and — the finding neither
+this entry nor `evolve` anticipated — a partial unique index whose `CREATE …
+CONCURRENTLY` fails against violating data and leaves an *invalid* index
+behind, so a naive retry fails a second time with "already exists" rather than
+the constraint violation that actually explains it. See both READMEs.
+
 Not a new application. `example/tasks` already carries two additive migrations
 and a drift gate that replays them; this carries it through the six changes that
 are *not* additive:
@@ -238,6 +263,14 @@ untouched item on the list.
 
 ### 2. `meter` — the write is an increment
 
+**Built:** [`example/meter`](../example/meter). Leads with a correction: the
+arithmetic upsert this entry calls "the reason to build it" is no longer
+missing — `OnConflictSet` landed in [#90](https://github.com/jryannel/sqlb/issues/90),
+and the example's `TestArithmeticUpsertUnderConcurrency` is its demonstration
+under real concurrent writers, not merely a sequential proof. The composite
+key, the `date_trunc` bucket's parameterisation trap, and the empty-range
+aggregate's `NULL` trap are all still exactly as described below.
+
 Per-tenant usage: one row per `(tenant, day, kind)`, written by many concurrent
 producers, read as a chart.
 
@@ -259,6 +292,15 @@ response, which has no shape at all today, and whether a chart endpoint over a
 metering table can be generated rather than hand-written.
 
 ### 3. `outbox` — each row is handed to exactly one worker
+
+**Built:** [`example/outbox`](../example/outbox), and worth a naming note: a
+*different*, first-class `outbox` package now exists at the repository root —
+a change-feed `Dispatcher` implementing [ADR-0012](adr/0012-change-feed-outbox.md)
+for `rest`'s event stream, unrelated to this entry's competing-consumers job
+queue beyond sharing a name and a table-plus-worker shape. The example's
+README disambiguates the two explicitly. What this entry asks for — the lock
+holding under contention, a retry/backoff/dead-letter policy — remains an
+open, explicitly-not-frozen shape, exactly as ADR-0012 says it should.
 
 A transactional outbox and a pool of competing consumers: claim with `FOR UPDATE
 SKIP LOCKED`, retry with backoff on a relative time window, dead-letter after n
@@ -282,6 +324,15 @@ a lock test says anything about.
 
 ### 4. `rooms` — two bookings cannot overlap
 
+**Built:** [`example/rooms`](../example/rooms). Leads with a correction: the
+`EXCLUDE USING gist` constraint this entry says is "not expressible" now is —
+`schema.Exclusion` and `TableDef.AddExclude` shipped
+([#121](https://github.com/jryannel/sqlb/issues/121)), and its own doc example
+is almost this exact scenario. The example is the demonstration under real
+contention (8 goroutines racing an overlapping confirmed booking; exactly one
+wins), not a discovery. The timestamptz day-filter trap below is still real
+and still uncorrected.
+
 A room-booking service. The invariant is not a unique key and not a check: it is
 that no two confirmed bookings on one room may overlap in time.
 
@@ -301,6 +352,15 @@ the exclusion constraint. Whether sqlb carries a raw table-level constraint the
 diff can compare, or refuses in writing, is a decision nothing here can make.
 
 ### 5. `vault` — the row whose payload only Go may write
+
+**Built:** [`example/vault`](../example/vault). Confirms most of this entry
+and corrects the sentence just below — "the typed update facade omits it
+too" — against what `sqlb generate` actually emits: `SecretUpdate.SetCiphertext`
+et al. exist and work, because `Hidden` strips the REST create/update bodies
+and the typed *predicate* facade (`SecretCols`), not the typed `Update`
+setter facade, which is exactly the trusted-code path a real key rotation
+would use. See the example's README, "A third thing, and it is easy to
+conflate with the other two."
 
 Secrets for two kinds of owner. Ciphertext, nonce and key material are `Hidden`,
 so the generated create and update bodies cannot name them and the typed facade
@@ -323,6 +383,14 @@ side, where nothing is written down.
 reader has to see rather than an assertion a test can make.
 
 ### 6. `catalog` — the tree, and where search stops
+
+**Built:** [`example/catalog`](../example/catalog). Leads with a correction:
+this entry and `pgtest/census_test.go`'s own comment both say self-reference
+"cannot currently be named at all" because there is "no `AddField`" — there
+now is (`TableDef.AddField`), which makes `Category.AddField(schema.Ref("parent",
+Category))` expressible, with a real, enforced `FOREIGN KEY` — the opposite of
+what `ExternalRef` gave, measured below. Nothing about the search-escalation
+half changed.
 
 A product catalog with self-referencing categories and a search box that outgrows
 `ILIKE`.
