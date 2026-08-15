@@ -23,7 +23,7 @@ import (
 // TABLE this registry produces is the one in Schema minus the three
 // expressions — and it reaches every emitter that describes a row.
 //
-// [ADR-0041]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0041-computed-fields.md
+// [ADR-0041]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#computed-fields
 var Declared = declaredRegistry()
 
 func declaredRegistry() *schema.Registry {

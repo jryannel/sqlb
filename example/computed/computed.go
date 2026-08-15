@@ -32,7 +32,7 @@
 // expression: schema.Computed is a property of the table, so a value only one
 // query wants is still a RawSel.
 //
-// [ADR-0041]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0041-computed-fields.md
+// [ADR-0041]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#computed-fields
 package computed
 
 import (

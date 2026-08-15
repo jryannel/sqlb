@@ -330,12 +330,12 @@ type Options struct {
 	// is what makes sqlb.AfterCommit reachable from a generated write. Without
 	// it there is no commit for a hook to be after, so a documented feature is
 	// unreachable from the writes most applications actually issue
-	// ([ADR-0021](../docs/adr/0021-hooks-receive-an-event.md)).
+	// ([ADR-0021](../docs/architecture.md#hooks-receive-an-event)).
 	//
 	// The cost is a BEGIN/COMMIT round trip per write, and a server-side
 	// connection held for longer. Behind PgBouncer in transaction pooling mode
 	// that is a change in occupancy rather than only in latency
-	// ([ADR-0019](../docs/adr/0019-pgbouncer-in-the-path.md)), so this exists
+	// ([ADR-0019](../docs/architecture.md#pgbouncer-in-the-path)), so this exists
 	// for anyone who measures it and decides against.
 	//
 	// Turning it on silently stops any AfterCommit callback the resource's

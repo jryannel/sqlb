@@ -51,8 +51,8 @@ import (
 //
 //	mise run bench-pg
 //
-// [ADR-0040]: ../docs/adr/0040-the-driver-is-a-dependency.md
-// [ADR-0019]: ../docs/adr/0019-pgbouncer-in-the-path.md
+// [ADR-0040]: ../docs/architecture.md#the-driver-is-a-dependency
+// [ADR-0019]: ../docs/architecture.md#pgbouncer-in-the-path
 
 // benchRows is the page size the read benchmarks scan. Chosen to look like a
 // list endpoint rather than to flatter either side: large enough that

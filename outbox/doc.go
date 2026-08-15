@@ -84,7 +84,7 @@
 // therefore reports it rather than absorbing it: see [DispatcherOptions.OnError]
 // and [Dispatcher.Stats].
 //
-// [ADR-0012]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0012-change-feed-outbox.md
-// [ADR-0019]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0019-pgbouncer-in-the-path.md
-// [ADR-0045]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0045-the-stream-is-a-seam.md
+// [ADR-0012]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#change-feed-outbox
+// [ADR-0019]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#pgbouncer-in-the-path
+// [ADR-0045]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#the-stream-is-a-seam
 package outbox
