@@ -175,6 +175,12 @@ server over the manifest.
 | [`example/computed`](example/computed/) | Four ways to get a derived value out of Postgres — generated columns, trigger counters, projected expressions, views — and where sqlb's ceiling is today ([ADR-0041](docs/adr/0041-computed-fields.md)) |
 | [`example/evolve`](example/evolve/) | A schema that changed five times: what is free, what destroys data, and the rename that is a clean migration and a broken client at once ([the walkthrough](docs/migrations/refactoring-a-database.md)) |
 | [`example/withsqlc`](example/withsqlc/) | sqlb and sqlc over one schema, plus one list endpoint in [four stages](docs/refactoring-from-sqlc.md) from static SQL to a generated resource |
+| [`example/meter`](example/meter/) | An arithmetic upsert under real concurrency, the composite-key workaround it needs, and the `date_trunc`/empty-aggregate traps a metering chart hits first ([docs/special-cases.md](docs/special-cases.md#2-meter--the-write-is-an-increment)) |
+| [`example/rooms`](example/rooms/) | An `EXCLUDE` constraint stopping double-booked rooms under contention, and the silent-zero-rows timestamptz day-filter trap beside it ([docs/special-cases.md](docs/special-cases.md#4-rooms--two-bookings-cannot-overlap)) |
+| [`example/vault`](example/vault/) | A table whose entire payload is `Hidden`: a generated read surface, no generated write surface at all, and the hand-written endpoint that fills the gap ([docs/special-cases.md](docs/special-cases.md#5-vault--the-row-whose-payload-only-go-may-write)) |
+| [`example/catalog`](example/catalog/) | A self-referencing category tree with a real foreign key via `TableDef.AddField`, and where `ILIKE` search stops on purpose ([docs/special-cases.md](docs/special-cases.md#6-catalog--the-tree-and-where-search-stops)) |
+| [`example/outbox`](example/outbox/) | A competing-consumers job queue — `FOR UPDATE SKIP LOCKED`, retry backoff, dead-letter — explicitly one worked answer rather than a format sqlb ships ([ADR-0012](docs/adr/0012-change-feed-outbox.md)) |
+| [`example/tasks-evolved`](example/tasks-evolved/) | Six non-additive schema changes in a row against live data — a rename, a NOT NULL backfill, a destructive drop, an index build that fails and leaves an invalid index behind ([docs/special-cases.md](docs/special-cases.md#1-tasks-evolved--the-second-year)) |
 
 ## Development
 
