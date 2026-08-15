@@ -1179,7 +1179,49 @@ before-and-after correlation across a write, which nothing has produced yet.
 
 ### References declare their inverse
 
-_(pending merge from `docs/adr/0022-references-declare-their-inverse.md`)_
+An outside review argued that a one-sided foreign key can't tell the runtime
+its reverse cardinality, but that premise doesn't hold: the schema registry
+is a runtime value, a reference carries a pointer to its target table, and
+inbound edges are found by walking it, with cardinality following from
+whether the foreign-key column is unique. Forward expansion is fully
+determined by what the schema already records. Three things are genuinely
+missing, and all sit on the reverse side. There's no name: deriving one from
+the target table gives the same name to two different foreign keys pointing
+at the same table, and the distinction between them exists only in the
+schema author's head. There's no exposure decision: `Expandable` sits on the
+referencing column and speaks for the forward direction only, and deriving
+the reverse automatically would make it reachable by default, inverting this
+project's rule that capabilities are opt-in. And a reference across a module
+boundary carries no pointer at all, deliberately, since resolving one would
+require the cross-module import that module isolation avoids.
+
+So a reference may declare the name its target knows it by —
+`.Inverse("posts")` — and that declaration is what makes the reverse relation
+exist at all: absent it, the reverse isn't addressable, doesn't appear in the
+manifest, and isn't an error to omit. One side declares, so a module can gain
+an inbound relation without its owner changing a line, and exposure stays
+opt-in in both directions independently. The reverse compiles to a correlated
+subquery rather than a join, because joining a collection multiplies the base
+rows and forces a `GROUP BY` over every selected column, while a subquery in
+the projection composes by addition and stays one statement. The value
+returned is a list envelope (`{items, has_more}`), never a bare array, since a
+bare array can't say it's partial and it will be partial; the cap defaults to
+50 and is declared, with the child's own filtered endpoint as the escape hatch
+past it; and ordering carries the target's primary key as a tiebreaker, since
+under a `LIMIT` a non-total order doesn't reshuffle the result, it decides
+which children the caller never sees.
+
+This buys reverse expansion as a genuinely expressible half of `?expand`, and
+a manifest that describes a relation from both ends. The cost is a second name
+to keep true — one that lives on the referencing table but shapes the
+target's API surface, so reading one table's declaration in isolation no
+longer tells you everything its own endpoint exposes — and a real per-row
+cost forward expansion doesn't have: one subquery per base row per relation,
+which is why the foreign key's index becomes load-bearing rather than merely
+good hygiene. Revisit if forward expansion turns out to be all anyone asks
+for in practice, or if the cap and order need to vary per request — which
+would extend the wire format rather than the schema, a decision of its own
+weight since the relation name is already part of a frozen response shape.
 
 ### Mixins carry behaviour
 
