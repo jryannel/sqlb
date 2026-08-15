@@ -1269,7 +1269,54 @@ codegen-as-carrier direction stops being deferred.
 
 ### No annotation slot
 
-_(pending merge from `docs/adr/0024-no-annotation-slot.md`)_
+An outside review suggested an annotation slot on the table declaration,
+pointing at ent's ecosystem of generators hanging their own config off it —
+"that is why ent has an ecosystem and sqlb has a feature list." The
+observation is correct and the causation runs the right way; the question is
+whether the slot is the missing piece here. sqlb already has an annotation,
+and it's typed: `Expose(schema.REST{...})` is config attached to a table,
+meaningless to the database, read downstream — and it works precisely because
+it crosses the boundary as a value with a known shape, so codegen can read
+its fields and the manifest can describe what it means. An untyped bag
+couldn't do either. And the slot is the smaller half of what ent actually
+has: the thing that reads an annotation there is a generator with a plugin
+and template system, while this project's code generation is a fixed
+sequence of emitters named directly in the source, with no plugin interface
+and no way to add a fifth. An annotation added today would be a field only
+the in-tree emitters could read, which a typed field already serves better
+than an untyped one — the extensible generator is the load-bearing half of
+ent's feature, and it's far more work than the slot. The demand for either is
+also inferred rather than observed: this is a pre-1.0 project with one author
+and no third-party consumers yet, and the schema package sits in the stable
+tier, where a mistaken commitment is expensive to walk back.
+
+So there's no annotation slot, and the schema stays a closed, typed
+vocabulary: new config on a table gets added the way the REST-exposure field
+was, as a typed field with a consumer written at the same time in the same
+repository. If third-party extensibility is wanted later, the order runs
+opposite to what the review implied — an extensible generator first, with a
+stable view of the registry for it to read, and the annotation slot second,
+shaped by what that generator actually turns out to need. It may even turn
+out the emitter interface is the whole feature and the slot is never needed
+at all.
+
+This buys every declaration a known meaning, so validation can reject an
+incoherent one, linting can warn on it, the manifest can describe it, and the
+schema can round-trip back out as source — the last of which is the adoption
+loop, and it only works because the set of things a registry can hold is
+closed; an opaque bag would break it, since the renderer can't emit Go source
+for a value it doesn't know the shape of. The cost is that anyone wanting to
+attach their own config today forks the project or opens a pull request, and
+"send a patch" scales badly against one maintainer the day someone actually
+wants this. Declining now is deliberately the cheap direction: adding the
+slot later is additive and changes nothing existing, while narrowing or
+removing one after it ships is close to impossible, since the moment one
+extension writes into it, its shape is frozen in a stable-tier package.
+Revisit the moment someone asks — one concrete request for config sqlb
+doesn't understand, naming the consumer they intend to write, is deliberately
+a low bar — or if a second in-tree consumer wants config that doesn't belong
+in the existing typed fields, which is the same pressure arriving from
+inside instead of outside.
 
 ### Expansion is one statement
 
