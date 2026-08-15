@@ -1817,7 +1817,73 @@ than abandoning the mechanism.
 
 ### Array columns
 
-_(pending merge from `docs/adr/0033-array-columns.md`)_
+Two outside evaluations named array columns the cheapest schema gap with
+the most real call sites, and the gap was total rather than partial: with
+no `text[]` mapping, `introspect` didn't drop an array column, it refused
+one, and one array column anywhere in a module meant the whole module
+failed the adoption loop's empty-diff test. jsonb doesn't answer this for
+an adoption target that already has `text[]` — declaring it `jsonb` makes
+the diff render a rewriting `ALTER`, destroying the zero-migration probe
+adoption exists to offer, and it loses on the wire too, since a JSON type
+emits `unknown` in the TypeScript client where an array of text could say
+`string[]`.
+
+So an array is its element type plus a flag — `FieldDesc.Type` keeps naming
+the element and gains `Array bool` beside it, rather than a fused constant
+like `TypeTextArray` — because the filter parser needs the element type
+back: `?tags=has.urgent` binds a scalar `text`, and a fused type would have
+to be split apart again at the one place that most needs to get it right.
+`Nullable` still means the column may be NULL, but a NULL *element* is
+refused at validation time, since `{a,NULL,b}` versus `NULL` is a
+distinction neither generated client can express. The Go-side type is a
+plain slice, `[]string`, not a named `sqlb.TextArray` — decided by the
+adoption path, since sqlc in pgx mode emits a plain slice for `text[]`, and
+a named type would make arrays absent from exactly the path meant to prove
+the library cheaply. `Sortable` and `Searchable` are refused outright,
+since sorting would put an array into a keyset cursor, and `Filterable`
+requires a GIN index, since an array filter with no index is a sequential
+scan — the same failure vector-index declarations exist to name, arriving
+here at a fraction of the cost to get right.
+
+The operator vocabulary tracks what a census of real usage actually
+called for: `has` binds a scalar element (`$1 = ANY(tags)`) and covers the
+large majority of observed queries; `hasany` (`tags && $1`) and `hasall`
+(`tags @> $1`) bind whole arrays for the rest. `contains`, which reads
+naturally, is deliberately not one of them — it stays text-only, since two
+operators sharing one name and differing only by column type is exactly
+the ambiguity the generated clients exist to remove, and a caller who
+types it gets refused by name toward `has`. Negated forms (`nhas`,
+`nhasany`, `nhasall`) were added once the JSON filter tree gained a general
+`not` group: the URL grammar conjoins by design and has nowhere to put a
+`not`, so without negated array operators the two filter frontends would
+have compiled different vocabularies, breaking this project's rule that
+they compile to the same predicate. Each negated form compiles to a plain
+`NOT (…)`, not a hand-derived complement, so a NULL column matches neither
+the positive nor the negative form — three-valued logic that only a real
+Postgres could settle, and is asserted there rather than against rendered
+SQL text.
+
+The codec that first made binding and scanning a `[]string` possible — an
+array-literal encoder and decoder written by hand under a stdlib-only
+constraint — was later deleted outright once the driver dependency
+[moved to pgx](#the-driver-is-a-dependency), which decodes and encodes
+arrays natively; a `[]string` now binds and scans with nothing in between.
+That deletion left every decision here untouched, because the element-type
+shape, the plain slice, the operator set and the refusals never depended
+on which library did the decoding — only on what the wire format and the
+schema needed to say. What's bought is that a single unsupported array
+column stops failing an entire module's adoption; what it costs is several
+switch statements across the emitters that grow a case with no compiler to
+check they all did — a missed arm in the TypeScript emitter would produce
+a client type silently wider than the server, the one failure the
+TypeScript client's own design claims cannot happen. Revisit if `has`
+turns out to be the only operator anyone reaches for in practice, which
+would mean the whole-array operators weren't worth building; if a real
+sqlc struct doesn't present as a plain slice on a schema with nullable
+elements, which would argue for a named type after all; or if the GIN
+requirement is experienced as a tax — an index added only to satisfy a
+check and never queried through — which would turn it from a refusal into
+a lint.
 
 ### One column addresses a row
 
