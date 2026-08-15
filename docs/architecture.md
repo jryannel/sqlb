@@ -2898,7 +2898,57 @@ inheriting global rules — the fix then is making a bare executor refuse a
 
 ### Auto incrementing keys
 
-_(pending merge from `docs/adr/0048-auto-incrementing-keys.md`)_
+Neither `BIGSERIAL` nor `GENERATED … AS IDENTITY` could be declared, because
+`introspect` correctly refused to import a serial as an ordinary column
+whose default happens to name a sequence — that produces a diff proposing
+to drop the default outright, since nothing renders the `CREATE SEQUENCE`
+behind it. Across a real multi-application platform this made exactly one
+kind of table undescribable: an append-only log using the serial as a
+tiebreak so `ORDER BY occurred_at DESC, id DESC` stays a total order, with
+an index built over that same column. "Use a UUID instead" isn't a
+substitution here — a monotonic counter is the thing being asked for, and
+widening the densest key Postgres offers to sixteen bytes on the
+highest-volume tables in the system, just to satisfy the declaration
+language, is the same trade `SmallInt` and `PrimaryKeyColumns` existed to
+retire.
+
+Auto-ness is declared as a property of a column — `Auto`, alongside `Array`
+and `Size` — rather than as a distinct `Type`. A `bigserial` column *is* a
+`bigint`: that's what the catalog reports and what an `ALTER COLUMN TYPE`
+has to name, so a separate type constant would have split the filter
+grammar and sort machinery the same way array types were refused a type of
+their own, and would have turned a column that stops auto-incrementing into
+a table rewrite instead of what it actually is, a default going away. Both
+Postgres spellings are declarable, and the older one — serial plus a named
+sequence — is not deprecated in favor of the newer, cheaper-to-own identity
+column, because the entire demand for this feature came from databases that
+already have serials; a DSL that could declare only the modern spelling
+would propose rewriting those columns on its first diff. Everything
+downstream asks one question, not "is this a sequence" — `DatabaseSupplied`
+folds a plain default, a serial and an identity together, which is what
+lets the existing `default` struct tag make the runtime work unchanged: the
+engine already omits a zero value on such a column, so the write path never
+has to learn what a sequence is. A `GENERATED ALWAYS` column marks itself
+read-only at declaration, the same move made for computed columns, so an
+insert naming it is rejected once rather than every write path having to
+know the feature exists.
+
+Two things are deliberately left as named hazards rather than automated
+away. The sequence's name is derived (`<table>_<column>_seq`) and not
+recorded, so a database whose sequence is actually named something else
+round-trips correctly but a database rebuilt from a diff gets the
+conventional name — a small, one-directional lossy edge, accepted because
+nothing compares the name so pinning it would add a field nothing reads.
+And when a column *becomes* auto-incrementing on a populated table, the
+migration names the `setval` or `RESTART WITH` that has to run first but
+does not generate it, because the row count isn't in the schema and a
+generated `setval` scanning the column's own max would be a full-table scan
+written into a migration by something that can't see the table's size —
+getting it wrong is a duplicate key on the next insert, which is loud
+enough that it should stay a person's decision rather than a quiet guess.
+Revisit if a project's sequence name turns out to be load-bearing —
+referenced by `nextval()` in application SQL or by a grant — which would
+earn `Auto` a name field the way a check constraint earned `CheckName`.
 
 ### The skill is generated
 
