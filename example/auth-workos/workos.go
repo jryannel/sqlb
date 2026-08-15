@@ -20,6 +20,21 @@
 // It lives under example/ with its own go.mod for exactly that reason —
 // see docs/architecture.md's "A Verifier composes with the principal
 // seam" decision.
+//
+// # Why Verify never returns sqlb.TransientError
+//
+// golang-jwt/jwt/v5 wraps any error the Keyfunc callback returns as
+// jwt.ErrTokenUnverifiable, and keyfunc's own top-level error
+// (keyfunc.ErrKeyfunc) does not distinguish "the JWKS was fetched but
+// doesn't contain this key" from "the JWKS could not be fetched at all" —
+// both wrap the same way. There is no reliable sentinel to tell a WorkOS
+// outage apart from an unrecognized signing key, and string-matching an
+// error message to guess would be worse than not guessing. So every
+// rejection Verify makes, including an unknown key, answers as a plain
+// error (401 via sqlb.Middleware). The one place a WorkOS-unreachable
+// failure surfaces cleanly is New, which fetches the JWKS synchronously
+// at construction and returns an ordinary error if that fails — handled
+// as a startup failure, not a per-request one.
 package authworkos
 
 import (

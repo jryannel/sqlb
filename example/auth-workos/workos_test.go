@@ -184,3 +184,73 @@ func TestNew_RejectsNilMapper(t *testing.T) {
 		t.Fatal("New accepted a nil mapper")
 	}
 }
+
+func TestVerify_RejectsWrongIssuer(t *testing.T) {
+	key := newTestRSAKey(t)
+	v := newTestVerifier(t, key, "client_test123")
+	claims := validClaims()
+	claims["iss"] = "https://evil.example.com"
+	token := mintToken(t, key, claims)
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted a token with the wrong issuer")
+	}
+}
+
+func TestVerify_RejectsExpiredToken(t *testing.T) {
+	key := newTestRSAKey(t)
+	v := newTestVerifier(t, key, "client_test123")
+	claims := validClaims()
+	past := time.Now().Add(-time.Hour)
+	claims["iat"] = past.Add(-time.Minute).Unix()
+	claims["exp"] = past.Unix()
+	token := mintToken(t, key, claims)
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted an expired token")
+	}
+}
+
+func TestVerify_RejectsMissingExpiry(t *testing.T) {
+	key := newTestRSAKey(t)
+	v := newTestVerifier(t, key, "client_test123")
+	claims := validClaims()
+	delete(claims, "exp")
+	token := mintToken(t, key, claims)
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted a token with no exp claim")
+	}
+}
+
+func TestVerify_RejectsWrongClientID(t *testing.T) {
+	key := newTestRSAKey(t)
+	v := newTestVerifier(t, key, "client_test123")
+	claims := validClaims()
+	claims["client_id"] = "client_someone_else"
+	token := mintToken(t, key, claims)
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted a token issued for a different client_id")
+	}
+}
+
+func TestVerify_RejectsWrongSigningKey(t *testing.T) {
+	registeredKey := newTestRSAKey(t)
+	forgedKey := newTestRSAKey(t) // never published in the keyset below
+	v := newTestVerifier(t, registeredKey, "client_test123")
+	token := mintToken(t, forgedKey, validClaims())
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted a token signed with an unregistered key")
+	}
+}
+
+func TestVerify_RejectsMalformedToken(t *testing.T) {
+	key := newTestRSAKey(t)
+	v := newTestVerifier(t, key, "client_test123")
+
+	if _, err := v.Verify(t.Context(), "not-a-jwt-at-all"); err == nil {
+		t.Fatal("Verify accepted a malformed token")
+	}
+}
