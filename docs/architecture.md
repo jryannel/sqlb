@@ -1,7 +1,7 @@
 # Architecture
 
 How sqlb fits together, and why the seams are where they are. For the reasoning
-behind individual choices, see the [decision records](adr/). For where this is
+behind individual choices, see [Decisions](#decisions) below. For where this is
 going, see the [vision](vision.md).
 
 *Last reviewed: 2026-07-28.*
@@ -39,10 +39,10 @@ going, see the [vision](vision.md).
 
 Two things carry most of the design. The first is that a **query is a value**,
 so it can be built conditionally, handed to a hook to amend, and inspected
-without being run ([ADR-0002](adr/0002-queries-are-values.md)). The second is
+without being run ([ADR-0002](#queries-are-values)). The second is
 that there is **one predicate AST with two producers** — hand-written Go and the
 URL filter grammar — so escaping, authorisation and hook application each happen
-exactly once ([ADR-0003](adr/0003-one-ast-two-producers.md)).
+exactly once ([ADR-0003](#one-ast-two-producers)).
 
 Almost everything else follows from those two.
 
@@ -65,7 +65,7 @@ Almost everything else follows from those two.
 
 The dependency direction matters: `schema` is a leaf that nothing imports at
 runtime, and `sqlb` has no dependency on `schema`. That is deliberate. It is
-what makes [ADR-0010](adr/0010-codegen-is-optional.md) possible — the engine
+what makes [ADR-0010](#codegen-is-optional) possible — the engine
 cannot quietly grow a dependency on the schema DSL, because it cannot see it.
 Capabilities reach the runtime as struct tags or `Describe` calls, never as a
 schema import.
@@ -89,23 +89,23 @@ depends on `rest`. `mise run deps-check` proves this per package rather than per
 module — the allowed set is computed from what pgx itself pulls in, so it cannot
 go stale — and it ends by checking that it can still see huma in `rest` and that
 it still *refuses* huma everywhere else. A guard that cannot fail is worse than
-no guard ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+no guard ([ADR-0016](#guards-proven-both-ways)).
 
 `Executor` is the two-method subset of pgx that the engine needs — `Query` and
 `Exec` — so a `*pgxpool.Pool`, a `*pgx.Conn` and any instrumenting wrapper all
 work unchanged. So does a `pgx.Tx`, which is the point of taking pgx at all:
 sqlb writes join a transaction the application opened
-([ADR-0040](adr/0040-the-driver-is-a-dependency.md)). `sqlb.DB` is a handle over
+([ADR-0040](#the-driver-is-a-dependency)). `sqlb.DB` is a handle over
 an `Executor`, adding `WithTx` and a scoped hook registry; it satisfies
 `Executor` itself, which is what lets it be adopted without touching call sites
-([ADR-0020](adr/0020-transaction-scoped-handle.md)). `DB.Tx` reaches the
+([ADR-0020](#transaction-scoped-handle)). `DB.Tx` reaches the
 underlying `pgx.Tx`, which is how a unit of work is shared with code wanting
 more than two methods — `CopyFrom`, `SendBatch`, or sqlc's generated `DBTX`.
 `rest` takes a `huma.API`, not a router, so the choice of chi, gin, echo or
 `net/http` — and all of that router's middleware — stays the application's. It
 wraps each generated write in a transaction, which is what gives a hook a commit
 to be after; reads are left alone, since one `SELECT` is atomic already
-([ADR-0021](adr/0021-hooks-receive-an-event.md)).
+([ADR-0021](#hooks-receive-an-event)).
 
 ## Request path
 
@@ -114,7 +114,7 @@ A list request through `rest.Resource`:
 1. **Parse.** `filter.Parse` reads the query string against the model. Unknown
    parameters, undeclared capabilities and uncoercible values are collected into
    a `filter.Errors` — all of them, not the first
-   ([ADR-0011](adr/0011-actionable-errors.md)). Values become typed Go values
+   ([ADR-0011](#actionable-errors)). Values become typed Go values
    here; nothing downstream sees strings.
 2. **Apply.** `filter.Apply` writes predicates, ordering, projection and limits
    onto a `*sqlb.Builder[T]`. It owns the projection and defaults to non-hidden
@@ -123,10 +123,10 @@ A list request through `rest.Resource`:
    Cloning is what stops a hook's predicates accumulating when the same query
    value runs twice. A hook that returns an error aborts before any SQL is
    issued, so a missing tenant fails closed
-   ([ADR-0008](adr/0008-hooks-as-domain-seam.md)). Which registry the hooks come
+   ([ADR-0008](#hooks-as-domain-seam)). Which registry the hooks come
    from is read off the executor: a `*sqlb.DB` carries one, and anything else
    carries none, so a statement issued against a bare pool runs unconfined
-   ([ADR-0047](adr/0047-no-default-hook-registry.md)).
+   ([ADR-0047](#no-default-hook-registry)).
 4. **Compile.** The AST renders to SQL with `$N` placeholders. Values are always
    bind parameters. Identifiers are validated against the model and quoted.
    `LIMIT`/`OFFSET` are literals so the planner can see them — safe because both
@@ -155,7 +155,7 @@ since their contents are opaque and could otherwise re-associate a surrounding
 predicate.
 
 **Opt-in capabilities.** A column that does not declare `Filterable` cannot be
-filtered, ever ([ADR-0006](adr/0006-capabilities-are-opt-in.md)). `Hidden` goes
+filtered, ever ([ADR-0006](#capabilities-are-opt-in)). `Hidden` goes
 further: the column is reported as unknown rather than as forbidden, so its
 existence cannot be probed, and `Hidden` plus `Filterable` is a schema
 validation error because a filterable secret can be recovered a character at a
@@ -189,7 +189,7 @@ the point.
 ## API surface
 
 There are no `internal/` packages, and the layout is flat
-([ADR-0013](adr/0013-no-internal-split.md)). The genuinely internal machinery —
+([ADR-0013](#no-internal-split)). The genuinely internal machinery —
 the compiler, scanning, model building, escaping — is already unexported within
 package `sqlb`, which is a finer-grained boundary than `internal/` can express.
 
@@ -268,8 +268,8 @@ working is worse than no test, so those are exercised as real build attempts.
   production wherever one was uncommented by hand.
 - No change feed, and no MCP server over the manifest. See the
   [vision](vision.md). The TypeScript client, the Dart client and the CLI have
-  since landed ([ADR-0028](adr/0028-typescript-client.md),
-  [ADR-0031](adr/0031-dart-client.md), [ADR-0029](adr/0029-go-cli.md)); all
+  since landed ([ADR-0028](#typescript-client),
+  [ADR-0031](#dart-client), [ADR-0029](#go-cli)); all
   three read the schema rather than the OpenAPI document, for the reason the
   diagram above gives.
 - `?expand` resolves one level. A relation expands to its row; that row's own
@@ -282,9 +282,11 @@ working is worse than no test, so those are exercised as real build attempts.
 Decisions that shaped this codebase, folded in one at a time from a former
 `docs/adr/` directory of individually numbered records. Each subsection below
 used to be its own file; the reasoning now lives here, and its history lives
-in this file's git history rather than in a separate directory — `git log --follow -p -L /^### <heading>/,/^### /:docs/architecture.md` finds the commit that made or last revised a given decision. A change to a
-decision below gets its own commit, and the commit message carries the *why*,
-the way an ADR's body used to.
+in this file's git history rather than in a separate directory —
+`git log -G'### <heading>' -- docs/architecture.md` finds the commit that made
+or last revised a given decision. A change to a decision below gets its own
+commit, and the commit message carries the *why*, the way an ADR's body used
+to.
 
 ### Postgres only
 
