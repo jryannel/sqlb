@@ -1,6 +1,7 @@
 package sqlb
 
 import (
+	"context"
 	"net/http"
 	"strings"
 )
@@ -27,3 +28,32 @@ func BearerToken(r *http.Request) (string, bool) {
 	token := strings.TrimSpace(h[len(prefix):])
 	return token, token != ""
 }
+
+// Verifier checks a credential and returns the application's own principal
+// type. T is the same type the application later reads back with
+// PrincipalFrom[T] — Verifier does not introduce a new principal shape, it
+// produces the one the application already owns.
+//
+// Different providers hand back different claim shapes; Verifier stays
+// generic over T rather than sqlb defining a canonical principal struct, so
+// a WorkOS, Clerk, Zitadel, or self-hosted-JWT adapter maps its provider's
+// claims into whatever type the application's hooks already read via
+// PrincipalFrom[T].
+type Verifier[T any] interface {
+	Verify(ctx context.Context, cred string) (T, error)
+}
+
+// TransientError marks a Verify failure as not-a-verdict-on-the-credential —
+// a network error reaching the provider, a provider 5xx, a timeout — so
+// Middleware answers 500 instead of 401. "The provider is down" and "the
+// token is bad" are different failures for both an operator paging on 5xx
+// and a client that should not retry a rejected credential; collapsing them
+// into one status code erases that distinction.
+//
+// This is opt-in. A Verifier with no network call to fail — local JWT
+// verification, for instance — never has a transient failure mode and never
+// needs to return one; every error it returns is correctly a 401.
+type TransientError struct{ Err error }
+
+func (e TransientError) Error() string { return e.Err.Error() }
+func (e TransientError) Unwrap() error { return e.Err }
