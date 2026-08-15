@@ -396,7 +396,32 @@ be a stop-the-line signal for the whole approach.
 
 ### Runtime query engine
 
-_(pending merge from `docs/adr/0005-runtime-query-engine.md`)_
+Since sqlb generates code anyway, the query builder could have been
+generated per table — `Users.Age.Gte(18)` as real Go, the way ent does it.
+That trades compile-time safety against generated-code volume: a generated
+builder catches a hallucinated column name at compile time, which matters
+when an agent is writing the queries, but adds hundreds of lines of API
+surface per table.
+
+Instead the query engine is generic and reflective: `sqlb.Query[T]()` builds
+a model from `db` and `sqlb` struct tags, cached per type, and column
+references are strings at the core (`sqlb.F("age")`). Compile-time safety is
+recovered separately by a thin generated facade over the same model rather
+than by generating the builder itself. This keeps the engine one small
+package instead of a template that has to produce a correct API per table,
+and it means the engine works on any tagged struct, including ones sqlb
+never generated — which is what makes optional codegen possible. A new
+builder feature benefits every table at once, with no regeneration needed.
+
+The trade shows up as `sqlb.F("titel")` compiling fine and failing at
+runtime, and as the engine having to validate column names itself rather
+than getting that from the type system; reflective scanning is also slower
+than generated field access, though that has not been measured against real
+query latency. Revisit if the typed facade proves insufficient and
+column-name typos keep reaching production — then generate the builder after
+all — or if profiling shows reflective scanning is a meaningful share of
+request time on realistic result sets, in which case generate scan
+functions while keeping the builder itself generic.
 
 ### Capabilities are opt in
 
