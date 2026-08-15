@@ -1747,7 +1747,73 @@ spelling.
 
 ### Sqlb command
 
-_(pending merge from `docs/adr/0032-sqlb-command.md`)_
+The schema is Go, not a file (see "Schema as Go DSL" above), and a table
+only exists in a registry once the package declaring it is linked in — so
+unlike `sqlc` or `atlas`, a prebuilt `sqlb` binary cannot read a project's
+schema; only a program that imports it can. Each project first answered
+this by hand-writing its own `cmd/gen/main.go`, and the copies drifted: a
+`-dir` flag whose correct default changed depending on whether it ran from
+a shell, `go generate`, or CI, and a `codegen.Options` literal that was the
+only project-specific line in sixty. So `sqlb generate ./taskschema` writes
+a three-line driver to a temporary directory outside the repository,
+compiles it with the working directory at the module root, runs it, and
+deletes it — no artefact to gitignore, none left behind on failure. The
+driver itself stays three lines; everything it could contain lives in
+`codegen.Main`, which is ordinary tested code, because generated code
+cannot be tested but the package that generates it can. A project declares
+itself by exporting a convention function, `SqlbProject() codegen.Project`,
+rather than a config file — a config file would be a second declaration
+language mirroring `codegen.Options` field for field, drifting whenever a
+field is added and reporting mistakes at runtime, where the Go function is
+compiler-checked and `go doc`-documented. Paths always resolve against the
+module root, never the schema package or the working directory, which is
+what deletes the need for a `-dir` flag at all: the command means the same
+thing from all three callers that had to agree before.
+
+Two verbs need no compile: `sqlb check` asks whether committed output
+matches what the emitters would produce, a pure function of the schema, so
+it gates every push with no database; `sqlb survey` introspects a live
+Postgres and needs no schema package either. `sqlb migrate` is the verb
+that does need one — it asks whether the committed migration history
+*builds* the declared schema, answerable only by replaying it into an
+empty database. Building `migrate` surfaced that a declared `CHECK`
+constraint, and later a partial index's `WHERE` clause, never round-trip as
+text: Postgres stores a parse tree and renders it back canonicalised, so
+the author's spelling is unrecoverable and comparing declared-versus-live
+as strings reports a phantom diff. Canonicalising both sides in Go was
+rejected — stripping parentheses loses information, since `(a OR b) AND c`
+and `a OR (b AND c)` reduce alike, so a heuristic can call two different
+constraints equal and silently produce no migration where one was needed,
+a failure quieter than the loud, visible churn it would replace. Instead
+`shadow.Normalize` adds the declared expression to the replayed table,
+reads back what Postgres actually stored, and rolls back — correct by
+construction, one round trip per expression, available only because the
+command already had a scratch database open at the right moment.
+
+`sqlb survey` was originally its own binary, on the reasoning that it needs
+no schema package to compile — but that's a fact about one verb's
+arguments, not a reason for a second binary with its own help text and
+install line. It was folded into `sqlb` as a fifth verb once the actual
+boundary became clear: the compile is a consequence of the schema being
+Go, not a property of the command. Cobra was considered for the merged
+tree and rejected on the command's own shape: `cmd/sqlb` doesn't parse the
+driving verbs' flags, it forwards them opaquely for `codegen.Run` to parse
+on the far side, so cobra confined to `cmd/sqlb` would own a five-case
+switch and none of the flags, while cobra pushed far enough to own the
+flags would put a CLI framework inside `codegen`, a library package every
+consumer imports — a dependency paid for by every consumer to improve the
+help text of a binary only maintainers run, with no argument strong enough
+to justify it. What this buys is a workflow that is one command with
+byte-identical output to the generators it replaced; what it costs is a
+real compile on every invocation — sub-second warm, the module's full
+dependency graph cold — and a hard requirement that `go` is on the path,
+so `sqlb` cannot be a binary dropped into a container with no compiler.
+Revisit if a project needs something `Project` can't express and reaches
+for a hand-written `main` again — widen the type rather than accept that,
+since a working hand-written generator is one nobody comes back from — or
+if the compile cost is felt in the inner loop rather than only in CI, which
+argues for caching the built driver keyed on the module's build ID rather
+than abandoning the mechanism.
 
 ### Array columns
 
