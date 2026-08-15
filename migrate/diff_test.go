@@ -309,6 +309,17 @@ func TestDiffExistingTableIndexIsConcurrent(t *testing.T) {
 	if idx.Down != `DROP INDEX CONCURRENTLY "posts_slug_idx";` {
 		t.Fatalf("index Down: %s", idx.Down)
 	}
+	// A CONCURRENTLY build that fails against existing data leaves an invalid
+	// index behind instead of rolling back — issue #242 — so the comment has
+	// to say so, and say what to run (this change's own Down) before an
+	// operator reissues the identical Up and gets "already exists" instead of
+	// the real error.
+	if !strings.Contains(idx.Comment, "leaves an invalid index behind") {
+		t.Fatalf("comment should warn that a failed CONCURRENTLY build leaves an invalid index behind: %q", idx.Comment)
+	}
+	if !strings.Contains(idx.Comment, "Down before retrying") {
+		t.Fatalf("comment should point at this change's Down as the fix: %q", idx.Comment)
+	}
 }
 
 func TestDiffIndexRedefinedIsDropAndCreate(t *testing.T) {
