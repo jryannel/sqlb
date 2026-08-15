@@ -2007,7 +2007,83 @@ has, a distinct feature from this one.
 
 ### The wire is the column name
 
-_(pending merge from `docs/adr/0036-the-wire-is-the-column-name.md`)_
+Field naming and the list envelope shape were both decided in practice —
+every JSON tag matched the column name, every list response shared one
+envelope — and undocumented in [compatibility.md](compatibility.md), which
+freezes the filter grammar for the same reason but said nothing about
+either. That's the state that produces a "we never promised that"
+argument later, and two adoption evaluations measured the cost of not
+having settled it: one found 85% of a codebase's JSON tags already
+snake_case with the rest to rename on both sides; another found camelCase
+throughout plus its own `{data, total, cursor, hasMore}` envelope. Neither
+found the cost unpayable, but neither was "no change needed" either. The
+underlying argument for settling on one spelling is that a client which
+renamed fields would need a mapping table, and a mapping table is the one
+thing in otherwise-generated code with a reason to drift — the first time
+it did, a column would arrive as `undefined` in a UI rather than failing
+anywhere a test would see it.
+
+So a column's wire spelling is one thing, reaching the response body, the
+request body, the OpenAPI document, the filter grammar's parameter names,
+and both generated clients identically — `?created_at=gte.…` names the
+same thing the response does — and there is no per-field override, since
+that's exactly the mapping table this design refuses. The list envelope is
+one shape for every resource (`items`, `page`, `per_page`, `has_more`,
+`next_cursor`, `total`), not one per resource, so a generated cursor pager
+or query-key factory is written once against it. Both are frozen at 1.0.
+The spelling was originally the identity function — the wire name is
+exactly the column name, snake_case, no transformation — until a third
+adoption data point landed on the far side of the earlier evaluations: a
+68-table application at 100% camelCase, one of six applications in the
+same position, meaning the rename cost wasn't paid once but six times.
+That pressure forced two candidate escapes, and both turned out worse than
+a per-field mapping. Renaming the Postgres columns themselves to camelCase
+was withdrawn as advice outright — a camelCase identifier is reachable in
+Postgres only double-quoted, so it breaks every hand-written query, every
+`psql` session and every `pg_dump` a human reads, permanently, for a
+Postgres-only library, which costs strictly more than the problem it
+solves and isn't reversible the way a wire format choice is. And pushing
+the transformation into the adopter's own transport layer just relocates
+the exact drift risk the whole design exists to prevent, to hand-written
+code with none of sqlb's own guarantees around it — one in-flight
+adoption already had such a file and reported it as the least-checked code
+in the port.
+
+So the spelling became a declared total function of the column name,
+`Verbatim` by default and `WireCase(Camel)` opt-in, applied by the same
+pure function at every surface — still one spelling per deployment, still
+derived, still no per-field override, and still additive: `Verbatim`
+remains the default so no existing deployment is affected. Because
+`snake → camel` isn't invertible over every possible column name (`pos_x_2`
+round-trips to `pos_x2`, not itself), `Validate` computes each column's
+wire name and its inverse and refuses the schema outright if any column
+doesn't round-trip — an ambiguity becomes a compile-time error on a schema
+nobody has deployed yet, rather than a wrong parameter name in a shipped
+client. The derivation crosses into the runtime as data attached to the
+generated model, the same way capabilities already cross as struct tags,
+never as a policy the runtime evaluates — preserving the rule that the
+request path may not import `schema`, so the DSL stays optional. Two
+follow-on gaps surfaced after the amendment shipped, both from the same
+cause: a surface that *describes* the wire rather than speaks it wasn't
+among the five that were actually tested. The compatibility snapshot
+matched fields by column name, so flipping a schema's `WireCase` respelled
+every field of every resource while the compatibility gate stayed green,
+blind to the one edit that renames everything at once; and the generated
+manifest reported the column's own name rather than the derived wire name,
+so a camelCase schema's worked example printed a request that would 400.
+Both are fixed now, and both are evidence that "one setting, several
+surfaces" has to be tested surface by surface rather than asserted.
+
+`compatibility.md`'s frozen entry reads "one spelling per deployment,
+computed from the column name by the schema's declared `WireCase`" rather
+than "the column's own name, verbatim" — what's frozen is that there is
+exactly one derived spelling, not which derivation a given deployment
+picked; changing a deployment's `WireCase` afterward is a breaking change
+for that deployment, exactly like renaming a column. Revisit if the
+envelope's key names collide expensively with a common convention, which
+would call for the same shape of answer — one choice per deployment, not
+per resource — or if a genuinely second wire format is needed, which is a
+second adapter rather than a configuration of this one.
 
 ### Search is ilike until it cannot be
 
