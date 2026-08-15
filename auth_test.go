@@ -14,10 +14,10 @@ import (
 
 func TestBearerToken(t *testing.T) {
 	cases := []struct {
-		name      string
-		header    string
-		wantCred  string
-		wantOK    bool
+		name     string
+		header   string
+		wantCred string
+		wantOK   bool
 	}{
 		{"present", "Bearer abc123", "abc123", true},
 		{"case-insensitive scheme", "bearer abc123", "abc123", true},
