@@ -196,4 +196,4 @@ Composite primary keys (a row is addressed by one column; the refusal names
 `EXCLUDE USING gist`, `tsvector` full-text search (`?search` is `ILIKE`),
 self-referencing `parent_id` as a typed reference, and generated
 columns/triggers. These are decisions with records behind them, not gaps
-awaiting a patch — check `docs/adr/` before proposing one.
+awaiting a patch — check architecture.md's Decisions section before proposing one.

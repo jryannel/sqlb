@@ -3,7 +3,7 @@
 > **Status: all five findings are triaged**, in
 > [release-1.0.md stream G](release-1.0.md#g-port-findings-triaged--two-land-four-are-written-down).
 > One is done (#5, pgtype scanning — now covered by `pgtest/pgtype_test.go`), one
-> is answered by [ADR-0007](adr/0007-generated-rest-handlers.md) (#1, the module
+> is answered by [ADR-0007](architecture.md#generated-rest-handlers) (#1, the module
 > graph), the bind-parameter cast (#2) lands before 1.0, and #3 and #4 are
 > scheduled for 1.1 with the documentation they owe landing before the tag.
 > Finding #1's second half — "keep the engine's `go` directive as low as it
@@ -515,7 +515,7 @@ create/read/list/update; tenant hooks supply and scope `org_id` from the request
 Three findings from standing it up:
 
 1. **The server refuses to mount an unscoped write
-   ([ADR-0030](adr/0030-declared-scope-is-required.md)).** With
+   ([ADR-0030](architecture.md#declared-scope-is-required)).** With
    `BeforeQuery` + `BeforeCreate` registered but no `BeforeUpdate`, `Register`
    returned: *"/projects exposes …update…, and nothing confines Project — update:
    BeforeUpdate is not registered (org_id is Scoped)."* A PATCH that could cross
@@ -541,7 +541,7 @@ of whether the generated server works.
 
 The one Go-side objection from finding #2 above — the generated model typed ids as
 `string` where the subject's sqlc uses `uuid.UUID` — is a one-line fix, and it behaves
-exactly as [ADR-0035](adr/0035-type-overrides.md) says: an override is a
+exactly as [ADR-0035](architecture.md#type-overrides) says: an override is a
 **rendering** decision.
 
 ```go

@@ -16,7 +16,7 @@ used to hand-write that glue in three packages (`dbbase`, `sqlbkit`, `httpkit`);
 
 **It is glue to copy, not a library to import.** It was briefly published as a
 module, `github.com/jryannel/sqlb/sqlbfx`, and
-[ADR-0044](../../docs/adr/0044-the-container-is-an-adapter.md) records the
+[ADR-0044](../../docs/architecture.md#the-container-is-an-adapter) records the
 reversal: nearly all of it is opinion — chi, humachi, goose, `log/slog` — and
 opinions that load-bearing are better adapted in a file you own than taken
 whole from a dependency. [`fxkit/doc.go`](fxkit/doc.go) states the four
@@ -25,7 +25,7 @@ obligations a copy has to preserve, which is the part that is not opinion.
 The schema is deliberately small — two tables, one of them a tenant — because
 it is not the subject. It has exactly one property that matters: `notes.space_id`
 and `spaces.id` are `Scoped`, so the generated resources refuse to mount unless
-the hooks that confine them are registered ([ADR-0030](../../docs/adr/0030-declared-scope-is-required.md)).
+the hooks that confine them are registered ([ADR-0030](../../docs/architecture.md#declared-scope-is-required)).
 That refusal is what makes the container's ordering guarantee worth stating,
 and it is what [`app_test.go`](app_test.go) asserts by taking a module away.
 
@@ -107,7 +107,7 @@ rest: /notes exposes create|read|update|delete|list, and nothing confines store.
 
 That is asserted, in `TestResourcesRefuseToMountWithoutHooks`. A guard nobody
 has watched refuse is a claim rather than a check
-([ADR-0016](../../docs/adr/0016-guards-proven-both-ways.md)).
+([ADR-0016](../../docs/architecture.md#guards-proven-both-ways)).
 
 **Ordering is a type, not a position.** `fxkit.Migrated` is an empty struct
 that means "every registered migration set has been applied". The handles take
@@ -152,7 +152,7 @@ that for the identity half and this one for the wiring. What the `access`
 module does show is the shape any replacement takes: verify however you
 verify, then `sqlb.WithPrincipal` — the hooks read the principal back
 through one seam and never learn the mechanism, which is what makes the auth
-module swappable ([ADR-0044](../../docs/adr/0044-the-container-is-an-adapter.md)).
+module swappable ([ADR-0044](../../docs/architecture.md#the-container-is-an-adapter)).
 
 **It is not a claim that sqlb needs fx.** Nothing in the engine knows what a
 container is, and `example/tasks` assembles the same pieces with a function and

@@ -137,7 +137,7 @@ cannot ask for `?filter=isOverdue.eq.true` no matter what the SQL can do. That i
 not a gap in what sqlb can *express* — the SQL above is proof it can — it is a
 gap in what sqlb can *declare*, and the declaration is what the emitters read.
 
-Both of those are what [ADR-0041](../../docs/adr/0041-computed-fields.md) and
+Both of those are what [ADR-0041](../../docs/architecture.md#computed-fields) and
 [issue #17](https://github.com/jryannel/sqlb/issues/17) argued for, and both are
 closed below.
 

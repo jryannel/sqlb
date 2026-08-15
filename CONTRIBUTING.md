@@ -7,7 +7,7 @@ order.
 ## Before you start
 
 For anything more than a typo, **open an issue first**. The design has a
-written record — see [`docs/adr/`](docs/adr/) — and a change that contradicts
+written record — see [architecture.md's Decisions section](docs/architecture.md#decisions) — and a change that contradicts
 one of those records is not necessarily wrong, but it needs to argue with the
 record rather than around it. That conversation is cheaper before the code than
 after.
@@ -58,7 +58,7 @@ put in the pull request is the assertion in its failing form: the value that
 came out wrong, not a description of it.
 
 **A guard proven in both directions.** If the change adds a check, show that it
-fires. [ADR-0016](docs/adr/0016-guards-proven-both-ways.md) exists because this
+fires. [ADR-0016](docs/architecture.md#guards-proven-both-ways) exists because this
 repository has already shipped three guards that reported success while
 verifying nothing. A test that cannot fail is worse than no test, because it
 is also a claim.
@@ -77,7 +77,7 @@ the next line.
 An ADR is a living document, not a minute of a meeting. If you find one that
 the code has since outgrown, correcting it *is* a contribution — say what
 changed and why, and update the Status and Confidence lines.
-[`docs/adr/README.md`](docs/adr/README.md) has the convention.
+[architecture.md's Decisions section](docs/architecture.md#decisions) has the convention.
 
 ## Commit messages
 
@@ -95,8 +95,8 @@ before disclosing.
 ## Scope
 
 The things this project has decided *not* to do are recorded rather than left
-implicit: multi-dialect support ([ADR-0001](docs/adr/0001-postgres-only.md)),
+implicit: multi-dialect support ([ADR-0001](docs/architecture.md#postgres-only)),
 a query DSL that reaches every Postgres construct
-([ADR-0005](docs/adr/0005-runtime-query-engine.md)), and an annotation slot on
-the schema DSL ([ADR-0024](docs/adr/0024-no-annotation-slot.md)) are the three
+([ADR-0005](docs/architecture.md#runtime-query-engine)), and an annotation slot on
+the schema DSL ([ADR-0024](docs/architecture.md#no-annotation-slot)) are the three
 that come up most. Each says what would change its mind.

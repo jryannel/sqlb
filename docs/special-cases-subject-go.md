@@ -21,7 +21,7 @@ code and cited by file and line, not from the docs.*
 **Deliberately not re-reported.** Constraint errors arriving as 500
 ([FEEDBACK §1](../FEEDBACK.md)), `SoftDelete` boilerplate (§2), empty-set
 aggregates (§4), arithmetic upsert (§5), composite primary keys
-([ADR-0034](adr/0034-one-column-addresses-a-row.md)), null-aware operators and
+([ADR-0034](architecture.md#one-column-addresses-a-row)), null-aware operators and
 the missing bind-parameter cast ([review-adoption-port](review-adoption-port.md))
 are all recorded already. Where this corpus is independent evidence for one of
 them, it is cited as evidence and not re-argued.
@@ -202,7 +202,7 @@ project assigns keys to every task — becomes O(rows) statements.
 to every matched row; there is no values-list form. `sqlb.UpdateFrom[T]`
 rendering the `unnest` join is the write-side twin of the multi-row insert that
 already exists, and it needs no encoder behind it: the two arrays are ordinary
-bind parameters since [ADR-0040](adr/0040-the-driver-is-a-dependency.md), which
+bind parameters since [ADR-0040](architecture.md#the-driver-is-a-dependency), which
 deleted the array codec this paragraph used to point at.
 
 ### 4. Bulk insert has an exact ceiling, and it is now named — closed
@@ -228,7 +228,7 @@ supplies the arithmetic, so the batch never reaches the driver:
 > and one statement can carry 65535; insert at most 6553 rows at a time, in a
 > transaction if they have to land together`
 
-Which is the [actionable-errors](adr/0011-actionable-errors.md) answer: rows in,
+Which is the [actionable-errors](architecture.md#actionable-errors) answer: rows in,
 rows out. Batching inside a transaction was the larger option and is deliberately
 *not* taken — a batch silently becoming several statements stops being atomic
 outside a transaction, and how to divide the work is the caller's decision.
@@ -236,7 +236,7 @@ outside a transaction, and how to divide the work is the caller's decision.
 
 ## Vectors: a second data point for ADR-0026
 
-[ADR-0026](adr/0026-vectors-declare-their-index.md) is explicit that nothing is
+[ADR-0026](architecture.md#vectors-declare-their-index) is explicit that nothing is
 built and that vectors are out of 1.0 unless a port needs them, and it reasons
 from `subject-mono`'s `core/rag`. This corpus is an independent instance of the
 same module, with three wrinkles the record does not have:
@@ -307,7 +307,7 @@ and a real Postgres suite around it.
    `code || '-' || number` — a filterable value with no column behind it.
 3. **A reorder endpoint** — `FOR UPDATE` over the siblings, one bulk
    reposition, and the assertion that pays for the whole graft: **a keyset
-   cursor held across a reorder.** [ADR-0027](adr/0027-keyset-pagination.md)
+   cursor held across a reorder.** [ADR-0027](architecture.md#keyset-pagination)
    claims a concurrent insert cannot make a client read a row twice. A
    concurrent *reorder* can, and that sentence belongs in the record either way.
 
@@ -318,7 +318,7 @@ with **no** `org_id` at all — 26 `*_admin.sql` files, under the convention tha
 a query without an `org_id` predicate belongs in one "or it is a tenant-leak
 bug", enforced by file naming and review.
 
-[ADR-0030](adr/0030-declared-scope-is-required.md) makes the scope hook an
+[ADR-0030](architecture.md#declared-scope-is-required) makes the scope hook an
 obligation and refuses to mount a resource without one, which is right. What has
 no spelling is the *deliberate* exception — a platform admin listing every
 organization, a job re-embedding every document, a billing sweep. Today that is

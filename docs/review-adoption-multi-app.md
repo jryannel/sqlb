@@ -3,7 +3,7 @@
 > **Status: reconciled 2026-07-30.** This report already annotates its upstream
 > asks inline as they close; §6 is where to look. Since then the **first** of
 > those asks has been granted rather than merely answered — sqlb is taking the
-> pgx dependency ([ADR-0040](adr/0040-the-driver-is-a-dependency.md)), so the
+> pgx dependency ([ADR-0040](architecture.md#the-driver-is-a-dependency)), so the
 > "flip sqlc" answer this report was given is withdrawn. Ask 2 has shipped, and
 > B2's composite-primary-key half stopped being a blocker when the port hit one.
 > The same subject was subsequently *ported*:
@@ -41,7 +41,7 @@ so. It is an evaluation, not a decision — the input to one.
 > evaluation was written against `cc312aa`; four commits landed behind it.
 >
 > - **§2's second reading of "CLI", §4.6, and upstream ask 4 — "sqlb emits no Go
->   client".** [ADR-0029](adr/0029-go-cli.md) is *Working*: `codegen.Options.CLIDir`
+>   client".** [ADR-0029](architecture.md#go-cli) is *Working*: `codegen.Options.CLIDir`
 >   emits a cobra command-line client into the consuming repository, depending on
 >   cobra and nothing else, speaking HTTP so it holds no database credential.
 >   §4.6's "this layer gets *no* generator" is the sentence that no longer holds,
@@ -49,11 +49,11 @@ so. It is an evaluation, not a decision — the input to one.
 >   the type system, the CLI puts in `--help` — the operators a column accepts
 >   are in the usage string.
 > - **§4.6's toolchain cost — a per-module `gen/main.go` run by `go generate`.**
->   [ADR-0032](adr/0032-sqlb-command.md) shipped `sqlb generate`, `sqlb check`
+>   [ADR-0032](architecture.md#sqlb-command) shipped `sqlb generate`, `sqlb check`
 >   and `sqlb migrate`, so the hand-written generator main the section budgets
 >   for is no longer written at all. R1 gets cheaper by exactly that much.
 > - **§4.4's "single most dangerous footgun", and kill criterion 2.**
->   [ADR-0030](adr/0030-declared-scope-is-required.md) landed: a column declared
+>   [ADR-0030](architecture.md#declared-scope-is-required) landed: a column declared
 >   `Scoped()` is an obligation, and `rest.Resource` refuses to mount a resource
 >   whose exposed operations have no matching hook. `schema.Validate` also
 >   rejects a `Scoped` column that is not `ReadOnly`, or that is `Nullable`. So
@@ -62,7 +62,7 @@ so. It is an evaluation, not a decision — the input to one.
 >   closed** — ADR-0030 records it under Consequences — so §9.2's advice stands
 >   unchanged, and sqlb's own record reaches the same fix (the composite foreign
 >   key) by the same reasoning.
-> - **§8's row for the generated client.** [ADR-0031](adr/0031-dart-client.md)
+> - **§8's row for the generated client.** [ADR-0031](architecture.md#dart-client)
 >   adds a Dart emitter alongside the TypeScript one. `subject-mono` has no
 >   Flutter consumer, so this changes the row and not the recommendation.
 >
@@ -93,7 +93,7 @@ so. It is an evaluation, not a decision — the input to one.
 **On ADR numbers.** `subject-mono` keeps its own numbered ADRs and the ranges
 collide — its ADR-0002 is the rule of two, sqlb's is that queries are values.
 Every reference below to one of `subject-mono`'s reads `subject ADR-000N`; a
-bare `ADR-000N` is sqlb's own and links into [`adr/`](adr/).
+bare `ADR-000N` is sqlb's own and links into [architecture.md's Decisions section](architecture.md#decisions).
 
 ---
 
@@ -262,7 +262,7 @@ The DDL is remarkably plain, which is exactly what a schema DSL needs:
 | views / matviews | **0** | ✅ n/a |
 | **composite primary keys** | **26** (15 files) | ❌ at most one `PrimaryKey()` column |
 | **array columns** (`text[]` etc.) | **9** (8 files) | ❌ no array type — but **concentrated**: 5 of the 6 affected table structs are `app-d`'s, so most apps are unaffected (§7) |
-| **`vector`** (pgvector, `core/rag`) | 1 | ❌ [ADR-0026](adr/0026-vectors-declare-their-index.md) is *Exploring, nothing built*; `introspect` refuses the column |
+| **`vector`** (pgvector, `core/rag`) | 1 | ❌ [ADR-0026](architecture.md#vectors-declare-their-index) is *Exploring, nothing built*; `introspect` refuses the column |
 | `GENERATED` columns | 10 | ❌ no DSL spelling |
 | gin/gist indexes | 3 | ⚠️ `AddIndex{Method: "gin"}` renders, but no opclass/`WITH` |
 | function + trigger | 1 each | ❌ stays hand-written |
@@ -305,7 +305,7 @@ All 923 named queries, classified by SQL feature:
 | LATERAL | 6 | <1% | ❌ `Raw` |
 | `FOR UPDATE` | 3 | <1% | ✅ `ForUpdate()`/`SkipLocked()` |
 | window functions (`OVER`) | **0** | 0% | ✅ nothing to port |
-| pgvector `<=>` | 1 | <1% | ❌ works via `Raw`, but *sequentially scans* — see [ADR-0026](adr/0026-vectors-declare-their-index.md) |
+| pgvector `<=>` | 1 | <1% | ❌ works via `Raw`, but *sequentially scans* — see [ADR-0026](architecture.md#vectors-declare-their-index) |
 
 sqlb's own docs are honest about this and draw the line in the same place this
 team would: [with-sqlc.md](with-sqlc.md) says *"sqlb owns the CRUD and list
@@ -436,7 +436,7 @@ json tags exactly"* — a convention enforced by nobody. There are **489 such
 types across 56 files**. Separately, **792 hand-written `queryKey` literals and
 413 `invalidateQueries` calls** across 282 files are exactly the drift class
 sqlb's `keysByTable` index targets;
-[ADR-0028](adr/0028-typescript-client.md) cites the motivating bug as
+[ADR-0028](architecture.md#typescript-client) cites the motivating bug as
 `['draft', id]` against `['drafts', id]` in a client where mutations and an
 event stream each kept their own list. `subject-mono` has 413 opportunities for
 that bug.
@@ -469,13 +469,13 @@ in the shared API client — that code survives as the `Transport` function.
 - **Toolchain CLI (in scope):** `sqlc generate` / `sqlc diff` / goose-by-hand
   → a per-module `gen/main.go` run by `go generate`, plus `codegen.Check` as the
   CI drift gate (a direct analogue of `mise run sqlc-check`). This is a *wash* in
-  effort and a small win in coherence. [Stale — [ADR-0032](adr/0032-sqlb-command.md):
+  effort and a small win in coherence. [Stale — [ADR-0032](architecture.md#sqlb-command):
   the `gen/main.go` is not written at all now.]
 - **Admin CLIs (partly in scope):** `admin-cli` and friends would gain a
   uniform filter grammar (`?status=eq.new&sort=-created_at&cursor=…`) instead of
   bespoke params per app, but sqlb **emits no Go client**, so the cobra/resty
   layer stays hand-written. If the team wants the generator symmetry, that is an
-  upstream ask (§6). [Stale — [ADR-0029](adr/0029-go-cli.md) emits exactly this.]
+  upstream ask (§6). [Stale — [ADR-0029](architecture.md#go-cli) emits exactly this.]
 - **Code-first CLIs — untouched.** `clikit` is about source folders, not rows.
 
 ---
@@ -568,7 +568,7 @@ flowchart LR
   deliberately.
 
   **Downgraded by the port: not a blocker.** The stance is recorded
-  ([ADR-0034](adr/0034-one-column-addresses-a-row.md)), and this paragraph's
+  ([ADR-0034](architecture.md#one-column-addresses-a-row)), and this paragraph's
   premise turns out to be narrower than written — the migration is owed only by
   tables that are *addressed*. `core/llmcatalog` has a `(provider, model_id)`
   key, was ported with no surrogate and no migration, and its upsert names the
@@ -577,7 +577,7 @@ flowchart LR
   not the 15-file migration this row budgets for.
 - **Arrays (8 files)** — ~~no `text[]`~~. **Closed since this review**:
   `schema.Text("tags").Array()` declares one, and it round-trips through
-  `introspect` ([ADR-0033](adr/0033-array-columns.md)). The pilot-target table
+  `introspect` ([ADR-0033](architecture.md#array-columns)). The pilot-target table
   below was written before that and still reads `app-d` out on this ground; on
   arrays alone it no longer is.
 - **pgvector / `core/rag`** — not just unsupported, actively hazardous: the
@@ -657,7 +657,7 @@ core does not carry.
 1. **A pgx path** — or an explicit statement that `database/sql` is the contract,
    so we stop looking for one. (Today: the honest answer is "flip sqlc".)
    [~~Answered — compatibility.md.~~ **Granted, and the earlier answer is
-   withdrawn.** [ADR-0040](adr/0040-the-driver-is-a-dependency.md) takes the pgx
+   withdrawn.** [ADR-0040](architecture.md#the-driver-is-a-dependency) takes the pgx
    dependency: `Executor` is redefined over pgx's types and the `database/sql`
    path is removed, before 1.0 or not at all. So this ask is the one that moved
    sqlb rather than the one sqlb declined — "flip sqlc" is no longer the honest
@@ -669,19 +669,19 @@ core does not carry.
    resource's requirement. It documents; middleware still enforces. This also
    closes F1 in §5.4.]
 3. **Array columns** — the cheapest of the schema gaps and the one with 8 real
-   call sites here. [Built — [ADR-0033](adr/0033-array-columns.md). The ask is
+   call sites here. [Built — [ADR-0033](architecture.md#array-columns). The ask is
    what prompted the record, and the record is now implemented: `text[]`
    declares, renders, introspects, scans and filters. This closes the half of
    B2 that ruled `app-d` out as a pilot target; composite keys and the
    generated columns are what is left of it.]
 4. **A Go client generator** to match the TypeScript one, for the admin CLIs.
-   [Answered — [ADR-0029](adr/0029-go-cli.md).]
+   [Answered — [ADR-0029](architecture.md#go-cli).]
 5. **Composite primary keys**, or a documented "surrogate key required" stance.
-   [The stance is now recorded — [ADR-0034](adr/0034-one-column-addresses-a-row.md).
+   [The stance is now recorded — [ADR-0034](architecture.md#one-column-addresses-a-row).
    It also concedes that the refusal is currently wider than its own argument:
    a table that is never addressed, expanded or cursor-paged does not need a
    key at all, which covers some of the 15 files below.]
-6. pgvector ([ADR-0026](adr/0026-vectors-declare-their-index.md)) — noted, not
+6. pgvector ([ADR-0026](architecture.md#vectors-declare-their-index)) — noted, not
    urgent if `rag` is scoped out.
 
 ---
@@ -882,6 +882,6 @@ The TypeScript SDK generator was read at `cc312aa`, the repository's HEAD at the
 time: `codegen/tsclient.go` (38,662 bytes), its emitted output in
 `example/tasks/web/src/api/` (`client.gen.ts` 1,153 lines, `queries.gen.ts` 247
 lines), the [TypeScript guide](typescript/README.md) and
-[ADR-0028](adr/0028-typescript-client.md). Emission is gated on a table
+[ADR-0028](architecture.md#typescript-client). Emission is gated on a table
 declaring `Expose(...)` — `codegen/tsclient.go:159` and `:305` skip any table
 whose `Rest()` is nil.
