@@ -298,5 +298,6 @@ quietest wrong answer in the system. See
 - [Actions](actions.md) — a domain verb with a generated envelope
 - [A cross-tenant admin surface](admin.md) — releasing a scope, and guarding the route it needs
 - [Change events](events.md) — an SSE stream of invalidations, and what it does not promise
+- [Webhooks and HTTP callbacks](webhooks.md) — receiving Stripe/Clerk-style callbacks, and sending your own
 - [Rejections](errors.md) — what a refusal says and why
 - [API compatibility](compatibility.md) — what a schema edit does to the contract
