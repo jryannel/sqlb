@@ -1580,7 +1580,61 @@ rather than a generated callback.
 
 ### Go cli
 
-_(pending merge from `docs/adr/0029-go-cli.md`)_
+The TypeScript client's argument reaches a second consumer: a growing share
+of traffic against an API is an agent working in a shell, which has to
+discover what a resource accepts before it can ask for anything. `curl` is a
+poor fit for this API specifically, because the filter grammar is
+compositional and gated by declared capabilities, so the set of legal
+requests isn't visible from the endpoint itself — a request either works or
+comes back with a 400 naming the filterable columns, and the only way to find
+out is to send it. Actionable error responses make that 400 recoverable,
+which is most of a fix, but it's delivered only after a failed request, and
+the caller who needs it most is the one for whom a round trip is a real cost.
+A generic OpenAPI-driven CLI inherits the same loss as a generic TypeScript
+client, since the filter grammar still arrives as free text either way. What
+differs from the TypeScript case is where the vocabulary can land: a CLI has
+no compile step, so nothing can refuse an illegal request before it's sent —
+what it has instead is `--help`, read before the request rather than after
+it.
+
+So a cobra command tree is generated from the same registry the other
+emitters read, into the consuming repository as one self-contained package,
+and it speaks HTTP rather than SQL — it holds no database credential and
+can't bypass what the HTTP layer enforces per request, such as the claims a
+hook reads or a rate limit, while looking from outside like the same command
+a direct-to-Postgres tool would be. The commands are exactly the exposed
+operations, so an operation that isn't exposed has no command rather than
+merely undocumented one. The flags are the capability vocabulary itself: one
+flag per filterable column, taking the wire-spelled condition and repeatable,
+since repeating a flag is what conjoins conditions, with the operator set on
+each narrowed by column type exactly as the REST documentation and the
+filter parser narrow it — which makes `--help` an exact, request-free
+statement of what the resource accepts, not a refusal but a disclosure of
+the same vocabulary the typed TypeScript facade carries in a form a shell can
+use. Presence is read from whether a flag was passed, not from its value,
+because a flag left out and a flag explicitly set to empty have to write
+different SQL, and setting a column back to NULL gets its own explicit flag
+rather than overloading emptiness. Walking every page (`--all`) walks by
+cursor rather than by counting pages, since a script looping over numbered
+pages re-reads rows the moment the underlying table is written mid-walk —
+exactly the case a long-running walk is likely to hit.
+
+This buys a vocabulary that's readable without sending a request, by a human
+or an agent, and that can't drift from what the server enforces, since both
+the flags and the server's own validation come from one declaration; a
+column gaining a capability gains its flag at the next regeneration with
+nothing else to update. The cost is a cobra dependency in the consuming
+module, help output that scales with schema width rather than API surface —
+around 1,800 lines of generated code for a six-table schema — and a CLI that
+covers exactly the generated CRUD, so a hand-written endpoint like login has
+no command at all, meaning the first thing an operator needs, a token, is
+the one thing this tool can't get them on its own. Revisit if operators
+reach for `curl` anyway despite the flags, which would mean discovery isn't
+actually the friction point and the tool should shrink to one generic
+request command handling only auth and paging; or if per-column flags make
+`--help` unreadable past roughly thirty filterable columns on a wide table,
+which would push the vocabulary into a `describe` subcommand backed by a
+single structured filter flag instead.
 
 ### Declared scope is required
 
