@@ -3012,7 +3012,53 @@ boundary has to be paid for rather than sidestepped by omission.
 
 ### Reachability is a property of the mount
 
-_(pending merge from `docs/adr/0050-reachability-is-a-property-of-the-mount.md`)_
+A table has one model and one `Expose`, which is the right shape for a
+table served one way — nearly all of them — and the wrong shape for a
+table served two: a storefront and an admin panel over the same
+`products` row, where the admin surface exists precisely to serve columns
+(`cost_price_minor`, `supplier`, `internal_notes`) the storefront must
+never see. `Hidden` can't make that split, because it hides a column from
+every reader of the model, and there's only one model; `Expose` can't add
+a second resource either, since the schema only carries one REST
+declaration per table. The fix reuses a mechanism that already existed for
+a different reason — `rest.Options.Computed` narrows per-resource column
+reachability for query cost — and generalizes it: `rest.Options.Columns`
+says which columns a given mount serves, at every layer a column touches —
+response, `SELECT`, filter, sort, search, `?select`, write body, and the
+allow-list a rejection offers back — so what a request may name and what
+the database is asked for can't disagree. Empty means every column, which
+is what a generated resource emits and every existing mount already
+relies on.
+
+This keeps `Expose` singular and the emitters at one resource per table;
+the narrowed, privileged mount is a hand-written `rest.Resource` call over
+the same generated model, keeping the typed facade, the manifest and the
+drift gate for the wide half while paying only for the one hand-written
+mount. The honest cost is that narrowing lives at the mount rather than in
+the schema: a model with no field for `cost_price_minor` has no code path
+that could ever return it, while a model that has the field and a mount
+that declines it is one `Options` value away from serving it — a real,
+weaker guarantee than a schema-side split would give, and the one the
+report that prompted this asked not to be true. Two smaller costs follow
+the same shape: the OpenAPI response schema is the model's Go type,
+registered once and shared by every mount, so a narrowed resource's
+document still lists columns its runtime responses omit; and reused create
+or update body types document fields a narrowed mount will not actually
+write.
+
+The trigger to watch for was named directly rather than left implicit —
+whether a second surface needs its own generated clients, at which point
+the schema should carry a `Columns` allowlist per declared `Expose`
+appended rather than replacing, with each surface on its own drift gate —
+and it has since been observed, just not inside this codebase: an external
+Huma-based application (no sqlb involved) hit the same consumer/superadmin
+split and didn't stop at narrowing a mount, building a second independent
+`huma.API` with its own document and client-generation surface entirely.
+That isn't evidence `Options.Columns` failed anywhere it's actually been
+used — it's evidence that the shape of the need, when it gets big enough,
+is two whole surfaces rather than one narrowed one, which is closer to two
+schemas sharing tables than to one schema with a mount-time restriction,
+and is the shape a future `Expose`-appending design would have to take.
 
 ### A gap in the declaration is reported
 
