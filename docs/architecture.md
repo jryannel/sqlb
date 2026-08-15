@@ -631,7 +631,37 @@ confusingly in practice — the fix would be having the generator emit
 
 ### Actionable errors
 
-_(pending merge from `docs/adr/0011-actionable-errors.md`)_
+Because capabilities are opt-in, requests get rejected routinely — that's
+the design working as intended. The caller most likely to hit a rejection
+is a program assembling a request against a schema it only partly knows: a
+frontend, a client library, or an agent. For all three, `400 column is not
+sortable` on its own is a dead end that costs a round trip and a guess. So
+every rejection names both what was wrong and what would have worked:
+
+```
+filter: sort=body: column is not sortable (allowed: title, status, view_count, published_at, created_at)
+```
+
+Parsing collects every problem in a request rather than stopping at the
+first, so a malformed request takes one round trip to fix rather than one
+per mistake, and schema validation follows the same rule. The exception is
+`Hidden` columns, which are reported as unknown and never listed in an
+allow-list — the diagnostic must not become an oracle for probing what
+exists.
+
+This lets a caller correct itself from the response alone, and the
+allow-list doubles as discovery, reducing how much schema a client needs up
+front — part of why the API is pleasant to drive with an agent. The cost is
+that error responses are larger and disclose the shape of the resource,
+which is fine for something meant to be exposed but makes the exposure
+decision itself carry more weight. The response shape is not free to change
+later, either: a generated client's or an agent's retry logic depends on
+the current structure, so renaming or renesting fields is a breaking change
+even on an error path. Revisit if disclosing the filterable column set
+turns out to be unacceptable for some resource — add a per-resource terse
+mode rather than making terse the default — or if allow-lists get long
+enough to be unhelpful, in which case truncate with a count and a pointer
+to the OpenAPI document rather than dropping them outright.
 
 ### Change feed outbox
 
