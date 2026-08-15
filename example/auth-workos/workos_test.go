@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/MicahParks/jwkset"
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/example/auth-workos"
 )
 
@@ -277,4 +279,57 @@ func TestNewDefaultOverrideCtx_FailsWhenJWKSUnreachable(t *testing.T) {
 	if err == nil {
 		t.Fatal("keyfunc.NewDefaultOverrideCtx succeeded against a closed server despite NoErrorReturnFirstHTTPReq: false")
 	}
+}
+
+func TestMiddleware_EndToEnd(t *testing.T) {
+	key := newTestRSAKey(t)
+	v := newTestVerifier(t, key, "client_test123")
+	mw := sqlb.Middleware[testPrincipal](v, sqlb.BearerToken)
+
+	var gotPrincipal testPrincipal
+	var gotOK bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPrincipal, gotOK = sqlb.PrincipalFrom[testPrincipal](r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("valid token reaches the handler with a principal", func(t *testing.T) {
+		gotOK = false
+		token := mintToken(t, key, validClaims())
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+
+		mw(next).ServeHTTP(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		if !gotOK {
+			t.Fatal("PrincipalFrom[testPrincipal] found nothing in next's context")
+		}
+		want := testPrincipal{UserID: "user_01HBEQKA6K4QJAS93VPE39W1JT", OrgID: "org_01HRDMC6CM357W30QMHMQ96Q0S", Role: "member"}
+		if gotPrincipal != want {
+			t.Fatalf("principal = %+v, want %+v", gotPrincipal, want)
+		}
+	})
+
+	t.Run("rejected token never reaches the handler", func(t *testing.T) {
+		gotOK = false
+		claims := validClaims()
+		claims["client_id"] = "someone_else"
+		token := mintToken(t, key, claims)
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+
+		mw(next).ServeHTTP(w, r)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+		}
+		if gotOK {
+			t.Fatal("next ran despite a rejected token")
+		}
+	})
 }
