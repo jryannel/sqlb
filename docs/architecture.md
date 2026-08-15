@@ -1518,7 +1518,65 @@ snapshot id, which would reopen the question of signing it.
 
 ### Typescript client
 
-_(pending merge from `docs/adr/0028-typescript-client.md`)_
+The obvious plan was to point a generic OpenAPI-to-TypeScript generator at
+the emitted OpenAPI document and write no generator of its own, and three
+things argue against it. The document is lossy exactly where the value is: a
+filter parameter like `?status=eq.published` can only be documented as
+`array<string>` with the operator vocabulary left to prose, so a generic
+generator emits a bare string array type and a bogus operator compiles
+clean. Two independently hand-written reference clients confirmed the shape
+of that loss directly — both hand-roll their list endpoints with raw
+`URLSearchParams` and untyped string parameters, with a comment explaining
+which values happen to be legal, which is the single most generatable
+function in either codebase and exactly where a typo compiles. And the
+sharpest evidence was about cache keys: one client had to impose a key
+factory and an architecture test to enforce it after two production bugs;
+the other hand-writes over thirty string-literal keys across nine files, and
+its change-feed subscriber and its mutation handlers keep two invalidation
+lists that have quietly drifted apart by a single character — nothing catches
+it, and it's the signature of a missing artifact rather than a missing rule.
+
+So the TypeScript client is generated from the same model metadata the Go
+code generator already reads, not from the emitted OpenAPI document, and
+emitted directly into the consuming repository rather than published as a
+package — a client generated against the exact server it talks to can't
+drift from it. It's built as four independent layers, each usable without the
+one above it: row and request-body types, with hidden columns absent from the
+row type entirely rather than merely marked; typed request parameters, where
+`where` admits only filterable columns with an operator set narrowed by
+column type, and `sort`/`select`/`expand` are similarly narrowed; transport
+functions encoding those parameters into the URL grammar, taking an injected
+request function so auth, refresh, retry and redirect-on-401 stay the
+application's problem; and a key factory plus query-options factories for
+reads, with write support deliberately stopping at a bare mutation function.
+That last boundary is deliberate rather than an oversight: the mechanical
+half of a write — route, body type, response — is derivable, but what a write
+should invalidate depends on which views a particular application keeps, and
+a computed view isn't a table, so its cache key can't be generated at all; a
+generated success callback would be a guess, and a guess in generated code is
+exactly the kind of thing that gets copied out and silently edited. Wire
+names keep their JSON tag spelling rather than being camelCased, since
+camelCasing would need a runtime mapping layer this design refuses to carry.
+An expanded reverse collection keeps its list envelope rather than being
+typed as a bare array, which is the one shortcut that would reintroduce
+silent truncation one layer further from where it was closed.
+
+This buys a misspelled column, an illegal operator, or a sort on a column
+that never opted in all failing at the TypeScript compile step instead of at
+a runtime 400, and gives the change feed a consumer whose cache invalidation
+is structural rather than a convention someone has to remember. The cost is
+a second toolchain — Node, and a peer dependency on a query-caching library —
+inside a repository whose pitch is a single Go module, and the generated
+surface is honestly a minority of what a real client needs, five of twenty
+methods in one observed service. Adoption is a migration rather than a
+drop-in for any existing client, since both reference clients assumed offset
+paging and an always-present total count that this design doesn't provide
+the same way. Revisit if callers reach for the raw-parameters escape hatch
+more often than the typed `where` builder, which would mean the typed layer
+is an overlay rather than the primary interface; or if every real consumer
+ends up hand-writing the same success callback anyway, which would argue the
+policy actually is derivable, most likely as a keyed defaults mechanism
+rather than a generated callback.
 
 ### Go cli
 
