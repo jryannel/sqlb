@@ -2,6 +2,7 @@ package sqlb
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -57,3 +58,47 @@ type TransientError struct{ Err error }
 
 func (e TransientError) Error() string { return e.Err.Error() }
 func (e TransientError) Unwrap() error { return e.Err }
+
+// Middleware wraps a Verifier[T] as net/http middleware: extract the
+// credential, verify it, and on success carry the resulting principal on
+// the request context via WithPrincipal before calling next. It is
+// ordinary net/http middleware, not anything huma-specific, so it composes
+// with whatever router or middleware chain the application already has —
+// the same reason rest.Resource takes a huma.API rather than owning one.
+//
+// A missing or rejected credential answers 401 and never calls next.
+func Middleware[T any](v Verifier[T], extract CredentialExtractor) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cred, ok := extract(r)
+			if !ok {
+				writeProblem(w, http.StatusUnauthorized, "the request carries no credential")
+				return
+			}
+
+			principal, err := v.Verify(r.Context(), cred)
+			if err != nil {
+				// err is deliberately not echoed: which check a forged or
+				// expired credential failed is useful to precisely one kind
+				// of caller. Task 4 adds the TransientError branch here.
+				writeProblem(w, http.StatusUnauthorized, "the credential is not valid")
+				return
+			}
+
+			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
+		})
+	}
+}
+
+// writeProblem writes the same RFC 9457 problem shape example/tasks/auth
+// and the rest package both use, so a client sees one error type across
+// authentication failures and everything rest itself rejects.
+func writeProblem(w http.ResponseWriter, status int, detail string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"title":  http.StatusText(status),
+		"status": status,
+		"detail": detail,
+	})
+}

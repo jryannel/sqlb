@@ -74,3 +74,38 @@ func TestVerifierInterface(t *testing.T) {
 		return cred, nil
 	})
 }
+
+type testPrincipal struct{ ID string }
+
+func TestMiddleware_Success(t *testing.T) {
+	v := verifierFunc[testPrincipal](func(ctx context.Context, cred string) (testPrincipal, error) {
+		if cred != "good-token" {
+			t.Fatalf("Verify received %q, want %q", cred, "good-token")
+		}
+		return testPrincipal{ID: "user-1"}, nil
+	})
+
+	var gotPrincipal testPrincipal
+	var gotOK bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPrincipal, gotOK = sqlb.PrincipalFrom[testPrincipal](r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := sqlb.Middleware[testPrincipal](v, sqlb.BearerToken)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer good-token")
+	w := httptest.NewRecorder()
+
+	mw(next).ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !gotOK {
+		t.Fatalf("PrincipalFrom[testPrincipal] found nothing in next's context")
+	}
+	if gotPrincipal.ID != "user-1" {
+		t.Fatalf("principal.ID = %q, want %q", gotPrincipal.ID, "user-1")
+	}
+}
