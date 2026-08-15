@@ -3297,7 +3297,56 @@ whole design leans on and argue for a registry-level assertion that a
 
 ### A nested query runs nobodys hooks
 
-_(pending merge from `docs/adr/0055-a-nested-query-runs-nobodys-hooks.md`)_
+A query being a value everywhere else in this design still had one gap: a
+value couldn't stand inside another query. `Field.OneOf` takes values, so a
+set the database itself computes had to be written as `RawPred` — the
+escape hatch whose contents go unvalidated, in exactly the position where
+a mistake produces a wrong answer rather than a syntax error — and
+enumerating the set instead runs into a hard ceiling of one bind parameter
+per member. The real obstacle was never the SQL, though. A nested query is
+*compiled*, not *run*, and hooks apply when a query runs — so a model whose
+reads a `BeforeQuery` scope is supposed to confine would contribute its
+rows to somebody else's `WHERE` clause with the confinement silently
+absent, and nothing in the response would show it: the outer query returns
+the right shape, computed over a set an unscoped read produced.
+
+So a `*Builder[T]` can now be nested — `Exists`, `NotExists`,
+`Field.InQuery`, `Field.NotInQuery` compile it directly into the
+surrounding statement's compiler, sharing its bind numbering the way only
+a closed `Subquery` interface with unexported methods can — but a nested
+query that would have run confined is refused unless it has already been
+resolved into a value with `.Resolved(ctx, db)`. The refusal is computed
+at each nesting site rather than looked up from a registry entry, because
+asking "does this model have hooks registered anywhere" would refuse every
+nested query in any application using hooks at all; what actually has to
+be asked is whether this handle, in this context, would apply a predicate
+to this model — which correctly finds nothing missing for a handle that
+released a named scope. The check walks every clause that can carry an
+expression, recursing into each nested query's own nested queries, because
+a clause left out is a nested query that skips the check silently; `Raw`
+holds text rather than nodes and stays invisible to the walk the same way
+it's invisible everywhere else `Raw` is used. Auto-resolving the inner
+query automatically, rather than refusing and asking the caller to resolve
+it, was rejected because resolution has to produce a new value without
+touching the caller's original expression tree, and a rewriter that missed
+a node type would fail open in exactly the way this guard exists to
+prevent — refusing needs only the same walk, and nothing more.
+
+The cost lands exactly where people will first try nesting: a confined
+model takes two steps instead of one, with an error message that teaches
+the second. A `resolved` flag on `Builder` survives `Clone` and could
+follow a query onto one that's since been widened — sound today only
+because adding predicates narrows a conjunction, and not something that
+would stay sound if a disjunctive `Where` were ever added. And nesting a
+query inside itself is now expressible and is caught by a depth backstop
+and a visited set rather than being structurally impossible. Revisit if
+the two-step resolve gets worked around in practice — callers reaching for
+`RawPred` specifically to dodge it — which would mean the friction buys
+nothing and auto-resolution is worth building the rewriter for after all,
+or if a nested query turns out to be wanted somewhere the walk doesn't
+reach, such as inside a `Raw` fragment or a computed column's declared
+SQL, which would mean the refusal belongs where that text gets assembled
+instead.
 
 ### A junction is a table
 
