@@ -2357,7 +2357,104 @@ own users at pgx now.
 
 ### Computed fields
 
-_(pending merge from `docs/adr/0041-computed-fields.md`)_
+sqlb's model *is* the row, so a value the row doesn't store had no slot at
+all — one derived field pushed an entire entity off the generated path,
+and an adoption review measured the cost as a 416-line hand-written view
+plus a hand-written TypeScript type on top, ranking the gap first of six.
+The fields a real application actually needed didn't stratify into one
+feature: some were trigger-maintained real columns needing nothing beyond
+`ReadOnly`; some were aggregates needing a correlated subquery; some were
+row-local expressions; and one — "is this row starred by the viewer" —
+depended on who was asking, which a static SQL string can't express at
+all. So a computed field is a `*ColumnInfo` carrying an expression instead
+of only a name, substituted wherever that column is rendered — `WHERE`,
+`ORDER BY`, `?select`, the projection — so all four follow from one
+change to the column-resolution path rather than four separate ones, and
+the projection's `(expr) AS name` needs no new scan logic since name
+matching already handles it.
+
+Three tiers shipped. A row-local expression may be `Filterable()` and
+`Sortable()` directly, since it's exactly a predicate the compiler already
+knows how to emit. A correlated-subquery expression is projection-only
+unless `Filterable()` is written explicitly, because a subquery in `WHERE`
+runs once per row and the declaration is the author's acknowledgement of
+that cost. A parameterised expression takes `Needs(key)` in the same shape
+as a tenant-scoped table's obligation: the declaration supplies no value,
+and mounting refuses to start until a `BeforeQuery` hook supplies the
+bind — the same startup-time failure mode as an unscoped multi-tenant
+table, chosen because an *unbound* parameterised expression renders as a
+predicate that's always false and looks exactly like a working feature. A
+fourth tier — a value computed in Go rather than SQL, requiring its own
+hook — was designed and deliberately never built: the applications that
+motivated this record expressed every real field in SQL once the
+correlated and parameterised tiers existed, and a schema round-trip that
+reads a database back into a declaration has no way to represent Go code
+at all, so a tier the round trip can't express is a tier nothing could
+adopt into. It stays documented as a considered-and-cut option rather
+than silently dropped, since a taxonomy that quietly loses a row stops
+being a record of what was actually weighed. `Sortable()` is refused on a
+volatile expression, since keyset pagination breaks ties on the sort
+column and an expression reading the current time isn't stable across
+pages; `Needs` with no hook behind it refuses at mount for the same reason
+`Scoped` does. No DDL is emitted in either direction — a computed field
+never reaches `migrate` and a schema diff never sees one — and Postgres's
+own `GENERATED ALWAYS AS … STORED` was set aside as a separate decision
+rather than folded in here, since it requires `IMMUTABLE` and so can't
+express the current-time-dependent fields that motivated this in the
+first place.
+
+Three corrections came from building it against real data rather than
+from the design. Nullability had to invert: a computed column defaults to
+nullable unless declared `NotNull()`, the opposite of a stored column's
+default, because an unmatched correlated subquery is `NULL` by
+construction and inferring non-null from the expression is wrong in the
+unsafe direction whenever it's incomplete — the failure otherwise surfaces
+as a scan panic on real data neither the migration diff nor generation
+had any opinion about, since a computed column has no DDL for either gate
+to check. Reads and writes both had to become opt-in per caller rather
+than always-on: a correlated subquery evaluated on every read whether or
+not a client asked for it, and worse, on every `INSERT`, `UPDATE` and
+`DELETE` too, meant a per-write tax nobody asked for, a create whose
+returned aggregate counted rows the same transaction hadn't committed yet
+(always wrong, requiring the extra read this feature exists to avoid),
+and a subquery naming another module's table riding into every insert of
+the table that declared it. So reads and `RETURNING` both narrow to
+exactly the computed columns a caller opts into, defaulting to none, and
+an unrequested computed column is simply absent from the response rather
+than serialised at its Go zero value — a definite `false` for "unknown"
+being precisely the silent-failure shape this whole feature exists to
+prevent. And a gap the design never named: `FromSQL` accepts a subquery
+naming another module's table with no refusal at all, unlike
+`ExternalRef`'s explicit one, because nothing parses the SQL string to
+check — checking it would require exactly the cross-module dependency
+`ExternalRef`'s free-text target exists to avoid. That's not a defect so
+much as an undocumented asymmetry with a real consequence: a joined query
+lives behind one handler, where a computed column sits in the projection
+surface of every mount and the `RETURNING` of every write that opts into
+it, so naming a foreign module's table there couples every statement
+against the table to that module's presence — worth stating plainly next
+to `ExternalRef` rather than discovering it from a failed isolation test.
+
+What's bought is one declaration reaching the row type, JSON, both
+generated clients and the CLI at once, with capabilities working
+unchanged since a computed field is still an ordinary `ColumnInfo` for
+every purpose but rendering. What it costs is real: `FromSQL` is raw,
+unvalidated SQL sitting in the schema, only checked by actually running a
+query; a correlated subquery makes a list's cost a function of how many
+computed columns a request opts into; and `Needs` adds a third kind of
+obligation the mount check has to track. Adding it is additive and safe —
+a schema declaring no computed column compiles to the same SQL as before —
+while removing a *filterable* tier is expensive once shipped, since a
+filter expression a client can send became part of the REST contract this
+project already freezes; that asymmetry is the argument for shipping
+projection before filterability and holding a tier's `Filterable()` until
+an application asks for it by name. Revisit if the correlated-subquery
+tier is never filtered in practice, which would make its `Filterable()`
+opt-in dead weight; if a second real application's fields don't fit this
+same four-tier stratification, meaning the taxonomy itself is wrong rather
+than incomplete; or if `Needs` starts carrying general request state
+rather than a narrow per-column bind, at which point it has outgrown this
+decision and needs its own.
 
 ### The exit is generated
 
