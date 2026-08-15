@@ -18,7 +18,7 @@ The narrower comparison is the honest one:
 
 | Work | Choose | Why |
 |---|---|---|
-| Static queries, typed at compile time | **sqlc** | Its whole guarantee; sqlb's is weaker by design ([ADR-0009](adr/0009-typed-column-facade.md)) |
+| Static queries, typed at compile time | **sqlc** | Its whole guarantee; sqlb's is weaker by design ([ADR-0009](architecture.md#typed-column-facade)) |
 | Reporting, recursive CTEs, window functions | **sqlc** | sqlb sends these to `Raw`, which is declared a non-goal, not a gap |
 | A filter/sort/search list endpoint | **sqlb** | sqlc structurally cannot express a conditional `WHERE`; this is the reason sqlb exists |
 | Multi-tenant scoping across every read | **sqlb** | `BeforeQuery` is genuinely load-bearing and has no sqlc equivalent |
@@ -37,21 +37,21 @@ passes.
 
 Stated because it calibrates the rest, not as praise.
 
-- **One AST, two producers** ([ADR-0003](adr/0003-one-ast-two-producers.md)) is
+- **One AST, two producers** ([ADR-0003](architecture.md#one-ast-two-producers)) is
   the real idea here, and it is intact: the URL grammar and Go code compile to
   the same predicates, so `BeforeQuery` constrains both. Nothing else in the Go
   ecosystem does this.
-- **Capabilities opt-in** ([ADR-0006](adr/0006-capabilities-are-opt-in.md)) is
+- **Capabilities opt-in** ([ADR-0006](architecture.md#capabilities-are-opt-in)) is
   the right answer to the PostgREST failure mode, and it is enforced in the
   places that matter — a `Hidden` column is absent from the OpenAPI schema, the
   filter vocabulary and the rejection allow-list alike.
 - **The engine depends on the standard library alone**, and `deps-check`
   enforces it with an understanding of why `go list -deps` would otherwise lie
-  ([ADR-0015](adr/0015-module-isolation.md)). That is a real constraint held
+  ([ADR-0015](architecture.md#module-isolation)). That is a real constraint held
   properly.
 - `mise run test` is green across all nine packages, and `pgtest` proves the
   DDL against a live Postgres *and* through PgBouncer in transaction pooling
-  ([ADR-0019](adr/0019-pgbouncer-in-the-path.md)).
+  ([ADR-0019](architecture.md#pgbouncer-in-the-path)).
 
 ## Findings
 
@@ -63,7 +63,7 @@ Stated because it calibrates the rest, not as praise.
 > what its own transaction has written. One thing came out better than the
 > recommendation predicted — because `*DB` satisfies `Executor`, no call site
 > changed and `rest.Resource` needed no `*DB` parameter at all.
-> [ADR-0020](adr/0020-transaction-scoped-handle.md) records the decision and
+> [ADR-0020](architecture.md#transaction-scoped-handle) records the decision and
 > what it costs. The finding is kept below as the argument that motivated it.
 
 `Executor` ([exec.go:17](../exec.go)) is `QueryContext` + `ExecContext`, which
@@ -108,7 +108,7 @@ every month of adoption adds call sites that assume the global.
 > because under autocommit the callback's timing would depend on which hook
 > registered it; and `ErrAfterCommit` distinguishes a failed side effect from a
 > failed unit of work, since retrying a durable write would double it.
-> [ADR-0012](adr/0012-change-feed-outbox.md) now says why this is not the change
+> [ADR-0012](architecture.md#change-feed-outbox) now says why this is not the change
 > feed.
 
 [hooks.go:79](../hooks.go) documents that `AfterCreate` "runs inside the
@@ -121,7 +121,7 @@ nowhere to go.
 The full hook set is `BeforeQuery`, `Before`/`AfterCreate`,
 `Before`/`AfterUpdate`, `Before`/`AfterDelete`. No commit-scoped hook exists.
 
-[ADR-0012](adr/0012-change-feed-outbox.md)'s outbox is the eventual answer, but
+[ADR-0012](architecture.md#change-feed-outbox)'s outbox is the eventual answer, but
 it is item 4 on the roadmap and this is needed before item 1 ships.
 
 **Recommendation.** Once finding 1 lands, `WithTx` holds a deferred callback
@@ -186,7 +186,7 @@ schema and has concluded, reasonably, that it works.
 > every shape the blog example's three resources can produce — list filters,
 > sorts, projections and pages, plus read, insert, update and delete — inside
 > `mise run ci`. It ends by pointing the same check at a misspelled column, so
-> the guard is proven to fire ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+> the guard is proven to fire ([ADR-0016](architecture.md#guards-proven-both-ways)).
 >
 > One thing this finding understated: `Explain` catches *strictly more* than a
 > compile-time column check, because it validates against the live schema and so
@@ -195,7 +195,7 @@ schema and has concluded, reasonably, that it works.
 `sqlb.F("titel")` fails at runtime ([expr.go:176](../expr.go)); scanning is
 reflective ([exec.go:189](../exec.go)); predicates are deliberately untyped, so
 a column from the wrong table still compiles. Every one of those is argued for
-in [ADR-0009](adr/0009-typed-column-facade.md) and the arguments are sound. It
+in [ADR-0009](architecture.md#typed-column-facade) and the arguments are sound. It
 is still a strictly weaker guarantee than sqlc's, and a prospective user
 comparing the two will notice.
 
@@ -271,7 +271,7 @@ common objection — "why not just use sqlc" — into a compatibility story.
 | 4 | ~~Promote `Explain` to documented practice~~ | Perception | **Fixed** |
 | 2 | ~~No `AfterCommit`~~ | Blocking | **Fixed** |
 | 6 | ~~No sqlc pairing story~~ | Adoption | **Fixed** — [with-sqlc.md](with-sqlc.md) |
-| 1 | ~~No transaction-scoped handle~~ | Blocking | **Fixed** — [ADR-0020](adr/0020-transaction-scoped-handle.md) |
+| 1 | ~~No transaction-scoped handle~~ | Blocking | **Fixed** — [ADR-0020](architecture.md#transaction-scoped-handle) |
 
 Ordered by leverage per unit of effort, which is not the order they will
 naturally get done in — 1 is the one that matters most and 2 depends on it, so

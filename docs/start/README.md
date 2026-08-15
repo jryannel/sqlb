@@ -88,7 +88,7 @@ client and the generated CLI are separate toolchains and separate opt-ins.
 
 Postgres only, deliberately. `LISTEN/NOTIFY`, jsonb aggregation and `RETURNING`
 are all load-bearing, and multi-dialect support would cost the best features
-([ADR-0001](../adr/0001-postgres-only.md)).
+([ADR-0001](../architecture.md#postgres-only)).
 
 ## Status
 

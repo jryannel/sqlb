@@ -174,7 +174,7 @@ schema.ExternalRef("org", "organizations.id").Enforced().Filterable()
 ```
 
 The target is a name, not a resolution. See [`Enforced`](https://pkg.go.dev/github.com/jryannel/sqlb/schema#Field.Enforced)
-for what it gives up — everything [ADR-0015](../adr/0015-module-isolation.md)
+for what it gives up — everything [ADR-0015](../architecture.md#module-isolation)
 bought by refusing the constraint, which is the right trade only when both tables
 live in one database.
 
@@ -219,5 +219,5 @@ to have checked something it never looked at.
   queries in front of it sqlb would take
 - [Using your own structs](../start/structs-first.md) — the other half of
   adopting sqlb into a project that already exists
-- [ADR-0014](../adr/0014-migrations-and-import.md) — why the history beats
+- [ADR-0014](../architecture.md#migrations-and-import) — why the history beats
   production as a source of truth

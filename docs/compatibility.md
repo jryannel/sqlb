@@ -34,7 +34,7 @@ or deployed clients, not just call sites.
 
   **This entry broke once, deliberately, before 1.0.** It used to be
   `QueryContext` and `ExecContext` over `database/sql`.
-  [ADR-0040](adr/0040-the-driver-is-a-dependency.md) redefined it, because the
+  [ADR-0040](architecture.md#the-driver-is-a-dependency) redefined it, because the
   driver was structurally blocking two things sqlb had already committed to.
   That was a pre-1.0-or-never change: after the tag the same work is a major
   version and a hand migration for every consumer. What it bought, and what it
@@ -44,7 +44,7 @@ or deployed clients, not just call sites.
   deployed client or an agent driving the API off `sqlb.json` has requests built
   against it. New operators are additive; existing spellings do not change
   meaning. `has`, `hasany` and `hasall` were added for array columns
-  ([ADR-0033](adr/0033-array-columns.md)) and are frozen from here on, as are
+  ([ADR-0033](architecture.md#array-columns)) and are frozen from here on, as are
   their negations `nhas`, `nhasany`, `nhasall` and `nhasdoc`, added later for
   the frontend-parity reason that record's 2026-08-01 revision gives; `contains`
   was *not* extended to mean array containment, and will not be — one name
@@ -57,7 +57,7 @@ or deployed clients, not just call sites.
   has no spelling at all. Renaming a column is therefore an API change as well
   as a schema change; `RenamedFrom` makes the database half mechanical and the
   client half is a regeneration plus a compile error per call site
-  ([ADR-0036](adr/0036-the-wire-is-the-column-name.md)). More precisely: there is
+  ([ADR-0036](architecture.md#the-wire-is-the-column-name)). More precisely: there is
   **one spelling per deployment**, computed from the column name by the schema's
   declared `WireCase` — `Verbatim` unless the schema says otherwise, so this
   reads as "the column's own name" for every schema that has not chosen. What is
@@ -79,7 +79,7 @@ or deployed clients, not just call sites.
   base64url of JSON and has room for a version field, but that field has to
   arrive before it is needed. Nothing today reads the payload, which is not a
   reason to treat it as private. See
-  [ADR-0027](adr/0027-keyset-pagination.md).
+  [ADR-0027](architecture.md#keyset-pagination).
 
 ## Will move
 
@@ -88,14 +88,14 @@ Named in advance, so the break is a documented plan rather than a surprise.
 - ~~**Hook registration.**~~ Moved twice, and the second time it broke on
   purpose. After `v0.1.0` it became `sqlb.On[T]()` over a process-default
   `Registry` with `OnIn[T](r)` for a scoped one
-  ([ADR-0020](adr/0020-transaction-scoped-handle.md)). The subtlety this entry
+  ([ADR-0020](architecture.md#transaction-scoped-handle)). The subtlety this entry
   used to warn about — which registry a statement uses is decided by the
   *dynamic type* of the executor, so passing a raw pool where a scoped
   `*sqlb.DB` was meant silently used the default — turned out to be the whole
   problem rather than a footnote to it, and it switched a real adopter's tenant
   boundary off without a compile error or a failing request.
 
-  So the default registry is **gone** ([ADR-0047](adr/0047-no-default-hook-registry.md)).
+  So the default registry is **gone** ([ADR-0047](architecture.md#no-default-hook-registry)).
   `On[T](r)` takes the registry and `OnIn` is deleted; `rest.PublishChanges[T](r, p)`
   takes it too and `PublishChangesIn` is deleted; `sqlb.New` gives each handle an
   empty registry of its own, which `DB.WithHooks` is how you fill. Every call
@@ -122,7 +122,7 @@ Named in advance, so the break is a documented plan rather than a surprise.
   a longer name — `?expand=list.workspace` — under a depth limit, so nothing a
   request can send today changes meaning.
 - ~~**`schema.Action`, the referential one.**~~ Landed with declared actions
-  ([ADR-0043](adr/0043-declared-actions.md)), which needed that noun for a
+  ([ADR-0043](architecture.md#declared-actions)), which needed that noun for a
   domain verb. The foreign-key type is now `schema.RefAction`; the constants
   every call site actually writes — `schema.Cascade`, `schema.SetNull` and the
   rest — are unchanged, so a schema breaks only if it named the type. The
@@ -130,11 +130,11 @@ Named in advance, so the break is a documented plan rather than a surprise.
   position.
 - **Backwards cursors.** Paging goes forward only. If `?before=` lands it is a
   new parameter alongside `?cursor=`, so again nothing a request can send today
-  changes meaning. [ADR-0027](adr/0027-keyset-pagination.md) says what would
+  changes meaning. [ADR-0027](architecture.md#keyset-pagination) says what would
   make it worth building.
 - **The `sqlb` command's verb names**, which are still settling. `v0.8.0` moved
   one: `sqlb-survey` became `sqlb survey`, a second binary folded into the one
-  command tree ([ADR-0032](adr/0032-sqlb-command.md)). The mechanical edit is
+  command tree ([ADR-0032](architecture.md#sqlb-command)). The mechanical edit is
   `./cmd/sqlb-survey …` → `./cmd/sqlb survey …`, and it is the cheap kind of
   break — a script that invoked the old name stops with "no such file" rather
   than doing something subtly different.
@@ -153,7 +153,7 @@ Named in advance, so the break is a documented plan rather than a surprise.
   frontmatter and directory convention belong to the agent tooling rather than to
   sqlb, so a change there is a change to this output with no deprecation window
   sqlb is in a position to offer
-  ([ADR-0049](adr/0049-the-skill-is-generated.md)).
+  ([ADR-0049](architecture.md#the-skill-is-generated)).
 
   This is the cheapest kind of break to own, and that is the reason it is
   allowed to be here at all: the file is generated, so the mechanical edit is
@@ -235,7 +235,7 @@ next regeneration and want committing with it. Nor are the command's verb
 ## The driver
 
 **sqlb depends on pgx v5, and `database/sql` is not the contract.**
-[ADR-0040](adr/0040-the-driver-is-a-dependency.md) decides it and the engine is
+[ADR-0040](architecture.md#the-driver-is-a-dependency) decides it and the engine is
 built that way: `Executor` is `Query` and `Exec` over `pgx.Rows` and
 `pgconn.CommandTag`, and there is one driver rather than two.
 
@@ -261,12 +261,12 @@ callbacks behind a commit sqlb will never perform.
   `stdlib.OpenDBFromPool` shares connections, not transaction handles.
 - **Arrays at no cost.** `array.go` was 449 lines of array-literal codec written
   because `database/sql` has no array case in either direction
-  ([ADR-0033](adr/0033-array-columns.md)). It is deleted. A `[]string` binds as
+  ([ADR-0033](architecture.md#array-columns)). It is deleted. A `[]string` binds as
   `text[]` and scans back from one, and `sqlb.EncodeArray` — a public function
   whose only job was rendering `{a,b}` — is gone with nothing in its place.
 - **Per-connection type codecs.** Registering a binary codec on `AfterConnect`
   is a pgx API with no `database/sql` spelling, and
-  [ADR-0026](adr/0026-vectors-declare-their-index.md) had to specify a vector
+  [ADR-0026](architecture.md#vectors-declare-their-index) had to specify a vector
   column over pgvector's *text* form for exactly that reason. Measured, a 50-row
   page of 1536-dimension embeddings cost 2.7× the time and 21× the memory
   through the bridge, because the text literal is parsed element by element in
@@ -284,7 +284,7 @@ callbacks behind a commit sqlb will never perform.
   any dependency of the engine that is not pgx or something pgx itself pulls in,
   and on `rest` anything that is not huma.
 - **sqlb does not run on another driver.** A population
-  [ADR-0001](adr/0001-postgres-only.md) had already made small, but not zero.
+  [ADR-0001](architecture.md#postgres-only) had already made small, but not zero.
 - **`Executor` broke, and there was no deprecation path** that preserved both,
   because the point was to have one.
 

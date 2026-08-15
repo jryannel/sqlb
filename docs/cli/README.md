@@ -168,7 +168,7 @@ taskctl tasks list --status eq.done --all
 
 `--all` follows `next_cursor` until the collection is exhausted and writes
 everything as one page. It pages by [cursor rather than by page
-number](../adr/0027-keyset-pagination.md), so a concurrent insert cannot make
+number](../architecture.md#keyset-pagination), so a concurrent insert cannot make
 the walk read a row twice — which is the failure a hand-written `while` loop
 over `?page=` has and does not report.
 
@@ -240,7 +240,7 @@ environment, then the built-in default.
 ## Rejections
 
 A 400 arrives as the problem document with its allow-list intact, which is the
-[actionable errors](../adr/0011-actionable-errors.md) guarantee reaching the
+[actionable errors](../architecture.md#actionable-errors) guarantee reaching the
 last consumer in the chain:
 
 ```
@@ -259,7 +259,7 @@ Interactive prompts, a config file, output formatting beyond `--compact`,
 credential storage, and any command for an endpoint you wrote by hand.
 `example/tasks` has `POST /auth/login` on the same router, and the CLI has no
 command for it — the generated tree covers the generated CRUD and stops there.
-[ADR-0029](../adr/0029-go-cli.md) records why, and what would change it.
+[ADR-0029](../architecture.md#go-cli) records why, and what would change it.
 
 ## Worked example
 

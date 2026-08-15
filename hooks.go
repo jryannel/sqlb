@@ -84,7 +84,7 @@ func (s scopedFn[F]) keep(released map[string]struct{}) bool {
 // in one process shared rules neither had asked for, and a module that stopped
 // registering left the previous module's scoping silently in force.
 //
-// [ADR-0047]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0047-no-default-hook-registry.md
+// [ADR-0047]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#no-default-hook-registry
 type Registry struct {
 	m sync.Map // reflect.Type -> *Hooks[T]
 }
@@ -190,7 +190,7 @@ func (h *Hooks[T]) BeforeQuery(fn func(context.Context, *Builder[T]) error) *Hoo
 // counts. The check is the same one, asked after the release rather than before,
 // which is what keeps this from being the flag that record declined to add.
 //
-// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#declared-scope-is-required
 func (h *Hooks[T]) Scope(name string) *ScopedHooks[T] {
 	if name == "" {
 		panic("sqlb: Scope called with an empty name; an unnamed registration is Hooks.BeforeQuery itself")
@@ -348,7 +348,7 @@ func (h *Hooks[T]) AfterDeleteRows(fn func(context.Context, []T) error) *Hooks[T
 // no registration could possibly be meeting, because there is no registration
 // ([ADR-0030]).
 //
-// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#declared-scope-is-required
 type RegisteredHooks struct {
 	BeforeQuery  bool
 	BeforeCreate bool

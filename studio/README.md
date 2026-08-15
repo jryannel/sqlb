@@ -4,7 +4,7 @@ A generic data/schema/action browser: point it at a manifest and a running
 application's REST API, and it renders a grid, not a curated admin. **Not a
 Django-admin replacement** — see *What it does not do* below before reaching
 for it as one. See the package doc (`go doc ./studio`) for the argument and
-[docs/adr/0053](../docs/adr/0053-the-manifest-describes-what-cannot-be-guessed.md)
+[docs/adr/0053](../docs/architecture.md#the-manifest-describes-what-cannot-be-guessed)
 for the decision this module exists to test.
 
 It is a module of its own, like `pgtest` and `example/tasks`, so its
@@ -96,7 +96,7 @@ phrase "uncurated browser" undersells it otherwise):
   no select-N-rows-apply-one-action. Not planned here.
 - **No history or audit trail, and not because the infrastructure is
   missing — because studio doesn't read it.** The durable change feed
-  ([`outbox`](../outbox), [ADR-0012](../docs/adr/0012-change-feed-outbox.md))
+  ([`outbox`](../outbox), [ADR-0012](../docs/architecture.md#change-feed-outbox))
   is built and durable, but its `Event` ([`rest/events.go`](../rest/events.go))
   is an invalidation signal — table, key, create/update/delete — with no
   actor and no field-level diff. Turning that into a Django `LogEntry`

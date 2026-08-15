@@ -101,4 +101,4 @@ have to be argued for, and neither has been.
 - [Filtering and search](../rest/filtering.md) — the grammar in full
 - [Filter grammar reference](https://jryannel.github.io/sqlb/reference/filter-grammar/)
   — the operator matrix
-- [ADR-0003](../adr/0003-one-ast-two-producers.md) — the decision record
+- [ADR-0003](../architecture.md#one-ast-two-producers) — the decision record

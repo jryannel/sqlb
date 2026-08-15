@@ -39,7 +39,7 @@ package codegen
 // naming the column that asked. The seam is a plain function field: the exit
 // keeps the property, and drops the machinery.
 //
-// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#declared-scope-is-required
 
 import (
 	"bytes"

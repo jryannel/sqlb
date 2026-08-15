@@ -73,8 +73,8 @@ and it is why the gate runs with `--fatal-infos`.
 ## The three things Dart does differently
 
 The design is [`../web`](../web)'s, argued in
-[ADR-0028](../../../docs/adr/0028-typescript-client.md). Three things could not
-carry over, and [ADR-0031](../../../docs/adr/0031-dart-client.md) is about those.
+[ADR-0028](../../../docs/architecture.md#typescript-client). Three things could not
+carry over, and [ADR-0031](../../../docs/architecture.md#dart-client) is about those.
 
 **Members are camelCase.** `org_id` is `orgId`, with the wire spelling beside
 it. snake_case members would fail the lowerCamelCase lint in every file that
@@ -178,4 +178,4 @@ thing people copy out and edit, which is the same reason the TypeScript client
 emits `queryOptions` rather than hooks.
 
 The reasoning, and the Flutter application it was drawn from, are in
-[ADR-0031](../../../docs/adr/0031-dart-client.md).
+[ADR-0031](../../../docs/architecture.md#dart-client).

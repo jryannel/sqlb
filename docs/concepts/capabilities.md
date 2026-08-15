@@ -66,7 +66,7 @@ resource refuses to serve.
 
 Every problem in a request is reported at once, not one per round trip, and each
 carries the allow-list that would have satisfied it
-([ADR-0011](../adr/0011-actionable-errors.md)). A malformed request takes one
+([ADR-0011](../architecture.md#actionable-errors)). A malformed request takes one
 round trip to fix rather than one per mistake.
 
 That shape exists for a specific caller: a program assembling requests against a
@@ -94,7 +94,7 @@ so even a hand-written `Row()` cannot set one — and a hook still can.
 `rest.Resource` refuses to mount a model whose declarations no hook satisfies,
 and names every missing registration at once. A rule that can be forgotten
 entirely is not a rule, and the table somebody added last week is the case that
-actually happens ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
+actually happens ([ADR-0030](../architecture.md#declared-scope-is-required)).
 
 ## Capabilities are a privacy decision
 
@@ -114,4 +114,4 @@ where it is reviewable.
   patterns
 - [Capability reference](https://jryannel.github.io/sqlb/reference/capabilities/)
   — every method and what it permits
-- [ADR-0006](../adr/0006-capabilities-are-opt-in.md) — the decision record
+- [ADR-0006](../architecture.md#capabilities-are-opt-in) — the decision record

@@ -46,7 +46,7 @@ Two, specifically, and not one:
 - **A multi-app monorepo** — the shape the second describes. It exercises
   breadth: many schemas beside a shared platform layer, coexistence with sqlc
   rather than replacement of it, and the question of whether module isolation
-  ([ADR-0015](adr/0015-module-isolation.md)) survives contact with a `core/`.
+  ([ADR-0015](architecture.md#module-isolation)) survives contact with a `core/`.
 
 The two fail differently, which is the point. A port that only proves the depth
 case leaves the isolation claim untested; one that only proves breadth leaves
@@ -62,14 +62,14 @@ spikes are useful but they are not the gate.
    from the declaration.
 2. **`sqlb migrate -check` is green against the real migration history.** The
    history builds the declared schema — that is the claim
-   [ADR-0014](adr/0014-migrations-and-import.md) makes, and the port is where it
+   [ADR-0014](architecture.md#migrations-and-import) makes, and the port is where it
    either holds against a seven-month history or does not.
 3. **Every generated client compiles and its refusals file holds.** A widened
-   type is the one failure [ADR-0028](adr/0028-typescript-client.md) claims
+   type is the one failure [ADR-0028](architecture.md#typescript-client) claims
    cannot happen, and a real schema is a much harder test of that than
    `example/tasks`.
 4. **The tenant boundary is enforced at startup, not by review.** Every `Scoped`
-   model mounts or refuses ([ADR-0030](adr/0030-declared-scope-is-required.md)).
+   model mounts or refuses ([ADR-0030](architecture.md#declared-scope-is-required)).
 5. **The existing test suite passes**, including whatever architecture tests the
    consuming repository has. Where a rule had to be rewritten, that is a finding
    and goes in the report.
@@ -93,7 +93,7 @@ in stream A and B is a blocker. Everything below is negotiable.
 ### A. The hole that is a security bug, not a gap — **closed**
 
 **`?expand` did not run the target's hooks.** Both evaluations found it
-independently, and [ADR-0030](adr/0030-declared-scope-is-required.md) recorded
+independently, and [ADR-0030](architecture.md#declared-scope-is-required) recorded
 it under Consequences: a `BeforeQuery` hook confines a model's own reads, and an
 expansion reached the target through a join that hook never saw. On a
 tenant-scoped schema that was a cross-tenant read behind a capability the schema
@@ -117,7 +117,7 @@ This was the one item the plan deliberately refused to pre-decide, on the
 grounds that doing the work on a guess is how you acquire a permanent interface
 for a problem you did not have. The gate was both ports run and both reports
 exist. That gate is met, and the answer is
-[ADR-0040](adr/0040-the-driver-is-a-dependency.md): **the engine depends on pgx
+[ADR-0040](architecture.md#the-driver-is-a-dependency): **the engine depends on pgx
 v5, `database/sql` stops being the contract, and there is one driver rather than
 two.** It lands before the freeze or not at all, because it breaks `Executor`.
 It has landed; Phase 4 below is closed.
@@ -158,7 +158,7 @@ first evaluation made the cost concrete: `uuid → string` where the codebase us
 signature.
 
 `codegen.Options.Types` is the sqlc `overrides:` equivalent
-([ADR-0035](adr/0035-type-overrides.md)). The record is mostly about the
+([ADR-0035](architecture.md#type-overrides)). The record is mostly about the
 boundary rather than the mechanism, because that is the part that would have
 been easy to get wrong: an override reaches the models, the typed facade, the
 REST bodies and the manifest; it reaches filter coercion too, and must; and it
@@ -173,7 +173,7 @@ writing, which is the state that produces a "we never promised that" argument
 later.
 
 Both are now stated, with their cost and their escape
-([ADR-0036](adr/0036-the-wire-is-the-column-name.md)):
+([ADR-0036](architecture.md#the-wire-is-the-column-name)):
 
 | | Rule |
 |---|---|
@@ -185,7 +185,7 @@ and undiscounted — one evaluation counts 334 tags — and names the two positi
 an adopter can take instead, both of which keep exactly one spelling per
 deployment. It also names the escape it *would* build if a port stalls on this:
 a deployment-wide naming policy, not a per-field mapping layer, because every
-guarantee [ADR-0028](adr/0028-typescript-client.md) makes is about the generated
+guarantee [ADR-0028](architecture.md#typescript-client) makes is about the generated
 client having no contents to be wrong.
 
 ### E. Schema gaps, and which of them 1.0 needs
@@ -194,13 +194,13 @@ Not all of these block. The test is whether a port can complete without them.
 
 | Gap | Blocks a port? | Position for 1.0 |
 |---|---|---|
-| **Array columns** | Was yes | **Done** — [ADR-0033](adr/0033-array-columns.md) |
-| **pgvector** | Yes, for one module — **confirmed**, and the blocker is not this row | **Not in 1.0.** The port scoped `rag`/`memory` out, and what stopped them is the driver rather than the missing DSL: a text-form vector cannot host pgvector's binary codec however well the schema declares its index. [ADR-0026](adr/0026-vectors-declare-their-index.md) records the closure; stream B owns the fix |
-| **`tsvector` / full text** | Probably | **Decided: not in 1.0** ([ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md)). The blocker is not the column type, it is that a `tsvector` is database-maintained and `migrate` renders neither generated columns nor triggers |
-| **Composite primary keys** | ~~Yes, ~15 tables~~ **No** — the multi-app port hit one and it "didn't block me" | **Not in 1.0, and no longer a candidate to hold it.** [ADR-0034](adr/0034-one-column-addresses-a-row.md) stands as written; the narrowing it concedes is additive and can land after the tag |
+| **Array columns** | Was yes | **Done** — [ADR-0033](architecture.md#array-columns) |
+| **pgvector** | Yes, for one module — **confirmed**, and the blocker is not this row | **Not in 1.0.** The port scoped `rag`/`memory` out, and what stopped them is the driver rather than the missing DSL: a text-form vector cannot host pgvector's binary codec however well the schema declares its index. [ADR-0026](architecture.md#vectors-declare-their-index) records the closure; stream B owns the fix |
+| **`tsvector` / full text** | Probably | **Decided: not in 1.0** ([ADR-0037](architecture.md#search-is-ilike-until-it-cannot-be)). The blocker is not the column type, it is that a `tsvector` is database-maintained and `migrate` renders neither generated columns nor triggers |
+| **Composite primary keys** | ~~Yes, ~15 tables~~ **No** — the multi-app port hit one and it "didn't block me" | **Not in 1.0, and no longer a candidate to hold it.** [ADR-0034](architecture.md#one-column-addresses-a-row) stands as written; the narrowing it concedes is additive and can land after the tag |
 | **Generated columns, triggers, backfills** | No | `migrate.Diff` renders DDL only; hand-written migrations interleave. Document the asterisk rather than close it |
 | ~~**`Security` on `rest.Options`**~~ | No | **Done** — every generated operation carries the resource's requirement. It documents; middleware still enforces |
-| **Parent-scoped routes** (`/projects/{id}/tasks`) | No, but every consumer notices | **Decided: flat, deliberately** ([ADR-0038](adr/0038-collections-are-flat.md)). The one real cost is that a missing parent is an empty page rather than a 404 |
+| **Parent-scoped routes** (`/projects/{id}/tasks`) | No, but every consumer notices | **Decided: flat, deliberately** ([ADR-0038](architecture.md#collections-are-flat)). The one real cost is that a missing parent is an empty page rather than a 404 |
 
 **The row this section expected to argue about was composite primary keys, and
 the ports settled it the cheap way.** The prediction was that ~15 tables would
@@ -231,18 +231,18 @@ from a confidence line.
 
 | ADR | Was | Now |
 |---|---|---|
-| [0004](adr/0004-schema-as-go-dsl.md) schema as Go DSL | Exploring | **Working** — every artefact is generated from it |
-| [0014](adr/0014-migrations-and-import.md) migrations by diff | Exploring | **Working** — the loop closes and CI enforces the fixpoint |
-| [0019](adr/0019-pgbouncer-in-the-path.md) PgBouncer | Exploring/Low | **Working** — the carve-outs are tested against a real pooler, not reasoned |
-| [0023](adr/0023-mixins-carry-behaviour.md) mixins | Exploring | **Working as a decision** — the column half ships, the behaviour half is out of scope |
-| [0012](adr/0012-change-feed-outbox.md) change feed | Exploring/Low | **Not in 1.0**, said in the status |
-| [0026](adr/0026-vectors-declare-their-index.md) vectors | Exploring/Low | **Not in 1.0.** A port did need it; what it needed was the driver, not this — see stream B |
+| [0004](architecture.md#schema-as-go-dsl) schema as Go DSL | Exploring | **Working** — every artefact is generated from it |
+| [0014](architecture.md#migrations-and-import) migrations by diff | Exploring | **Working** — the loop closes and CI enforces the fixpoint |
+| [0019](architecture.md#pgbouncer-in-the-path) PgBouncer | Exploring/Low | **Working** — the carve-outs are tested against a real pooler, not reasoned |
+| [0023](architecture.md#mixins-carry-behaviour) mixins | Exploring | **Working as a decision** — the column half ships, the behaviour half is out of scope |
+| [0012](architecture.md#change-feed-outbox) change feed | Exploring/Low | **Not in 1.0**, said in the status |
+| [0026](architecture.md#vectors-declare-their-index) vectors | Exploring/Low | **Not in 1.0.** A port did need it; what it needed was the driver, not this — see stream B |
 
 Four decisions had **no record at all**. All four now have one: type overrides
-([0035](adr/0035-type-overrides.md)), the wire-format policy
-([0036](adr/0036-the-wire-is-the-column-name.md)), full-text search
-([0037](adr/0037-search-is-ilike-until-it-cannot-be.md)) and parent-scoped routes
-([0038](adr/0038-collections-are-flat.md)).
+([0035](architecture.md#type-overrides)), the wire-format policy
+([0036](architecture.md#the-wire-is-the-column-name)), full-text search
+([0037](architecture.md#search-is-ilike-until-it-cannot-be)) and parent-scoped routes
+([0038](architecture.md#collections-are-flat)).
 
 **The index now has no Exploring row whose subject is shipped**, which was Phase
 1's gate.
@@ -262,7 +262,7 @@ completeness rather than re-argued; one belongs to the platform, not to sqlb.
 | **`$N`-form raw predicate** — `RawPred` is positional, `$N` is referential | single-app | #4 | 1.1, documented now |
 | **Registry-aware coercion** — `filter.Coerce` is string→type only | single-app | #5 | 1.1 |
 | **`Describe` panics after first use** (`InUse`) | multi-app | Low | 1.1, documented now |
-| Module-graph MVS bump (huma/chi, `go` directive) | both | #3 / Low | Answered — [ADR-0007](adr/0007-generated-rest-handlers.md). The `go` directive half is **fixed**: it was patch-pinned at `1.25.7` for no reason and is now `1.25.0`. The remaining 1.25 floor is huma's, not the engine's — the non-`rest` packages build at `1.21.0` |
+| Module-graph MVS bump (huma/chi, `go` directive) | both | #3 / Low | Answered — [ADR-0007](architecture.md#generated-rest-handlers). The `go` directive half is **fixed**: it was patch-pinned at `1.25.7` for no reason and is now `1.25.0`. The remaining 1.25 floor is huma's, not the engine's — the non-`rest` packages build at `1.21.0` |
 | `pgtype` scanning unverified in sqlb's own tests | single-app | — | **Done** — `pgtest/pgtype_test.go`, both directions and NULLs |
 | Composite primary key | multi-app | Medium | Stream E above; not a blocker |
 | Local `replace` is machine-specific | multi-app | landing blocker | The platform's, not sqlb's |
@@ -297,12 +297,12 @@ feature does not.
 
 Named so that "it is missing" is not mistaken for "it was forgotten".
 
-- ~~**The change feed** ([ADR-0012](adr/0012-change-feed-outbox.md)). The biggest
+- ~~**The change feed** ([ADR-0012](architecture.md#change-feed-outbox)). The biggest
   unbuilt item in [the vision](vision.md), and the one most likely to change
   shape on contact with traffic. Freezing an outbox format on a guess is exactly
   the mistake 1.0 exists to avoid.~~ **Built**, in two halves and in that order —
   the endpoint and the wire format first
-  ([ADR-0045](adr/0045-the-stream-is-a-seam.md)), the transactional outbox behind
+  ([ADR-0045](architecture.md#the-stream-is-a-seam)), the transactional outbox behind
   them second, which is what stopped the format from being a guess: the wire was
   settled against a running client a fortnight before the durable source existed,
   and the source then landed without changing it.
@@ -321,7 +321,7 @@ Named so that "it is missing" is not mistaken for "it was forgotten".
   action is unaffected.
 - ~~**Computed fields** ([#17](https://github.com/jryannel/sqlb/issues/17)).~~
   Built, additive, and in: `schema.Computed` with `FromSQL` and `Needs`, per
-  [ADR-0041](adr/0041-computed-fields.md). It was deferred as the strongest
+  [ADR-0041](architecture.md#computed-fields). It was deferred as the strongest
   candidate for 1.1 rather than a blocker; it landed early because it is purely
   additive — a schema that declares no computed column compiles to the same SQL.
   The record's `FromGo` tier is **cut** rather than pending: ADR-0041 set the
@@ -330,20 +330,20 @@ Named so that "it is missing" is not mistaken for "it was forgotten".
 - ~~**`sqlb eject`** ([#19](https://github.com/jryannel/sqlb/issues/19))~~ Built:
   the schema as SQL and the resources as plain `net/http` handlers over pgx, with
   what it does not carry refused by name and a comparison test against the
-  generated resources it replaces ([ADR-0042](adr/0042-the-exit-is-generated.md)).
+  generated resources it replaces ([ADR-0042](architecture.md#the-exit-is-generated)).
   It was deferred as an adoption argument rather than a feature; it landed early
   because the argument is the one thing a pre-1.0 library with no consumers can
   actually answer.
 - **`sqlb impact`** ([#21](https://github.com/jryannel/sqlb/issues/21)). Half of
   it is built — a REST-contract diff against a committed baseline
-  ([ADR-0039](adr/0039-a-schema-edit-is-an-api-edit.md)) — and what the issue
+  ([ADR-0039](architecture.md#a-schema-edit-is-an-api-edit)) — and what the issue
   asks for beyond that is the blast-radius report: which endpoints, which client
   types, which DDL statements one edit touches.
 - ~~**A pgx-native `Executor`** — unless stream B says otherwise.~~ Stream B said
   otherwise. It is now the opposite of a deferral: it is the one item that has to
   land **before** the tag, because it breaks `Executor` and afterwards that is a
   major version. See stream B above and
-  [ADR-0040](adr/0040-the-driver-is-a-dependency.md).
+  [ADR-0040](architecture.md#the-driver-is-a-dependency).
 
 ## Sequencing
 
@@ -370,7 +370,7 @@ legible to someone who is not the author.
 - ~~**Stream C**: type overrides in `codegen.Options`.~~ Done.
 - ~~Whichever of stream E's rows the two target codebases actually hit — decided
   by reading them, not by guessing here.~~ Array columns shipped
-  ([ADR-0033](adr/0033-array-columns.md)) and were the row that had to move
+  ([ADR-0033](architecture.md#array-columns)) and were the row that had to move
   first. The rest were answered by the ports rather than before them — see the
   stream E table, which now records which predictions held.
 
@@ -396,7 +396,7 @@ then breaking, which is the failure the freeze exists to prevent.
 
 - ~~`Executor` redefined over pgx, the `database/sql` path removed, `deps-check`
   rewritten to enforce pgx-and-nothing-else with its positive controls intact~~
-  ([ADR-0040](adr/0040-the-driver-is-a-dependency.md)). Done, and it took two
+  ([ADR-0040](architecture.md#the-driver-is-a-dependency)). Done, and it took two
   things with it the phase did not list: `array.go`'s 449-line codec, and
   `sqlb.EncodeArray` — a public function that existed only because
   `database/sql` had no spelling for an array.

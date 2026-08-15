@@ -80,7 +80,7 @@ ecosystem.
   (`HasPetsWith(...)`) and chained traversal. sqlb has one-directional
   references and one level of forward `?expand`; there is no reverse expansion,
   no M2M vocabulary, and no relation-spanning predicate — see
-  [ADR-0022](adr/0022-references-declare-their-inverse.md) for what is missing
+  [ADR-0022](architecture.md#references-declare-their-inverse) for what is missing
   and why.
 - **Maturity.** ~17.2k stars and ~4,000 importers on pkg.go.dev, production use
   at scale, and an extension for this exact job: [`entrest`](https://github.com/lrstanley/entrest)
@@ -118,7 +118,7 @@ eager loading issues additional queries: *"it is not possible to load all
 associations in a single `JOIN` operation. Therefore, Ent executes additional
 query to load each association."* sqlb expands in one statement, a `LEFT JOIN`
 and a `json_build_object` per relation
-([ADR-0025](adr/0025-expansion-is-one-statement.md)).
+([ADR-0025](architecture.md#expansion-is-one-statement)).
 
 sqlb's version is consistent by construction — one snapshot, so a foreign key
 and its expansion cannot contradict each other. **ent's version inherits its
@@ -191,7 +191,7 @@ missing allow-list becomes a leak.
 
 **The sharper difference, for a Postgres project.** Bun is built on
 `database/sql` — you hand `bun.NewDB` a `*sql.DB` and a dialect. sqlb is
-pgx-native since [ADR-0040](adr/0040-the-driver-is-a-dependency.md). So Bun cannot
+pgx-native since [ADR-0040](architecture.md#the-driver-is-a-dependency). So Bun cannot
 join a `pgx.Tx`: an application already holding one for its pgx or sqlc code
 cannot put a Bun query inside it without going through `database/sql` for
 everything. That is the whole of the sqlc coexistence story above, and it is not
@@ -222,7 +222,7 @@ and caught by `Explain`-as-a-gate in CI, and the jet/bob answer is codegen.
 None of the three is as good as what TypeScript's type system hands Drizzle
 for nothing. It is also multi-dialect — Postgres, MySQL, SQLite and a long
 list of serverless drivers — where sqlb is
-[Postgres only](adr/0001-postgres-only.md), and it has the ecosystem this page
+[Postgres only](architecture.md#postgres-only), and it has the ecosystem this page
 keeps conceding: Drizzle Studio, first-party integrations, and a community
 sqlb does not have.
 
@@ -281,13 +281,13 @@ Stated plainly, because a comparison page that cannot answer this is marketing:
   sqlc gives a stronger guarantee for that work.
 - **You need a graph.** Traversal predicates and expansion more than one level
   deep — ent has them and sqlb does not. Reverse expansion it does have
-  ([ADR-0022](adr/0022-references-declare-their-inverse.md)), and many-to-many is
+  ([ADR-0022](architecture.md#references-declare-their-inverse)), and many-to-many is
   a junction table queried directly rather than a declaration
-  ([ADR-0056](adr/0056-a-junction-is-a-table.md)); if a graph is the shape of
+  ([ADR-0056](architecture.md#a-junction-is-a-table)); if a graph is the shape of
   your domain rather than an edge of it, ent is still the answer.
 - **Migrations are the problem.** Atlas.
 - **You are not on Postgres.** sqlb is Postgres-only and
-  [will stay that way](adr/0001-postgres-only.md).
+  [will stay that way](architecture.md#postgres-only).
 - **Your team wants an ORM.** This is not one, and does not intend to be.
 - **Your whole stack is TypeScript and so are all your consumers.** Drizzle
   gives the same schema-as-code philosophy with the compile-time inference Go

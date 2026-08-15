@@ -542,7 +542,7 @@ type ComputedExpr struct{ sql string }
 // the dependency ExternalRef's free-text target exists to avoid — which is why
 // it is written here rather than enforced.
 //
-// [ADR-0024]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0024-no-annotation-slot.md
+// [ADR-0024]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#no-annotation-slot
 func FromSQL(sql string) ComputedExpr { return ComputedExpr{sql: sql} }
 
 // Needs names the binds this column's expression takes, in the order its `?`
@@ -688,7 +688,7 @@ func ExternalRef(relation, target string) *Field {
 // not give this schema the target's columns, so `?expand` has nothing to build
 // a join from.
 //
-// [ADR-0015]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0015-module-isolation.md
+// [ADR-0015]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#module-isolation
 func (f *Field) Enforced() *Field {
 	if f.d.Ref != nil {
 		f.d.Ref.Enforced = true
@@ -784,8 +784,8 @@ func Timestamps() Group {
 // statement, not turn it into an UPDATE. A table that means deletes to be soft
 // should leave OpDelete out of its Expose and route the endpoint itself.
 //
-// [ADR-0008]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0008-hooks-as-domain-seam.md
-// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+// [ADR-0008]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#hooks-as-domain-seam
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#declared-scope-is-required
 func SoftDelete() Group {
 	f := Timestamp("deleted_at").Nullable().ReadOnly()
 	f.d.SoftDelete = true
@@ -1219,7 +1219,7 @@ func (f *Field) LookupKey() *Field {
 // leave the child unexposed and reach its rows through the parent's endpoint,
 // which is where the confinement already holds (#158).
 //
-// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0030-declared-scope-is-required.md
+// [ADR-0030]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#declared-scope-is-required
 func (f *Field) Scoped() *Field {
 	f.d.Scoped = true
 	return f

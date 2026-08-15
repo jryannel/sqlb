@@ -2,7 +2,7 @@
 
 Five short pages, one idea each. Together they are the reasoning the rest of the
 documentation assumes; the [guide](../start/quickstart.md) is how to use it, the
-[decision records](../adr/) are the long arguments, and this is the middle.
+[decision records](../architecture.md#decisions) are the long arguments, and this is the middle.
 
 | | |
 |---|---|
@@ -62,7 +62,7 @@ request path. `rest` is the single exception — it depends on
 [Huma](https://huma.rocks), and nothing depends on `rest`, so importing the
 engine still costs nothing. `mise run deps-check` proves this per package, and
 ends by checking it can still *see* huma in `rest`: a guard that cannot fail is
-worse than no guard ([ADR-0016](../adr/0016-guards-proven-both-ways.md)).
+worse than no guard ([ADR-0016](../architecture.md#guards-proven-both-ways)).
 
 ## The request path
 
@@ -71,7 +71,7 @@ A list request through `rest.Resource`:
 1. **Parse.** `filter.Parse` reads the query string against the model. Unknown
    parameters, undeclared capabilities and uncoercible values are collected into
    a `filter.Errors` — all of them, not the first
-   ([ADR-0011](../adr/0011-actionable-errors.md)). Values become typed Go values
+   ([ADR-0011](../architecture.md#actionable-errors)). Values become typed Go values
    here; nothing downstream sees strings.
 2. **Apply.** `filter.Apply` writes predicates, ordering, projection and limits
    onto a `*sqlb.Builder[T]`. It owns the projection and defaults to non-hidden
@@ -132,4 +132,4 @@ worth knowing before you write anything:
 - [A query is a value](queries-are-values.md) — start here
 - [Architecture](../architecture.md) — the same material at full length,
   including the API stability tiers and the known gaps
-- [Decision records](../adr/) — why each choice was made, and what would change it
+- [Decision records](../architecture.md#decisions) — why each choice was made, and what would change it

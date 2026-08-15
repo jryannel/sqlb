@@ -79,7 +79,7 @@ for them:
 Why it works this way, and why the obvious repair — making the group `not`
 null-inclusive while the leaf complements stay three-valued — is the one option
 that cannot work, is
-[ADR-0046](https://github.com/jryannel/sqlb/blob/main/docs/adr/0046-a-negation-is-sqls.md).
+[ADR-0046](https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#a-negation-is-sqls).
 Read it before proposing a change here.
 
 `contains` is refused too, and that one is deliberate rather than incidental.
@@ -99,7 +99,7 @@ An array column cannot be `Sortable` or `Searchable`, and a `Filterable` one has
 to carry a GIN index — `schema.Validate` reports all three. The index is not a
 suggestion: an array filter without one still returns the right rows, by
 scanning the table for them, so nothing would ever report it
-([ADR-0033](https://github.com/jryannel/sqlb/blob/main/docs/adr/0033-array-columns.md)).
+([ADR-0033](https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#array-columns)).
 
 ## Document columns take containment, and nothing else
 
@@ -195,7 +195,7 @@ worth knowing before relying on it. A user who types `ada` matches `Nowlada`; a
 user who types `running` does *not* match `run`, because nothing stems, drops
 stop words or ranks. That is the right default for a filter box over identifiers
 and the wrong one for a search box over prose, and sqlb has the first
-([ADR-0037](https://github.com/jryannel/sqlb/blob/main/docs/adr/0037-search-is-ilike-until-it-cannot-be.md),
+([ADR-0037](https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#search-is-ilike-until-it-cannot-be),
 which also says why `tsvector` is not in 1.0 and what a schema carrying one does
 today).
 

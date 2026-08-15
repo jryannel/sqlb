@@ -18,7 +18,7 @@ feature, but because the query does not exist yet at the moment sqlc runs.
 
 sqlb builds the query at runtime, which is what makes a filterable list endpoint
 expressible, and it pays for that with a weaker compile-time guarantee: column
-names are strings ([ADR-0009](adr/0009-typed-column-facade.md)). What it offers
+names are strings ([ADR-0009](architecture.md#typed-column-facade)). What it offers
 instead is [`Explain`](#instead-of-compile-time-column-checking).
 
 So the question is never *which one*. It is *which queries go where*.
@@ -28,9 +28,9 @@ So the question is never *which one*. It is *which queries go where*.
 | Static queries, typed end to end | **sqlc** | Its whole guarantee. sqlb's is weaker by design |
 | Reporting, window functions, recursive CTEs | **sqlc** | sqlb sends these to `Raw`, which is an escape hatch, not a feature |
 | A filter/sort/search list endpoint | **sqlb** | sqlc structurally cannot express a conditional `WHERE` |
-| Multi-tenant scoping across every read | **sqlb** | `BeforeQuery` constrains every query of a model at once ([ADR-0008](adr/0008-hooks-as-domain-seam.md)) |
-| A REST surface with an OpenAPI document | **sqlb** | Generated from the schema's declared capabilities ([ADR-0007](adr/0007-generated-rest-handlers.md)) |
-| A multi-statement unit of work | **either** | `WithTx` hands you a handle; one `pgx.Tx` satisfies sqlc's `DBTX` too ([ADR-0020](adr/0020-transaction-scoped-handle.md)) |
+| Multi-tenant scoping across every read | **sqlb** | `BeforeQuery` constrains every query of a model at once ([ADR-0008](architecture.md#hooks-as-domain-seam)) |
+| A REST surface with an OpenAPI document | **sqlb** | Generated from the schema's declared capabilities ([ADR-0007](architecture.md#generated-rest-handlers)) |
+| A multi-statement unit of work | **either** | `WithTx` hands you a handle; one `pgx.Tx` satisfies sqlc's `DBTX` too ([ADR-0020](architecture.md#transaction-scoped-handle)) |
 
 A useful split for a typical application: sqlb owns the CRUD and list surface,
 sqlc owns the dashboard and the reports.
@@ -131,14 +131,14 @@ the sqlc projects people already have.
 **What this costs.** Capabilities cannot be read from a struct that never
 declared them, so what the schema DSL states once has to be restated in
 `Describe`. That is not a papercut, it is the price of this path: a column is
-not filterable until you say so ([ADR-0006](adr/0006-capabilities-are-opt-in.md)),
+not filterable until you say so ([ADR-0006](architecture.md#capabilities-are-opt-in)),
 and adopting over existing structs must not widen the API by accident. `Describe`
 checks the names against the struct, so a typo fails rather than quietly
 disabling a filter.
 
 ## Sharing a transaction
 
-Both sides take an interface, and since [ADR-0040](adr/0040-the-driver-is-a-dependency.md)
+Both sides take an interface, and since [ADR-0040](architecture.md#the-driver-is-a-dependency)
 they are interfaces over the same types: `sqlb.Executor` is `Query` and `Exec`
 over pgx, and a pgx-generated `DBTX` is those two plus `QueryRow`. `Executor` is
 a strict subset, so a `pgx.Tx` satisfies both and `DB.Tx` reaches it:
@@ -259,7 +259,7 @@ was written but not applied.
 [pgtest/explain_test.go](../pgtest/explain_test.go) does this for every shape
 the blog example's three resources can produce, mutations included, and ends by
 pointing the same check at a misspelled column to prove it fires
-([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+([ADR-0016](architecture.md#guards-proven-both-ways)).
 
 Two things it does not give you: the failure arrives at test time rather than
 compile time, and it needs a database. Both are real, and both are cheaper than

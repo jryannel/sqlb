@@ -38,11 +38,11 @@ the input to one.
 > **Two findings are already stale, and both moved in sqlb's favour.**
 >
 > - **§6.H — "the CLI emitter is unmerged."** `bb63e12` is on `main`
->   ([ADR-0029](adr/0029-go-cli.md)), so the confidence caveat no longer
+>   ([ADR-0029](architecture.md#go-cli)), so the confidence caveat no longer
 >   describes it. The rest of that finding — a generated surface is a different
 >   promise from a curated one — is untouched and is the stronger half.
 > - **§11.3's second "less safe" item — the silently-default hook registry.**
->   [ADR-0030](adr/0030-declared-scope-is-required.md) landed: a table whose
+>   [ADR-0030](architecture.md#declared-scope-is-required) landed: a table whose
 >   schema declares its rows confined and whose model carries no scoping hook
 >   now refuses to mount. What the review asked for as "a lint or an archtest
 >   rule" is a startup failure. The `?expand` hole in **§6.F** is *not* closed —
@@ -56,7 +56,7 @@ the input to one.
 **On ADR numbers.** subject-go keeps its own numbered ADRs, and the ranges
 collide — its ADR-0007 reverts Huma, sqlb's specifies generated REST handlers.
 Every reference below to one of subject-go's reads `subject ADR-000N`; a bare
-`ADR-000N` is sqlb's own and links into [`adr/`](adr/).
+`ADR-000N` is sqlb's own and links into [architecture.md's Decisions section](architecture.md#decisions).
 
 ---
 
@@ -81,7 +81,7 @@ But three findings are load-bearing and none of them is about taste:
 | # | Finding | Class |
 |---|---|---|
 | **A** | sqlb's `Executor` is `database/sql`. subject-go is pgx-native end-to-end (sqlc with `sql_package: pgx/v5`, `pgxpool.Pool` in every handler signature, `CopyFrom`, `pgvector` binary codec, River on `riverpgxv5`). **A sqlb write and a sqlc query cannot share a transaction.** | **Blocker for incremental adoption** |
-| **B** | sqlb has **no `vector` type** — not in the schema DSL, not in `migrate`'s DDL, and `introspect` *refuses* a vector column. subject-go's RAG corpus is a `vector(1536)` column with an HNSW index. sqlb's own [ADR-0026](adr/0026-vectors-declare-their-index.md) is `Status: Exploring — nothing is built`. | **Blocker for schema ownership** |
+| **B** | sqlb has **no `vector` type** — not in the schema DSL, not in `migrate`'s DDL, and `introspect` *refuses* a vector column. subject-go's RAG corpus is a `vector(1536)` column with an HNSW index. sqlb's own [ADR-0026](architecture.md#vectors-declare-their-index) is `Status: Exploring — nothing is built`. | **Blocker for schema ownership** |
 | **C** | sqlb's `rest` package requires **Huma**. subject-go removed Huma deliberately in subject ADR-0007 after trying it on real domains. | **Reversal of a recorded decision** |
 
 Add to that: pre-1.0, one author, **no observed consumers** — sqlb's own
@@ -205,7 +205,7 @@ fine, they stay hand-written on the same chi router.
 | REST plumbing | 73 handler files on chi | `rest.Resource[T,C,U]` on a `huma.API` | 🔴 **Requires Huma** (subject ADR-0007 removed it) |
 | API contract | golden contract tests (`AssertContractGolden`) | OpenAPI from the model + generated TS/CLI | 🟡 Trade: gain a real spec, lose the golden mechanism's coverage story |
 | Web client | hand-written SDK + `queryKeys.ts` + 4 arch tests | generated `client.gen.ts` + `queries.gen.ts` | 🟢 **Genuinely attractive** — but snake_case and a full SDK rewrite |
-| Public CLI | curated cobra commands + `endpoints` registry + contract-golden ratchet | generated cobra tree ([ADR-0029](adr/0029-go-cli.md), **unmerged**) | 🟡 Gains completeness, loses the curated surface and the ratchet |
+| Public CLI | curated cobra commands + `endpoints` registry + contract-golden ratchet | generated cobra tree ([ADR-0029](architecture.md#go-cli), **unmerged**) | 🟡 Gains completeness, loses the curated surface and the ratchet |
 | Dev CLI (`devctl`) | raw passthrough + profiles + agent/SSE | not addressed by sqlb at all | ⚪ Out of scope — keep |
 | Jobs (River) | `riverpgxv5` on the same pool | none | ⚪ Unaffected — but see finding A |
 | RAG / pgvector | `vector(1536)`, HNSW, `CopyFrom` bulk insert | **none** | 🔴 **Blocker** |
@@ -372,7 +372,7 @@ dependency. (i) is the pilot in §8. (ii) is not recommended.
 
 ### 🔴 B. pgvector is not expressible
 
-From sqlb's own [ADR-0026](adr/0026-vectors-declare-their-index.md) (`Status: Exploring — nothing is built`):
+From sqlb's own [ADR-0026](architecture.md#vectors-declare-their-index) (`Status: Exploring — nothing is built`):
 
 - `migrate.sqlType` ends in `unknown type %q` — **no vector declaration
   renders**, not even via the `OfType` escape hatch external refs use.
@@ -502,7 +502,7 @@ assume the chi route table is the whole surface.
   write (`example/tasks/cmd/gen`, `cmd/migrate`). sqlb's README lists "a
   command-line entry point" under *not built yet*. That is fine — subject-go
   already has `mise` tasks — but it means no `sqlb generate` / `sqlb migrate`.
-- The **generated app CLI** (cobra, [ADR-0029](adr/0029-go-cli.md)) is real code — 1,402 LOC in
+- The **generated app CLI** (cobra, [ADR-0029](architecture.md#go-cli)) is real code — 1,402 LOC in
   `codegen/gocli.go` + `gocli_runtime.go` — but sits on the unmerged branch
   `claude/github-pr-review-f6de0c` @ `bb63e12`, marked `Confidence: Medium on
   the shape … Low on --all and on the enum completions`.
@@ -868,7 +868,7 @@ channel, not a change feed** — the event vocabulary is `chat_message` and
 Second, **the bus is entirely in-process**: `Emitter.Emit` spawns
 `go handler(event)` and `EventBroker` is a `sync.RWMutex` around a map.
 
-That gives it exactly the three defects sqlb's [ADR-0012](adr/0012-change-feed-outbox.md) opens by naming, plus one
+That gives it exactly the three defects sqlb's [ADR-0012](architecture.md#change-feed-outbox) opens by naming, plus one
 it does not:
 
 - **Phantom events.** `events.Emit` is called from the handler, not after commit.
@@ -1342,7 +1342,7 @@ loudest.
 
 | Item | Why not |
 |---|---|
-| **The change feed** ([ADR-0012](adr/0012-change-feed-outbox.md)) | Genuinely valuable and reduces cost of change by **zero**. A different axis. subject-go should build its own on River (§11.4) |
+| **The change feed** ([ADR-0012](architecture.md#change-feed-outbox)) | Genuinely valuable and reduces cost of change by **zero**. A different axis. subject-go should build its own on River (§11.4) |
 | **Nested `?expand`, backwards cursors** | Depth, not breadth. Neither appears in the ceremony measurement |
 | **Window functions, recursive CTEs** | Correctly a non-goal. `Raw` and sqlc are the right answers |
 | **pgvector** | Worth being precise: it unblocks *subject-go's* adoption (§6.B) but reduces nobody's cost of change. Removing a blocker and removing ceremony are different projects — conflating them lets a blocker set the roadmap |
@@ -1375,14 +1375,14 @@ correction.
 
 | | Friction | Where it stands |
 |---|---|---|
-| 🔴 A | `database/sql` vs pgx transaction wall | **Decided, in this report's favour.** [ADR-0040](adr/0040-the-driver-is-a-dependency.md) takes the pgx dependency rather than asking the subject to flip sqlc. The report called (ii) "not recommended"; sqlb agreed and moved instead. Not built — it is Phase 4 of [the road to 1.0](release-1.0.md) |
-| 🔴 B | pgvector not expressible | **Split.** Arrays are **built** ([ADR-0033](adr/0033-array-columns.md)) — `TEXT[]`/`VARCHAR(n)[]` declare, render, introspect, scan and filter. `tsvector` is **decided out** ([ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md)). Composite PKs have a recorded stance ([ADR-0034](adr/0034-one-column-addresses-a-row.md)) and the port found them non-blocking. pgvector itself is unchanged and now known to be gated on A ([ADR-0026](adr/0026-vectors-declare-their-index.md)). `INTERVAL` remains absent |
-| 🔴 C | `rest` requires huma | **Answered, narrower than feared.** chi left the library graph in [#32](https://github.com/jryannel/sqlb/pull/32), and `rest.NewServer` builds the API on `net/http` — so the `humachi.New(...)`-over-existing-chi mount this report describes is no longer the shape. huma stays, deliberately: both escapes were scoped in full on 2026-07-30 and declined ([ADR-0007](adr/0007-generated-rest-handlers.md)) |
-| 🟡 D | Type mapping fixed and narrow, no override | **Closed.** [ADR-0035](adr/0035-type-overrides.md) ships type overrides in `codegen.Options` — the `sqlc.yaml` `overrides:` counterpart this report found missing. `uuid → uuid.UUID` is now declarable, which was the row that "touches everything" |
-| 🟡 E | Wire format, three simultaneous breaks | **Two of three answered.** The wire spelling is now a stated policy rather than an accident ([ADR-0036](adr/0036-the-wire-is-the-column-name.md)), and parent-scoped routes are decided rather than absent ([ADR-0038](adr/0038-collections-are-flat.md)) — flat, deliberately, with the 404-versus-empty-page cost named. **"sqlb emits no Dart" is no longer true**: [ADR-0031](adr/0031-dart-client.md) ships a Dart client, so the 10 hand-written Flutter model files are a regeneration rather than hand work. The envelope and grammar breaks stand as costed |
-| 🟡 F | Hooks do not follow an expansion — a real tenant-leak edge | **Fixed, and it was a security bug.** This was the highest-value finding in the report. The expansion now runs the target's hooks and requalifies their predicates onto the join alias, so the composite-FK workaround is belt-and-braces rather than the only thing holding ([ADR-0030](adr/0030-declared-scope-is-required.md), stream A of the release plan). The report's instruction — add composite keys *before* declaring `Expandable()` — is no longer a precondition |
+| 🔴 A | `database/sql` vs pgx transaction wall | **Decided, in this report's favour.** [ADR-0040](architecture.md#the-driver-is-a-dependency) takes the pgx dependency rather than asking the subject to flip sqlc. The report called (ii) "not recommended"; sqlb agreed and moved instead. Not built — it is Phase 4 of [the road to 1.0](release-1.0.md) |
+| 🔴 B | pgvector not expressible | **Split.** Arrays are **built** ([ADR-0033](architecture.md#array-columns)) — `TEXT[]`/`VARCHAR(n)[]` declare, render, introspect, scan and filter. `tsvector` is **decided out** ([ADR-0037](architecture.md#search-is-ilike-until-it-cannot-be)). Composite PKs have a recorded stance ([ADR-0034](architecture.md#one-column-addresses-a-row)) and the port found them non-blocking. pgvector itself is unchanged and now known to be gated on A ([ADR-0026](architecture.md#vectors-declare-their-index)). `INTERVAL` remains absent |
+| 🔴 C | `rest` requires huma | **Answered, narrower than feared.** chi left the library graph in [#32](https://github.com/jryannel/sqlb/pull/32), and `rest.NewServer` builds the API on `net/http` — so the `humachi.New(...)`-over-existing-chi mount this report describes is no longer the shape. huma stays, deliberately: both escapes were scoped in full on 2026-07-30 and declined ([ADR-0007](architecture.md#generated-rest-handlers)) |
+| 🟡 D | Type mapping fixed and narrow, no override | **Closed.** [ADR-0035](architecture.md#type-overrides) ships type overrides in `codegen.Options` — the `sqlc.yaml` `overrides:` counterpart this report found missing. `uuid → uuid.UUID` is now declarable, which was the row that "touches everything" |
+| 🟡 E | Wire format, three simultaneous breaks | **Two of three answered.** The wire spelling is now a stated policy rather than an accident ([ADR-0036](architecture.md#the-wire-is-the-column-name)), and parent-scoped routes are decided rather than absent ([ADR-0038](architecture.md#collections-are-flat)) — flat, deliberately, with the 404-versus-empty-page cost named. **"sqlb emits no Dart" is no longer true**: [ADR-0031](architecture.md#dart-client) ships a Dart client, so the 10 hand-written Flutter model files are a regeneration rather than hand work. The envelope and grammar breaks stand as costed |
+| 🟡 F | Hooks do not follow an expansion — a real tenant-leak edge | **Fixed, and it was a security bug.** This was the highest-value finding in the report. The expansion now runs the target's hooks and requalifies their predicates onto the join alias, so the composite-FK workaround is belt-and-braces rather than the only thing holding ([ADR-0030](architecture.md#declared-scope-is-required), stream A of the release plan). The report's instruction — add composite keys *before* declaring `Expandable()` — is no longer a precondition |
 | 🟡 G | Conformance kit and archtest need re-founding | Unchanged, and the subject's, not sqlb's |
-| 🟡 H | CLI story half-built, points a different direction | **Half closed.** There **is** an `sqlb` binary now ([ADR-0032](adr/0032-sqlb-command.md)) — `sqlb generate` and `sqlb check` — so "no `sqlb generate` / `sqlb migrate`" is stale, and the generated cobra CLI is merged rather than sitting on a branch. The *philosophical* conflict this report identifies is untouched and is the real finding: a generated CLI exposes every exposed resource by construction, which is the opposite of a human-curated surface with a golden per endpoint |
+| 🟡 H | CLI story half-built, points a different direction | **Half closed.** There **is** an `sqlb` binary now ([ADR-0032](architecture.md#sqlb-command)) — `sqlb generate` and `sqlb check` — so "no `sqlb generate` / `sqlb migrate`" is stale, and the generated cobra CLI is merged rather than sitting on a branch. The *philosophical* conflict this report identifies is untouched and is the real finding: a generated CLI exposes every exposed resource by construction, which is the opposite of a human-curated surface with a golden per endpoint |
 | 🟡 I | Migration adoption has two hand-cranks | **Narrowed.** The "report of what the DSL cannot express" is shorter by the arrays. The vector column, the tsvector columns, the triggers, the composite PKs and the partial indexes still appear in it |
 | 🟡 J | Maturity | **Changed in kind, not in degree.** "No observed consumers" is no longer true — two ports have run, this subject's among them. That is days of someone else's use, not the six months the exit criterion asks for |
 
@@ -1391,8 +1391,8 @@ correction.
 §13 ranked six things and said that if only one were built it should be computed
 fields. Two of the six have shipped, and neither is that one:
 
-- **1 · sqlb binary** — built ([ADR-0032](adr/0032-sqlb-command.md)).
-- **5 · Dart emitter** — built ([ADR-0031](adr/0031-dart-client.md)).
+- **1 · sqlb binary** — built ([ADR-0032](architecture.md#sqlb-command)).
+- **5 · Dart emitter** — built ([ADR-0031](architecture.md#dart-client)).
 - **2 · computed fields** ([#17](https://github.com/jryannel/sqlb/issues/17)),
   **3 · declared actions** ([#18](https://github.com/jryannel/sqlb/issues/18)),
   **4 · eject** ([#19](https://github.com/jryannel/sqlb/issues/19)),

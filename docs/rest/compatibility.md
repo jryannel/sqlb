@@ -7,9 +7,9 @@ answers are different, and often inverted.
 The REST contract a schema generates — the response fields, the filter and sort
 parameters, the `?expand` relations, the create and patch bodies, the operation
 set — is a pure function of the model's capabilities
-([ADR-0007](../adr/0007-generated-rest-handlers.md)). So sqlb is the one thing
+([ADR-0007](../architecture.md#generated-rest-handlers)). So sqlb is the one thing
 that knows how a schema edit changes that contract, and `sqlb impact` reports it
-([ADR-0039](../adr/0039-a-schema-edit-is-an-api-edit.md)).
+([ADR-0039](../architecture.md#a-schema-edit-is-an-api-edit)).
 
 ## Why this is not the migration check
 
@@ -28,7 +28,7 @@ all:
 
 The cleanest migration sqlb can emit — a declared rename — is a hard wire break,
 because the wire spelling of a column is derived from the column's name
-([ADR-0036](../adr/0036-the-wire-is-the-column-name.md)). That is the case that
+([ADR-0036](../architecture.md#the-wire-is-the-column-name)). That is the case that
 makes `impact` a check of its own rather than something the migration gate could
 have told you.
 

@@ -163,5 +163,5 @@ if (isProblem(body)) {
 | `sqlb.ErrAfterCommit` | The write committed; one or more after-commit callbacks failed. The two cases need opposite responses — see [Hooks](/sqlb/queries/hooks/#aftercommit-for-side-effects) |
 | `sqlb.ErrConstraint` | The class of every write a database constraint refused. `errors.As` into `*sqlb.ConstraintError` for the kind and, with a classifier registered, the name |
 
-See [ADR-0011](/sqlb/adr/0011-actionable-errors/) for why rejections carry data
+See [ADR-0011](/sqlb/project/architecture/#actionable-errors) for why rejections carry data
 rather than prose.

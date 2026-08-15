@@ -79,4 +79,4 @@ is worth preferring where codegen is in play.
 - [Queries](../queries/README.md) — the builder in full: predicates, terminal
   methods, aggregates
 - [One grammar, two producers](one-grammar.md) — the second half of the design
-- [ADR-0002](../adr/0002-queries-are-values.md) — the decision record
+- [ADR-0002](../architecture.md#queries-are-values) — the decision record

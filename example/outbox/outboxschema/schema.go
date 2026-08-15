@@ -3,7 +3,7 @@
 // retry policy and a dead-letter rule around the claim.
 //
 // See ../README.md before reading this as more than one worked answer.
-// ADR-0012 (docs/adr/0012-change-feed-outbox.md) says in so many words that
+// ADR-0012 (docs/architecture.md, "Change feed outbox") says in so many words that
 // freezing an outbox row format on a guess is the mistake sqlb's pre-1.0
 // stance exists to avoid — this schema is that guess, made once, on the
 // record, so the claim mechanism underneath it has something real to be

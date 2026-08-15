@@ -89,4 +89,4 @@ Not hooks. A hook bakes in React and is the thing people copy out and edit; a
 ```
 
 The reasoning, and the two hand-written clients it was drawn from, are in
-[ADR-0028](../../../docs/adr/0028-typescript-client.md).
+[ADR-0028](../../../docs/architecture.md#typescript-client).

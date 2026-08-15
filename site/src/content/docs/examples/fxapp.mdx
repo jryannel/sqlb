@@ -56,7 +56,7 @@ who never read the file.
 
 **That a refused mount can be a boot failure.** The generated `Register` returns
 the error sqlb raises when a resource declares a scope no hook backs
-([ADR-0030](/sqlb/adr/0030-declared-scope-is-required/)), the operation set
+([ADR-0030](/sqlb/project/architecture/#declared-scope-is-required)), the operation set
 carries it out, and fx reports it instead of listening. Remove the notes module
 from the list and the server does not start:
 
@@ -69,7 +69,7 @@ rest: /notes exposes create|read|update|delete|list, and nothing confines store.
 That is asserted rather than described. `TestResourcesRefuseToMountWithoutHooks`
 boots the reduced module list and requires the failure, because a guard nobody
 has watched refuse is a claim rather than a check
-([ADR-0016](/sqlb/adr/0016-guards-proven-both-ways/)).
+([ADR-0016](/sqlb/project/architecture/#guards-proven-both-ways)).
 
 **That ordering is better expressed as a type than as a list.** `fxkit.Migrated`
 is an empty struct meaning "every registered migration set has been applied".
@@ -105,7 +105,7 @@ packages: a standard stack every product composes, and the product.
 
 `fxkit` is glue to copy rather than a library to import. It was briefly a
 published module and is not one now
-([ADR-0044](/sqlb/adr/0044-the-container-is-an-adapter/) has the reversal):
+([ADR-0044](/sqlb/project/architecture/#the-container-is-an-adapter) has the reversal):
 nearly all of it is opinion — chi, humachi, goose, `log/slog` — and opinions
 that load-bearing are better adapted in a file you own. Its `doc.go` states the
 four obligations a copy has to preserve, of which the boot refusal above is the

@@ -30,7 +30,7 @@ right without being measured, but it should not pretend to evidence it lacks.
 
 ## A module's tables carry its prefix, applied mechanically — **Enforced**
 
-[ADR-0015](adr/0015-module-isolation.md). `schema.NewModule("billing")` returns a
+[ADR-0015](architecture.md#module-isolation). `schema.NewModule("billing")` returns a
 registry that prefixes everything in it, so declarations use the local name and
 the prefix cannot be forgotten:
 
@@ -76,7 +76,7 @@ that have nothing to do with the API.
 
 ## Columns are named the way you want the JSON named — **Enforced**
 
-[ADR-0036](adr/0036-the-wire-is-the-column-name.md). One spelling from the column
+[ADR-0036](architecture.md#the-wire-is-the-column-name). One spelling from the column
 to the JSON key. In practice: `snake_case` in both.
 
 **Why, independent of sqlb.** The alternatives relocate drift rather than
@@ -118,7 +118,7 @@ read-only and sortable.
 
 ## An enum is `text` with a `CHECK`, not a Postgres `ENUM` — **Enforced**
 
-[ADR-0017](adr/0017-enums-as-text-and-check.md).
+[ADR-0017](architecture.md#enums-as-text-and-check).
 
 **Why, independent of sqlb.** A native enum cannot drop a value: there is no
 `ALTER TYPE … DROP VALUE`, only a replacement type, a rewrite of every column
@@ -132,7 +132,7 @@ sort order, and type-level rejection at every call site.
 
 ## A row is addressed by one column — **Enforced**
 
-[ADR-0034](adr/0034-one-column-addresses-a-row.md). A composite key becomes a
+[ADR-0034](architecture.md#one-column-addresses-a-row). A composite key becomes a
 `UniqueIndex`; a table that must be addressed carries a surrogate for identity
 *and* the unique index that keeps the real key real.
 
@@ -179,7 +179,7 @@ so an adopted database diffs to nothing.
 
 ## A vector declares its dimension; the index is a separate decision — **Enforced**
 
-[ADR-0026](adr/0026-vectors-declare-their-index.md).
+[ADR-0026](architecture.md#vectors-declare-their-index).
 
 ```go
 schema.Vector("embedding", ragcfg.Dim).Searchable()
@@ -245,7 +245,7 @@ schema.BigInt("id").Identity().PrimaryKey()  // recommended
 schema.BigSerial("id").PrimaryKey()          // what your database probably has
 ```
 
-Both are declarable ([ADR-0048](adr/0048-auto-incrementing-keys.md)), and that
+Both are declarable ([ADR-0048](architecture.md#auto-incrementing-keys)), and that
 is deliberate rather than indecision: the recommendation is for a column you are
 writing now, and the serial exists because moving an existing column between the
 two is a migration rather than a rename. Declaring what the database actually
@@ -260,7 +260,7 @@ filter operators and the sort machinery are the plain integer's.
 
 ## A page is a position, not a distance — **Enforced**
 
-[ADR-0027](adr/0027-keyset-pagination.md). A cursor names a position in an
+[ADR-0027](architecture.md#keyset-pagination). A cursor names a position in an
 ordering, and the ordering is always total: `Stable()` appends the primary key
 unless the ordering already ends with it, and `filter.Apply` calls it on **every**
 list, so deterministic paging is not opt-in.
@@ -276,7 +276,7 @@ $2)` — which Postgres turns into a single index condition.
 
 ## One collection, one path; the parent is a filter — **Enforced**
 
-[ADR-0038](adr/0038-collections-are-flat.md). `GET /tasks?list_id=eq.<id>`.
+[ADR-0038](architecture.md#collections-are-flat). `GET /tasks?list_id=eq.<id>`.
 `GET /lists/{id}/tasks` is not offered.
 
 **Why, independent of sqlb.** A flat collection composes with the grammar you
@@ -287,7 +287,7 @@ accept them and mean something subtly different; a caller cannot tell from
 
 ## A schema edit is an API edit, and the break is diffed — **Enforced**
 
-[ADR-0039](adr/0039-a-schema-edit-is-an-api-edit.md).
+[ADR-0039](architecture.md#a-schema-edit-is-an-api-edit).
 `restcompat.Diff(old, new *schema.Registry) []Break` is a pure function over two
 registries — no database, golden-testable — classifying each delta to response
 fields, filter and sort parameters, the create-body required/optional split, the
@@ -304,7 +304,7 @@ longer a function of the schema and no longer sqlb's to judge.
 
 ## A declaration that rows are confined is an obligation — **Enforced**
 
-[ADR-0030](adr/0030-declared-scope-is-required.md). Declaring a scope obliges the
+[ADR-0030](architecture.md#declared-scope-is-required). Declaring a scope obliges the
 machinery to honour it, including through `?expand` — which is where
 multi-tenant leaks otherwise live, since an expansion traverses a foreign key
 that the row filter never sees.

@@ -145,7 +145,7 @@ project](../start/quickstart.md#or-scaffold-it). This is younger than
 `NewServer` — measured byte-identical against a hand-rolled `main` in
 `example/tasks2`, but not yet adopted by a second application — so expect
 `ServeConfig` to grow fields sooner than it changes shape under you. See
-[ADR-0058](../adr/0058-serve-owns-the-boilerplate-mount-is-the-seam.md).
+[ADR-0058](../architecture.md#serve-owns-the-boilerplate-mount-is-the-seam).
 
 ## What each operation gives you
 
@@ -172,7 +172,7 @@ sorting, projection, paging and `?expand` all work on it unchanged, and it is th
 same request a capped `?expand` tells a caller to follow for the rest of the
 children. The one real cost is that a parent which does not exist yields an empty
 page rather than a 404
-([ADR-0038](https://github.com/jryannel/sqlb/blob/main/docs/adr/0038-collections-are-flat.md)).
+([ADR-0038](https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#collections-are-flat)).
 
 ### A table with one row per caller
 

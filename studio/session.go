@@ -3,7 +3,8 @@ package studio
 import "net/http"
 
 // tokenCookie holds the operator's own bearer token, never a service
-// credential — see docs/adr/0053's revision, "authenticates as the caller."
+// credential — the studio authenticates as the caller, not on the caller's
+// behalf.
 const tokenCookie = "sqlb_studio_token"
 
 func tokenFromRequest(r *http.Request) string {

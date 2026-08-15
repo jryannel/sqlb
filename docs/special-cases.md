@@ -60,19 +60,19 @@ running Postgres, and say what it did rather than what the source implies.
 | `ON CONFLICT` upsert | 53 | **Partial,** measured. `OnConflictDoNothing` / `OnConflictUpdate(target, cols…)` copy `EXCLUDED.<col>`. An update that is an *expression* — `SET n = t.n + EXCLUDED.n` — has no spelling: upserting 3 over an existing 5 leaves 3, silently and without error |
 | `CHECK` constraint | 58 | **Works.** `Table.Check(name, expr)`; the drift check compares Postgres's own spelling, which one commit already had to fix |
 | jsonb column | 96 | **Stores fine,** measured. Filtering *into* a document has no operator; `RawPred` reaches both `->>` and `@>` and is the only way in. The corpus never does, which is itself the finding |
-| Array column | 26 | **Works** — [ADR-0033](adr/0033-array-columns.md), `Has`/`HasAny`/`HasAll`, GIN index enforced by lint |
-| Composite primary key | 26 | **Not expressible** — [ADR-0034](adr/0034-one-column-addresses-a-row.md). 15 tables in this corpus; every m2m link table is one. Measured: the refusal is a `Diff` error that names its own workaround — `UniqueIndex`, plus a surrogate key if the table is exposed |
+| Array column | 26 | **Works** — [ADR-0033](architecture.md#array-columns), `Has`/`HasAny`/`HasAll`, GIN index enforced by lint |
+| Composite primary key | 26 | **Not expressible** — [ADR-0034](architecture.md#one-column-addresses-a-row). 15 tables in this corpus; every m2m link table is one. Measured: the refusal is a `Diff` error that names its own workaround — `UniqueIndex`, plus a surrogate key if the table is exposed |
 | `expires_at` / `revoked_at` lifecycle columns | 73 | **Works,** and is where the missing bind-parameter cast bites. Measured, and worse than reported: a day filter against a `timestamptz` matches **zero rows and returns no error**, and `Field.Cast` cannot be used to fix it by hand — it returns an `Expr`, which a projection takes and no comparison does |
 | Relative time window (`now() - interval …`) | 34 | **`Raw` only,** measured. No interval literal, no `now()`. Computing the instant in Go and binding it works through the typed API and quietly moves the boundary onto the application's clock |
 | `GROUP BY` / `date_trunc` rollup | 19 / 5 | **Half,** measured, and worse than reported. `GroupBy`, `Having`, `Sum`, `Count`, `Coalesce` exist, but the natural `Sel(Call{…})` bucket *fails*: a `Param` unit is numbered `$1` in the projection and `$2` in the `GROUP BY`, so Postgres sees two expressions and refuses the query. The unit has to be a `Raw` literal. The REST surface has no aggregate shape at all |
 | Polymorphic owner (`tenant_kind` + `tenant_id`) | 9 | **Not expressible as a reference.** Works as two plain columns; loses `?expand` and the FK |
-| `LEFT JOIN LATERAL` per-row aggregate | 8 | **Mostly covered** by inverse expansion ([ADR-0022](adr/0022-references-declare-their-inverse.md)) for count/latest-child; anything else is `Raw` |
+| `LEFT JOIN LATERAL` per-row aggregate | 8 | **Mostly covered** by inverse expansion ([ADR-0022](architecture.md#references-declare-their-inverse)) for count/latest-child; anything else is `Raw` |
 | Partial index carrying an invariant | 6 | **Works** via `AddIndex(Index{Where: …})` — but only the struct form, and the predicate is a hand-written string the diff compares textually. Measured, and better than reported: the violation arrives as a `*ConstraintError` carrying the index name, so a 409 *can* say which rule was hit, with nothing to register |
 | `soft delete` (`deleted_at`) | 5 | **Works** — `SoftDelete()` + a hook. [FEEDBACK](../FEEDBACK.md) finding 2 argues a view is the better answer |
 | `FOR UPDATE` | 4 | **Works,** plus `ForShare` and `SkipLocked` — measured under contention, not merely compiled: four workers over twelve rows claim each row exactly once, and dropping the two calls makes every row claimed four times. Still undocumented; still no example walks it |
-| `vector(n)` | 3 | **Not expressible** — [ADR-0026](adr/0026-vectors-declare-their-index.md), and `introspect` refuses the column, so it cannot even round-trip |
+| `vector(n)` | 3 | **Not expressible** — [ADR-0026](architecture.md#vectors-declare-their-index), and `introspect` refuses the column, so it cannot even round-trip |
 | Range overlap / `EXCLUDE USING gist` | 2 | **Not expressible.** No range types, no exclusion constraints |
-| `tsvector` | 1 | **Deliberately out** — [ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md). The blocker is the generated column, not the type |
+| `tsvector` | 1 | **Deliberately out** — [ADR-0037](architecture.md#search-is-ilike-until-it-cannot-be). The blocker is the generated column, not the type |
 | `DISTINCT ON` | 1 | **`Raw` only,** measured. `RawSel` reaches it, but only as the *first* projection item — a positional convention nothing enforces, so getting it wrong is a syntax error at the database rather than a build error in Go |
 | Idempotency key | 28 | **Works,** measured, and not the way it reads. `OnConflictDoNothing` skips the row, so `One` has no row to return. It answered `ErrNotFound` — a retried payment arriving as "not found" — and since [#146](https://github.com/jryannel/sqlb/issues/146) it refuses instead, naming both routes out. What returns the first call's row is `OnConflictUpdate(target, target…)`: a write that changes nothing is still a written row, and a written row is a returned one |
 | Self-referencing parent (`parent_id`) | 0 here, universal | **Not expressible.** `Ref(name, target *TableDef)` needs the target value, which does not exist yet inside its own `Table(…)` call, and there is no `AddField`. `ExternalRef` compiles but gives up the type and `?expand` — and, measured, the foreign key too: a `parent_id` naming a row that is not there is accepted |
@@ -122,7 +122,7 @@ The runtime half is there: the violation arrives as a `*ConstraintError` whose
 name used to need a driver-aware `SetErrorClassifier`, because the standard
 library defines no way to read a constraint name off an error; sqlb reads
 `*pgconn.PgError` itself since
-[ADR-0040](adr/0040-the-driver-is-a-dependency.md), so that catch is gone. The
+[ADR-0040](architecture.md#the-driver-is-a-dependency), so that catch is gone. The
 open question is therefore narrower than it looked: not "can the layer know
 which rule was hit" but "should the schema declare the rule by name, the way
 `Check` does".
@@ -295,7 +295,7 @@ metering table can be generated rather than hand-written.
 
 **Built:** [`example/outbox`](../example/outbox), and worth a naming note: a
 *different*, first-class `outbox` package now exists at the repository root —
-a change-feed `Dispatcher` implementing [ADR-0012](adr/0012-change-feed-outbox.md)
+a change-feed `Dispatcher` implementing [ADR-0012](architecture.md#change-feed-outbox)
 for `rest`'s event stream, unrelated to this entry's competing-consumers job
 queue beyond sharing a name and a table-plus-worker shape. The example's
 README disambiguates the two explicitly. What this entry asks for — the lock
@@ -309,7 +309,7 @@ attempts, wake on `LISTEN/NOTIFY`.
 **Settles:** that `ForUpdate`/`SkipLocked` work under contention rather than
 merely compile; the relative-time predicate that today needs `Raw`; and — the
 real reason to build it — it is the shape of
-[ADR-0012](adr/0012-change-feed-outbox.md). The record says freezing an outbox
+[ADR-0012](architecture.md#change-feed-outbox). The record says freezing an outbox
 format on a guess is the mistake 1.0 exists to avoid. An example is how you stop
 guessing without shipping the format. **Deliberately not:** a scheduler, cron, or
 exactly-once delivery.
@@ -397,10 +397,10 @@ A product catalog with self-referencing categories and a search box that outgrow
 
 **Settles:** the self-reference, which the DSL cannot currently name at all — the
 fix is small (a deferred `Ref`, or an `AddField`) and the shape is universal; and
-[ADR-0037](adr/0037-search-is-ilike-until-it-cannot-be.md)'s escalation path
+[ADR-0037](architecture.md#search-is-ilike-until-it-cannot-be)'s escalation path
 written down as code rather than prose: `Searchable` → trigram index → the
 `tsvector` the record puts out of 1.0 → the vector column
-[ADR-0026](adr/0026-vectors-declare-their-index.md) leaves open. **Deliberately
+[ADR-0026](architecture.md#vectors-declare-their-index) leaves open. **Deliberately
 not:** a ranking model, or relevance tuning.
 
 Last because most of what it would prove is already decided; it becomes a 1.1

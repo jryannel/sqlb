@@ -42,19 +42,19 @@ hidden columns excluded, row-scoping held, bearer-token login as designed —
 and then named what "an uncurated data/schema/action browser" was leaving
 unsaid next to Django's admin: no curation layer, no inline/nested editing, no
 bulk actions, no history/audit trail, no permission-configuration screen.
-None of that was ever promised by [ADR-0053](adr/0053-the-manifest-describes-what-cannot-be-guessed.md),
+None of that was ever promised by [ADR-0053](architecture.md#the-manifest-describes-what-cannot-be-guessed),
 and the README now says so directly instead of by omission.
 
 **A worked cross-tenant admin surface, in `example/tasks`.** Answers "how do I
 see all data from all tenants as an admin?" with the mechanism that already
-exists — [ADR-0054](adr/0054-a-named-scope-is-releasable-at-the-mount.md)'s
+exists — [ADR-0054](architecture.md#a-named-scope-is-releasable-at-the-mount)'s
 named-scope release — written out as a copy-pasteable pattern. The boundary is
 two independent halves: row visibility (naming the workspace-confining hook so
 a mount may release it, while the soft-delete hook stays permanently
 unreleased) and route access (`RequireAdmin("/admin/")`, gated on a
 `PlatformAdmin` claim no public flow can set). Neither half is the boundary
 alone. Where releasing a model's only confining hook would otherwise leave
-`rest.Resource` unable to mount ([ADR-0030](adr/0030-declared-scope-is-required.md)
+`rest.Resource` unable to mount ([ADR-0030](architecture.md#declared-scope-is-required)
 doing its job), a permanent, unnamed no-op hook — `rest/scope.go`'s own
 sanctioned answer — takes its place on `/admin/*`.
 
@@ -73,7 +73,7 @@ Predates `v0.13.0`'s own `btree_gist` detection
 change had the identical gap, undetected because both tests asserting on it
 used `strings.Contains`, which a missing trailing character is invisible to.
 Both are now exact-equality checks, confirmed to fail without the fix before
-being restored ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+being restored ([ADR-0016](architecture.md#guards-proven-both-ways)).
 
 No API change. A schema already on `v0.13.0` that declares `AddExclude` with
 a scalar `=` inside a gist index, or a `Vector` column, regenerates a correct
@@ -154,7 +154,7 @@ instead of discarding it.
 ### `studio` is an uncurated data/schema/action browser
 
 Over `sqlb.json`, its own module off the engine's release cadence.
-[ADR-0053](adr/0053-the-manifest-describes-what-cannot-be-guessed.md)
+[ADR-0053](architecture.md#the-manifest-describes-what-cannot-be-guessed)
 declined to carry any UI, on the argument that a curated admin needs
 guesses — a row label, a field order — the manifest cannot answer; that
 argument holds and stays. It does not hold for a raw grid over
@@ -206,9 +206,9 @@ hand collapsed into one call. No breaking changes in this tag.
 
 ### The change feed is durable
 
-[ADR-0012](adr/0012-change-feed-outbox.md) has been *Exploring* since
+[ADR-0012](architecture.md#change-feed-outbox) has been *Exploring* since
 2026-07-27, the largest unbuilt item in the vision: what shipped instead was
-only the half downstream of it ([ADR-0045](adr/0045-the-stream-is-a-seam.md))
+only the half downstream of it ([ADR-0045](architecture.md#the-stream-is-a-seam))
 — the SSE endpoint, the wire format, `rest.Broker` — which holds events in
 memory and is therefore at-most-once and correct on exactly one replica. Both
 limits produce the same failure, a client that never learns a row changed and
@@ -256,7 +256,7 @@ whose model would run confined is refused unless it has been `Resolved`
 first; auto-resolving it during compile was rejected, since resolution
 produces a new value and a rewriter that misses a node type fails open exactly
 where this guard exists to prevent that.
-[ADR-0055](adr/0055-a-nested-query-runs-nobodys-hooks.md).
+[ADR-0055](architecture.md#a-nested-query-runs-nobodys-hooks).
 
 **A caller may narrow an expanded row.** `ExpandOnly("author", "id", "name")`
 takes columns off an expanded row and can put none on — `Hidden` stays hidden,
@@ -267,9 +267,9 @@ skipped. Opt-in, per query, narrowing only.
 many-to-many keyword and none is planned: a junction is an ordinary table with
 two references, reached by querying it directly, because a junction is almost
 never empty and a declared traversal would hide the row that holds
-`added_at`, `role`, `position`. [ADR-0056](adr/0056-a-junction-is-a-table.md)
+`added_at`, `role`, `position`. [ADR-0056](architecture.md#a-junction-is-a-table)
 says so; the position existed already, split across
-[ADR-0034](adr/0034-one-column-addresses-a-row.md), `best-practices.md` and
+[ADR-0034](architecture.md#one-column-addresses-a-row), `best-practices.md` and
 `schema/references.md`, none of which answered the question somebody arriving
 from bun actually asks first.
 
@@ -278,12 +278,12 @@ from bun actually asks first.
 Both new, both still *Exploring* in the ways that matter — only one example
 application, and the naming and the typing of `Mutation.Writes` both changed
 shape while building this.
-[ADR-0057](adr/0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md).
+[ADR-0057](architecture.md#a-read-is-a-query-and-a-row-scoped-write-is-a-mutation).
 
 `Query` is a `GET` with no fetch, no lock and no obligation check; `Do` runs
 against whatever `Executor` it is handed and inherits its hooks. `Mutation` is
 `Action`'s item-form envelope under its own name.
-[ADR-0043](adr/0043-declared-actions.md)'s `Action` is unchanged and keeps its
+[ADR-0043](architecture.md#declared-actions)'s `Action` is unchanged and keeps its
 item form — deliberately not deprecated, since a table can declare the same
 shape two ways today and nothing refuses the redundant one, left open until
 there is evidence rather than a guess.
@@ -294,7 +294,7 @@ alongside `actions`, each present only if a table declares one. A generated
 — a query wanting a different result stays hand-mounted.
 
 `rest.Serve(ctx, ServeConfig, mount)`
-([ADR-0058](adr/0058-serve-owns-the-boilerplate-mount-is-the-seam.md))
+([ADR-0058](architecture.md#serve-owns-the-boilerplate-mount-is-the-seam))
 collapses the pool-open, ping, migrate, listen and graceful-shutdown
 boilerplate every server's `main.go` wrote identically into one call, leaving
 `mount(*Server, sqlb.Executor) error` as the one seam that cannot be generic.
@@ -309,7 +309,7 @@ working CRUD API from an empty directory in five commands.
 
 The last tag named two things it would not do, and this one does both. A
 tenant-keyed singleton was *"a release of its own, not the ninth item on a
-list"*; [ADR-0050](adr/0050-reachability-is-a-property-of-the-mount.md) scoped its column
+list"*; [ADR-0050](architecture.md#reachability-is-a-property-of-the-mount) scoped its column
 split to columns and said in as many words that a second surface differing in
 rows was the alternative it did not cover. Both came out of the same adoption
 and both needed a *shape* rather than a setting, which is why neither fitted in
@@ -328,7 +328,7 @@ been](compatibility.md#four-that-broke-without-being-listed-here-first).
 `Update` and `Delete` grow `WithComputed`, defaulting to none, and
 `rest.Options.Computed` narrows a write's `RETURNING` as it already narrowed the
 read's projection. Reads took this opt-in in `v0.6.0` and nothing revisited
-writes, so [ADR-0041](adr/0041-computed-fields.md)'s clause keeping computed
+writes, so [ADR-0041](architecture.md#computed-fields)'s clause keeping computed
 columns in `RETURNING` *"so a POST response carries the derived fields without a
 second read"* outlived the default it was written against.
 
@@ -385,7 +385,7 @@ A singleton reports *no* filterable, sortable or searchable columns and emits no
 filter vocabulary in the clients even where the columns declare those
 capabilities: its one `GET` rejects every query parameter but `?expand`, so
 publishing them would document requests that answer 400.
-[ADR-0052](adr/0052-a-singleton-is-an-op-that-removes-the-id.md).
+[ADR-0052](architecture.md#a-singleton-is-an-op-that-removes-the-id).
 
 ### A named scope is releasable at the mount, and only a named one
 
@@ -416,7 +416,7 @@ out of it.
 **The obligation check runs after the release.** `rest.Resource` derives the
 released handle first and checks against the handle it will actually serve from,
 so a `Scoped` model whose every confining rule a resource released does not
-mount. [ADR-0030](adr/0030-declared-scope-is-required.md) declined an escape
+mount. [ADR-0030](architecture.md#declared-scope-is-required) declined an escape
 hatch on the grounds that *"an unused escape hatch is the thing most likely to
 be reached for reflexively"*; a hatch that still refuses the case the check
 exists for is not that hatch.
@@ -425,7 +425,7 @@ exists for is not that hatch.
 published catalog" is one rule over four tables, so a handle releases it once
 and the release reaches all four — including models a request arrives at through
 `?expand`, whose hooks run requalified onto the join alias.
-[ADR-0054](adr/0054-a-named-scope-is-releasable-at-the-mount.md).
+[ADR-0054](architecture.md#a-named-scope-is-releasable-at-the-mount).
 
 ### Five more from the same set of reports
 
@@ -501,7 +501,7 @@ already declared `Camel` sees one spurious break the first time it is checked
 and clears it with `-write`. That is the safe direction and the alternative is
 not: reading absence as "not recorded" would suppress the finding against
 exactly the baselines that predate the check.
-[ADR-0039](adr/0039-a-schema-edit-is-an-api-edit.md).
+[ADR-0039](architecture.md#a-schema-edit-is-an-api-edit).
 
 ### The TypeScript writes reach the layer the reads were already at
 
@@ -520,7 +520,7 @@ A generated `onSuccess` would be a guess, and a guess in generated code is
 precisely what gets copied out and edited. `keysByTable` is the mechanical half;
 choosing what to invalidate stays with the caller. No `mutationKey` either, on
 the narrower ground that a key shape is expensive once anything consumes it and
-nothing here needs one. [ADR-0028](adr/0028-typescript-client.md).
+nothing here needs one. [ADR-0028](architecture.md#typescript-client).
 
 ### A verb the resource already generates is refused
 
@@ -537,7 +537,7 @@ The taken verbs are the *generated* ones rather than `Op.String()`'s: `OpRead`
 is `get` in the clients, on the command line and in the document, so `get` is
 refused beside it and `read` is not.
 
-The DSL is optional ([ADR-0010](adr/0010-codegen-is-optional.md)), so
+The DSL is optional ([ADR-0010](architecture.md#codegen-is-optional)), so
 `rest.Action` and `rest.CollectionAction` return an error too, naming the id,
 the method and path already holding it, and the two ways out. The scan is Huma's
 own rather than a table of the verbs each `Op` generates: `rest` does not import
@@ -563,8 +563,8 @@ is the procedure around it and writes down the ordering that makes the gate
 satisfiable: **tag the releases-page commit, not the feature commit.**
 
 **The ADR status vocabulary is four words.**
-[ADR-0040](adr/0040-the-driver-is-a-dependency.md) carried `Accepted` for ten
-days, in [a directory](adr/README.md) whose README says in so many words that
+[ADR-0040](architecture.md#the-driver-is-a-dependency) carried `Accepted` for ten
+days, in [a directory](architecture.md#decisions) whose README says in so many words that
 there is no *Accepted* and no *Final*. A person caught it by eye. `adr-check`
 reads `docs/adr` and refuses a status outside the vocabulary, a record with no
 index row, a row whose link no longer names the record, an orphan row, an index
@@ -596,7 +596,7 @@ postgres for go`, so a copy that drifted to *Golang* while the other three said
 *Go* passed the gate — the exact drift the check exists to catch, in the one
 phrase it is built around. The both-ways proof missed it because both mutations
 were too large. A guard proven only against total absence is proven against the
-easy half ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
+easy half ([ADR-0016](architecture.md#guards-proven-both-ways)).
 
 ### Deliberately not done
 
@@ -604,7 +604,7 @@ easy half ([ADR-0016](adr/0016-guards-proven-both-ways.md)).
 CSS, a component vocabulary, a theme and a browser support matrix, none of which
 exist here and all of which would tie a release cadence to frontend churn rather
 than to the schema.
-[ADR-0053](adr/0053-the-manifest-describes-what-cannot-be-guessed.md) states the
+[ADR-0053](architecture.md#the-manifest-describes-what-cannot-be-guessed) states the
 rule the manifest had been following without saying so: it carries what a
 competent author cannot guess and would get wrong silently, and nothing an
 author can decide and the compiler will check.
@@ -704,7 +704,7 @@ refusal at the boundary, a report from the tool that reads the database, or a
 sentence where the reader is standing. What that rules out is the fourth option
 all four had: correct behaviour, an available workaround, and the two facts
 documented in different files from each other
-([ADR-0051](adr/0051-a-gap-in-the-declaration-is-reported.md)).
+([ADR-0051](architecture.md#a-gap-in-the-declaration-is-reported)).
 
 **Two cost ceilings the mount could express and the schema could not.**
 `schema.REST` gains `MaxSortTerms` and `MaxOffset`, so all five per-request
@@ -754,7 +754,7 @@ rather than dropped in silence. The proof is the break-on-purpose: with the
 mapping reverted the rebuilt database no longer matches the original and names
 the constraint that lost its clause, while the fixpoint test *passes* — both
 registries having dropped the same thing, which is
-[ADR-0016](adr/0016-guards-proven-both-ways.md)'s failure mode stated about a
+[ADR-0016](architecture.md#guards-proven-both-ways)'s failure mode stated about a
 field rather than about an object.
 
 **A hidden column can say it is the key it is looked up by.** `Hidden` names one
@@ -790,7 +790,7 @@ listed is unreachable: not projected, not filterable, not sortable, not
 searched, not nameable in `?select`, cleared off any row a body produced, and
 absent from the list a rejection offers back — that last one because a surface
 narrowed to conceal something must not confirm the column exists.
-[ADR-0050](adr/0050-reachability-is-a-property-of-the-mount.md) records what it
+[ADR-0050](architecture.md#reachability-is-a-property-of-the-mount) records what it
 costs and what the stronger schema-side answer would need.
 
 ### A delete can hand its rows to a hook
@@ -806,7 +806,7 @@ always paid.
 `rest.PublishChanges` moves to it, which is the half that was not asked for and
 the reason to pay the cost: `Event.Scope` is read off the changed row, so a
 keyless delete was also a *scopeless* one and every tenant's subscribers woke on
-every other tenant's delete. [ADR-0045](adr/0045-the-stream-is-a-seam.md) had
+every other tenant's delete. [ADR-0045](architecture.md#the-stream-is-a-seam) had
 listed keyless deletes as a what-would-change-our-mind gated on a measured
 refetch cost; that named the wrong axis and the record says so.
 
@@ -816,7 +816,7 @@ refetch cost; that named the wrong axis and the record says so.
 of docs hands the verb a transaction it can write anything through. Three tools
 reported `Writes` as complete with no signal that a verb can exceed it, and the
 CLI case is the sharp one, since
-[ADR-0029](adr/0029-go-cli.md)'s argument for the CLI
+[ADR-0029](architecture.md#go-cli)'s argument for the CLI
 is that `--help` answers a caller with no compile step. A declared write set of
 two columns invites the inference that the route is confined to one row, and
 that inference can be wrong by ten tables.
@@ -857,7 +857,7 @@ and `Manifest.WireCase` and `ColumnManifest.Wire` are new so a consumer holding
 only the document can tell the two spellings apart. `Wire` is absent where they
 are equal, so a `Verbatim` schema's `sqlb.json` is byte-identical.
 
-Worth stating next to [ADR-0049](adr/0049-the-skill-is-generated.md)'s claim
+Worth stating next to [ADR-0049](architecture.md#the-skill-is-generated)'s claim
 that gating is what makes writing instructions into a repository safe: this is
 the first bug in that emitter the gate structurally could not have found. Being
 gated proves the file matches the schema, not that it is *right* about it.
@@ -934,7 +934,7 @@ in every project and no static document can carry it. `example/tasks` commits a
 generated skill, so `generate-check` gates it in CI rather than a test asserting
 the property in the abstract — and it earned that on the first run, catching a
 real drift when the emitter changed after the file was written
-([ADR-0049](adr/0049-the-skill-is-generated.md)).
+([ADR-0049](architecture.md#the-skill-is-generated)).
 
 What the document does not carry is prose. `introspect` reads `col_description`
 off a live database and calls `Field.Comment`, so a comment is not necessarily
@@ -994,7 +994,7 @@ machinery; the evidence the cut is right is that `scalarSQLType` did not change.
 The older spelling is not deprecated, either — every report came from a database
 that already has a serial, and a DSL that could only declare the modern one
 would propose rewriting the column on its first diff
-([ADR-0048](adr/0048-auto-incrementing-keys.md)).
+([ADR-0048](architecture.md#auto-incrementing-keys)).
 
 **An enum value is data**, so a dotted one names a Go constant instead of
 failing to parse. `task.assigned` produced `NotificationTypeTask.assigned` and
@@ -1086,7 +1086,7 @@ binary folded into the one command tree: needing no schema package is a fact
 about one verb's arguments, not a reason a user has to hear about a separate
 command — and the one it made separate was the adoption probe, the first thing
 somebody deciding whether to adopt sqlb would run, and the only thing `sqlb
-help` did not mention ([ADR-0032](adr/0032-sqlb-command.md)).
+help` did not mention ([ADR-0032](architecture.md#sqlb-command)).
 
 ```
 go run ./cmd/sqlb-survey …   →   go run ./cmd/sqlb survey …
@@ -1158,7 +1158,7 @@ that census — the routes and queries in front of the database.
   document and both clients, and leave it `created_at` in the database, in every
   hand-written query and in `pg_dump`. One spelling per deployment, derived from
   the column, no mapping layer and no per-field override —
-  [ADR-0036](adr/0036-the-wire-is-the-column-name.md) amended rather than
+  [ADR-0036](architecture.md#the-wire-is-the-column-name) amended rather than
   reversed. It exists because six applications were blocked on the same rename
   and the escape the record offered was to rename 615 columns into quoted
   camelCase identifiers, which is not reversible and should not have been in the
@@ -1216,7 +1216,7 @@ the writes to the fields the request path reads to decide what a caller may see
 — a torn read there is a hidden column reaching a response, not a crash. Every
 mutator now clones the model, writes the clone and publishes it, so a published
 `*Model` is never written again and a statement in flight keeps a consistent
-snapshot. [ADR-0010](adr/0010-codegen-is-optional.md)'s no-locks-on-the-read-path
+snapshot. [ADR-0010](architecture.md#codegen-is-optional)'s no-locks-on-the-read-path
 constraint holds because the cost moved to the writer, where it is one copy at
 startup. The two new concurrency tests are the only ones in the suite that run
 two requests at once, and two of them fail against the old code — one without
@@ -1229,7 +1229,7 @@ check.
 
 One break, and it is the one this library most needed to make before anyone
 depended on it: **there is no default hook registry**
-([ADR-0047](adr/0047-no-default-hook-registry.md)).
+([ADR-0047](architecture.md#no-default-hook-registry)).
 
 Hooks are the rules that confine what a query may see, so they were also the
 one surface where ambient state could decide a tenant boundary. `On[T]()`
@@ -1281,7 +1281,7 @@ is strictly narrower — the registry and the handle are usually adjacent
 expressions rather than action at a distance — and the case that matters is
 still caught at the mount, because a model declaring `Scoped` is refused when
 the handle's registry has no hook for it
-([ADR-0030](adr/0030-declared-scope-is-required.md)).
+([ADR-0030](architecture.md#declared-scope-is-required)).
 
 ## v0.6.0
 
@@ -1358,12 +1358,12 @@ What landed, beyond the breaks:
   refetches, because a payload built outside the subscriber's context would skip
   the resource's `BeforeQuery` scope and hand one tenant's rows to another.
   Correct on one replica and quietly wrong on two, which is the first thing its
-  doc comment says. [ADR-0045](adr/0045-the-stream-is-a-seam.md).
+  doc comment says. [ADR-0045](architecture.md#the-stream-is-a-seam).
 - **The filter tree gained `not`, and containment gained its negation.** `nhas`,
   `nhasany`, `nhasall` and `nhasdoc` exist because the URL grammar conjoins by
   design and has nowhere to put a `not` — shipping only the tree would have left
   the two frontends compiling different vocabularies, which is the one thing
-  [ADR-0003](adr/0003-one-ast-two-producers.md) claims they do not. A negation
+  [ADR-0003](architecture.md#one-ast-two-producers) claims they do not. A negation
   is not a complement: each compiles to `NOT (…)`, so a NULL column matches
   neither `has` nor `nhas`, exactly as `nin` already behaved.
 - **`ON CONFLICT DO UPDATE` assigns an expression.** An upsert could only copy
@@ -1405,7 +1405,7 @@ What landed, beyond the breaks:
   core-style app takes `Handles()` only.
 
 What it cost. `FromGo` is **cut** rather than pending:
-[ADR-0041](adr/0041-computed-fields.md) wrote the condition — "if the first two
+[ADR-0041](architecture.md#computed-fields) wrote the condition — "if the first two
 applications express everything in SQL" — and both did, so the record says so
 and closes [#17](https://github.com/jryannel/sqlb/issues/17) with the evidence
 rather than leaving a fourth tier in the tracker. The change feed is correct on
@@ -1432,7 +1432,7 @@ breaks only if it named the type, and the mechanical edit is `schema.Action` →
 announced it under *Will move* and now records that it landed.
 
 **A computed column is an expression.**
-[ADR-0041](adr/0041-computed-fields.md), three of its four tiers:
+[ADR-0041](architecture.md#computed-fields), three of its four tiers:
 
 ```go
 schema.Computed("is_overdue", schema.TypeBool,
@@ -1444,7 +1444,7 @@ One interception point, as the record's trace predicted: every consumer already
 resolves through a `*ColumnInfo` and renders through the compiler's column, so
 substituting the expression there puts the value in the projection, the `WHERE`
 and the `ORDER BY` at once. The parameterised tier takes
-[ADR-0030](adr/0030-declared-scope-is-required.md)'s shape — `Needs("viewer")`
+[ADR-0030](architecture.md#declared-scope-is-required)'s shape — `Needs("viewer")`
 declares the bind, a `BeforeQuery` hook supplies it through `Builder.Bind`, and
 `rest.Resource` refuses to mount when nothing does. Without that refusal an
 unbound expression renders `member_id = NULL`, returns false for every row
@@ -1455,7 +1455,7 @@ applications express everything in SQL", and both did. Nothing in the tree
 reaches for it and nothing outside it did either.
 
 **A declared action generates the envelope, and the verb stays plain Go.**
-[ADR-0043](adr/0043-declared-actions.md), against the 26 item verbs and ~20
+[ADR-0043](architecture.md#declared-actions), against the 26 item verbs and ~20
 collection verbs the evaluated application had, and the ~30 lines of identical
 envelope written four times over before any domain logic:
 
@@ -1480,7 +1480,7 @@ action fetches nothing, so it obliges no hook, and that is two in five of the
 measured verbs.
 
 **`sqlb eject` writes [the way out](eject.md).**
-[ADR-0042](adr/0042-the-exit-is-generated.md), and the answer to the objection a
+[ADR-0042](architecture.md#the-exit-is-generated), and the answer to the objection a
 pre-1.0 library with no consumers cannot answer with a promise: sqlc and chi are
 cheap to reverse because they own almost nothing, while sqlb owns the schema,
 the migrations, the wire format, the client and the CLI. `sqlb eject ./schema`
@@ -1501,7 +1501,7 @@ fork with a different import path rather than an exit. Two properties survive
 the loss of the machinery they were implemented in: capabilities stay opt-in, so
 a column that never declared `Filterable` is not filterable in the exit and a
 `Hidden` one has no spelling at all, and
-[ADR-0030](adr/0030-declared-scope-is-required.md)'s obligation stays compulsory.
+[ADR-0030](architecture.md#declared-scope-is-required)'s obligation stays compulsory.
 The load-bearing half is `pgtest/eject_test.go`, which stands the committed exit
 beside the generated resources it came from, points both at one database, sends
 both the same requests and compares the bodies byte for byte.
@@ -1518,7 +1518,7 @@ is the failure that teaches people to stop reading the gate:
 - `ExternalRef(...).Enforced()` emits a real `FOREIGN KEY` against a table this
   schema has not declared, which is the thing an incremental adoption always has
   to say and had no spelling for. What it gives up is what
-  [ADR-0015](adr/0015-module-isolation.md) bought by refusing the constraint: two
+  [ADR-0015](architecture.md#module-isolation) bought by refusing the constraint: two
   modules joined this way can no longer be migrated independently, so it is
   opt-in and unenforced stays the default. `introspect` imports foreign keys this
   way, which is what stops a gate proposing `DROP CONSTRAINT` forever.
@@ -1559,7 +1559,7 @@ a substring assertion naming the mistake in advance.
 
 2026-07-30 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.4.0)
 
-The release [ADR-0040](adr/0040-the-driver-is-a-dependency.md) was announced for.
+The release [ADR-0040](architecture.md#the-driver-is-a-dependency) was announced for.
 `v0.3.0` said the driver question had been decided and that nothing of it was
 built; this is it built. sqlb depends on pgx v5, `database/sql` is not the
 contract, and `Executor` — Frozen in [compatibility.md](compatibility.md) — broke
@@ -1607,7 +1607,7 @@ Additive, and new:
   ADR-0040's arguments. The column is `Hidden` and not optionally so. There is no
   index kind and no REST search operation: a similarity search is an exact scan
   over the rows a filter already selected.
-  [ADR-0026](adr/0026-vectors-declare-their-index.md) stages the index as a second
+  [ADR-0026](architecture.md#vectors-declare-their-index) stages the index as a second
   decision and stays *Exploring*.
 
 Fixed, most of them found by adopting sqlb over something that already existed. A
@@ -1623,7 +1623,7 @@ The rest is evidence rather than surface. ADR-0026's physical claims about
 pgvector are measured now instead of read out of documentation, and a fourth was
 added: the planner may decline the ANN index, which makes the silent under-return
 conditional on statistics nobody watches.
-[ADR-0041](adr/0041-computed-fields.md) decides computed fields, including the
+[ADR-0041](architecture.md#computed-fields) decides computed fields, including the
 per-viewer tier a static SQL string cannot express, and builds none of it.
 `example/recipes` is 86 Go example functions, one point each, whose printed output
 is compared on every `go test` — so a recipe describing an API that changed fails
@@ -1639,7 +1639,7 @@ and what it cost, in both directions.
 No API change. What this release carries is a decision, the seam that makes it
 buildable, and the test coverage that was holding it up.
 
-[ADR-0040](adr/0040-the-driver-is-a-dependency.md) decides that the engine will
+[ADR-0040](architecture.md#the-driver-is-a-dependency) decides that the engine will
 depend on pgx and that `database/sql` stops being the contract — a break to
 `Executor` that lands before 1.0 or not at all. Nothing of it is built yet. Read
 [the driver](compatibility.md#the-driver) before pinning: the interface every
@@ -1663,7 +1663,7 @@ that exact toolchain.
 Also: a documentation pass that closed the open ends across the ADRs and the six
 review reports, and a nested `rest` module that was built and reverted within the
 day — huma stays the default HTTP path, in the same module.
-[ADR-0007](adr/0007-generated-rest-handlers.md) records why.
+[ADR-0007](architecture.md#generated-rest-handlers) records why.
 
 ## v0.2.0
 

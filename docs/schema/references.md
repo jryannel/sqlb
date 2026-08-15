@@ -128,11 +128,11 @@ escape hatch and not a fork.
 relations do not expand in turn, and there is no `?expand=list.workspace`. One
 level is a join per relation and a bounded statement; nesting is where a depth
 limit and a cost model have to be argued for
-([ADR-0025](../adr/0025-expansion-is-one-statement.md)).
+([ADR-0025](../architecture.md#expansion-is-one-statement)).
 
 ## Next
 
 - [Expanding relations](../rest/expand.md) — what these look like on the wire
 - [Migrations](../migrations/README.md) — the DDL a reference produces
-- [ADR-0022](../adr/0022-references-declare-their-inverse.md) — why the inverse
+- [ADR-0022](../architecture.md#references-declare-their-inverse) — why the inverse
   is declared rather than derived

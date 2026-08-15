@@ -321,8 +321,8 @@ func TestDeletingAParentWithChildrenIsRefused(t *testing.T) {
 // ranked full-text match. It finds a substring anywhere in the name and does
 // not stem, rank or need an index. Escalating past that — a trigram index, the
 // tsvector ADR-0037 leaves for a later record, the vector column
-// docs/adr/0026-vectors-declare-their-index.md leaves open — is deliberately
-// out of scope here.
+// docs/architecture.md's "Vectors declare their index" leaves open — is
+// deliberately out of scope here.
 func TestSearchIsSubstringNotFullText(t *testing.T) {
 	ctx := context.Background()
 	pool := freshDatabase(t)

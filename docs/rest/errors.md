@@ -2,7 +2,7 @@
 
 A column that does not declare a capability cannot be reached through it, and
 the rejection is data rather than prose
-([ADR-0011](../adr/0011-actionable-errors.md)):
+([ADR-0011](../architecture.md#actionable-errors)):
 
 ```json
 {
@@ -106,4 +106,4 @@ has no spelling. The rejection is the fallback, not the mechanism.
 
 - [Mounting resources](README.md)
 - [Capabilities](../concepts/capabilities.md) — why the refusal is shaped this way
-- [ADR-0011](../adr/0011-actionable-errors.md) — the decision record
+- [ADR-0011](../architecture.md#actionable-errors) — the decision record

@@ -17,12 +17,21 @@ Read in this order, and stop as soon as you have what you need:
    most repay reading before touching anything. A command documents itself the
    Go way instead, as `// Command sqlb …` at the head of `cmd/sqlb/main.go`.
 2. **[docs/architecture.md](docs/architecture.md)** for how the pieces fit and
-   why the seams are where they are.
-3. **[docs/adr/](docs/adr/)** — 53 records, and they are *load-bearing rather
-   than historical*. A decision here is usually the answer to "why is this not
-   simpler", and reversing one without reading it is the most common way to
-   spend an afternoon rediscovering a rejected alternative. Each carries a
-   revisit trigger and the cost of change.
+   why the seams are where they are — including its
+   **[Decisions](docs/architecture.md#decisions)** section, 58 of them, and
+   they are *load-bearing rather than historical*. A decision here is usually
+   the answer to "why is this not simpler", and reversing one without reading
+   it is the most common way to spend an afternoon rediscovering a rejected
+   alternative. Most end with a revisit trigger.
+
+   These used to be a separate `docs/adr/` directory of 58 individually
+   numbered files, each editable in place with its own revisions log. They
+   were folded into architecture.md one at a time, each as its own commit, so
+   that *changing* a decision's reasoning is a commit with a message that
+   argues for the change — the way every other commit in this repo already
+   has to — rather than a hand-maintained log entry nothing else reads. To see
+   why a decision reads the way it does, `git log -G'### <heading>' --
+   docs/architecture.md` finds every commit that touched it.
 
 `docs/` mirrors to the published site. Everything under it is prose for humans;
 the API reference is the Go doc comments.
@@ -55,8 +64,8 @@ for reproducing a CI failure rather than for routine use — CI is the gate. The
 database-backed suites read a DSN and start nothing; `mise run pg-up` provides
 it from `compose.yaml`, and the tasks that need it depend on that. Individual
 steps — `vet`, `lint`, `generate-check`, `impact-check`, `eject-check`,
-`adr-check`, `test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on
-their own and `mise tasks` describes all 32.
+`test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on their own
+and `mise tasks` describes all 33.
 
 **`mise run site-check` needs no npm install.** It is the fast way to find out
 whether a docs edit can be published, and the check that catches a link whose
@@ -94,26 +103,28 @@ which does not need it.
 **Commit messages argue.** The subject is a claim in the repo's voice —
 `fix(model): a description publishes a copy, so a model handed out is never
 written` — and the body says what was wrong, what was decided, and what was
-deliberately not done. `git log` is the design record that ADRs summarise, so a
+deliberately not done. `git log` is the design record now that architecture.md's
+Decisions section replaced a directory of individually revised files, so a
 body that only restates the diff loses the reasoning nothing else captures.
 
 **A guard is not trusted until it has failed on purpose**
-([ADR-0016](docs/adr/0016-guards-proven-both-ways.md)). When you add a check,
-break the thing it checks and record that it caught it. The v0.8.0 exclusion
-work is the model: with the import silently dropping exclusions, one test
-failed and named the constraint while the fixpoint test *passed*, because both
-registries had dropped the same thing.
+([docs/architecture.md, "Guards proven both ways"](docs/architecture.md#guards-proven-both-ways)).
+When you add a check, break the thing it checks and record that it caught it.
+The v0.8.0 exclusion work is the model: with the import silently dropping
+exclusions, one test failed and named the constraint while the fixpoint test
+*passed*, because both registries had dropped the same thing.
 
 **Tooling operates on tracked files only**
-([ADR-0018](docs/adr/0018-tooling-scoped-to-tracked-files.md)).
+([docs/architecture.md, "Tooling scoped to tracked files"](docs/architecture.md#tooling-scoped-to-tracked-files)).
 
 **Prefer a failing check to a written-down rule.** `generate-check`,
-`eject-check`, `impact-check`, `deps-check`, `adr-check` and `bisect-check` all
-exist because a convention that is only documented is a convention that drifts.
-If you are about to add a paragraph telling someone to remember something,
-consider whether it can fail in CI instead. `adr-check` is the newest and the
-plainest case: docs/adr/README.md said in so many words that the vocabulary has
-no "Accepted" in it, and a record carried Accepted for ten days anyway.
+`eject-check`, `impact-check`, `deps-check` and `bisect-check` all exist
+because a convention that is only documented is a convention that drifts. If
+you are about to add a paragraph telling someone to remember something,
+consider whether it can fail in CI instead. `deps-check` is a plain case: the
+engine's dependency list is a decision, not a memory, and it is checked by
+diffing `go.mod` against a pinned allow-list rather than by asking a reviewer
+to notice a new import.
 
 **Releases.** A release is an annotated tag whose message *is* the notes, plus
 a GitHub release carrying the same text, on a commit where **both** workflows
@@ -131,19 +142,19 @@ since `pages` never runs on a pull request.
 
 Worth knowing before you propose removing them:
 
-- **Postgres only** ([ADR-0001](docs/adr/0001-postgres-only.md)), and **pgx is
-  the driver, not `database/sql`**
-  ([ADR-0040](docs/adr/0040-the-driver-is-a-dependency.md)). `Executor` is
-  `Query` and `Exec` over pgx types and grows by optional interfaces that are
-  type-asserted for, never by adding methods.
+- **Postgres only** ([docs/architecture.md, "Postgres only"](docs/architecture.md#postgres-only)),
+  and **pgx is the driver, not `database/sql`**
+  ([docs/architecture.md, "The driver is a dependency"](docs/architecture.md#the-driver-is-a-dependency)).
+  `Executor` is `Query` and `Exec` over pgx types and grows by optional
+  interfaces that are type-asserted for, never by adding methods.
 - **The schema DSL is optional.** The engine reflects over struct tags, so
   every feature must be reachable without codegen
-  ([ADR-0010](docs/adr/0010-codegen-is-optional.md)).
+  ([docs/architecture.md, "Codegen is optional"](docs/architecture.md#codegen-is-optional)).
 - **Nothing on the read path locks.** Describing a model is copy-on-write: a
   published `*Model` is never written again, so the cost sits with the writer.
 - **A column has one wire spelling**, derived from its name by the schema's
-  `WireCase` ([ADR-0036](docs/adr/0036-the-wire-is-the-column-name.md)). There
-  is no mapping layer and no per-field override, in either direction.
+  `WireCase` ([docs/architecture.md, "The wire is the column name"](docs/architecture.md#the-wire-is-the-column-name)).
+  There is no mapping layer and no per-field override, in either direction.
 - **Capabilities are opt-in.** Nothing is filterable, sortable or selectable
   unless the column declares it, and a rejection names what would have been
-  accepted ([ADR-0011](docs/adr/0011-actionable-errors.md)).
+  accepted ([docs/architecture.md, "Actionable errors"](docs/architecture.md#actionable-errors)).

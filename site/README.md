@@ -26,8 +26,7 @@ collection from it on every build, one route per source:
 | `docs/typescript/` | `/typescript/` | The generated client |
 | `docs/cli/` | `/cli/` | The generated cobra tree |
 | `docs/migrations/` | `/migrations/` | Diffing, rollout, adopting a database |
-| `docs/adr/` | `/adr/` | Every file, ordered by the number in its filename |
-| `docs/` | `/project/` | A named list: vision, architecture, compatibility, comparisons, with-sqlc, the adoption review |
+| `docs/` | `/project/` | A named list: vision, architecture (including its Decisions section), compatibility, comparisons, with-sqlc, the adoption review |
 
 Every section but the last two names its own reading order in `SOURCES`, so a
 new page has to be placed deliberately and one missing from the list is
@@ -71,12 +70,13 @@ both were checked to fail before being relied on.
 
 **`sync-docs.mjs`** rewrites repo-relative links into web links by *resolving*
 them, not by matching patterns. The same target is written differently depending
-on where the file sits — `adr/0011-x.md` from `docs/`, `../adr/0011-x.md` from
-`docs/queries/`, `0011-x.md` from `docs/adr/` — so each link is resolved against
-the repository and then looked up:
+on where the file sits — `architecture.md` from `docs/`, `../architecture.md`
+from `docs/queries/` — so each link is resolved against the repository and
+then looked up:
 
-- **published here** → an internal route, which is why the guide's ADR
-  references stay on the site instead of leaving for GitHub;
+- **published here** → an internal route, which is why a cross-reference to
+  one of architecture.md's decisions stays on the site instead of leaving for
+  GitHub;
 - **exists in the repo** → a GitHub URL, file or directory as appropriate;
 - **neither** → a **hard error**.
 
@@ -85,9 +85,9 @@ deploy, and a link to a repository file that is simply not there. It also fails
 on a page with no H1 to take a title from, and on a page missing from its
 section's `sequence` list, so adding one is a deliberate act here too.
 
-It skips inline code as well as fenced blocks, which is not fussiness: ADR-0020
-contains `sqlb.QueryIn[T](tx)`, Go generics that are indistinguishable from a
-markdown link to a pass that only skips fences.
+It skips inline code as well as fenced blocks, which is not fussiness:
+compatibility.md contains `OnIn[T](r)`, Go generics that are indistinguishable
+from a markdown link to a pass that only skips fences.
 
 It also **pairs every route with a sidebar group**, in both directions. The
 pages of a section left out of `astro.config.mjs` still build and are still

@@ -89,5 +89,5 @@ over the requests that must not type — see
 - [Queries](README.md) — the builder these columns feed
 - [Mutations and transactions](mutations.md) — the typed update statement in
   context
-- [ADR-0009](../adr/0009-typed-column-facade.md) — why the facade is generated
+- [ADR-0009](../architecture.md#typed-column-facade) — why the facade is generated
   rather than reflective

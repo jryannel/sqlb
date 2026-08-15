@@ -17,7 +17,8 @@ go = "1.26.4"
 # finding. Bump deliberately, then run `mise run lint`.
 golangci-lint = "2.12.2"
 # Node is here for one thing: typechecking the TypeScript client codegen emits
-# into example/tasks/web. That is the cost ADR-0028 names — a second toolchain
+# into example/tasks/web. That is the cost the "Typescript client" decision in
+# docs/architecture.md names — a second toolchain
 # in a repository whose Go module takes one dependency — and it is paid here
 # rather than in the Go module, which still inherits nothing else. Pinned for the
 # same reason the others are: the emitted client's guarantees are enforced by
@@ -27,7 +28,7 @@ node = "26.4.0"
 # is here for the Dart client codegen emits into example/tasks/mobile, whose
 # guarantees are enforced by `dart analyze` the way the TypeScript client's are
 # by tsc — including the `unnecessary_ignore` lint that makes lib/refusals.dart
-# a gate rather than a comment (ADR-0031). The Dart SDK alone, not Flutter: the
+# a gate rather than a comment (docs/architecture.md, "Dart client"). The Dart SDK alone, not Flutter: the
 # emitted client imports nothing, so nothing in that package needs a Flutter
 # toolchain and CI does not pay for one.
 dart = "3.12.2"
@@ -128,7 +129,7 @@ run = "go test -parallel 8 ./..."
 
 [tasks.bench-pg]
 depends = ["pg-up"]
-description = "Measure what sqlb costs over pgx, against a real Postgres. Deliberately NOT part of `ci`: benchmark numbers from a shared runner are noise, and a gate that fails on them trains people to ignore it. It exists because ADR-0040 argued partly on performance, and ADR-0019 is the precedent for what happens when a record in this repo reasons from documentation instead of measuring — two of its three claims came back different. Now that the flip has landed, both arms run on pgx and what is left is the builder and the reflective scan."
+description = "Measure what sqlb costs over pgx, against a real Postgres. Deliberately NOT part of `ci`: benchmark numbers from a shared runner are noise, and a gate that fails on them trains people to ignore it. It exists because docs/architecture.md's \"The driver is a dependency\" decision argued partly on performance, and its \"Pgbouncer in the path\" decision is the precedent for what happens when a decision in this repo reasons from documentation instead of measuring — two of its three claims came back different. Now that the flip has landed, both arms run on pgx and what is left is the builder and the reflective scan."
 dir = "pgtest"
 run = "go test -run '^$' -bench . -benchmem ./..."
 
@@ -140,7 +141,7 @@ run = "go test ./..."
 
 [tasks.test-fx]
 depends = ["pg-up"]
-description = "Run the fx example, including the fxkit glue it assembles itself from. The kit's own tests need no database — graph validation constructs nothing, and the rest exercise the assembly seams directly. The example needs a database for all but one of its tests: everything else boots the whole application against a real Postgres because the claims are about a boot — that the migrations apply, that provisioning survives a restart, that the space boundary holds between two callers. It also carries the one assertion the other examples cannot make: with the notes module removed from the list, the server must refuse to start rather than serve unscoped rows (ADR-0030)."
+description = "Run the fx example, including the fxkit glue it assembles itself from. The kit's own tests need no database — graph validation constructs nothing, and the rest exercise the assembly seams directly. The example needs a database for all but one of its tests: everything else boots the whole application against a real Postgres because the claims are about a boot — that the migrations apply, that provisioning survives a restart, that the space boundary holds between two callers. It also carries the one assertion the other examples cannot make: with the notes module removed from the list, the server must refuse to start rather than serve unscoped rows (docs/architecture.md, \"Declared scope is required\")."
 run = '''
 set -e
 cd "$MISE_PROJECT_ROOT/example/fxapp" && go test ./...
@@ -177,7 +178,7 @@ go test ./cli/...
 '''
 
 [tasks.test-studio]
-description = "Build the uncurated data/schema/action browser (docs/adr/0053) and run its tests. No Docker and no Postgres: it speaks REST, so its tests drive the routes against an httptest fake standing in for a generated API, the same way test-cli's does for the CLI. Not part of `ci` yet — see the module's README for what full CI wiring would still need to decide (the layout doc's 'four modules' claim, mainly)."
+description = "Build the uncurated data/schema/action browser (docs/architecture.md, \"The manifest describes what cannot be guessed\") and run its tests. No Docker and no Postgres: it speaks REST, so its tests drive the routes against an httptest fake standing in for a generated API, the same way test-cli's does for the CLI. Not part of `ci` yet — see the module's README for what full CI wiring would still need to decide (the layout doc's 'four modules' claim, mainly)."
 dir = "studio"
 run = '''
 go build -o /dev/null ./cmd/sqlb-studio
@@ -207,7 +208,7 @@ cd "$MISE_PROJECT_ROOT/example/fxapp" && go vet ./...
 '''
 
 [tasks.lint]
-description = "golangci-lint across all four modules. Formatting is reported here rather than by a gate of its own — ADR-0018."
+description = "golangci-lint across all four modules. Formatting is reported here rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\"."
 run = '''
 set -e
 golangci-lint run
@@ -226,8 +227,8 @@ run = '''
 # There is deliberately no fmt-check gate. golangci-lint has the gofmt formatter
 # enabled and fails on a formatting-only defect, and what it sees is a strict
 # superset of the tracked Go files, so a separate check gated nothing that lint
-# did not already gate. ADR-0018 records the reasoning and what would bring it
-# back.
+# did not already gate. docs/architecture.md's "Tooling scoped to tracked
+# files" decision records the reasoning and what would bring it back.
 #
 # Still scoped to the files git tracks rather than `gofmt -w .`: the unscoped
 # walk descends into .claude/worktrees/, which .git/info/exclude ignores and
@@ -247,8 +248,9 @@ run = '''
 set -e
 # Healing and gating are deliberately separate tasks. A gate that rewrote the
 # tree and then reported green would certify code that was never clean, and on
-# a CI runner the rewrite is discarded anyway — the failure mode ADR-0016 is
-# about. So `ci` reports and this fixes; nothing does both.
+# a CI runner the rewrite is discarded anyway — the failure mode
+# docs/architecture.md's "Guards proven both ways" decision is about. So `ci`
+# reports and this fixes; nothing does both.
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -266,7 +268,7 @@ fi
 mise run fmt
 # The example's hand-written Dart, for the same reason gofmt runs above: the
 # gate checks formatting and this is where it gets fixed. The generated client
-# is format-stable by construction (ADR-0031), so this only ever touches files
+# is format-stable by construction (docs/architecture.md, "Dart client"), so this only ever touches files
 # a person wrote.
 (cd "$MISE_PROJECT_ROOT/example/tasks/mobile" && dart format . > /dev/null)
 # lint-fix exits non-zero when findings remain that it cannot fix by itself.
@@ -347,15 +349,16 @@ exit $status
 '''
 
 [tasks.deps-check]
-description = "Fail if a dependency the engine has not chosen has crept in. The engine depends on pgx and nothing else (ADR-0040); `rest` additionally on huma; anything more is a regression. Every dependency sqlb takes is one its consumers inherit, so the list is short and it is checked rather than remembered."
+description = "Fail if a dependency the engine has not chosen has crept in. The engine depends on pgx and nothing else (docs/architecture.md, \"The driver is a dependency\"); `rest` additionally on huma; anything more is a regression. Every dependency sqlb takes is one its consumers inherit, so the list is short and it is checked rather than remembered."
 run = '''
-# What must hold, since ADR-0040: the engine's dependency list is a decision,
-# and this is where the decision is checked rather than remembered. "Zero
+# What must hold: the engine's dependency list is a decision docs/architecture.md
+# argues for, and this is where the decision is checked rather than remembered. "Zero
 # dependencies" stopped being the invariant when sqlb took pgx — but "pgx, and
 # nothing that arrived without an argument" is a stronger claim than the old one
 # was, because the old one was never written down in a record at all.
 #
-# ADR-0016: a guard must be proven in both directions, so this one ends by
+# docs/architecture.md's "Guards proven both ways" decision: a guard must be
+# proven in both directions, so this one ends by
 # checking that it *does* fire for `rest`. Three earlier guards in this repo
 # reported success while verifying nothing.
 
@@ -468,7 +471,8 @@ fi
 # report test-only imports. A test file in this module importing a container
 # runtime, an assertion library, or anything else convenient would leave every
 # assertion above passing while go.mod grew — success reported by a check that
-# had stopped covering anything, which is the ADR-0016 failure mode.
+# had stopped covering anything, which is the failure mode docs/architecture.md's
+# "Guards proven both ways" decision is about.
 #
 # So the root module's direct requirements are pinned by name. This is what
 # keeps the pgtest module honest: moving those tests back in here fails loudly
@@ -478,8 +482,8 @@ fi
 # the single-line `require path ver` that `go mod tidy` collapses to when only
 # one requirement remains. An earlier version grepped for indented lines only and
 # read nothing the moment the block became a one-liner — a check that had stopped
-# covering anything, which is the ADR-0016 failure mode the positive control below
-# exists to catch.
+# covering anything, the same failure mode the positive control below exists to
+# catch.
 want='github.com/danielgtaylor/huma/v2 github.com/jackc/pgx/v5'
 got=$(awk '
   $1 == "require" && $2 != "(" && $0 !~ /\/\/ indirect/ { print $2; next }
@@ -492,7 +496,7 @@ if [ "$got" != "$(printf '%s\n' $want | sort)" ]; then
   echo "deps-check: the root module's direct dependencies changed."
   echo "  want: $(printf '%s ' $want)"
   echo "  got:  $(printf '%s ' $got)"
-  echo "A new one needs a record arguing for it, the way ADR-0040 argues for pgx."
+  echo "A new one needs docs/architecture.md arguing for it, the way it argues for pgx."
   echo "Tests needing a container belong in the pgtest module, which has a go.mod"
   echo "of its own for exactly this reason. See pgtest/doc.go."
   exit 1
@@ -537,8 +541,8 @@ go run ./cmd/sqlb check ./internal/internalschema
 #
 # This one keeps a generator of its own because it emits something codegen does
 # not: plain DDL for sqlc to read. `sqlb generate` runs the emitters a Project
-# declares, and a bespoke fourth artefact is exactly the case ADR-0032 says
-# stays a hand-written main.
+# declares, and a bespoke fourth artefact is exactly the case docs/architecture.md's
+# "Sqlb command" decision says stays a hand-written main.
 go run ./example/withsqlc/gen -check
 # example/tasks is a module of its own, so its schema cannot be reached from the
 # root module's package list and needs a line here. Forgetting it would leave
@@ -552,7 +556,7 @@ cd "$MISE_PROJECT_ROOT/example/fxapp" && go run github.com/jryannel/sqlb/cmd/sql
 '''
 
 [tasks.impact-check]
-description = "Fail if a schema edit has changed the generated REST contract in a way that breaks a deployed client — a renamed or un-exposed column, a dropped operation, a narrowed type (ADR-0039). Diffs each example's schema against its committed restcontract.json baseline. Distinct from generate-check: that catches drift in the code sqlb writes, this catches drift in the API that code serves, and the two can disagree — a clean RENAME migration is a wire break. Re-record a baseline with `sqlb impact -write` when the change is intended. -error, not a bare run, because in a gate the point is to fail."
+description = "Fail if a schema edit has changed the generated REST contract in a way that breaks a deployed client — a renamed or un-exposed column, a dropped operation, a narrowed type (docs/architecture.md, \"A schema edit is an api edit\"). Diffs each example's schema against its committed restcontract.json baseline. Distinct from generate-check: that catches drift in the code sqlb writes, this catches drift in the API that code serves, and the two can disagree — a clean RENAME migration is a wire break. Re-record a baseline with `sqlb impact -write` when the change is intended. -error, not a bare run, because in a gate the point is to fail."
 run = '''
 set -e
 go run ./cmd/sqlb impact -error ./example/blog/blogschema
@@ -569,221 +573,11 @@ cd "$MISE_PROJECT_ROOT/example/fxapp" && go run github.com/jryannel/sqlb/cmd/sql
 '''
 
 [tasks.eject-check]
-description = "Fail if the committed ejected package no longer matches what the schema would produce now. `sqlb eject` writes the way out — the schema as SQL and the resources as plain net/http handlers over pgx — and an exit nobody checks is one that has quietly stopped working by the time it is needed (ADR-0042). Only example/blog commits one, because one worked exit is the claim; the other examples would add gate time and say nothing new. Distinct from generate-check on purpose: generated code is stale when it disagrees with the schema, while an ejected package is *meant* to be edited, so the day a project takes the exit is the day it deletes this gate rather than fixing it."
+description = "Fail if the committed ejected package no longer matches what the schema would produce now. `sqlb eject` writes the way out — the schema as SQL and the resources as plain net/http handlers over pgx — and an exit nobody checks is one that has quietly stopped working by the time it is needed (docs/architecture.md, \"The exit is generated\"). Only example/blog commits one, because one worked exit is the claim; the other examples would add gate time and say nothing new. Distinct from generate-check on purpose: generated code is stale when it disagrees with the schema, while an ejected package is *meant* to be edited, so the day a project takes the exit is the day it deletes this gate rather than fixing it."
 run = "go run ./cmd/sqlb eject -check ./example/blog/blogschema"
 
-[tasks.adr-check]
-description = "Fail if a record in docs/adr disagrees with the directory that holds it — a status outside the four-word vocabulary, a record missing from the index table, an index row whose status contradicts the record, or a missing Confidence or Last reviewed line. ADR-0040 carried the status `Accepted` for ten days: a word docs/adr/README.md explicitly says is not in the vocabulary, in the one place a reader looks to find out what a record is worth. Nothing caught it and a person did, which is the case for a check rather than a paragraph."
-run = '''
-# ADR-0018: the files git tracks, not whatever is on disk. .claude/worktrees/
-# holds other checkouts of this same repository, and an unscoped glob would
-# happily validate another session's records and report on those.
-index="docs/adr/README.md"
-if ! git ls-files --error-unmatch "$index" > /dev/null 2>&1; then
-  echo "adr-check: $index is not tracked, so there is nothing to check against" >&2
-  exit 1
-fi
-
-# 0000-template.md is excluded deliberately: its status line *is* the vocabulary
-# ("Exploring | Working | Revisiting | Replaced by ...") and its review date is
-# the literal YYYY-MM-DD. It is a form to copy, not a record, and it has no index
-# row for the same reason.
-records=$(git ls-files 'docs/adr/[0-9][0-9][0-9][0-9]-*.md' | grep -v '0000-template\.md$')
-if [ -z "$records" ]; then
-  echo "adr-check: no tracked records matched, so nothing was checked" >&2
-  exit 1
-fi
-
-# Unquoted, so the shell splits it into arguments. Safe because the pathspec
-# above admits only docs/adr/NNNN-slug.md, and a slug has no spaces.
-# shellcheck disable=SC2086
-awk '
-BEGIN {
-  split("Exploring Working Revisiting Replaced", w, " ")
-  for (i in w) vocab[w[i]] = 1
-  known = "Exploring, Working, Revisiting, Replaced"
-}
-
-function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
-
-# The first word of a status, stripped of whatever punctuation the record wraps
-# it in: Working, and Working. and Working (column) all lead with Working.
-function lead(s,   t) {
-  t = trim(s)
-  sub(/[ \t].*$/, "", t)
-  gsub(/[^A-Za-z]/, "", t)
-  return t
-}
-
-# The leading vocabulary word of a status, or the empty string if any part of it
-# leads with something else. A compound status is written
-# "Working (column) / Exploring (index)" -- 0026 -- so the separator is a slash
-# with spaces around it. A bare slash would split an "and/or" in prose and refuse
-# a status that is perfectly good, which is how a check earns being ignored.
-function status_word(s,   n, part, i, t, first) {
-  n = split(s, part, " / ")
-  first = ""
-  for (i = 1; i <= n; i++) {
-    t = lead(part[i])
-    if (!(t in vocab)) return ""
-    if (first == "") first = t
-  }
-  return first
-}
-
-# Parsed here rather than handed to date(1), whose accepted syntax differs
-# between the BSD one on a laptop and the GNU one on the runner.
-function isdate(s,   y, m, d, dim, last) {
-  if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]([^0-9]|$)/) return 0
-  y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
-  if (m < 1 || m > 12) return 0
-  split("31 28 31 30 31 30 31 31 30 31 30 31", dim, " ")
-  last = dim[m]
-  if (m == 2 && y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) last = 29
-  return d >= 1 && d <= last
-}
-
-function say(where, what) { printf "%s: %s\n", where, what; fail = 1 }
-function hint(what)       { printf "    %s\n", what }
-
-# ---- the index table, which is read first ----
-FILENAME ~ /README\.md$/ {
-  if ($0 !~ /^\|[ \t]*\[[0-9][0-9][0-9][0-9]\]\(/) next
-  # A row is | # | Title | Status | Confidence |, so splitting on the bar gives
-  # six fields, the first and last of them empty. Anything else is a row a
-  # column has been added to or dropped from, and the cells below would be read
-  # from the wrong places.
-  if (split($0, cell, "|") != 6) {
-    say(FILENAME " line " FNR, "index row is not | # | Title | Status | Confidence |")
-    next
-  }
-  num = cell[2];  sub(/^[^[]*\[/, "", num);  sub(/\].*$/, "", num)
-  link = cell[2]; sub(/^[^(]*\(/, "", link); sub(/\).*$/, "", link)
-  if (num in idx_row) {
-    say(FILENAME " line " FNR, "a second row for " num "; the first is on line " idx_row[num])
-    next
-  }
-  idx_row[num] = FNR
-  idx_status[num] = trim(cell[4])
-  idx_link[num] = link
-  rows++
-  next
-}
-
-# ---- the records ----
-{
-  if (!(FILENAME in seen)) {
-    seen[FILENAME] = 1
-    order[++nrec] = FILENAME
-    base = FILENAME; sub(/^.*\//, "", base)
-    num = base;      sub(/-.*$/, "", num)
-    rec_base[FILENAME] = base
-    rec_num[FILENAME] = num
-  }
-  # First occurrence only. A status runs on over several lines in a dozen
-  # records, and Revisions sections quote these headings.
-  if (!has_status[FILENAME] && $0 ~ /^- \*\*Status:\*\*/) {
-    s = $0; sub(/^- \*\*Status:\*\*/, "", s)
-    has_status[FILENAME] = 1; rec_status[FILENAME] = trim(s)
-  }
-  if (!has_conf[FILENAME] && $0 ~ /^- \*\*Confidence:\*\*/) has_conf[FILENAME] = 1
-  if (!has_rev[FILENAME] && $0 ~ /^- \*\*Last reviewed:\*\*/) {
-    s = $0; sub(/^- \*\*Last reviewed:\*\*/, "", s)
-    has_rev[FILENAME] = 1; rec_rev[FILENAME] = trim(s)
-  }
-}
-
-END {
-  for (i = 1; i <= nrec; i++) {
-    f = order[i]; num = rec_num[f]; mine = ""
-
-    if (!has_status[f]) {
-      say(f, "no `- **Status:**` line")
-      hint("every record carries one; 0000-template.md is the shape")
-    } else {
-      mine = status_word(rec_status[f])
-      if (mine == "") {
-        say(f, "status \"" rec_status[f] "\" does not lead with a word this directory uses")
-        hint("accepted: " known)
-        hint("docs/adr/README.md defines them, and says there is deliberately no Accepted and no Final")
-        hint("a compound status is written \"Working (column) / Exploring (index)\", each part leading with one of the four")
-      }
-    }
-
-    if (!(num in idx_row)) {
-      say(f, "no row in the index table in docs/adr/README.md")
-      hint("add | [" num "](" rec_base[f] ") | Title | Status | Confidence |")
-    } else {
-      matched[num] = 1
-      if (idx_link[num] != rec_base[f]) {
-        say("docs/adr/README.md line " idx_row[num], "row " num " links " idx_link[num])
-        hint("the record is " rec_base[f] " -- a rename that the index did not follow")
-      }
-      theirs = status_word(idx_status[num])
-      if (theirs == "") {
-        say("docs/adr/README.md line " idx_row[num], "status cell \"" idx_status[num] "\" does not lead with a word this directory uses")
-        hint("accepted: " known)
-      } else if (mine != "" && theirs != mine) {
-        say("docs/adr/README.md line " idx_row[num], "the index says " theirs " and " rec_base[f] " says " mine)
-        hint("the index is the summary; whichever is wrong, they cannot both stand")
-      }
-    }
-
-    if (!has_conf[f]) {
-      say(f, "no `- **Confidence:**` line")
-      hint("High, Medium or Low, and separate from status -- Working / Low is a useful thing to say")
-    }
-    if (!has_rev[f]) {
-      say(f, "no `- **Last reviewed:**` line")
-      hint("a record with no review date cannot be told from a stale one")
-    } else if (!isdate(rec_rev[f])) {
-      say(f, "last reviewed \"" rec_rev[f] "\" does not start with a date")
-      hint("expected YYYY-MM-DD, optionally followed by a note")
-    }
-  }
-
-  for (num in idx_row) {
-    if (!(num in matched)) {
-      say("docs/adr/README.md line " idx_row[num], "a row for " num " with no tracked record behind it")
-      hint("it links " idx_link[num])
-    }
-  }
-
-  # The positive controls. ADR-0016: until it has failed on purpose, a green
-  # result here is indistinguishable from a check that read nothing.
-  if (nrec == 0) {
-    print "adr-check: no records were read, so every assertion above was vacuous"
-    fail = 1
-  }
-  if (rows == 0) {
-    print "adr-check: no index rows were parsed, so the cross-check compared nothing"
-    fail = 1
-  }
-  if (status_word("Accepted, and built.") != "") {
-    print "adr-check: the vocabulary admits Accepted, which is the exact word this task exists to catch"
-    fail = 1
-  }
-  if (status_word("Working (column) / Exploring (index)") != "Working") {
-    print "adr-check: the vocabulary refuses a compound status the directory already uses (0026)"
-    fail = 1
-  }
-  if (status_word("Working / Accepted") != "") {
-    print "adr-check: only the first part of a compound status is checked, so the rest is unguarded"
-    fail = 1
-  }
-  if (!isdate("2026-07-30") || isdate("2026-13-01") || isdate("2025-02-29") || isdate("YYYY-MM-DD")) {
-    print "adr-check: the date test does not tell a date from something that merely looks like one"
-    fail = 1
-  }
-
-  if (fail) exit 1
-  printf "adr-check: %d records, %d index rows, statuses in vocabulary and agreeing\n", nrec, rows
-}
-' "$index" $records
-'''
-
 [tasks.tagline-check]
-description = "Fail if the four hand-written copies of the project's one-line pitch have drifted apart. README.md, docs/start/README.md and the site's two `description` fields all state what sqlb is, none of them is generated from any other, and nothing links them — so an edit to the README leaves three copies saying something the project stopped claiming. This is the same class as the mirroring CLAUDE.md already warns about for the emitter docs, caught the same way adr-check catches a status outside the vocabulary: cheaply, and before a reader does. It checks the claim rather than the wording, because the four are written for different media — a markdown paragraph, a YAML folded block, a JS string in three pieces — and forcing them to be byte-identical would be a gate that fights the copy instead of protecting it."
+description = "Fail if the four hand-written copies of the project's one-line pitch have drifted apart. README.md, docs/start/README.md and the site's two `description` fields all state what sqlb is, none of them is generated from any other, and nothing links them — so an edit to the README leaves three copies saying something the project stopped claiming. This is the same class as the mirroring CLAUDE.md already warns about for the emitter docs, caught the same way generate-check catches code that has drifted from the schema: cheaply, and before a reader does. It checks the claim rather than the wording, because the four are written for different media — a markdown paragraph, a YAML folded block, a JS string in three pieces — and forcing them to be byte-identical would be a gate that fights the copy instead of protecting it."
 run = '''
 set -e
 
@@ -793,9 +587,10 @@ set -e
 LC_ALL=C
 export LC_ALL
 
-# ADR-0018: the files git tracks, not whatever is on disk. .claude/worktrees/
-# holds other checkouts of this same repository, and an unscoped read would
-# happily validate another session's copy and report on that.
+# docs/architecture.md's "Tooling scoped to tracked files" decision: the files
+# git tracks, not whatever is on disk. .claude/worktrees/ holds other checkouts
+# of this same repository, and an unscoped read would happily validate another
+# session's copy and report on that.
 files="README.md docs/start/README.md site/src/content/docs/index.mdx site/astro.config.mjs"
 
 # The claim every copy has to make: the lede, then the surfaces the one
@@ -941,7 +736,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, adr-check, tagline-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — ADR-0018. Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, tagline-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\". Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet
@@ -951,13 +746,10 @@ mise run deps-check
 mise run generate-check
 mise run impact-check
 mise run eject-check
-# The two gates here that check prose rather than code, and they are in this
-# list rather than beside it for the reason the others are: docs/adr is where
-# the reasoning behind this codebase lives, and a record whose status is a word
-# the directory does not use is one a reader cannot weigh. The tagline is the
-# first sentence anyone reads about this project, and it is written out by hand
-# in four places that nothing links.
-mise run adr-check
+# The gate here that checks prose rather than code, in this list rather than
+# beside it for the reason the others are: the tagline is the first sentence
+# anyone reads about this project, and it is written out by hand in four
+# places that nothing links.
 mise run tagline-check
 mise run test-race
 mise run test-ts
@@ -965,8 +757,9 @@ mise run test-dart
 mise run test-cli
 # Last because they are the slowest and the only ones needing Docker. It is in the
 # gate rather than beside it because a check nobody remembers to run is one this
-# project has already lost once: ADR-0014's round-trip was measured by hand, and
-# the scripts that measured it are gone.
+# project has already lost once: the "Migrations and import" round-trip in
+# docs/architecture.md was measured by hand, and the scripts that measured it
+# are gone.
 mise run test-pg
 mise run test-demo
 mise run test-fx
@@ -999,6 +792,6 @@ npm run build
 '''
 
 [tasks.site-check]
-description = "Report whether docs/guide and docs/adr can be published as they stand, without building. Fails on a link the rewriter has no rule for, on a page with no H1 to take a title from, and on a page missing from the sidebar order. Needs no npm install."
+description = "Report whether docs/ can be published as it stands, without building. Fails on a link the rewriter has no rule for, on a page with no H1 to take a title from, and on a page missing from the sidebar order. Needs no npm install."
 dir = "site"
 run = "node scripts/sync-docs.mjs --check"

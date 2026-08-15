@@ -8,7 +8,7 @@ sometimes a train tunnel.
 `codegen` emits a Dart client for all three, from the same schema declaration the
 Go models come from. It is [the TypeScript client](../typescript/README.md) in a
 second language, with the three differences the language forces —
-[ADR-0031](../adr/0031-dart-client.md) is where those are argued.
+[ADR-0031](../architecture.md#dart-client) is where those are argued.
 
 ## Turning it on
 
@@ -133,7 +133,7 @@ wants to store.
 A column carrying `Needs(...)` never arrives on a create or update response —
 its expression depends on who is asking, and a write has no per-request bind to
 resolve that with, so the key is absent
-([ADR-0041](../adr/0041-computed-fields.md)). Lazy decoding means a getter for
+([ADR-0041](../architecture.md#computed-fields)). Lazy decoding means a getter for
 it would still compile against the plain row class and only fail at
 `MissingColumn` the first time something called it, which is the same
 promise-and-fail-later shape as an unselected column, only with no `select` to
@@ -259,7 +259,7 @@ An immutable column has no method here at all — it is settable once, at create
 
 Riverpod providers, BLoCs, widgets, a client object, a pub package. A generated
 provider is a framework baked in and the thing people copy out and edit, which
-is the same reason [ADR-0028](../adr/0028-typescript-client.md) refuses to
+is the same reason [ADR-0028](../architecture.md#typescript-client) refuses to
 generate React hooks.
 
 There is also no cache-key factory, which the TypeScript client does emit. That

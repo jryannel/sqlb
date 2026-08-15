@@ -5,7 +5,7 @@
 //
 // It carries no per-application knowledge — no row label, no field order, no
 // widget hints — because a raw grid over declared columns needs none of
-// that. That is the whole argument in [docs/adr/0053] in the parent module:
+// that. That is the whole argument in [the parent module's architecture doc]:
 // a *curated* admin (Django's ModelAdmin, picking "title" over "id" for a
 // row) has to guess something the manifest deliberately withholds, but an
 // uncurated one (Convex's dashboard, a spreadsheet over raw rows addressed
@@ -33,5 +33,5 @@
 // example_trace_test.go, and point whatever it exports at Uptrace, Jaeger,
 // or a Grafana dashboard.
 //
-// [docs/adr/0053]: https://github.com/jryannel/sqlb/blob/main/docs/adr/0053-the-manifest-describes-what-cannot-be-guessed.md
+// [the parent module's architecture doc]: https://github.com/jryannel/sqlb/blob/main/docs/architecture.md#the-manifest-describes-what-cannot-be-guessed
 package studio

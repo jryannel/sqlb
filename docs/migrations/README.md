@@ -62,7 +62,7 @@ column the skipped statement never added.
 A rename is indistinguishable from a drop plus an add when only the before and
 after states are known, and inferring one from a similar name and type destroys
 data whenever the inference is wrong. So you declare it
-([ADR-0014](../adr/0014-migrations-and-import.md)):
+([ADR-0014](../architecture.md#migrations-and-import)):
 
 ```go
 schema.Text("email_address").RenamedFrom("email")
@@ -170,5 +170,5 @@ for a decade. Three places are version sensitive:
   that is a clean migration and a broken client at once
 - [Declaring tables](../schema/README.md) — the declarations these diffs are
   computed from
-- [ADR-0014](../adr/0014-migrations-and-import.md) — why renames are declared,
+- [ADR-0014](../architecture.md#migrations-and-import) — why renames are declared,
   and why the history beats production as a source of truth

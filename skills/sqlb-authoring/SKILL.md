@@ -12,7 +12,7 @@ same question every session pays a source read to answer, because prose in
 It is **not** the *consuming* direction: which columns *this project's*
 schema actually declared `Filterable` on is a different, per-project question,
 answered by the generated `sqlb-schema` skill (`Options.SkillDir`,
-[ADR-0049](../../docs/adr/0049-the-skill-is-generated.md)) — load that one
+[ADR-0049](../../docs/architecture.md#the-skill-is-generated)) — load that one
 instead when the question is "can I filter `tasks.author_id`", not "does
 `Filterable` exist". This skill can be hand-maintained where that one cannot:
 the DSL's vocabulary is the same in every repository, so there is no
@@ -169,8 +169,8 @@ system := sqlb.NewRegistry()  // nothing registered — no rules apply
 tx.WithHooks(system)
 ```
 
-Documented at `db.go:527-530` and demonstrated at
-[`docs/adr/0020-transaction-scoped-handle.md:33`](../../docs/adr/0020-transaction-scoped-handle.md)
+Documented at `db.go:527-530` and demonstrated in
+[the transaction-scoped-handle decision](../../docs/architecture.md#transaction-scoped-handle)
 (`tenant := db.WithHooks(sqlb.NewRegistry()) // hooks: scoped to this
 handle`). `db.go` prefers `Update.One` over `Update.Exec` on the escalated
 handle so that matching nothing refuses rather than silently committing
@@ -222,8 +222,8 @@ support in the builder yet — reach them with `Raw`). Composite primary keys
 aren't representable (a row is addressed by one column; `UniqueIndex` is the
 named workaround). Range types, `EXCLUDE USING gist`, and `tsvector` full-text
 search (`?search` is `ILIKE`, not `to_tsquery`) are the same shape of gap.
-These are ADR-backed decisions, not oversights — check `docs/adr/` before
-proposing a builder extension for one. `sqlb-queries` has the fuller list and
+These are ADR-backed decisions, not oversights — check architecture.md's
+Decisions section before proposing a builder extension for one. `sqlb-queries` has the fuller list and
 the reasoning.
 
 ## What this file does not say

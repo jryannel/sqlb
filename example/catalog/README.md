@@ -91,11 +91,11 @@ predicate `filter.go`'s `?search` fan-out compiles every `Searchable` column
 down to (`sqlb.F(col.Name).Contains(term)`, `filter/filter.go`). It finds a
 substring anywhere in the name, case-insensitively, and nothing else: no
 stemming, no ranking, no index required. That is
-[ADR-0037](../../docs/adr/0037-search-is-ilike-until-it-cannot-be.md)'s
+[ADR-0037](../../docs/architecture.md#search-is-ilike-until-it-cannot-be)'s
 decision, written as a passing test instead of a paragraph. Deliberately not
 built here: a ranking model, relevance tuning, a trigram index, the `tsvector`
 column ADR-0037 leaves for a later record, or the vector column
-[ADR-0026](../../docs/adr/0026-vectors-declare-their-index.md) leaves open.
+[ADR-0026](../../docs/architecture.md#vectors-declare-their-index) leaves open.
 Widening past ILIKE is a decision for one of those records to make, not a gap
 this example papers over.
 

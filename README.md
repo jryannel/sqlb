@@ -13,7 +13,7 @@ Nothing downstream is written by hand, so nothing drifts out of step.
 **[Documentation](https://jryannel.github.io/sqlb/)** ·
 [Quickstart](https://jryannel.github.io/sqlb/start/quickstart/) ·
 [API reference](https://pkg.go.dev/github.com/jryannel/sqlb) ·
-[Decision records](https://jryannel.github.io/sqlb/adr/)
+[Decision records](https://jryannel.github.io/sqlb/project/architecture/#decisions)
 
 ## Why
 
@@ -81,7 +81,7 @@ compiler, one bind-parameter discipline, one set of hooks — two producers.
   on [pgx](https://github.com/jackc/pgx) and takes nothing else; a CI gate fails
   on anything that is not pgx or something pgx itself pulls in. That is a
   deliberate reversal — sqlb used to depend on the standard library alone, and
-  [ADR-0040](docs/adr/0040-the-driver-is-a-dependency.md) says what it bought:
+  [ADR-0040](docs/architecture.md#the-driver-is-a-dependency) says what it bought:
   sqlb writes join a `pgx.Tx` your own code opened, arrays need no codec, and
   pgvector's binary format is reachable. Only the REST adapter pulls in
   [Huma](https://huma.rocks), and only if you use it. The generated TypeScript,
@@ -113,7 +113,7 @@ sqlb eject ./schema                   # the way out: the schema as SQL, the reso
 The argument is the package that declares your schema, and the package says what
 to emit and where by exporting one function. Because the schema is Go, `sqlb`
 compiles a driver against your module to read it — see
-[ADR-0032](docs/adr/0032-sqlb-command.md) for why that is forced and what it
+[ADR-0032](docs/architecture.md#sqlb-command) for why that is forced and what it
 costs.
 
 `generate` and `check` need no database. `migrate` works out the current schema
@@ -167,19 +167,19 @@ server over the manifest.
 | [Examples](https://jryannel.github.io/sqlb/examples/) | Six worked applications, and what each one proves |
 | [Reference](https://jryannel.github.io/sqlb/reference/) | Filter operators, column types, capabilities, codegen options, CLI, rejections |
 | [Architecture](https://jryannel.github.io/sqlb/project/architecture/) | How the pieces fit, the request path, where safety lives |
-| [Decision records](https://jryannel.github.io/sqlb/adr/) | What was decided, why, and what would change our mind |
+| [Decision records](https://jryannel.github.io/sqlb/project/architecture/#decisions) | What was decided, why, and what would change our mind |
 | [`example/recipes`](example/recipes/) | Eighty-odd small examples, one file per aspect — the place to look when you know what you are building and need to know how one piece is spelled |
 | [`example/blog`](example/blog/) | A worked schema and everything codegen emits from it |
 | [`example/tasks`](example/tasks/) | A multi-tenant task manager: auth, migrations, a runnable server, and a generated TypeScript client, Dart client and CLI |
 | [`example/fxapp`](example/fxapp/) | The same pieces assembled by uber-go/fx on the [`fxkit`](example/fxapp/fxkit/) glue — copyable, not importable: hooks arriving through a value group, a pluggable auth module behind the principal seam, and a resource that refuses to mount without its hooks |
-| [`example/computed`](example/computed/) | Four ways to get a derived value out of Postgres — generated columns, trigger counters, projected expressions, views — and where sqlb's ceiling is today ([ADR-0041](docs/adr/0041-computed-fields.md)) |
+| [`example/computed`](example/computed/) | Four ways to get a derived value out of Postgres — generated columns, trigger counters, projected expressions, views — and where sqlb's ceiling is today ([ADR-0041](docs/architecture.md#computed-fields)) |
 | [`example/evolve`](example/evolve/) | A schema that changed five times: what is free, what destroys data, and the rename that is a clean migration and a broken client at once ([the walkthrough](docs/migrations/refactoring-a-database.md)) |
 | [`example/withsqlc`](example/withsqlc/) | sqlb and sqlc over one schema, plus one list endpoint in [four stages](docs/refactoring-from-sqlc.md) from static SQL to a generated resource |
 | [`example/meter`](example/meter/) | An arithmetic upsert under real concurrency, the composite-key workaround it needs, and the `date_trunc`/empty-aggregate traps a metering chart hits first ([docs/special-cases.md](docs/special-cases.md#2-meter--the-write-is-an-increment)) |
 | [`example/rooms`](example/rooms/) | An `EXCLUDE` constraint stopping double-booked rooms under contention, and the silent-zero-rows timestamptz day-filter trap beside it ([docs/special-cases.md](docs/special-cases.md#4-rooms--two-bookings-cannot-overlap)) |
 | [`example/vault`](example/vault/) | A table whose entire payload is `Hidden`: a generated read surface, no generated write surface at all, and the hand-written endpoint that fills the gap ([docs/special-cases.md](docs/special-cases.md#5-vault--the-row-whose-payload-only-go-may-write)) |
 | [`example/catalog`](example/catalog/) | A self-referencing category tree with a real foreign key via `TableDef.AddField`, and where `ILIKE` search stops on purpose ([docs/special-cases.md](docs/special-cases.md#6-catalog--the-tree-and-where-search-stops)) |
-| [`example/outbox`](example/outbox/) | A competing-consumers job queue — `FOR UPDATE SKIP LOCKED`, retry backoff, dead-letter — explicitly one worked answer rather than a format sqlb ships ([ADR-0012](docs/adr/0012-change-feed-outbox.md)) |
+| [`example/outbox`](example/outbox/) | A competing-consumers job queue — `FOR UPDATE SKIP LOCKED`, retry backoff, dead-letter — explicitly one worked answer rather than a format sqlb ships ([ADR-0012](docs/architecture.md#change-feed-outbox)) |
 | [`example/tasks-evolved`](example/tasks-evolved/) | Six non-additive schema changes in a row against live data — a rename, a NOT NULL backfill, a destructive drop, an index build that fails and leaves an invalid index behind ([docs/special-cases.md](docs/special-cases.md#1-tasks-evolved--the-second-year)) |
 
 ## Development

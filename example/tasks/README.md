@@ -52,7 +52,7 @@ schema or install [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7).
 | [`app/auth_routes.go`](app/auth_routes.go) | Register and login: the endpoints that establish the identity everything else is scoped by. |
 | [`app/hooks.go`](app/hooks.go) | Also where the comment invariant lives: two writes in one transaction, and `AfterCommit` for the side effect. |
 | [`app/events.go`](app/events.go) | The change feed. The one path a `BeforeQuery` hook does not reach, and the filter that closes it. |
-| [`app/admin.go`](app/admin.go) | A worked cross-tenant admin surface: `/admin/*`, hand-mounted per [ADR-0050](../../docs/adr/0050-reachability-is-a-property-of-the-mount.md), over a handle that releases the `"tenant"` scope [ADR-0054](../../docs/adr/0054-a-named-scope-is-releasable-at-the-mount.md) names hooks.go's workspace predicate under. `auth.RequireAdmin` is the route half of the boundary; `cmd/mint-admin` is how the token gets minted. Not schema-declared — see the file's doc comment for why `studio` can't browse it yet. |
+| [`app/admin.go`](app/admin.go) | A worked cross-tenant admin surface: `/admin/*`, hand-mounted per [ADR-0050](../../docs/architecture.md#reachability-is-a-property-of-the-mount), over a handle that releases the `"tenant"` scope [ADR-0054](../../docs/architecture.md#a-named-scope-is-releasable-at-the-mount) names hooks.go's workspace predicate under. `auth.RequireAdmin` is the route half of the boundary; `cmd/mint-admin` is how the token gets minted. Not schema-declared — see the file's doc comment for why `studio` can't browse it yet. |
 | [`cmd/migrate/main.go`](cmd/migrate/main.go) | The generated baseline, plus three things the DSL cannot express. |
 | [`web/`](web/) | The generated TypeScript client, and the hand-written transport it takes. The schema reaches the browser without a second declaration. |
 | [`mobile/`](mobile/) | The generated Dart client, plus the cursor pager an infinite-scrolling list needs. The same schema reaches a phone. |
@@ -161,7 +161,7 @@ built rather than handing you a router — and `POST /auth/login` is called from
 the same file, because it is not a table and no schema generator will ever
 produce it.
 
-Run `mise run test-ts` to typecheck it. [ADR-0028](../../docs/adr/0028-typescript-client.md)
+Run `mise run test-ts` to typecheck it. [ADR-0028](../../docs/architecture.md#typescript-client)
 is the record.
 
 ## And so is the Dart client
@@ -198,7 +198,7 @@ an offset counter, once per screen.
 [`mobile/lib/refusals.dart`](mobile/lib/refusals.dart) asserts twenty-one
 refusals the way `refusals.ts` asserts seventeen, using the `unnecessary_ignore` lint as
 Dart's `@ts-expect-error`. Run `mise run test-dart`;
-[ADR-0031](../../docs/adr/0031-dart-client.md) is the record.
+[ADR-0031](../../docs/architecture.md#dart-client) is the record.
 
 ## And so is the CLI
 
@@ -230,7 +230,7 @@ CLI has no command for, the same asymmetry `web/src/api/http.ts` has.
 
 Run `mise run test-cli` to build it and exercise the wire format against an
 `httptest` server; no Docker.
-[ADR-0030](../../docs/adr/0029-go-cli.md) is the record.
+[ADR-0030](../../docs/architecture.md#go-cli) is the record.
 
 ## Two things sqlb does not do that this example works around
 
@@ -248,7 +248,7 @@ soft delete therefore do not expose `OpDelete`; the read hooks add
 What the declaration does do is oblige the hook to exist: a resource over a
 table declaring a soft delete, or a `Scoped` column, does not mount until the
 registrations its operations need are on the registry
-([ADR-0030](../../docs/adr/0030-declared-scope-is-required.md)). The hooks in
+([ADR-0030](../../docs/architecture.md#declared-scope-is-required)). The hooks in
 this example predate that check and satisfy it unchanged, which is the reason
 the check is shaped the way it is.
 
@@ -305,7 +305,7 @@ go run ./cmd/migrate -force    # migrations, from the schema
 
 `go generate ./...` runs the first line, because that is the directive in
 [`taskschema/sqlb.go`](taskschema/sqlb.go) — which is also where this example
-declares what it emits and where it lands ([ADR-0032](../../docs/adr/0032-sqlb-command.md)).
+declares what it emits and where it lands ([ADR-0032](../../docs/architecture.md#sqlb-command)).
 There is no `cmd/gen` any more; the whole of it was that declaration wrapped in
 flag parsing.
 

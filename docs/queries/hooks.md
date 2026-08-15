@@ -82,7 +82,7 @@ out of the request body.
 
 The check proves a hook exists, not that it is right. That is worth knowing
 before relying on it, and it catches the case that actually happens: the table
-somebody added last week. [ADR-0030](../adr/0030-declared-scope-is-required.md)
+somebody added last week. [ADR-0030](../architecture.md#declared-scope-is-required)
 has the reasoning, including why the predicate is not generated for you.
 
 [`example/tasks/app/hooks.go`](../../example/tasks/app/hooks.go) is this taken
@@ -165,7 +165,7 @@ the same unit of work have written but not yet committed.
 The gap that remains is narrower and deliberate: `BeforeUpdate` cannot read the
 assignments it was handed, so a rule that depends on what a column is *becoming*
 belongs in a `BEFORE` trigger.
-[ADR-0021](../adr/0021-hooks-receive-an-event.md) records why the event types
+[ADR-0021](../architecture.md#hooks-receive-an-event) records why the event types
 that would have closed it are not being built.
 
 What has landed from that record is the transaction: `rest.Resource` wraps every
@@ -332,7 +332,7 @@ a decision about the resource's hooks, not only about its latency.
 
 This is in-process and at-most-once. A callback that never ran because the
 process died leaves no trace — that is what a transactional outbox is for, and
-it is not built ([ADR-0012](../adr/0012-change-feed-outbox.md)).
+it is not built ([ADR-0012](../architecture.md#change-feed-outbox)).
 
 ## Reading your own writes
 
@@ -390,7 +390,7 @@ handler. `ForUpdate`, `ForShare` and `SkipLocked` are on
 
 `On[T](r)` registers into the registry you hand it, and `db.WithHooks(r)` is
 how a handle acquires it. There is no process-wide registry to fall back on
-([ADR-0047](../adr/0047-no-default-hook-registry.md)) — a handle built by
+([ADR-0047](../architecture.md#no-default-hook-registry)) — a handle built by
 `sqlb.New` starts with an empty one of its own, so the rules in force are a
 property of how the handle was assembled rather than of what ran first.
 
@@ -402,7 +402,7 @@ One consequence worth knowing: an `Executor` that is not a `*sqlb.DB` — a raw
 pool, a borrowed `pgx.Tx` — carries no registry, so a statement issued against
 one runs unconfined. That is why models whose rows must not be read unscoped
 declare `Scoped`, which refuses the mount rather than trusting the call site
-([ADR-0030](../adr/0030-declared-scope-is-required.md)).
+([ADR-0030](../architecture.md#declared-scope-is-required)).
 
 ### The second registry is not only for tests
 

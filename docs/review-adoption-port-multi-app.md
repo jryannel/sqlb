@@ -3,12 +3,12 @@
 > **Status: all six findings are triaged**, in
 > [release-1.0.md stream G](release-1.0.md#g-port-findings-triaged--two-land-four-are-written-down).
 > Finding 1 is the driver, and it is decided —
-> [ADR-0040](adr/0040-the-driver-is-a-dependency.md) takes option (b) of this
+> [ADR-0040](architecture.md#the-driver-is-a-dependency) takes option (b) of this
 > report's *Recommended next steps*: the platform moves, rather than sqlb growing
 > a second path. Finding 2 lands before 1.0. Finding 3 is answered by
-> [ADR-0034](adr/0034-one-column-addresses-a-row.md), which this report's evidence
+> [ADR-0034](architecture.md#one-column-addresses-a-row), which this report's evidence
 > moved off the 1.0 blocker list. Finding 4 is answered by
-> [ADR-0007](adr/0007-generated-rest-handlers.md); 6 is scheduled for 1.1; 5 is
+> [ADR-0007](architecture.md#generated-rest-handlers); 6 is scheduled for 1.1; 5 is
 > the platform's.
 
 **The subject is anonymised.** It is the same `subject-mono` as

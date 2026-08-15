@@ -74,12 +74,12 @@ percentage of an application.
 
 **Refuse** is where most of the design effort has gone, and it produces no code
 at all. A schema that says rows are confined obliges a hook, and a resource
-without one does not mount ([ADR-0030](adr/0030-declared-scope-is-required.md)).
+without one does not mount ([ADR-0030](architecture.md#declared-scope-is-required)).
 A capability nobody declared is a 400 naming what would have been accepted. A
 hook predicate that cannot be requalified onto a join alias fails the query
 rather than being dropped. A gap a layer below the declaration can see is
 reported rather than worked around
-([ADR-0051](adr/0051-a-gap-in-the-declaration-is-reported.md)). This is the
+([ADR-0051](architecture.md#a-gap-in-the-declaration-is-reported)). This is the
 property that separates a dynamic API from pointing PostgREST at your database,
 and it is the reason a release can consist almost entirely of things the library
 now declines to do.
@@ -113,7 +113,7 @@ title, status, view_count)` lets a caller correct itself in one step. Schema
 validation behaves the same way, reporting every authoring mistake at once with
 the valid alternatives named.
 
-**The reasoning is written down.** The [decision records](adr/) exist so that
+**The reasoning is written down.** The [decision records](architecture.md#decisions) exist so that
 someone arriving cold — human or agent — can tell not just what the system does
 but which constraints are load-bearing and which are incidental. That is the
 difference between a change that fits and a change that has to be reverted.
@@ -129,7 +129,7 @@ Being explicit about these is as useful as the goals.
 - **Not an ORM.** No identity map, no lazy loading, no object graph persistence.
   You write queries; sqlb makes them safe and composable.
 - **Not portable across databases.** Postgres only, deliberately
-  ([ADR-0001](adr/0001-postgres-only.md)).
+  ([ADR-0001](architecture.md#postgres-only)).
 - **Not a replacement for hand-written SQL.** Reporting queries, recursive CTEs
   and window functions belong in SQL. `Raw` is a supported escape hatch, not an
   admission of failure, and sqlb should stay useful alongside sqlc rather than
@@ -160,12 +160,12 @@ than an off-the-shelf tool: the document can only say `array<string>` about a
 filter parameter, with the operator vocabulary in prose, so anything pointed at
 it produces a client where `?status=bogus.x` compiles. It is generated from the
 model instead, and stops at a key factory the change feed can consume — see
-[ADR-0028](adr/0028-typescript-client.md) and
+[ADR-0028](architecture.md#typescript-client) and
 [the guide](typescript/README.md). `example/tasks/web` is the worked one,
 and its refusals file asserts what must not compile.
 
 The same vocabulary reached Dart next, for a Flutter app
-([ADR-0031](adr/0031-dart-client.md), [the guide](dart/README.md)). Three of
+([ADR-0031](architecture.md#dart-client), [the guide](dart/README.md)). Three of
 ADR-0028's decisions had to go the other way there — camelCase members, a row
 view instead of a data class, and a cursor pager instead of a key factory — and
 each is a language fact rather than a preference, which is what makes the split
@@ -173,7 +173,7 @@ worth reading if a third language ever follows.
 
 The REST handlers turned out not to need generating at all: one generic function
 serves every model, while the *document* is built per resource from the model's
-capabilities. See [ADR-0007](adr/0007-generated-rest-handlers.md), which reversed
+capabilities. See [ADR-0007](architecture.md#generated-rest-handlers), which reversed
 on this after it was built.
 
 **2. Migrations.** DDL emission plus a diff against a live database. The
@@ -183,10 +183,10 @@ express what cannot be inferred, such as a column rename.
 
 **3. Relation expansion.** Both directions of one level are built and wired end
 to end by codegen. Forward is a LEFT JOIN and a `json_build_object` in the same
-statement ([ADR-0025](adr/0025-expansion-is-one-statement.md)); the reverse is a
+statement ([ADR-0025](architecture.md#expansion-is-one-statement)); the reverse is a
 correlated subquery per relation, capped and told whether there was more, because
 joining a collection would make a page's row count depend on the data
-([ADR-0022](adr/0022-references-declare-their-inverse.md)). A board of lists each
+([ADR-0022](architecture.md#references-declare-their-inverse)). A board of lists each
 showing its first few tasks is one request rather than an N+1 the client writes.
 
 What is left is nesting under a depth limit, and — the likelier ask — an order
@@ -197,15 +197,15 @@ quietly.
 Paging, which used to sit here as the other half of "a real screen", is done:
 `?cursor=` names a position rather than a distance, so a walk costs the same at
 any depth and does not repeat rows when the table is written to underneath it
-([ADR-0027](adr/0027-keyset-pagination.md)). Backwards paging is deliberately
+([ADR-0027](architecture.md#keyset-pagination)). Backwards paging is deliberately
 not built; the record says what would change that.
 
 **4. The change feed.** Built, in both halves. The SSE endpoint, the wire format
-and an in-process source landed first ([ADR-0045](adr/0045-the-stream-is-a-seam.md)),
+and an in-process source landed first ([ADR-0045](architecture.md#the-stream-is-a-seam)),
 and the transactional outbox behind them — a table written by the same
 transaction as the change, a dispatcher woken by `LISTEN/NOTIFY`, at-least-once
 across replicas — is the `outbox` package
-([ADR-0012](adr/0012-change-feed-outbox.md)). This is what closes the loop from
+([ADR-0012](architecture.md#change-feed-outbox)). This is what closes the loop from
 "dynamic views" to "live views".
 
 It remains the piece most likely to change shape once it meets real traffic, and
@@ -227,7 +227,7 @@ over the manifest. Small work, disproportionate effect on how well the system
 can be driven by a model.
 
 Part of this is built, and arrived from the other direction. The generated CLI
-([ADR-0029](adr/0029-go-cli.md)) is introspection an agent can *act* on rather
+([ADR-0029](architecture.md#go-cli)) is introspection an agent can *act* on rather
 than only read: one flag per filterable column, the operators its type accepts
 in the usage string, so `--help` is a statement of what the resource will accept
 and it costs no request. The manifest still describes more than the CLI exposes
@@ -252,4 +252,4 @@ Success is not feature count. Concretely:
 The failure mode to watch for is a generator that produces code people fight.
 If generated handlers get copied out and edited by hand, the seams are in the
 wrong place, and that is a signal to revisit
-[ADR-0007](adr/0007-generated-rest-handlers.md) rather than to add options.
+[ADR-0007](architecture.md#generated-rest-handlers) rather than to add options.

@@ -3,7 +3,7 @@
 The opinionated assembly of sqlb inside an [fx](https://github.com/uber-go/fx)
 application. **Copy it, don't import it**: it is a package of `example/fxapp`,
 not a published module, and
-[ADR-0044](../../../docs/adr/0044-the-container-is-an-adapter.md) records why
+[ADR-0044](../../../docs/architecture.md#the-container-is-an-adapter) records why
 the published version was reversed. Its opinions — chi, humachi, goose,
 `log/slog` — are load-bearing, so a library could only offer them
 take-it-or-leave-it where a file you own can be adapted.

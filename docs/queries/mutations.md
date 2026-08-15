@@ -108,7 +108,7 @@ which is what the same code looks like without it, and what no rename survives.
 
 This used to require registering a `SetErrorClassifier` at startup, because the
 constraint name is a struct field on the driver's error and sqlb depended on the
-standard library alone. Since [ADR-0040](../adr/0040-the-driver-is-a-dependency.md)
+standard library alone. Since [ADR-0040](../architecture.md#the-driver-is-a-dependency)
 sqlb reads `*pgconn.PgError` itself. If you registered a classifier for that
 reason, you can delete it; `SetErrorClassifier` remains for errors that reach
 sqlb wrapped past `errors.As`, and for an application that wants its own
