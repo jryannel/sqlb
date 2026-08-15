@@ -97,17 +97,11 @@ export default defineConfig({
         },
         {
           label: "Project",
-          // What it is for, how it is built, what it promises. Above the records
-          // because it is the shorter read and the one that frames them.
+          // What it is for, how it is built, what it promises — including the
+          // Decisions section in architecture.md, which used to be its own
+          // sidebar group of individually numbered records.
           collapsed: true,
           items: [{ autogenerate: { directory: "project" } }],
-        },
-        {
-          label: "Decision records",
-          // Collapsed: 32 records would otherwise push everything else off the
-          // screen, and someone arriving at the site is reading the guide first.
-          collapsed: true,
-          items: [{ autogenerate: { directory: "adr" } }],
         },
       ],
     }),

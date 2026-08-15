@@ -8,8 +8,8 @@
 //
 // What it does gate is links, and it does so by resolving them rather than by
 // matching patterns. A relative link means something different depending on
-// which directory the file sits in — `adr/0011-x.md` from docs/, `../adr/0011-x.md`
-// from docs/queries/, `0011-x.md` from docs/adr/ all name the same record — so each
+// which directory the file sits in — `architecture.md` from docs/,
+// `../architecture.md` from docs/queries/ name the same page — so each
 // link is resolved against the repository and then looked up:
 //
 //   published here    → an internal route
@@ -139,27 +139,6 @@ const SOURCES = [
       return this.sequence.indexOf(slug);
     },
     label: (slug) => (slug === "index" ? "Diffing and rendering" : null),
-  },
-  {
-    dir: "docs/adr",
-    route: "adr",
-    // Derived from the number the filename already carries: an ADR list is
-    // numbered by definition, so restating the sequence would be a second place
-    // to forget. The index leads; the template trails, recording no decision.
-    order(slug) {
-      if (slug === "index") return 0;
-      if (slug.startsWith("0000")) return 9999;
-      return Number.parseInt(slug.slice(0, 4), 10);
-    },
-    // "ADR-0016: A guard is not trusted until it has failed on purpose" is the
-    // right page title and too long for a sidebar row. The number carries the
-    // identity — every cross-reference in these docs uses it — so it leads.
-    label(slug, title) {
-      if (slug === "index") return "All records";
-      const m = /^ADR-(\d+|NNNN):\s*(.+)$/.exec(title);
-      if (!m) return null;
-      return m[1] === "NNNN" ? "Template" : `${m[1]} · ${m[2]}`;
-    },
   },
   {
     dir: "docs",
