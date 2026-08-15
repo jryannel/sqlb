@@ -2144,7 +2144,64 @@ text.
 
 ### Collections are flat
 
-_(pending merge from `docs/adr/0038-collections-are-flat.md`)_
+A resource mounts at one collection path, so a task belonging to a list is
+fetched as `GET /tasks?list_id=eq.<id>`, never `GET /lists/{id}/tasks` — no
+nested route is offered, and this record exists because a route shape is
+wire format: nested paths arriving later would be an addition, but if the
+flat form were ever going to move, that had to happen before the freeze,
+and nobody had written down that it wasn't. A parent filter composes with
+everything the request grammar already has — sorting, projection, search,
+paging, expansion, disjunction — where a nested path is a second entry
+point that would have to grow each of those separately or silently mean
+something different through it; a caller can't tell from a nested URL
+alone whether `?sort=` sorts the children. It's also already the
+documented answer to a question the schema asks on its own: a capped
+expansion says `has_more`, and the way to get the rest is the child's own
+endpoint filtered by the foreign key — the exact request a flat path
+already is. And a row commonly has more than one plausible parent — a task
+belongs to a list, a workspace, and an assignee — so a nested path forces
+a reader to guess which one is canonical, where a filter has no canonical
+parent because there isn't one. Keeping capability checking in one place
+matters too: `list_id` is reachable because the column itself declared
+`Filterable`; on a nested path, exposure becomes a property of the route
+instead, breaking the rule that capabilities live on the column.
+
+What's given up is real: a URL no longer reads as a hierarchy, which
+costs a human scanning an access log, and a request for a deleted parent's
+children becomes a plausible-looking empty page rather than a 404 —
+"no tasks yet" rendered for a list that no longer exists is the sharpest
+consequence and the one most likely to surface as a bug report. The
+nested form is refused outright rather than added as a convenience alias,
+because an alias is a second spelling of one request, exactly the kind of
+thing this project spends its refusals on elsewhere — every generated
+client, `--help` text, OpenAPI operation and cache key would then have to
+choose between the two, and readers would have to learn the choice didn't
+matter. An alias also can't answer whether the nested route enforces that
+the parent exists: if it does, it isn't really an alias; if it doesn't,
+the extra path segment buys nothing. A hand-written nested route stays
+entirely available to a project that wants one — write the handler, call
+the same filter parsing and application any generated handler uses, and
+add whatever parent check it wants — which is the escape hatch generated
+REST handlers were designed to leave open.
+
+The cost of change is asymmetric the useful way: adding a nested form
+later is additive, since no request that works today would change
+meaning and the flat path stays canonical, while removing the flat form
+once shipped would be expensive and isn't on the table, since every
+generated client, cache key and CLI command is already built on it — so
+the freeze binds only the one direction. One alternative is worth naming
+for what it would have cost: deriving nested routes automatically from a
+declared inverse relation. Elegant on paper, and rejected because it would
+make declaring a relation's inverse silently add a route, exactly the kind
+of coupling between a capability and its exposure this project's opt-in
+rule exists to prevent. Revisit if a port finds the flat form breaks a
+client it genuinely can't change — a mobile app with hardcoded nested
+paths and a slow release cycle, not merely "the URLs changed" — if the
+missing-parent 404 causes a real defect, which argues for a nested form as
+a genuinely different endpoint built with its own parent check rather than
+an alias; or if nested `?expand` ever lands, since the parent/child
+relationship would then gain a second representation and the ordering of
+the two features is worth reconsidering together.
 
 ### A schema edit is an api edit
 
