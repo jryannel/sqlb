@@ -336,7 +336,34 @@ copy-on-write.
 
 ### One ast two producers
 
-_(pending merge from `docs/adr/0003-one-ast-two-producers.md`)_
+A query gets built two ways — a developer writes it in Go, or a client sends
+filter parameters over HTTP — and giving each its own path would mean two
+escaping strategies, two places to enforce authorisation, and two things to
+keep in sync whenever a column changes. That is exactly where an injection
+risk would live. So there is one predicate AST. Go code produces it through
+`sqlb.F(...)`; the `filter` package produces it by parsing a request; both
+feed the same builder, compiler and hooks, and the filter parser never emits
+SQL text, only `sqlb.Pred` values. `filter` reads two wire formats — the URL
+grammar and a JSON expression tree — but they are two frontends over one
+compiler: both hand typed operands to a single internal `applyOp`, and a test
+asserts that equivalent filters compile to byte-identical statements.
+
+Bind-parameter discipline is enforced in exactly one place this way, and a
+`BeforeQuery` hook constrains HTTP-driven and hand-written queries
+identically, so tenant scoping cannot be bypassed by going through REST
+instead of Go. A new builder feature reaches the filter grammar for free, and
+adding a second wire format cost a parser rather than a second compiler. The
+price is that the AST has to serve both producers — it carries nodes the
+filter grammar will never emit and cannot be tuned narrowly for either side —
+and the filter parser must coerce types up front, since the AST holds typed
+Go values rather than strings.
+
+This is cheap to keep and expensive to reverse: splitting the producers is
+easy to do and hard to undo, since it reintroduces two escaping paths and two
+authorisation points, and the resulting bugs are security bugs that surface
+late. Revisit if the filter grammar needs an expression the builder cannot
+represent — it may need its own compilation step, but it must still
+terminate in `Pred` values.
 
 ### Schema as go dsl
 
