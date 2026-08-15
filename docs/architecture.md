@@ -1225,7 +1225,47 @@ weight since the relation name is already part of a frozen response shape.
 
 ### Mixins carry behaviour
 
-_(pending merge from `docs/adr/0023-mixins-carry-behaviour.md`)_
+An outside review recommended a mixin mechanism — a user-defined bundle of
+columns, hooks and capabilities — and half of that already existed. A column
+mixin is exported and works today: it's an ordinary function returning a
+bundle of fields, and the built-in timestamp and soft-delete helpers aren't
+privileged, they're two such functions that happen to ship in the package,
+composable with a user-written one. What doesn't exist is behaviour, and the
+gap was concrete rather than theoretical: the soft-delete helper's doc
+comment claimed the REST layer filtered out soft-deleted rows, and nothing
+did — a table declaring it and exposing a list operation returned deleted
+rows regardless, because a bundle contributes fields and nothing else, no
+index, no check constraint, no hook. The schema package can't fix this by
+registering the hook itself, for two structural reasons: it imports nothing
+from the query engine, which is what keeps codegen optional, and hooks are
+keyed by the generated Go model type, which doesn't exist yet at the point a
+schema is declared — there's only the table definition, not the struct
+codegen will produce from it. No loosening of the import graph changes that
+ordering.
+
+So the column mixin mechanism stays as it is and isn't extended to carry
+hooks; if a mixin is ever to carry behaviour, codegen is the carrier, since
+it's the only layer that knows both the declaration and the generated type,
+and generated code is at least committed, readable and deletable. That's
+recorded as a direction rather than built, so the next person doesn't
+re-derive that the schema package is the wrong place for it. What's fixed now
+is documenting plainly that the column mechanism is the extension point — it
+was never advertised as one, which is why the review read the built-in
+bundles as hardcoded rather than as an instance of something general — and
+letting a bundle contribute table-level declarations like an index or a
+check constraint alongside its columns, so a bundle wanting a partial index
+on its own column doesn't leave the caller to remember it separately.
+
+This buys a documentation fix at no design cost, since the underlying
+mechanism already existed, and keeps the schema package a description of a
+database rather than a place where runtime behaviour hides. The cost is that
+soft deletion stays a two-part declaration — a column bundle plus a
+separately hand-registered hook — and a table declaring only the first half
+is still wrong in a way nothing currently catches; a lint rule is the obvious
+fix and isn't written. Revisit if a second mixin wants behaviour, such as a
+multi-tenancy bundle wanting to travel with its own scoping hook — one
+instance is a bug fixed by documentation, two is a pattern that means the
+codegen-as-carrier direction stops being deferred.
 
 ### No annotation slot
 
