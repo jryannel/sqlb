@@ -1371,7 +1371,88 @@ batched second query becomes worth its inconsistency on a per-resource basis.
 
 ### Vectors declare their index
 
-_(pending merge from `docs/adr/0026-vectors-declare-their-index.md`)_
+A vector column had no support anywhere in the schema pipeline — the DDL
+type mapping had no case for it, index creation had no operator class, and
+introspection refused a `vector` column outright, which would drop an
+embedding on adoption of any existing database using one. And yet a raw SQL
+distance expression in an `ORDER BY` compiled and returned correct rows,
+which is the dangerous half of the problem rather than the reassuring one: it
+returns correct rows by sequentially scanning the table, and a feature built
+on an escape hatch that happens to work looks finished right up until the
+table is large. The type also can't be pushed off to a hand-maintained SQL
+mirror file the way a window-function query can, because a vector's
+dimension needs to be a value, not a parsed literal, and a real consumer of
+this pattern was already hand-maintaining a mirror schema file with a text
+sentinel its own SQL parser couldn't tolerate — the dimension wants to live
+in the schema DSL as a Go expression or the arrangement breaks for any
+project with an embedding column.
+
+The harder argument is that an approximate nearest-neighbor index isn't like
+a btree. A btree is an optimization the query planner may ignore without
+changing the answer; an ANN index changes the answer — recall is a tuning
+parameter, not a guarantee — serves only a narrow `ORDER BY <op> LIMIT k`
+shape, and is built for exactly one distance metric, so an index built for
+cosine distance queried with a different operator doesn't error, it
+sequentially scans, meaning a metric mismatch is a correct-looking answer at
+a thousand times the latency with nothing to notice it. Filters compound the
+danger silently: an ANN scan finds its k candidates first and applies a
+`WHERE` clause after, so a filtered search can come back short of what was
+asked for with no error at all — and this isn't hypothetical, it's a
+deployed shape found in a related codebase's production index, narrowed by
+several per-request filters with no scan tuning anywhere. Measuring the
+physical claims against a real pgvector installation confirmed the
+mechanism, while also correcting the framing: recall varies with the corpus,
+the planner's own costing, and the ANN index's own build randomness, so no
+recall percentage measured here is a transferable fact about pgvector, only
+about that one run. The planner may also simply decline the index under a
+selective filter and fall back to an exact scan — which is not a
+reassurance, since it makes the silent under-return conditional on
+statistics nobody is watching, the same query complete on one database and
+quietly partial on another.
+
+So a vector column declares its dimension as part of its type, and an index
+is a separate, optional decision that carries its metric with it. The
+unindexed configuration is complete on its own — `Searchable()` with no
+index is the right shape at small scale, giving an exact, correct, slower
+scan — and adding an index is a second decision taken later, once exact
+search stops being fast enough. The metric lives with the index, not with a
+query, and asking for a metric no declared index serves is refused at build
+time naming the ones that are, because the failure this prevents is invisible
+in results and shows up only as a latency graph nobody thought to check. HNSW
+is the default index kind, because an alternative one clusters nothing when
+built against an empty table, and a migration-generated index runs at
+exactly that moment. Which filters may accompany a search depends entirely
+on whether there's an index: with none, any filter the model allows runs
+against an exact scan; with an index and filters known at declaration time, a
+constant predicate folds into the index's own `WHERE` and a variable one must
+be declared up front, refused otherwise; and with an index and filters that
+vary per request, the caller must explicitly opt into iterative scanning,
+whose honest promise is "try harder, and it may still come back short" rather
+than a fix — naming it as a fix would reintroduce the same silent failure
+behind a configuration flag. A similarity search is also its own operation,
+not a query parameter, both because a 1,536-dimension embedding doesn't fit
+comfortably in a URL and because paging into an approximate neighbor set
+isn't page six of anything meaningful. The embedding itself never crosses the
+wire — a vector column is unconditionally hidden from REST responses.
+
+This buys the schema staying the single source of truth for a project using
+embeddings, closing the same adoption loop every other column type gets, and
+it refuses the one mistake with literally no symptom — a metric that doesn't
+match its index — at build time instead of at query time. The cost is real:
+this is the largest surface added to the schema since relation expansion,
+justified by keeping one source of truth rather than by vector search being
+popular, and testing it honestly is harder than testing anything else here,
+since a recall percentage isn't a stable fact to assert on — the tests that
+exist assert on the shape of the query plan instead. Choosing to leave the
+indexed half unbuilt initially, while shipping the unindexed configuration as
+complete, means the riskiest part of the surface can be deferred or dropped
+entirely if nothing ever outgrows an exact scan. Revisit if a second metric
+per column is genuinely needed, which breaks the assumption that a distance
+expression can bind its vector once and serve projection, predicate and
+ordering together; if a caller needs the raw vector back over the wire for
+client-side re-ranking; or if the added surface shows up as bugs elsewhere
+faster than it earns its keep, in which case the fallback is cutting back to
+an opaque passthrough type at a tenth of the code.
 
 ### Keyset pagination
 
