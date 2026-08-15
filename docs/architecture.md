@@ -2952,7 +2952,63 @@ earn `Auto` a name field the way a check constraint earned `CheckName`.
 
 ### The skill is generated
 
-_(pending merge from `docs/adr/0049-the-skill-is-generated.md`)_
+An agent briefing itself off sqlb's docs and ADRs has a corpus, not a
+briefing, and the fact it most needs — which tables exist, which columns
+declared which capability, which resources are mounted where — is not
+knowable from any static file, because the schema *is* the surface and
+differs in every repository. That rules out the ecosystem's usual answer
+(Supabase ships two static skills that work because Supabase's Postgres is
+the same in every project) and argues instead for treating an agent skill
+like every other derived artefact: `sqlb generate` emits a project-specific
+`SKILL.md` from the same declaration everything else reads, and
+`generate-check` gates it the way it gates the TypeScript client or the
+manifest. Being gated is the load-bearing half — a skill that has drifted
+from the schema is worse than none, since it is confidently wrong about the
+one thing it exists to know, and generating it is the only version of the
+idea that structurally cannot drift. Two things stay hand-maintained rather
+than generated, precisely because they are not per-project facts: the
+adoption procedure (a census run in the wrong order is the failure mode,
+not a wrong ratio) and the query boundary where the builder degrades and a
+model's instinct is to keep pushing rather than drop to `Raw` — nothing
+compiles that judgment call away, so it's written down because there's no
+check to prefer. A third hand-maintained skill, covering the DSL's general
+vocabulary (does `Col[T]` have `Lt`, what does `Scoped` enforce), joined
+later on the same reasoning: that vocabulary changes at release cadence,
+not per-project, so it belongs with the other static skills rather than as
+a second generator reading a registry for facts no single project's schema
+would exercise.
+
+The emitter carries structure — names, types, capability flags, paths —
+and deliberately not free text, because `introspect` pulls column comments
+off a live database, and an adopted database is not first-party source; a
+comment written by someone outside the project would otherwise become an
+instruction sitting in an agent's context. This is the one place the skill
+emitter differs from every other one, since DDL and OpenAPI are read as
+data and a skill is read as instructions. A test injects an
+instruction-shaped string as both a table and a column comment and asserts
+it never appears while the column is still described — proven the way a
+guard has to be, by first carrying the comment through on purpose and
+watching the test catch it.
+
+Measurement narrowed the claim this decision was built on rather than
+confirming it: across several rounds of agent A/B testing, a generated
+skill produced no measurable accuracy improvement over an agent reading the
+schema declaration directly — the "an agent gets this wrong" premise did
+not reproduce against a capable model given the source. What survived is a
+cost effect, consistently: roughly 3× fewer tool calls and 2-6× less wall
+clock, which is a smaller and more honest justification than the one this
+record started with, and the reason the emitter is kept is that it's cheap,
+gated, and buys latency — not that it prevents mistakes. One gated-but-wrong
+failure did surface in real adoption: a camelCase registry's skill told an
+agent that column names were the wire's JSON field names, which was false
+under that project's `WireCase`, and the gate stayed green because the
+skill faithfully rendered a manifest that was itself wrong — proof that
+being gated shows the file matches the schema, not that it's correct about
+it. Revisit if the latency benefit stops mattering (the emitter should go),
+if the generated content collapses toward "read the manifest" (point at the
+manifest instead of restating it in prose), or if free text turns out to be
+what actually changes an agent's output, which would mean the trust
+boundary has to be paid for rather than sidestepped by omission.
 
 ### Reachability is a property of the mount
 
