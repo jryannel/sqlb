@@ -2458,7 +2458,77 @@ decision and needs its own.
 
 ### The exit is generated
 
-_(pending merge from `docs/adr/0042-the-exit-is-generated.md`)_
+The sharpest objection an adoption review raised against sqlb wasn't a
+missing feature: sqlc and chi are cheap to reverse because they own almost
+nothing — sqlc's output is Go functions you can stop calling, chi is a
+mux — while sqlb owns the schema, the migrations, the wire format, the
+clients and the CLI, and reversing that is not a day-4 change. Optional
+codegen already makes the *runtime* half reversible — `Describe` over
+structs you already own, a two-method `Executor`, stop calling the builder
+without touching a model — but that leaves exactly the half the review
+named unaddressed: the schema DSL owning migrations, and a generated wire
+format two clients have already shipped against. A library with no
+consumers yet can't answer a concentration-risk objection with a promise,
+only with a working artefact — the way out, generated from the same
+declaration as the way in, kept working by the same CI that keeps
+everything else working.
+
+So `sqlb eject` writes a package depending on pgx and the standard library
+alone — DDL, row structs with the `sqlb` tags stripped, one function per
+statement with the SQL spelled out, a small shared file of request
+parsing and WHERE assembly, and plain `net/http` handlers — and deleting
+sqlb from `go.mod` afterward is a supported end state, not a hack. The
+fidelity line is drawn between the surface and the engine, not between
+"important" and "unimportant": CRUD and list at the same paths and status
+codes, the full one-fragment-per-operator set (`eq`, `ne`, `lt`, `lte`,
+`gt`, `gte`, `in`, `nin`, `isnull`, `notnull`, `between`, `like`, `ilike`,
+`contains`, `startswith`, `endswith`), sorting, search, paging and the RFC
+9457 error shape with its allow-lists all come out whole. What doesn't —
+keyset cursors, `?select`, `?expand`, the JSON filter tree, array and
+document operators — is refused by name with a 400 rather than silently
+dropped, because reproducing any of those in the exit would mean emitting
+a copy of sqlb's own engine: not an exit, a fork under a different import
+path. Two properties survive the loss of the machinery that implemented
+them, on purpose: opt-in capabilities stay opt-in, so a column that never
+declared `Filterable` still can't be filtered and a `Hidden` column still
+has no spelling to probe; and the mount-time obligation for a scoped or
+soft-deleting table stays compulsory, expressed as a required Go function
+instead of a hook registration — the same seam with the generic machinery
+removed, not a weaker version of it.
+
+The load-bearing half is that the exit is tested against the thing it
+left, not merely generated and trusted: a Postgres-backed test stands the
+ejected package up beside the generated resource it came from, points
+both at one database, sends both the same requests, and compares response
+bodies byte for byte, with the two known intentional differences
+subtracted explicitly rather than tolerated by a loose comparison. That
+check runs as its own verb, deliberately not folded into the drift check
+that gates ordinary generated code — generated code is stale when it
+disagrees with the schema and there's exactly one right answer, but an
+ejected package is *meant* to be edited, so the day a project takes the
+exit is the day it deletes that gate rather than satisfies it, and keeping
+the two checks as separate verbs keeps that distinction visible in CI
+rather than blurred into one. What this buys is a concentration objection
+answered with a demonstrably working server rather than a plan, plus a
+free byproduct: the comparison test makes the generated resource's wire
+independence checkable in a way this project's own compatibility promise
+otherwise couldn't be tested at all. What it costs is a second emitter
+that has to track the first — an operator added to the filter grammar and
+not to the exit is a gap the comparison test will catch, and one added to
+both is work done twice — and a fidelity boundary that has to stay
+honestly documented, since the moment the "what's not out" list is wrong,
+the feature is worse than not having it. Eject is a door, not a supported
+dual-run mode: nothing keeps an ejected package and the generated
+resources in step afterward, and nothing should, since the emitted code
+is meant to be read and edited rather than regenerated. Revisit if nobody
+ever actually runs it, which would make it a claim rather than a tool
+still worth keeping for the objection it answers, but not worth its
+current CI cost; if the very things refused as "engine" — cursors,
+`?expand` — turn out to be exactly what a real eject immediately
+hand-writes back in, meaning the fidelity line was drawn in the wrong
+place; or if someone asks for the shared support file as a standalone
+package, which is the design being rejected here and would deserve
+reconsidering if asked for twice.
 
 ### Declared actions
 
