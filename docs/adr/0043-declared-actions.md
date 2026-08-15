@@ -1,8 +1,8 @@
 # ADR-0043: A declared action generates the envelope, and the verb stays plain Go
 
-- **Status:** Working — built, and `example/tasks` completes a task through it
-  against Postgres. Additive: a schema that declares no verb generates what it
-  generated before, `Register`'s signature included
+- **Status:** Revisiting — the row-only shape is still what is built and what
+  `example/tasks` runs against Postgres, but the *What would change our mind*
+  trigger on a computed write response has fired; see the 2026-08-14 revision
 - **Confidence:** High that the gap is real and large — the adoption review
   measured verbs at 780 lines against 464 for all of CRUD on the same handlers,
   so the part sqlb does not generate is bigger than the part it does. High that
@@ -10,9 +10,10 @@
   failure mode this feature is most likely to walk into. Medium on the
   declaration's spelling, which is the part most likely to change on first
   contact. Medium on where the obligation lands. Low on collection actions,
-  which are the half of the feature the safety argument does not reach
+  which are the half of the feature the safety argument does not reach. Low on
+  the widened response shape decided 2026-08-14 — sketched, not built
 - **Decided:** 2026-07-31
-- **Last reviewed:** 2026-07-31
+- **Last reviewed:** 2026-08-14
 
 ## Context
 
@@ -238,10 +239,13 @@ gets away with it.
   the safety argument covers the minority of the feature and this record is
   mostly an ergonomics one — which is fine, but it should say so instead of
   leading with ADR-0030.
-- **Actions become a place to put reads.** A `GET` action, or a `POST` that
+- ~~**Actions become a place to put reads.** A `GET` action, or a `POST` that
   returns a computed report, means this is an RPC surface rather than a verb
   surface. That is a different feature with different questions about caching and
-  the query key, and it needs its own record.
+  the query key, and it needs its own record.~~ **Half fired.** The
+  computed-report half fired, for a write's own response rather than a read —
+  see the 2026-08-14 revision. The `GET` half has not: an action is still
+  POST-only, and this record still declines to become a general RPC surface.
 - **`Do` returning `*rest.Problem` makes applications import `rest` for their
   domain errors.** The escape hatch would have become a coupling, and the answer
   is a status-carrying error interface in a package with no HTTP in it.
@@ -369,3 +373,65 @@ them is this record arguing with itself.
   `sqlb.TxFrom` take their own, in an order the application owns.
   [docs/rest/actions.md](../rest/actions.md) says so under the `TxFrom` example,
   which is where the reader is at the moment they are handed the transaction.
+
+- 2026-08-14 — **The row-only response is being widened, narrowly, for the
+  write side.** [#196](https://github.com/jryannel/sqlb/issues/196) named the
+  concrete case this record's own trigger predicted: a quiz-grading action
+  (`Lesson.submit`, evidence from a real port) grades a `QuizAttempt` and wants
+  to answer `{passed, score}` in the same round trip. It can't — `run`
+  (`rest/action.go:268`) always returns `*itemOutput[T]`, and the doc comment
+  at `rest/action.go:218-221` says so outright: "answers 200 with the row." The
+  issue is explicit that it is evidence for this conversation and not a design
+  for it, which is what this entry is for.
+
+  **Decision: open the door, but only as far as the write side needs it.** The
+  fired trigger names two things and they carry different risk. A `GET`
+  action is still declined — nothing here proposes one, and the caching and
+  query-key questions this record raised for a *read* RPC surface are real and
+  still unaddressed. A `POST`'s response outgrowing the row is a smaller
+  thing: the request was already a write, already not cacheable the way a
+  `GET` response is, and the envelope already has the transaction open and the
+  mutated row in hand at the moment it marshals the answer. What #196 asks for
+  is not "let an action read arbitrary state" — it is "let the answer to the
+  write it just did say more than the row." That is a report attached to a
+  verb, not an RPC surface.
+
+  [ADR-0057](0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md),
+  decided the same day as this entry, already generalised the sibling case on
+  the read side: `rest.Query`'s `Do` returns `(Out, error)` for an arbitrary
+  `Out`, not `[]T`, at the `rest` package level — codegen still fixes it to
+  `[]T`, which that record names as its own open cost, but the `rest`
+  primitive underneath does not assume the response is the model. Widening
+  `Action`'s item form the same way — `do` becoming
+  `func(ctx, *T, In) (Out, error)` in place of `func(ctx, *T, In) error`, with
+  `Out` defaulting to `row[T]` so every action declared today keeps compiling
+  and keeps answering exactly what it answers now — is the same move applied
+  to the write side, not a new one invented for this issue.
+
+  **What this does not settle**, and is future work rather than this entry's
+  job to finish: whether `Out` needs a declaration in the field vocabulary the
+  way `Body` does, or stays an application type outside the schema's reach —
+  and if it stays outside, this record's own reasoning against that choice for
+  `Body` applies again: a shape sqlb cannot see is a TypeScript client method
+  typed `unknown`, which is the drift this whole feature exists to close, not
+  reopen. Whether `Writes` still persists from the mutated `*T` when `do` also
+  returns a separate computed `Out`, or whether the two are now one value.
+  Whether a widened action reaches `sqlb.json`, `restcompat`, and the
+  TypeScript, Dart and CLI emitters the way `Body` and `Writes` already do, or
+  ships Go-only the way `Query` currently does. And whether an action with a
+  widened `Out` is still one surface next to CRUD, or the first crack in that
+  boundary — this entry's answer is that it is still one surface, because the
+  envelope's fetch, lock, transaction and persist step are all unchanged and
+  only the final marshal is what `Out` touches, but that answer is worth
+  checking again once a second and third action actually reach for it, the
+  same test [ADR-0057](0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md)
+  applied to `Mutation` and found wanting.
+
+  Status moves to Revisiting rather than staying Working, because nothing
+  built changes today — `example/tasks` still runs the row-only shape against
+  Postgres — but the direction is decided and the record should read as under
+  active reconsideration rather than settled.
+  [#218](https://github.com/jryannel/sqlb/issues/218) tracks the
+  implementation; [#196](https://github.com/jryannel/sqlb/issues/196) is
+  closed by this revision, since its own stated scope was to be evidence for
+  this conversation, and that conversation has now happened.
