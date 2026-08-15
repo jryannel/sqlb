@@ -2655,7 +2655,74 @@ implementation.
 
 ### The container is an adapter
 
-_(pending merge from `docs/adr/0044-the-container-is-an-adapter.md`)_
+`example/fxapp` answers the first question anyone building on a
+dependency-injection container like uber-go/fx asks — where do the sqlb
+pieces go when a container assembles the application — with roughly four
+hundred lines of glue every fx adopter would otherwise rewrite: a pool and
+migration runner assembled from a value group, a hook registry assembled
+the same way, and an HTTP layer wiring a router, a Huma API and
+middleware. The first answer to what to do with that glue was to publish
+it as its own module, `sqlb/sqlbfx`, reasoning that an unowned de-facto
+contract (a value-group name a third-party module would have to guess),
+a boot-refusal guarantee that only reached as far as the example copied
+it correctly, and a per-application auth convention for "who is calling"
+all argued for a stable import path. That was reversed one day later, not
+because the three observations were wrong but because they weren't one
+problem: only one of them — the seam between "who is calling" and "what
+confines the query" — had a real second consumer, since a hand-written
+version of exactly that convention already existed elsewhere in this
+repository's own examples, predating the kit. The other two were solving
+for a hypothetical third-party author who didn't exist yet.
+
+So the assembly and the seam split into different treatments. The
+assembly — `example/fxapp/fxkit` — stays a package of the example: copy
+it, adapt it, own it, with no import path anyone outside this repository
+should use, because every line of it is a load-bearing opinion (chi,
+humachi, goose, `slog`) and opinions that specific are the wrong thing to
+put behind an import path a consumer can only take whole or refuse
+outright. An application on a different router or migration runner
+doesn't want a smaller version of this kit, it wants this same file with
+four lines changed — which publishing would prevent by converting an
+adaptable reference into a take-it-or-leave-it dependency, at the cost of
+a second `go.mod`, a second release tag, and a compatibility surface with
+no one yet depending on it. What a copy loses is enforcement: the boot
+refusal, the deterministic migration ordering and the explicit middleware
+order are written down as obligations in the kit's own doc comment and
+proven by a test a copier is expected to take along, rather than
+guaranteed by an import a compiler checks — weaker, and accepted as the
+right instrument for as long as the number of people writing their own
+shareable fx module stays at zero. The principal seam, by contrast, moved
+the opposite direction, into the engine itself as `sqlb.WithPrincipal` and
+`sqlb.PrincipalFrom[T]` — a stdlib-only context contract where middleware
+resolves credentials and scoping hooks read them back by type, with
+neither end naming the other. That's the half originally published in the
+wrong place: it already had a real second consumer, and a seam is small,
+opinion-free, and spelled directly by hooks that nobody regenerates, which
+is exactly why moving it later would be expensive and having exactly one
+of it is worth real cost to guarantee now. That split is the general rule
+this settled into: publish the seams, copy the assembly.
+
+A later trigger this record wrote for itself fired and, notably, didn't
+force the reversal back: a real multi-module adoption reported dozens of
+hand-written, near-identical migration-set providers and operation-set
+literals — exactly the volume that should make codegen want to generate
+the assembly. The predicted consequence — that generating against a
+container needs a published, stable import path to generate against —
+turned out false, because the proposed emitter shape names the *host's*
+own types as fully-qualified strings in `codegen.Options` rather than
+importing anything of the consumer's, so sqlb compiles against nothing
+container-specific and a wrong name is simply a compile error in the
+generated file. Generating for a container this way strengthens "publish
+the seams, copy the assembly" rather than reopening it — the emitter
+generates a fresh copy of the assembly for each consumer instead of
+importing one shared instance. Revisit if a second author actually writes
+a shareable fx-integration module meant to drop into someone else's
+module list, which is the buyer the published contract never had the
+first time; if two independent copies of the assembly drift into the same
+bug, which would mean the obligations belonged in a type rather than in
+prose; or if a non-fx consumer wants more than just the principal seam
+from the engine, which would mean the seam/assembly line itself was drawn
+in the wrong place.
 
 ### The stream is a seam
 
