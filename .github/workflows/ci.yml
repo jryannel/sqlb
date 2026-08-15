@@ -51,7 +51,7 @@ jobs:
       # that failed in the job summary instead of one opaque step.
       # No fmt-check step: formatting is reported by the gofmt formatter inside
       # `lint`, which sees strictly more than a tracked-files check could
-      # (ADR-0018).
+      # (docs/architecture.md, "Tooling scoped to tracked files").
       - run: mise run vet
       - run: mise run lint
       - run: mise run tidy-check
@@ -59,25 +59,21 @@ jobs:
       - run: mise run generate-check
       - run: mise run impact-check
       - run: mise run eject-check
-      # Needs neither Go nor a cache — git and awk over docs/adr — so it costs
-      # this job under a second. It is here because ADR-0040 carried a status
-      # outside the directory's vocabulary for ten days and only a person
-      # noticed, which is the case for a check rather than a paragraph.
-      - run: mise run adr-check
-      # Same shape and the same reason: git and tr over four tracked files, no
-      # Go and no cache. The tagline is the first sentence anyone reads about
-      # this project and it is written out by hand in four places that nothing
-      # links, so the copy the README stops making is one the site keeps making.
+      # git and tr over four tracked files, no Go and no cache. The tagline is
+      # the first sentence anyone reads about this project and it is written
+      # out by hand in four places that nothing links, so the copy the README
+      # stops making is one the site keeps making.
       - run: mise run tagline-check
       - run: mise run test-race
       # Node comes from mise.toml, like Go and golangci-lint. This is the gate
-      # ADR-0028 promised the TypeScript client would need: the emitted client's
-      # guarantees are enforced by tsc, so an unchecked one guarantees nothing.
+      # docs/architecture.md's "Typescript client" decision promised the
+      # TypeScript client would need: the emitted client's guarantees are
+      # enforced by tsc, so an unchecked one guarantees nothing.
       - run: mise run test-ts
       # And the third toolchain, for the same reason: the Dart client's
       # guarantees are enforced by `dart analyze`, so an unchecked one
       # guarantees nothing. The Dart SDK alone — the emitted client imports
-      # nothing, so no Flutter is installed here (ADR-0031).
+      # nothing, so no Flutter is installed here (docs/architecture.md, "Dart client").
       - run: mise run test-dart
       # In this job rather than the postgres one because the generated CLI
       # speaks HTTP: its tests drive the command tree against an httptest
