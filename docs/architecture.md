@@ -288,7 +288,24 @@ the way an ADR's body used to.
 
 ### Postgres only
 
-_(pending merge from `docs/adr/0001-postgres-only.md`)_
+sqlb targets Postgres, and only Postgres. The `Dialect` interface exists for
+placeholder style and identifier quoting, not for pretending to be portable.
+The features the design leans on are not evenly available elsewhere:
+`LISTEN/NOTIFY` for the change feed, jsonb aggregation for relation expansion,
+`RETURNING` on every mutation, `ON CONFLICT`, `SKIP LOCKED`, partial and GIN
+indexes, `ILIKE`. Supporting a second dialect would mean either dropping to
+the intersection of what both support or carrying per-dialect branches
+through the compiler, the schema DSL and the migration generator — and either
+way, no feature could assume the best primitive available anymore. Targeting
+one database is what keeps the compiler one small set of rules and lets
+mutations return their rows in a single round trip.
+
+The cost is asymmetric by design: narrowing further is free, but widening to
+a second dialect later is close to a restart, since every compiler assumption
+would need re-auditing and `LISTEN/NOTIFY` and jsonb expansion would need
+replacements. Revisit only if a concrete project on MySQL or SQLite needs
+supporting and cannot move, or if the `Dialect` seam turns out to leak beyond
+placeholder rendering and quoting.
 
 ### Queries are values
 
