@@ -1080,7 +1080,51 @@ identified but never measured.
 
 ### Transaction scoped handle
 
-_(pending merge from `docs/adr/0020-transaction-scoped-handle.md`)_
+`Executor` is the two-method subset — `Query` and `Exec` — that a transaction
+also satisfies, so a caller could always thread one through terminal calls,
+but nothing sat on top of that: no `WithTx`, so every caller wrote its own
+begin/commit/rollback and its own panic handling, and forgetting the
+rollback-on-panic leaked a connection holding an open transaction. Worse, the
+hook registry was a single package-level map, so hooks couldn't be scoped and
+a hook had no way to learn it was running inside a unit of work — a
+`BeforeQuery` needing rows written earlier in the same transaction would find
+the plain pool instead. The obvious plan deferred this to a future Go release
+that adds methods with type parameters, which is right about the ergonomics
+of a fluent `db.Query[T]()` call but wrong about the scoping: a handle holding
+an executor and a registry needs no new language feature, and waiting was not
+neutral, since every month added call sites written against the process-global
+registry.
+
+So `*sqlb.DB` is built now, made additive by having it satisfy `Executor`
+itself — no call site breaks, since every terminal already accepts the
+interface. `WithTx` commits on nil return, rolls back on error, and rolls back
+and re-raises on panic; it asserts the executor can begin a transaction rather
+than requiring that of the two-method `Executor` interface, so that stays
+frozen. Nesting joins rather than nests: `WithTx` called on a handle already
+inside a transaction runs on that same transaction and leaves the commit to
+the outermost call, so a function that opens a transaction stays callable from
+inside one. And a hook joins the unit of work through an explicit
+`TxFrom(ctx)` call rather than an implicit context read, which would make the
+connection a statement runs on invisible at the call site.
+
+This buys a multi-statement unit of work as one call with correct rollback
+semantics including on panic, hooks that can be scoped to a handle rather than
+reset globally between tests, and a hook that can tell it's inside a
+transaction and read what that transaction already wrote — none of which was
+expressible before. The cost is that the fluent ergonomics genuinely do need
+the language feature that was deferred, so callers still thread the executor
+through terminals explicitly; and hook resolution depends on the executor's
+*dynamic type*, so passing a raw pool where a `*DB` was intended silently
+falls back to the default registry, with nothing in the compiler able to
+catch it — the price of not breaking existing call sites. One trigger has
+already fired: the interface for "can begin a transaction" proved too narrow
+once callers turned up already holding an open transaction handle of their
+own, which is answered by redefining that interface alongside `Executor`
+rather than widening it, since the narrowness belonged to the driver rather
+than to this design. Revisit further if the dynamic-type hook resolution ever
+causes a real bug, at which point terminals should stop accepting a bare
+`Executor` for models with scoped hooks — a breaking change worth making only
+once it's actually happened.
 
 ### Hooks receive an event
 
