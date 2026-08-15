@@ -458,7 +458,51 @@ per-resource permissive mode that still excludes `Hidden`.
 
 ### Generated rest handlers
 
-_(pending merge from `docs/adr/0007-generated-rest-handlers.md`)_
+The REST surface could be one generic handler dispatching on the path, or a
+generated handler per resource with a typed filter struct and a precise
+OpenAPI operation. The apparent trade was boilerplate against client-side
+typing — a generic handler supposedly cannot describe itself precisely,
+because the filter grammar is compositional. But the grammar is
+compositional and the *columns are not*: they are finite, known at
+registration, and each admits a documented operator vocabulary. One query
+parameter per filterable column describes the surface exactly without
+describing the grammar, and [Huma](https://huma.rocks) makes this
+buildable — it keeps explicitly-set operation parameters and hands an input
+struct's `Resolve` the raw query values, so `filter.Parse` still owns
+validation.
+
+So sqlb uses one generic handler, instantiated per resource through
+generics: `rest.Resource[T, C, U]` registers the exposed operations for a
+model on a `huma.API`, and the OpenAPI operation is built per resource from
+`sqlb.Model`. Generics rather than reflection, specifically, because hooks
+are keyed by type — a reflective dispatcher holding a `reflect.Type` cannot
+call `On[T]()`, which is how tenant scoping stops being something each
+handler has to remember. Codegen emits only what generics cannot express:
+the request bodies. Create, patch and row are three different JSON schemas
+over one table, and no single Go type serves all three honestly, so
+`rest_gen.go` holds two body types per writable resource plus one
+`rest.Resource` call per exposed table. `rest` takes a `huma.API` rather
+than building a router, so the application keeps its own router and
+middleware.
+
+The result is end-to-end typing into the frontend — a filter that does not
+exist fails at the client's compile step, not as a runtime 400 — and adding
+a table costs one generated registration, with response schema, parameter
+list and rejection allow-list all deriving from the same capability flags so
+they cannot disagree. The cost is a dependency on Huma's shape, and on huma
+itself: it sets the module's Go floor at 1.25 for every consumer, which was
+weighed against the module graph cost and accepted, since sqlb had already
+given up "importing it costs nothing" the moment the driver became pgx
+rather than `database/sql`. Moving off Huma later would cost only the `rest`
+package — the engine, filter grammar, generated bodies and generated
+clients all read `sqlb.Model`, never the OpenAPI document — but the response
+and error shape (`{items, page, per_page, has_more, total}` and an RFC 9457
+problem document) is the genuinely expensive surface to change, since a
+generated client or an agent's retry logic depends on its exact structure.
+Revisit if the per-column parameter list gets unwieldy at realistic column
+counts — a fifty-column table documenting fifty parameters — which would
+argue for collapsing the rare ones behind a single `filter` parameter with
+looser typing.
 
 ### Hooks as domain seam
 
