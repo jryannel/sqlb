@@ -3169,7 +3169,71 @@ modifier design was right and this was the wrong axis.
 
 ### The manifest describes what cannot be guessed
 
-_(pending merge from `docs/adr/0053-the-manifest-describes-what-cannot-be-guessed.md`)_
+Django's admin is the one thing sqlb had no answer to, and the obvious
+move — a fifth emitter generating a UI beside the TypeScript and Dart
+clients — is wrong: a UI is HTML, CSS, a component vocabulary, a theme and
+a browser support matrix, none of which exist in this repository, and
+carrying one would tie a release cadence to frontend churn instead of the
+schema. The seam that already existed, `sqlb.json`, was missing a rule for
+what belongs in it: every field there happens to be something a client
+would otherwise get wrong, but nothing said so, which left the next
+addition with no test to pass. The test turns out to hinge on who the
+consumer is. An agent authoring an admin against the generated SDK is in
+the loop at authoring time and picks `title` over `id` without being told,
+baking the choice into ordinary source a human can edit and `tsc`
+reguards on every schema change; a generic runtime renderer pointed at
+`sqlb.json`, with no human in the loop, has no such guess available to it.
+So the manifest carries what a competent author cannot guess and would
+get wrong silently — opt-in capabilities (a guess is a 400), the derived
+wire spelling (a guess is a 400 that reads like a typo), an inverse
+relation declared on the far side of a reference (invisible from this
+table alone), a declared action (invisible in a CRUD surface, and its
+absence leads an agent to PATCH the status the action exists to own) —
+and carries nothing an author can decide and the compiler will check: no
+row label, no field order, no widget hint. What a caller may actually do
+also stays undescribed, and deliberately: hooks are code, not data, so no
+static document can report a caller's rights, and because a hook adds a
+predicate rather than vetoing a request, a row in another tenant reads as
+a 404, not a 403 — there is no permission registry to consult.
+
+A later request for a Convex-dashboard-style admin (schema, data,
+actions) tested this rule rather than reversing it. Convex's dashboard is
+a grid over raw rows addressed by primary key, with no `__str__` to
+guess — column types and enums render a cell, `references` renders a
+foreign key as a link, and the typed `Body` a declared action already
+carries is enough to render an invoke form without guessing a field the
+curated case would have had to guess. Every fact that shape needs was
+already in the manifest, on the same admission test as before: nothing
+authorable became required, because a grid over raw rows never asked for
+a row label in the first place. So sqlb carries this one — an uncurated
+data/schema/action browser, built and released as its own module off the
+engine's cadence, the same way `pgtest` already is. It calls the
+generated REST API rather than the database, which is what makes it safe
+to carry at all: fetching through the same endpoints inherits row
+scoping for free, exactly as `?expand=` does, in a way Django's admin
+does not give you without a per-model `get_queryset` override. That
+inherits the permission question rather than answering it — a browser
+authenticating as the caller shows only what the caller could already
+fetch, and an operator wanting a cross-tenant view needs a credential
+this design does not build. Logs stay out of scope for both the manifest
+and the browser on the same "instrument, don't carry" posture: `Executor`
+is already a traceable interface, and an application points the result
+at whatever OTel-reading tool it prefers rather than sqlb rendering spans
+itself.
+
+A curated admin — one that guesses a row label, a field order, a widget —
+stays authored per application either way; carrying one is the
+expensive, least-reversible direction, not technically but socially,
+since an admin that ships gets adopted and removing it breaks whatever
+was built around it. The uncurated browser is shipped deliberately as a
+separate module for the same reason, so that if the claim it rests on
+doesn't hold up, deleting it costs a module rather than an unwind inside
+the engine. Revisit if an admin written against `sqlb.json` — curated or
+the uncurated browser alike — reaches for a fact that isn't there, which
+names the field to add, or if two different clients guess the same thing
+differently (a TypeScript admin and a Dart app disagreeing on which
+column names a row), which would mean a label is a contract after all
+and this record sits on the wrong side of its own line.
 
 ### A named scope is releasable at the mount
 
