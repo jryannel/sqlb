@@ -784,7 +784,81 @@ would be the trigger to extract the AST behind `internal/` and accept the
 
 ### Migrations and import
 
-_(pending merge from `docs/adr/0014-migrations-and-import.md`)_
+Making the Go DSL the source of truth means something has to turn a schema
+edit into DDL, and something has to turn an existing database into a
+schema. A wrong answer here is destructive: a diff that mistakes a rename
+for a drop-and-add loses a column of production data, and it cannot tell
+the two apart from the schema alone. So migrations are generated, not
+applied — sqlb emits files and stops; it does not own a runner, track
+applied versions, or connect to a database to migrate anything. Goose is
+the default output format, with golang-migrate and plain SQL selectable and
+`Plain` as the escape hatch for runners sqlb doesn't ship. The format isn't
+cosmetic: goose's `NO TRANSACTION` directive is file-level, so a migration
+containing `CREATE INDEX CONCURRENTLY` would strip the rollback guarantee
+from every unrelated change sharing its file — which is why index changes
+get their own migration file, versioned to sort immediately after the one
+they depend on.
+
+The diff itself runs between two registries, not between a registry and a
+live database. Introspection produces the same `*schema.Registry` the DSL
+does, so `Diff(current, target) []Change` is a pure function, testable
+without a database — and the same machinery works pointed in either
+direction. Current state comes from replaying the checked-in migration
+history into a scratch database and introspecting *that*, which validates
+the history and catches drift as a side effect. Destructive changes are
+opt-in: dropping a column or table, narrowing a type, or adding `NOT NULL`
+without a default all render commented out, with the reason stated. A
+change that depends on one of those commented-out changes is commented out
+too — carrying `DependsOn` rather than `Destructive`, because it's
+premature rather than dangerous — since without that, a commented `ADD
+COLUMN` followed by a live `ADD CONSTRAINT` would fail the file partway
+through instead of being the no-op the guard intends. Lock hazards, by
+contrast, are stated rather than gated: a statement that rewrites or scans
+a table is emitted live, with the lock it takes and an expand/contract
+sequence named above it, because unlike a destructive change this is only
+*occasionally* slow, and how slow depends on a row count the schema doesn't
+have. `migrate.Unblock` can rewrite the lock-brief sequence — a scanning
+`ADD CONSTRAINT` into `NOT VALID` plus `VALIDATE`, for instance — but the
+caller decides whether to apply it, because the sequences aren't equivalent
+under failure: they can leave a binding-but-unvalidated constraint or an
+invalid index behind, where the plain statement leaves nothing.
+
+Renames are declared, never inferred — `.RenamedFrom("old")` for one
+release, and without it a rename is rendered as a drop and an add: lossy,
+but never silently wrong. Adoption is `sqlb import`, which reads
+`pg_catalog` and emits a `schema.go` with no capabilities, so the result
+describes the database exactly and exposes nothing over REST until
+capabilities are added by a deliberate edit; what import cannot represent,
+it reports, and an empty report is the claim that the registry describes
+the database completely. Reading the catalog is a separate package
+(`introspect`) from writing DDL (`migrate`), which is what keeps the diff a
+pure function, and formats are rendered in code rather than translated by
+an agent — the variation between runners is only about fourteen lines of
+syntax each, but what they share is semantics (file splitting, `Down`
+reversing `Up`, destructive statements staying commented, multi-statement
+delimiting), and a translation step would have to re-derive all of that and
+get it right *most* of the time. A wrong migration is applied once, often
+irreversibly, and nothing type-checks it — so agents are better spent
+reviewing a destructive migration or supplying rename hints than generating
+SQL text. No `USING` clause is ever generated for a type change, either:
+Postgres refusing an implicit cast is the correct outcome, and a generated
+cast nobody reviewed would truncate data silently instead.
+
+The round trip is proven, not assumed: `pgtest` runs render, apply, read
+back, diff against real Postgres in CI, and a stricter *fixpoint* —
+import, re-render, apply, re-import, diff — is asserted unconditionally and
+is empty, which is what makes adoption actually trustworthy rather than
+merely plausible. Cost of change rises sharply once the first generated
+migration is applied anywhere real: before that the diff engine is a pure
+function and freely rewritable, but after, the migration history is
+permanent, and the file format is the single most expensive thing here to
+change later. Revisit if the shadow database proves too heavy for the inner
+loop (replay into an in-memory model instead, losing validation against a
+real parser), if people start uncommenting destructive changes without
+reading them (meaning the guard isn't working and needs to become a
+separate reviewed file rather than a comment), or if import silently drops
+a construct that matters — the failure mode this design watches for
+hardest, and the fix would be a raw-DDL passthrough.
 
 ### Module isolation
 
