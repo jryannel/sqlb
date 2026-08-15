@@ -1,6 +1,6 @@
 # example/outbox — each row is handed to exactly one worker
 
-**Read this before the code.** [ADR-0012](../../docs/adr/0012-change-feed-outbox.md)
+**Read this before the code.** [ADR-0012](../../docs/architecture.md#change-feed-outbox)
 is explicit that freezing an outbox row format on a guess is the mistake
 sqlb's pre-1.0 stance exists to avoid. The schema in
 [`outboxschema/schema.go`](outboxschema/schema.go) — a status enum, an

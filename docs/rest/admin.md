@@ -35,7 +35,7 @@ An ordinary `BeforeQuery` has no name and cannot be released — that asymmetry
 is deliberate, so the decision to make a rule negotiable sits with whoever
 wrote it. See [Capabilities: the other half,
 rows](../schema/capabilities.md#the-other-half-rows) and
-[ADR-0054](../adr/0054-a-named-scope-is-releasable-at-the-mount.md).
+[ADR-0054](../architecture.md#a-named-scope-is-releasable-at-the-mount).
 
 **Route access is a guard the release does not provide.** Releasing a scope
 only changes what rows a query can see, never who may ask, so the mount needs
@@ -98,14 +98,14 @@ every other hook still runs.
 ## What this buys, and what it costs
 
 **No create anywhere in it, on purpose.** `BeforeCreate` is not releasable
-([ADR-0054](../adr/0054-a-named-scope-is-releasable-at-the-mount.md) —
+([ADR-0054](../architecture.md#a-named-scope-is-releasable-at-the-mount) —
 "there is nothing for a reader to be released from"): it stamps the tenant
 column from the caller's own claims, and a platform-admin token names no
 workspace a new row should belong to. An admin creating a row in a specific
 tenant still does it through that tenant's own token.
 
 **It is hand-mounted, not schema-declared.** `Expose` stays singular per table
-([ADR-0050](../adr/0050-reachability-is-a-property-of-the-mount.md)), so this
+([ADR-0050](../architecture.md#reachability-is-a-property-of-the-mount)), so this
 file is not generated: it carries no entry in `sqlb.json`, no generated
 TypeScript or Dart client, and is not on the drift gate. A schema edit here
 needs `admin.go` updated by hand, the same as any other hand-written endpoint.
@@ -123,5 +123,5 @@ deliberately leaves alone.
 - [Hooks: when one surface is the exception](../queries/hooks.md#when-one-surface-is-the-exception) — naming and releasing a scope
 - [`example/tasks/app/admin.go`](../../example/tasks/app/admin.go) — the worked example
 - [`example/tasks/app/admin_test.go`](../../example/tasks/app/admin_test.go) — what it asserts
-- [ADR-0050](../adr/0050-reachability-is-a-property-of-the-mount.md) — why this is hand-mounted rather than declared
-- [ADR-0054](../adr/0054-a-named-scope-is-releasable-at-the-mount.md) — the release mechanism
+- [ADR-0050](../architecture.md#reachability-is-a-property-of-the-mount) — why this is hand-mounted rather than declared
+- [ADR-0054](../architecture.md#a-named-scope-is-releasable-at-the-mount) — the release mechanism

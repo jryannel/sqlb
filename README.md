@@ -179,7 +179,7 @@ server over the manifest.
 | [`example/rooms`](example/rooms/) | An `EXCLUDE` constraint stopping double-booked rooms under contention, and the silent-zero-rows timestamptz day-filter trap beside it ([docs/special-cases.md](docs/special-cases.md#4-rooms--two-bookings-cannot-overlap)) |
 | [`example/vault`](example/vault/) | A table whose entire payload is `Hidden`: a generated read surface, no generated write surface at all, and the hand-written endpoint that fills the gap ([docs/special-cases.md](docs/special-cases.md#5-vault--the-row-whose-payload-only-go-may-write)) |
 | [`example/catalog`](example/catalog/) | A self-referencing category tree with a real foreign key via `TableDef.AddField`, and where `ILIKE` search stops on purpose ([docs/special-cases.md](docs/special-cases.md#6-catalog--the-tree-and-where-search-stops)) |
-| [`example/outbox`](example/outbox/) | A competing-consumers job queue — `FOR UPDATE SKIP LOCKED`, retry backoff, dead-letter — explicitly one worked answer rather than a format sqlb ships ([ADR-0012](docs/adr/0012-change-feed-outbox.md)) |
+| [`example/outbox`](example/outbox/) | A competing-consumers job queue — `FOR UPDATE SKIP LOCKED`, retry backoff, dead-letter — explicitly one worked answer rather than a format sqlb ships ([ADR-0012](docs/architecture.md#change-feed-outbox)) |
 | [`example/tasks-evolved`](example/tasks-evolved/) | Six non-additive schema changes in a row against live data — a rename, a NOT NULL backfill, a destructive drop, an index build that fails and leaves an invalid index behind ([docs/special-cases.md](docs/special-cases.md#1-tasks-evolved--the-second-year)) |
 
 ## Development

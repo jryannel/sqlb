@@ -295,7 +295,7 @@ metering table can be generated rather than hand-written.
 
 **Built:** [`example/outbox`](../example/outbox), and worth a naming note: a
 *different*, first-class `outbox` package now exists at the repository root —
-a change-feed `Dispatcher` implementing [ADR-0012](adr/0012-change-feed-outbox.md)
+a change-feed `Dispatcher` implementing [ADR-0012](architecture.md#change-feed-outbox)
 for `rest`'s event stream, unrelated to this entry's competing-consumers job
 queue beyond sharing a name and a table-plus-worker shape. The example's
 README disambiguates the two explicitly. What this entry asks for — the lock

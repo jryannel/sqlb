@@ -62,7 +62,7 @@ fix, and the exception.
 
 `meters` wants a primary key of `(tenant, kind)`. sqlb refuses composite
 primary keys outright
-([ADR-0034](../../docs/adr/0034-one-column-addresses-a-row.md)) — the
+([ADR-0034](../../docs/architecture.md#one-column-addresses-a-row)) — the
 declaration is a schema-time error naming its own workaround, proven directly
 in `pgtest/census_test.go`'s
 `TestCompositePrimaryKeyIsRefusedAndNamesItsWorkaround` and not re-proven

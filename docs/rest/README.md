@@ -145,7 +145,7 @@ project](../start/quickstart.md#or-scaffold-it). This is younger than
 `NewServer` — measured byte-identical against a hand-rolled `main` in
 `example/tasks2`, but not yet adopted by a second application — so expect
 `ServeConfig` to grow fields sooner than it changes shape under you. See
-[ADR-0058](../adr/0058-serve-owns-the-boilerplate-mount-is-the-seam.md).
+[ADR-0058](../architecture.md#serve-owns-the-boilerplate-mount-is-the-seam).
 
 ## What each operation gives you
 
