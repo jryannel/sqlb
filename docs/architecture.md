@@ -2853,7 +2853,48 @@ the compatibility freeze.
 
 ### No default hook registry
 
-_(pending merge from `docs/adr/0047-no-default-hook-registry.md`)_
+Hooks used to have ambient state at their centre: `sqlb.On[T]()` registered
+into a package-level default registry, `sqlb.New(exec)` handed every handle
+that same registry, and the form that named where the rules land —
+`OnIn[T](r)` — carried the longer name, a recommendation written backwards.
+That surfaced as a real incident: an adopter migrating from the default
+registry to a per-application one left one module still calling
+`sqlb.On[T]()`, whose rules then landed on a registry no handle it queried
+through ever carried. It compiled, it mounted, it answered — with every
+tenant's rows — and nothing in the API could have caught it, since both
+spellings were valid and the shorter, more obvious one was the wrong one.
+The examples had already voted with their feet: both worked applications in
+this repository built their own registry rather than use the default,
+because two servers in one process otherwise stack each other's predicates.
+
+The default registry is deleted. `New(exec)` gives each handle an empty
+`Registry` of its own; `On[T](r)` is the only registration form, and the
+short name now takes the registry argument rather than omitting it. A bare
+`Executor` that is not a `*sqlb.DB` — a raw pool, a borrowed `pgx.Tx` — has
+no rules at all, which is honest for a handle-less statement and visible at
+the call site: the alternative is a handle, and a handle carries its rules.
+Two applications sharing a process are now independent by construction
+instead of by care. This was rejected in gentler forms first: inverting only
+the names while keeping a default (`On[T](r)` alongside `OnDefault[T]()`)
+still leaves ambient state a handle can acquire without asking; a shim that
+panics on second use trades a compile-time break for a production panic;
+documenting the hazard harder was tried already, in compatibility.md, and
+the boundary still switched off silently under an author who had read that
+page. The migration broke every existing registration call site in one
+edit, deliberately, with no deprecation window, because a shim would be the
+same ambient registry wearing a different name.
+
+One narrower failure survives: `On[T](reg)` still compiles whether or not
+any handle ever carries `reg`, so hooks can be registered into a registry
+nothing attaches. But it is local rather than action-at-a-distance — the
+registry and the handle are usually a few lines apart — and a model
+declaring `Scoped` is refused at mount if the handle's registry has no hook
+for it, which closes the specific case this record was written about.
+Revisit if naming a registry turns out to cost more than one line at
+startup in real adoption, which would suggest the seam is in the wrong
+place, or if bare-executor statements are found to have depended on
+inheriting global rules — the fix then is making a bare executor refuse a
+`Scoped` model outright, not restoring the default.
 
 ### Auto incrementing keys
 
