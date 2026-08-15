@@ -991,7 +991,46 @@ also the natural move once a value list acquires attributes of its own.
 
 ### Tooling scoped to tracked files
 
-_(pending merge from `docs/adr/0018-tooling-scoped-to-tracked-files.md`)_
+Parallel agent sessions check this repository out into a worktrees directory
+inside the repository itself, ignored via `.git/info/exclude` — git does not
+see them, but a tool that walks the filesystem does. A format check that ran
+`gofmt -l .` failed the gate naming a file belonging to an unrelated session
+while every tracked file was clean, a failure the reader could neither
+attribute nor act on; the write-mode equivalent, `gofmt -w .`, would have
+rewritten a neighbouring session's checkout out from under whoever was working
+in it. Every other gate happened to reach the code through `./...`, which
+skips dot-directories, or through `git archive`, and that immunity was a
+property of the Go tool rather than a decision this repository had made — it
+silently covered for the absence of a rule.
+
+So tooling that operates on "the repository" takes its file list from
+`git ls-files`, never from a filesystem walk: what git tracks is the
+definition of this repository, and anything else in the directory belongs to
+someone else. `./...` remains an accepted equivalent where it applies, but
+that's incidental immunity, so a check relying on it demonstrates the
+equivalence rather than assuming it. Scoping this way adds two failure modes
+that have to be handled explicitly — an empty file list checks nothing and
+must fail, and the underlying command's own failure empties the result and
+must be caught rather than read as clean. Formatting itself is checked by the
+`gofmt` formatter built into the lint step and nowhere else; the standalone
+tracked-files formatting check was strictly narrower than that (tracked files
+versus every file in a package) and so was a second thing to keep in step
+rather than a second gate, and was removed once lint was shown to catch the
+same defect.
+
+The gate's idea of the repository now matches git's, which is the only
+definition it shares with CI, and a failure names a file the reader can act
+on; nothing writes outside the tracked set, so a formatter can't damage a
+neighbouring worktree. The cost is that a file that hasn't been staged sits
+outside the set — not theoretical, since an unformatted, un-added file was
+caught only by the separate lint step while this very decision was being
+written. Neither the filesystem nor the index is automatically the right
+scope, which is the argument for choosing deliberately rather than inheriting
+whichever one a tool happens to walk. Revisit if a tracked Go file appears
+that `go list ./...` doesn't cover — a test fixture, a build-tag-excluded
+helper — since its formatting would then be checked by nothing; or if the
+`gofmt` formatter is ever disabled in the lint config with no second gate
+standing behind it.
 
 ### Pgbouncer in the path
 
