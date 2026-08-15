@@ -309,7 +309,30 @@ placeholder rendering and quoting.
 
 ### Queries are values
 
-_(pending merge from `docs/adr/0002-queries-are-values.md`)_
+A query is a value built up incrementally, not a statement assembled in one
+shot. `Where` appends rather than replacing, the zero `Pred` is a no-op that
+gets skipped, construction is separate from execution, and `SQL()` renders
+without running anything:
+
+```go
+q := sqlb.Query[Post]().Where(sqlb.If(search != "", sqlb.F("title").Contains(search)))
+```
+
+Static query generators cannot express "this clause exists only when the user
+typed something" without a combinatorial explosion of SQL strings, and teams
+that hit that wall tend to fall back to concatenating SQL by hand — which
+reintroduces every problem the typed builder was adopted to avoid. Making the
+query a value sidesteps the explosion: conditional filters need no branching
+at the call site, and the same value can be amended by a hook, produced by
+the REST filter parser, inspected in a test, or printed for `EXPLAIN`. Hooks,
+the filter grammar and query introspection all rest on this one property.
+
+The cost is that builder methods mutate in place and return themselves, so a
+shared base query can be aliased by accident — `Clone` exists but has to be
+remembered — and errors are sticky, surfacing at the terminal method rather
+than at the call that caused them. Revisit if aliasing bugs show up in
+practice, which would justify the extra allocation of switching to
+copy-on-write.
 
 ### One ast two producers
 
