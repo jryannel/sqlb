@@ -745,7 +745,42 @@ bigger window.
 
 ### No internal split
 
-_(pending merge from `docs/adr/0013-no-internal-split.md`)_
+Package `sqlb` exports a large number of identifiers: some are the daily
+API, some are public only because another package needs them across a
+boundary, some are the compiler's own vocabulary. Go offers `internal/` to
+make that distinction compiler-enforced, and two facts decided against
+using it. The genuinely internal machinery — compiler, scanning, model
+building, escaping — is already unexported within the package, so
+`internal/` would restate a boundary that already holds. And the obvious
+extraction fails on its own terms: `Expr` and `Raw` have to stay public as
+the documented escape hatch, so hiding the remaining node types would buy
+only field renaming while forcing `Pred.Expr()` to return a type callers
+cannot name.
+
+So there is no `internal/` package. The layout stays flat, and the
+distinction is expressed as documented tiers plus a `v0` version instead:
+stable (the query builder, predicates, the typed facade, hooks, mutations,
+`Describe`, `filter`, `schema` — changes here are breaking changes and
+treated as such), provisional (`Model`, `ColumnInfo`, `Dialect` and similar
+— public because `filter` and generated code cross a package boundary, and
+expected to move), and escape hatch (`Expr` and the node types — use `Raw`,
+`RawPred`, `RawSel` instead; the rest is compiler vocabulary that will
+change without ceremony). This avoids import gymnastics and a premature
+boundary in a library still moving pre-1.0, and tiers communicate intent
+per identifier where `internal/` can only work per package. The cost is
+that tiers are convention, not a compiler check — someone can depend on a
+node type like `Binary` and be broken with only a doc comment to point at,
+and a reader cannot tell the tiers apart without consulting the docs.
+
+Introducing `internal/` later stays mechanically cheap inside the module,
+but the cost lands entirely on external users: anything they imported that
+moves becomes uncompilable with no deprecation path, since `internal/` is
+absolute. If it's going to happen, it should happen before there are
+external users to break. Revisit properly at v1.0 — promote provisional
+identifiers to stable, or hide them — or sooner if someone outside the
+module depends on a node type and is broken by a compiler change, which
+would be the trigger to extract the AST behind `internal/` and accept the
+`Pred.Expr()` awkwardness that comes with it.
 
 ### Migrations and import
 
