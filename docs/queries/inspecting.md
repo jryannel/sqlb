@@ -50,7 +50,7 @@ rewrites the rows rather than the statement, so resolving one would mutate the
 caller's data as a side effect of inspecting it.
 
 `Explain` and `Resolved` are one case of a general rule —
-[ADR-0051](../adr/0051-a-gap-in-the-declaration-is-reported.md): a tool that
+[ADR-0051](../architecture.md#a-gap-in-the-declaration-is-reported): a tool that
 reports *no difference* is making a claim, and one that cannot see a property
 makes that claim about it whether or not a difference exists.
 
@@ -118,7 +118,7 @@ Use that when you want the driver's view and this when you want sqlb's.
 That two-method surface is also why a connection pooler in the path needs nothing
 from sqlb: the query path is tested through a real PgBouncer in transaction
 pooling, because that is the deployed topology
-([ADR-0019](../adr/0019-pgbouncer-in-the-path.md)).
+([ADR-0019](../architecture.md#pgbouncer-in-the-path)).
 
 ## Checking the schema, not the query
 

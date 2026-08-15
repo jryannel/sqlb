@@ -53,7 +53,7 @@ the ordering, so an index on the sort column alone is not enough —
 `schema.Lint`'s `unindexed-sort` diagnostic suggests the composite, which is
 what cursor paging wants anyway.
 
-[ADR-0027](../adr/0027-keyset-pagination.md) has the boundary predicate and how
+[ADR-0027](../architecture.md#keyset-pagination) has the boundary predicate and how
 NULLs in a sortable column are handled.
 
 ## The same thing over HTTP

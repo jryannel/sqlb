@@ -120,7 +120,7 @@ comment is in the file rather than in a document nobody reads at 2am.
 **A rename is declared, never inferred.** From the before and after states alone
 a rename is indistinguishable from a drop plus an add, and guessing from a
 similar name and type destroys data every time the guess is wrong
-([ADR-0014](../adr/0014-migrations-and-import.md)). So you say so:
+([ADR-0014](../architecture.md#migrations-and-import)). So you say so:
 
 ```go
 schema.Text("email_address").RenamedFrom("email").Unique().Searchable(),
@@ -158,7 +158,7 @@ That is `sqlb impact` output, and
 [history_test.go](../../example/evolve/history_test.go) asserts it by diffing the
 current contract against the one that stood before revision 4. Two gates,
 looking at the same edit, seeing different things
-([ADR-0039](../adr/0039-a-schema-edit-is-an-api-edit.md)):
+([ADR-0039](../architecture.md#a-schema-edit-is-an-api-edit)):
 
 | | What it compares | Verdict on revision 4 |
 |---|---|---|
@@ -172,7 +172,7 @@ deliberate act with a diff attached.
 
 The same test asserts the other direction — that adding a nullable column
 reports no breaks at all — because a gate that called everything breaking would
-pass the first test while being useless ([ADR-0016](../adr/0016-guards-proven-both-ways.md)).
+pass the first test while being useless ([ADR-0016](../architecture.md#guards-proven-both-ways)).
 
 ## Dropping
 

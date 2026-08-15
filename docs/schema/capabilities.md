@@ -148,7 +148,7 @@ request body.
 
 The check proves a hook *exists*, not that it is right. That is worth knowing
 before relying on it, and it catches the case that actually happens: the table
-somebody added last week ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
+somebody added last week ([ADR-0030](../architecture.md#declared-scope-is-required)).
 
 ## One table, two surfaces
 
@@ -239,7 +239,7 @@ already in every codebase — stays absolute.
 every confining rule a resource released has nothing confining it, and does not
 mount. The check runs against the released handle rather than against the
 registry, so releasing one of two rules is fine and releasing all of them is the
-[ADR-0030](../adr/0030-declared-scope-is-required.md) error. A name no
+[ADR-0030](../architecture.md#declared-scope-is-required) error. A name no
 registration claims is refused at startup too, because a release that quietly
 matches nothing leaves a mount that reads as narrowed and serves the wide rule.
 
@@ -248,7 +248,7 @@ catalog" is one rule over products, variants and categories; registering it
 under one name on all three means a mount releases it once, and the release
 reaches the models a request arrives at through `?expand` as well.
 
-See [ADR-0054](../adr/0054-a-named-scope-is-releasable-at-the-mount.md).
+See [ADR-0054](../architecture.md#a-named-scope-is-releasable-at-the-mount).
 
 Releasing a scope changes what rows a query can see, not who may ask — a
 worked admin mount pairs it with a route guard. See [A cross-tenant admin

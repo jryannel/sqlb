@@ -18,7 +18,7 @@ reflection cannot infer.
 
 That is not a promise, it is a dependency direction: the engine cannot quietly
 grow a reliance on the DSL, because it cannot see it
-([ADR-0010](../adr/0010-codegen-is-optional.md)). Capabilities reach the runtime
+([ADR-0010](../architecture.md#codegen-is-optional)). Capabilities reach the runtime
 as struct tags or `Describe` calls, never as a schema import.
 
 The practical consequence is that adoption has no cliff.
@@ -99,11 +99,11 @@ both compose with hand-written siblings.
 **An annotation slot.** There is no open extension field on `Table` for third
 parties to hang config off. The schema has exactly one annotation — `Expose`,
 which is typed — and adding an untyped one would move the failure from "does not
-compile" to "was ignored" ([ADR-0024](../adr/0024-no-annotation-slot.md)).
+compile" to "was ignored" ([ADR-0024](../architecture.md#no-annotation-slot)).
 
 ## Read next
 
 - [Quickstart §2](../start/quickstart.md) — running the generator
 - [Codegen reference](https://jryannel.github.io/sqlb/reference/codegen/) —
   every option and its default
-- [ADR-0010](../adr/0010-codegen-is-optional.md) — the decision record
+- [ADR-0010](../architecture.md#codegen-is-optional) — the decision record

@@ -90,7 +90,7 @@ query runs — so the scope would be silently absent from inside someone else's
 sub, err := sqlb.Query[Post]().Select(sqlb.F("author_id")).Resolved(ctx, db)
 ```
 
-A model with no hook needs none of this. [ADR-0055](../adr/0055-a-nested-query-runs-nobodys-hooks.md)
+A model with no hook needs none of this. [ADR-0055](../architecture.md#a-nested-query-runs-nobodys-hooks)
 has the reasoning, including why the inner query is not resolved for you.
 
 ## Aggregates and other shapes

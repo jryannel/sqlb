@@ -91,7 +91,7 @@ const page = await listPosts(request, {
 - **A column carrying `Needs(...)` is missing from what `create`/`update`
   return.** Its expression depends on who is asking, and a write has no
   per-request bind to resolve that with, so the response leaves the key out
-  ([ADR-0041](../adr/0041-computed-fields.md)). `createPost` and `updatePost`
+  ([ADR-0041](../architecture.md#computed-fields)). `createPost` and `updatePost`
   are typed as returning `PostWriteResult` rather than `Post` whenever the
   table has one of these — a distinct generated type, so a read and a write
   cannot silently drift back into sharing the wrong one.
@@ -220,7 +220,7 @@ and overridden instead:
 [the refusals](../../example/tasks/web/src/refusals.ts) — the requests that must
 *not* compile, asserted with `@ts-expect-error` so that a generator which
 widened a type fails the build.
-[ADR-0028](../adr/0028-typescript-client.md) records the reasoning, including
+[ADR-0028](../architecture.md#typescript-client) records the reasoning, including
 what would make the whole approach wrong.
 
 ## Next

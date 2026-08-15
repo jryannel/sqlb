@@ -109,15 +109,15 @@ Four gaps, all deliberate and all documented where they bite:
 
 - **`BeforeUpdate` cannot read the assignments it was handed**, so a rule
   depending on what a column is becoming belongs in a `BEFORE` trigger
-  ([ADR-0021](../adr/0021-hooks-receive-an-event.md)).
+  ([ADR-0021](../architecture.md#hooks-receive-an-event)).
 - **Hooks follow an `?expand` join, with one restriction.** The target's
   `BeforeQuery` predicates are requalified onto the join alias and added to the
   join condition. A predicate that cannot be requalified — `RawPred`, or a
   column from a table the expansion did not join — fails the query rather than
-  being dropped silently ([ADR-0030](../adr/0030-declared-scope-is-required.md)).
+  being dropped silently ([ADR-0030](../architecture.md#declared-scope-is-required)).
 - **`AfterCommit` is in-process and at-most-once.** A callback that never ran
   because the process died leaves no trace. That is what a transactional outbox
-  is for, and it is not built ([ADR-0012](../adr/0012-change-feed-outbox.md)).
+  is for, and it is not built ([ADR-0012](../architecture.md#change-feed-outbox)).
 - **A hook is registered per model; there is no receiver for all of them.**
   `On[T](reg)` is the only way in, so a cross-cutting concern — an audit log, a
   write counter — is one registration per model, written by hand, and a table
@@ -149,6 +149,6 @@ for logic a hook does not fit:
 - [Mounting resources](../rest/README.md) — `rest.Reads` and hand-written
   endpoints, for writes that stay outside the generated surface entirely
 - [Hooks](../queries/hooks.md) — registration, scoping, `AfterCommit`, testing
-- [ADR-0008](../adr/0008-hooks-as-domain-seam.md) — the decision record
-- [ADR-0030](../adr/0030-declared-scope-is-required.md) — why a schema can oblige
+- [ADR-0008](../architecture.md#hooks-as-domain-seam) — the decision record
+- [ADR-0030](../architecture.md#declared-scope-is-required) — why a schema can oblige
   a hook to exist

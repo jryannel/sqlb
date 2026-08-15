@@ -164,7 +164,7 @@ owns the router.
 One detail in that file is worth knowing before you meet it: `posts` declares
 `SoftDelete`, so **the resource does not mount until something filters the
 column**. Registration returns an error naming the missing hook. That is
-[ADR-0030](../adr/0030-declared-scope-is-required.md), and it is the difference
+[ADR-0030](../architecture.md#declared-scope-is-required), and it is the difference
 between a rule that can be forgotten and one that cannot.
 
 ## Then the tenant scope

@@ -287,7 +287,7 @@ An index can never serve one, which is why a trigger-maintained counter or a
 `GENERATED ALWAYS AS … STORED` column is still the better answer when the value
 allows it; `schema.Lint` says so once per filterable computed column.
 [`example/computed`](../../example/computed/) is the five techniques side by
-side, and [ADR-0041](../adr/0041-computed-fields.md) is why the tiers are drawn
+side, and [ADR-0041](../architecture.md#computed-fields) is why the tiers are drawn
 where they are.
 
 #### Whose table does it name
@@ -358,7 +358,7 @@ func init() { schema.SetWireCase(schema.Camel) }
 
 There is deliberately **no per-column override**. One setting, applied by one
 pure function, is what keeps the five surfaces from disagreeing; a per-column
-mapping is the part with a reason to drift ([ADR-0036](../adr/0036-the-wire-is-the-column-name.md)).
+mapping is the part with a reason to drift ([ADR-0036](../architecture.md#the-wire-is-the-column-name)).
 
 **A case that cannot round-trip is refused at build time.** `snake → camel` is
 not invertible over every name: `pos_x_2` becomes `posX2`, which reads back as
@@ -516,7 +516,7 @@ round trip, so the fixpoint held because the declaration and the database were
 blind to the same property, and a migration that recreated the constraint without
 its clause would have passed the drift gate on its way to breaking every write.
 
-[ADR-0051](../adr/0051-a-gap-in-the-declaration-is-reported.md) is the general
+[ADR-0051](../architecture.md#a-gap-in-the-declaration-is-reported) is the general
 rule that came out of it: where a layer below the declaration can say something
 the declaration cannot, the gap is reported rather than left to be found.
 
