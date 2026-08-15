@@ -506,7 +506,46 @@ looser typing.
 
 ### Hooks as domain seam
 
-_(pending merge from `docs/adr/0008-hooks-as-domain-seam.md`)_
+A generated data layer has to leave somewhere for domain logic to live, or
+teams route around it. The common failure is that generated CRUD is
+all-or-nothing: as soon as one endpoint needs to normalise an email or stamp
+an owner, it gets written by hand and the generated version is abandoned.
+Multi-tenant scoping is the sharpest case of this — `WHERE org_id = $1` has
+to be on every read, and forgetting it once is a cross-tenant data leak.
+
+sqlb registers hooks per model — `BeforeQuery`, `Before`/`AfterCreate`,
+`Before`/`AfterUpdate`, `Before`/`AfterDelete`, and `AfterDeleteRows` —
+and `BeforeQuery` is the load-bearing one. It receives the `*Builder` and
+may amend it, so one registration constrains every read of that model,
+including reads issued by generated REST handlers. Terminal methods clone
+the builder before running hooks, so a hook's predicates cannot accumulate
+across repeated executions of the same query value, and a hook that returns
+an error aborts the operation before any SQL runs. This turns tenant scoping
+and soft-delete filtering into one registration each, instead of a rule
+every call site has to remember.
+
+The cost is that hooks are action-at-a-distance — reading a query does not
+tell you what will execute, and hook order is registration order. Two limits
+worth naming: registration is default-*open*, where row-level security is
+default-*deny*, so an unregistered model serves every tenant's rows with no
+failure signal — this is closed only where handlers are generated, by a
+schema declaration the mount checks, and not for queries written by hand in
+Go. And write hooks were originally a thinner seam than intended:
+`BeforeCreate` receives a bare row and `BeforeUpdate` cannot read its own
+assignments; wrapping generated writes in a transaction closed most of that
+gap by giving a hook something to query against, but a hook on an ordinary
+read still has no executor. `AfterDeleteRows` exists alongside `AfterDelete`
+rather than changing its signature, because the rows it carries are not
+free — they arrive via `DELETE ... RETURNING`, so the clause is only added
+when a rows-kind hook is actually registered, keeping the cost visible at
+registration instead of charged to every delete in the process.
+
+Removing hooks entirely would be the expensive direction: tenant scoping
+would move back to individual call sites, losing the guarantee that it
+cannot be forgotten. Revisit if people need to bypass a hook for a
+legitimate admin path — the likely answer is an explicit unscoped builder,
+not a way to disable hooks globally — or if hook ordering starts to matter
+enough that registration order needs to become explicit priorities.
 
 ### Typed column facade
 
