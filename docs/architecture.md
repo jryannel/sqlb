@@ -1956,7 +1956,54 @@ alone.
 
 ### Type overrides
 
-_(pending merge from `docs/adr/0035-type-overrides.md`)_
+`schema.Type.GoType()` was a closed switch — a `uuid` column is always
+`string`, `numeric` is always `float64` — and both outside adoption
+evaluations named this a real blocker: a codebase using
+`github.com/google/uuid.UUID` for ids would have that type touch its
+tenant middleware, every filter registry and every use-case signature, and
+the only workaround, layering `sqlb.Describe` over structs sqlc already
+generated, sidesteps the question rather than answering it, since it works
+only by never generating a struct at all. So `codegen.Options` gains
+`Types []TypeOverride`, matched by table+column, column, or type (most
+specific wins; two overrides of equal specificity on one column is a
+generation-time error, not last-one-wins), and an override changes the
+emitted Go type and nothing else.
+
+That "nothing else" is the whole decision, and it points two different
+ways on purpose. The SQL type in DDL is decided by `schema.Type` alone and
+an override never reaches `migrate` — the database doesn't care what a
+consumer calls the type in Go. The wire — JSON, OpenAPI, the TypeScript
+and Dart clients, the CLI — also stays governed by `schema.Type`, not the
+override, because every client emitter maps from the declared type, so a
+`uuid.UUID` still serialises as a quoted string and TypeScript still sees
+`string`; this falls out of the emitters rather than being specially
+enforced, which matters because "fixing" it later to reflect the override
+would make a generated client disagree with the server it describes. Filter
+coercion, in contrast, *does* follow the override, and that's correct
+rather than an inconsistency: `filter.Coerce` reads the model's runtime
+reflect.Type and already delegates to `encoding.TextUnmarshaler`, so an
+overridden type that can't be coerced is one that can't be filtered, with
+the existing error rather than a new one. Nullable and array compose
+normally after the base type is chosen (`*uuid.UUID`, `[]uuid.UUID`), and
+an enum column can't be overridden at all — the generated named string
+type is the feature being sold, since it's what makes a value like
+`PostStatusPublished` exist and carries the value set into the TypeScript
+union and the CLI's `--help`.
+
+The import a custom type needs lands in the consumer's generated code as a
+string, so sqlb's own dependency budget is untouched, and a bad override —
+a typo'd type name — fails loudly at the consumer's next `go build` rather
+than being silently accepted. Overrides live in `codegen.Options`, which
+is per-project, not in the schema, which is per-declaration: the same
+schema generated into two repositories with different id conventions
+should be free to differ, and putting the override in the schema would
+make a rendering preference part of what `migrate` and `introspect` read.
+Revisit if people reach for an override to change the wire rather than the
+Go type — wanting camelCase JSON, say — which should stay refused, since an
+override that changed both would make a generated client wrong about the
+server; or if the enum refusal is experienced as a tax, in which case the
+likely real want is a named enum type from a package the consumer already
+has, a distinct feature from this one.
 
 ### The wire is the column name
 
