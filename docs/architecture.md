@@ -3062,7 +3062,54 @@ and is the shape a future `Expose`-appending design would have to take.
 
 ### A gap in the declaration is reported
 
-_(pending merge from `docs/adr/0051-a-gap-in-the-declaration-is-reported.md`)_
+Below the schema sit three layers that can each say something the
+declaration cannot — the mount, the migration, the caller — and that's by
+design; not everything belongs in a declaration. Five reports in two weeks
+shared a shape that had nothing to do with a missing field: a
+`rest.Options` narrowing that no `Expose` could express, a scan bound with
+no field on `schema.REST`, a `BeforeQuery` hook scoping a read that
+`Builder.SQL` rendered unscoped anyway, a hand-deferred constraint that
+passed `sqlb check` clean because the declaration and the database were
+blind to the same property, and — the one case that *was* loud — a
+predicate against a hidden column caught by the compiler. Each individually
+had a workaround the reporter already knew about; what was missing in the
+other four was that nothing said the gap existed. A drift check reporting
+"no difference" is a claim, and a check that cannot see a property reports
+no difference about it whether or not one is there — which is the same
+failure named elsewhere as silent dropping, one layer further down: a check
+that can't see a property isn't a weak check, it's a check answering a
+question it was never asked.
+
+So where a layer below the declaration can express something the
+declaration can't, the gap gets closed if that's cheap, and made visible
+if it isn't — never left inferable from a workaround documented somewhere
+else. Visibility has an order of preference: a refusal at the boundary
+first, where the declaration gains the word and something fails when it's
+absent or wrong (a scan bound moved onto `schema.REST`, a negative ceiling
+rejected outright); failing that, a report from the tool that reads the
+database, naming what it saw and cannot declare (`introspect` reads
+deferrability on every constraint and lists what the DSL can't express as
+a `Skip`, with the definition attached, rather than staying silent about
+a property neither side models); failing that, a sentence at the point
+where the reader is standing, not a pointer four screens away. What all
+three rule out is the same failure that produced the five reports: correct
+behavior, an existing workaround, and the two facts living in different
+files. The corollary for the schema itself is narrower than "declare
+everything" — a declaration that cannot say a thing is fine; a *tool*
+whose job is to report differences and cannot see the thing is not.
+
+This makes previously-green checks red wherever they were quietly blind —
+adopting a database that defers a foreign key now produces report entries
+where it produced none, which is the change working, not a regression —
+and it does not reverse the decisions that chose the weaker, mount-time or
+hand-written answer in the first place, like reachability living at the
+mount; it only insists that wherever that weaker answer is taken, its gap
+gets reported rather than found by experiment. Revisit if the reports
+turn to noise a routine adoption learns to ignore, which argues for a
+severity on `Skip` rather than more entries, or if a closed gap's
+declaration goes essentially unused by anyone but the importer that
+motivated it — evidence the next gap of this shape should stop at a report
+rather than earn a schema field.
 
 ### A singleton is an op that removes the id
 
