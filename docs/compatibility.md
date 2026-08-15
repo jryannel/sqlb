@@ -165,6 +165,17 @@ Named in advance, so the break is a documented plan rather than a surprise.
   that is confidently wrong about a schema it no longer describes is worse than
   an absent one.
 
+- **The emitted fx wiring** — `wiring_gen.go`'s exact shape, though not the
+  fact that `FxModule` is a composable `fx.Option` value, which is the load-
+  bearing property and is frozen. `Options.WiringMigrations` /
+  `WiringOperations` and the `WiringSet` field names are new and still
+  settling — this is the first release carrying them
+  ([ADR-0059](architecture.md#fx-wiring-is-generated-not-a-runtime-library)).
+
+  Same reasoning as the skill: generated, opt-in, and `sqlb check` names the
+  file when it drifts, so the mechanical edit is `sqlb generate`. A project
+  that never sets `WiringMigrations` or `WiringOperations` has no exposure.
+
 ### Five that broke without being listed here first
 
 `v0.6.0` broke three surfaces that were not under *Will move*, `v0.11.0` broke
