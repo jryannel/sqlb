@@ -3390,7 +3390,44 @@ so a check has something to attach to.
 
 ### A read is a query and a row scoped write is a mutation
 
-_(pending merge from `docs/adr/0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md`)_
+[Declared actions](#declared-actions) gave a row-scoped write a generated
+envelope and explicitly deferred the read case as needing its own record,
+since it raises different questions about caching and a query key. A read
+is now `Query{Name, Path, Params, Reads, Summary, Description}`, declared
+with `TableDef.AddQuery` and mounted as a `GET` with no fetch, no lock, and
+no obligation check — its `Do` function is free to call `sqlb.Query[T]`
+itself and inherits whatever hooks the executor it's handed carries, which
+was proven rather than assumed: a query mounted against a workspace-scoped
+table stayed correctly isolated between two tenants with no scoping code
+of its own. `Query.Reads` names tables besides the one a query is declared
+on, typed as `[]*TableDef` rather than as strings the way `Action.Touches`
+is, because a table is already a named Go value in this schema style — a
+seam a future table-scoped cache-invalidation feature can read without
+inventing anything new.
+
+The row-scoped write, by contrast, stays `Action` in its existing item
+form rather than gaining a second declaration type. A same-named
+`Mutation` type was actually built, wired into codegen, and shipped for
+exactly this shape — then retired the same release cycle, when an
+independent consumer reported the precise finding this decision's own
+revisit trigger had named in advance: swapping `Mutation` for `Action` on
+a live table changed the generated code by exactly one identifier and
+nothing about behavior, route, or response shape. The split-by-name
+argument that justifies `Query` as its own thing never applied to
+`Mutation`, because a read and a row-scoped write are genuinely different
+shapes while `Mutation` was never a different shape from `Action`'s item
+form at all — it borrowed a three-way query/mutation/action split from a
+query-language RPC surface, naming distinctions that don't exist in sqlb's
+REST surface, where a row-scoped write is already exactly one verb and one
+envelope. Retiring it on the day it shipped was a small, real pre-1.0
+break for the one schema that had adopted it, accepted because nothing
+else had, and the lesson carried forward is procedural: "the form may
+still change" is a reason to defer introducing a second name for the same
+shape, not a reason to ship one and see. Revisit if a generated `Query`'s
+fixed `[]T` result shape — every row of the table it reads, filtered —
+turns out to be the wrong default often enough that a narrower or wider
+result type is worth declaring; a query wanting something else stays
+hand-mounted today, the same as before codegen knew about `Query` at all.
 
 ### Serve owns the boilerplate mount is the seam
 
