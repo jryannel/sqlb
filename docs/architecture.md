@@ -367,7 +367,32 @@ terminate in `Pred` values.
 
 ### Schema as go dsl
 
-_(pending merge from `docs/adr/0004-schema-as-go-dsl.md`)_
+Something has to be the single source of truth for table structure, since
+every derived artefact — migrations, models, REST handlers, OpenAPI, three
+clients — has to agree with it. The candidates were a Go DSL that generates
+migrations (the ent/Convex approach) or introspection of an existing
+database (the sqlc/PostgREST approach). DDL has nowhere to record
+*capabilities*: there is no way to say "this column may be filtered on" in
+`CREATE TABLE`, so an introspecting tool needs a side-car config file, and
+now there are two sources of truth that can drift apart.
+
+The schema is a Go DSL in its own package, and `sqlb generate` reads it to
+emit migrations, models, typed column sets, REST handlers and OpenAPI. One
+file is edited; everything else is derived. Capabilities, REST exposure,
+comments and relations live next to the column they describe, which is a
+large part of why this is pleasant to drive with an agent, and authoring
+mistakes are caught before any SQL is generated. The cost lands on adoption:
+bringing sqlb into an existing project means importing the current schema
+and handing DDL control over to it, which is a real migration rather than an
+afternoon's work.
+
+Cost of change rises steadily once it's in use — after a production database
+has been migrated by generated DDL, reversing course means reconciling a
+generated history against a hand-managed one. Revisit if migration diffing
+against a live database proves substantially harder than expected (invert to
+introspection-first, keeping the DSL for capabilities), or if a generated
+migration ever produces a destructive diff that wasn't intended — that would
+be a stop-the-line signal for the whole approach.
 
 ### Runtime query engine
 
