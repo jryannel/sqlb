@@ -1638,7 +1638,62 @@ single structured filter flag instead.
 
 ### Declared scope is required
 
-_(pending merge from `docs/adr/0030-declared-scope-is-required.md`)_
+Hooks are offered as the answer to multi-tenant scoping and are described as
+failing closed, which is true of a hook that runs and says nothing about a
+hook nobody wrote. That's the actual hole: row-level security, the mechanism
+hooks replace, is default-deny — a new table is unreachable until someone
+writes a policy for it — while a query hook is default-open. Add a table,
+expose it over REST, forget to register its scoping hook, and the resource
+serves every tenant's rows with a 200. A worked multi-tenant example made
+this concrete rather than theoretical: its hand-written hook file was
+careful, well-argued, and enumerated five models by hand — and correct as far
+as it went, while being structurally unable to notice a sixth table someone
+adds later.
+
+So a schema declaration that rows are confined — `.Scoped()` on the foreign
+key naming the tenant column — becomes an obligation on any resource that
+exposes the table, and mounting refuses a resource whose obligations aren't
+satisfied by a registered hook. Neither the declaration nor the check writes
+a predicate itself; `Scoped` is inert at runtime, exactly as the soft-delete
+mixin already was, because a generated tenant predicate reading the wrong
+context key would be worse than none — it would look like a boundary while
+being one. What changes is what happens when nobody writes the hook at all.
+The obligation follows the exposed operations rather than being one flat
+requirement, since a query hook constrains what a request can see and says
+nothing about what it can overwrite by id: listing or reading requires a
+before-query hook, updating requires a before-update hook, deleting requires
+a before-delete hook, and creating requires a before-create hook — the last
+because the tenant column is read-only and therefore absent from the create
+body, so without a hook the insert would reach the database carrying no
+tenant at all. `Scoped` is defined to imply read-only, enforced by schema
+validation, and a nullable tenant column is rejected too, since a row whose
+tenant is NULL sits outside every scoping predicate and lands in everyone's
+results the day someone writes an `IS NULL OR = $1` clause; marking the
+column merely immutable isn't enough on its own, since that closes updates
+while leaving create wide open. The check itself proves only that a hook
+exists, not that it's correct — a hook that logs and returns success
+satisfies it — deliberately, because the alternative, actually running the
+application's hooks at mount time against a fabricated context, mostly just
+observes those hooks correctly refusing a fake context, proving less than it
+appears to while looking like it proves more.
+
+This buys turning a silent cross-tenant read at runtime into a named error at
+startup, listing every unmet obligation next to the registration that would
+satisfy it — the same actionable-error property this project gives callers,
+applied to the schema's own author instead. The cost is that a new table in a
+multi-tenant schema now fails to start until its hooks exist, which is
+friction by design and deliberately has no bypass flag: the way to say a
+table's rows aren't confined is to not declare that they are. The check also
+runs only at the REST mount, not on the query path itself, so
+application code querying a model directly bypasses it entirely — a
+deliberate choice, since a per-query check would cost something on every
+read and legitimate unscoped administrative code paths genuinely exist.
+Revisit if people start registering empty hooks purely to satisfy the check,
+which would mean it's a tax rather than a real boundary and the fix is
+making the check prove more, not relaxing it; or if a legitimate deployment
+wants to scope through row-level security or middleware instead of hooks,
+which today means stripping the declaration entirely and losing its
+documentation value along with it.
 
 ### Dart client
 
