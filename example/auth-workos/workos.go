@@ -22,6 +22,21 @@
 // seam" decision.
 package authworkos
 
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/MicahParks/keyfunc/v3"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/workos/workos-go/v10"
+)
+
+// issuer is fixed across every WorkOS environment and client — WorkOS does
+// not scope it per application — so it is a constant here rather than a
+// configuration field.
+const issuer = "https://api.workos.com"
+
 // Claims is what Verify extracts from a validated WorkOS access token,
 // named after the fields WorkOS documents as stable
 // (https://workos.com/docs/reference/authkit/session-tokens). The token's
@@ -50,4 +65,98 @@ type Claims struct {
 	// Permissions are the fine-grained grants attached to the token —
 	// "permissions".
 	Permissions []string
+}
+
+// Verifier implements sqlb.Verifier[T]: it verifies a WorkOS AuthKit
+// access token and maps the result to T via the mapper supplied to New.
+type Verifier[T any] struct {
+	jwks     keyfunc.Keyfunc
+	clientID string
+	mapper   func(Claims) T
+}
+
+// New returns a Verifier that checks tokens against clientID's JWKS
+// endpoint (https://api.workos.com/sso/jwks/<clientID>, built by
+// workos.GetJWKSURL) and maps a verified token's Claims to T via mapper.
+//
+// ctx should be long-lived — an application's own root context, not a
+// per-request one — because keyfunc ties its background key-set refresh
+// to it: cancelling ctx after New returns stops that refresh, not just
+// the initial fetch.
+func New[T any](ctx context.Context, clientID string, mapper func(Claims) T) (*Verifier[T], error) {
+	if clientID == "" {
+		return nil, errors.New("authworkos: clientID is empty")
+	}
+	if mapper == nil {
+		return nil, errors.New("authworkos: mapper is nil")
+	}
+	jwksURL := workos.GetJWKSURL("", clientID)
+	jwks, err := keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
+	if err != nil {
+		return nil, fmt.Errorf("authworkos: fetching JWKS from %s: %w", jwksURL, err)
+	}
+	return NewWithKeyfunc(jwks, clientID, mapper), nil
+}
+
+// NewWithKeyfunc builds a Verifier from an already-constructed
+// keyfunc.Keyfunc, skipping New's network fetch. It exists for tests that
+// need a Verifier backed by an in-memory key set
+// (keyfunc.NewJWKSetJSON) rather than a live JWKS URL — production code
+// should call New.
+func NewWithKeyfunc[T any](jwks keyfunc.Keyfunc, clientID string, mapper func(Claims) T) *Verifier[T] {
+	return &Verifier[T]{jwks: jwks, clientID: clientID, mapper: mapper}
+}
+
+// Verify checks cred as a WorkOS AuthKit access token: signature against
+// the client's JWKS, issuer, and expiry (via jwt.WithIssuer and
+// jwt.WithExpirationRequired), then that the token's own client_id claim
+// matches the Verifier's configured client — belt and suspenders
+// alongside the JWKS URL already being client-scoped, so a question about
+// whether WorkOS ever shares signing keys across clients does not have to
+// be answered to trust this check.
+func (v *Verifier[T]) Verify(ctx context.Context, cred string) (T, error) {
+	var zero T
+
+	claims := jwt.MapClaims{}
+	_, err := jwt.ParseWithClaims(cred, claims, v.jwks.Keyfunc,
+		jwt.WithIssuer(issuer),
+		jwt.WithExpirationRequired(),
+	)
+	if err != nil {
+		return zero, fmt.Errorf("authworkos: %w", err)
+	}
+
+	clientID, _ := claims["client_id"].(string)
+	if clientID != v.clientID {
+		return zero, fmt.Errorf("authworkos: token client_id %q does not match configured client %q", clientID, v.clientID)
+	}
+
+	return v.mapper(Claims{
+		Subject:     stringClaim(claims, "sub"),
+		SessionID:   stringClaim(claims, "sid"),
+		ClientID:    clientID,
+		OrgID:       stringClaim(claims, "org_id"),
+		Role:        stringClaim(claims, "role"),
+		Roles:       stringSliceClaim(claims, "roles"),
+		Permissions: stringSliceClaim(claims, "permissions"),
+	}), nil
+}
+
+func stringClaim(claims jwt.MapClaims, key string) string {
+	s, _ := claims[key].(string)
+	return s
+}
+
+func stringSliceClaim(claims jwt.MapClaims, key string) []string {
+	raw, ok := claims[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
