@@ -2,9 +2,11 @@ package sqlb_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jryannel/sqlb"
@@ -108,4 +110,97 @@ func TestMiddleware_Success(t *testing.T) {
 	if gotPrincipal.ID != "user-1" {
 		t.Fatalf("principal.ID = %q, want %q", gotPrincipal.ID, "user-1")
 	}
+}
+
+func TestMiddleware_MissingCredential(t *testing.T) {
+	v := verifierFunc[testPrincipal](func(ctx context.Context, cred string) (testPrincipal, error) {
+		t.Fatal("Verify must not be called when no credential is present")
+		return testPrincipal{}, nil
+	})
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
+
+	mw := sqlb.Middleware[testPrincipal](v, sqlb.BearerToken)
+	r := httptest.NewRequest(http.MethodGet, "/", nil) // no Authorization header
+	w := httptest.NewRecorder()
+
+	mw(next).ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+	if nextCalled {
+		t.Fatal("next was called despite a missing credential")
+	}
+	assertProblemJSON(t, w, http.StatusUnauthorized)
+}
+
+func TestMiddleware_InvalidCredential(t *testing.T) {
+	wantErr := errors.New("signature mismatch")
+	v := verifierFunc[testPrincipal](func(ctx context.Context, cred string) (testPrincipal, error) {
+		return testPrincipal{}, wantErr
+	})
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
+
+	mw := sqlb.Middleware[testPrincipal](v, sqlb.BearerToken)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer bad-token")
+	w := httptest.NewRecorder()
+
+	mw(next).ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+	if nextCalled {
+		t.Fatal("next was called despite an invalid credential")
+	}
+	body := assertProblemJSON(t, w, http.StatusUnauthorized)
+	if strings.Contains(body["detail"].(string), wantErr.Error()) {
+		t.Fatal("the underlying Verify error must not be echoed in the response body")
+	}
+}
+
+func TestMiddleware_TransientError(t *testing.T) {
+	v := verifierFunc[testPrincipal](func(ctx context.Context, cred string) (testPrincipal, error) {
+		return testPrincipal{}, sqlb.TransientError{Err: errors.New("dial tcp: i/o timeout")}
+	})
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
+
+	mw := sqlb.Middleware[testPrincipal](v, sqlb.BearerToken)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer some-token")
+	w := httptest.NewRecorder()
+
+	mw(next).ServeHTTP(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (a provider outage must not read as a rejected credential)", w.Code, http.StatusInternalServerError)
+	}
+	if nextCalled {
+		t.Fatal("next was called despite a transient verification failure")
+	}
+	assertProblemJSON(t, w, http.StatusInternalServerError)
+}
+
+// assertProblemJSON checks the response is RFC 9457 problem+json shaped with
+// the given status, and returns the decoded body for further assertions.
+func assertProblemJSON(t *testing.T, w *httptest.ResponseRecorder, status int) map[string]any {
+	t.Helper()
+	if ct := w.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, want application/problem+json", ct)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("response body did not decode as JSON: %v", err)
+	}
+	if got, want := int(body["status"].(float64)), status; got != want {
+		t.Fatalf("body[status] = %d, want %d", got, want)
+	}
+	if _, ok := body["detail"].(string); !ok {
+		t.Fatal("body[detail] missing or not a string")
+	}
+	return body
 }

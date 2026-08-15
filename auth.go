@@ -3,6 +3,7 @@ package sqlb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -78,9 +79,14 @@ func Middleware[T any](v Verifier[T], extract CredentialExtractor) func(http.Han
 
 			principal, err := v.Verify(r.Context(), cred)
 			if err != nil {
+				var transient TransientError
+				if errors.As(err, &transient) {
+					writeProblem(w, http.StatusInternalServerError, "authentication could not be completed")
+					return
+				}
 				// err is deliberately not echoed: which check a forged or
 				// expired credential failed is useful to precisely one kind
-				// of caller. Task 4 adds the TransientError branch here.
+				// of caller.
 				writeProblem(w, http.StatusUnauthorized, "the credential is not valid")
 				return
 			}
