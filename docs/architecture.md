@@ -2279,7 +2279,81 @@ that happen to agree.
 
 ### The driver is a dependency
 
-_(pending merge from `docs/adr/0040-the-driver-is-a-dependency.md`)_
+The engine depended on the standard library alone, unwritten and
+unjustified anywhere, and the argument for it is genuinely good for a
+library that merely extends the standard library: every dependency it
+takes is one every consumer inherits. But that's not what sqlb had become
+by the time this was written — `rest` already depended on huma by name,
+exempted from the dependency check, because sqlb was turning into the
+thing an application is *built with*, for a Postgres stack that already
+runs pgx. Two structural costs of the `database/sql` bridge weren't
+inconveniences, they were designs the driver choice was actively bending:
+a vector column's binary codec needs to register on a pgx-specific
+connection hook with no `database/sql` spelling, so the vector-index
+design had already shipped as a text-form approximation of what it wanted
+to be; and a caller holding a `pgx.Tx` and sqlb holding a `*sql.Tx` are
+two separate transactions against one pool, since the bridge shares
+connections, not transaction handles, and joining a transaction the
+application already opened — the exact promise the transaction-scoped
+handle makes — was structurally impossible across it. A real port counted
+twenty-five call sites depending on exactly that.
+
+Benchmarking narrowed rather than settled the performance argument.
+Ordinary CRUD through the bridge ran about 30% slower than hand-written
+pgx — real, but not by itself a reason to break a frozen interface, since
+it's the honest cost of the case nearly every request is. The cost stopped
+being incremental for a wide `float32` vector row, where a text literal
+gets parsed element by element in Go: 2.7× the time and 21× the memory,
+which is the pgvector case with a number attached and the strongest single
+piece of evidence here. And the apparent bulk-insert gap turned out to be
+an API gap, not a driver one — sqlb's multi-row `VALUES` path already ran
+within about 10% of hand-written pgx, and the whole of the difference
+belonged to `CopyFrom`, which the bridge simply can't reach at all. So the
+engine now depends on pgx v5 directly and `database/sql` stops being the
+contract: `Executor` is redefined over pgx's types, a breaking change to
+the single most central public interface, landing before 1.0 specifically
+because it could never land cleanly after. One driver, not two — carrying
+both would mean two scanners' worth of type-mapping tests forever, a cost
+that compounds where a one-time break doesn't. The scanners keep reading
+an internal `rowSource` interface, now a test seam rather than a driver
+seam, which is what turned the migration into an adapter rather than a
+rewrite of `scan` and `mutate`. The closer alternative — an optional
+interface sqlb type-asserts for, additive and freeze-preserving — was
+rejected because it delivers the capability without the positioning: a
+binary vector codec only helps if it's on by default, and supporting two
+drivers indefinitely doubles the type-mapping matrix forever rather than
+once.
+
+What this buys: transactions an application already opened can now be
+joined rather than merely wrapped, `CopyFrom` and batched writes become
+reachable, one type-mapping matrix instead of two, and a vector index
+built as designed rather than as a text-form compromise. What it costs:
+`Executor` breaks for every caller with no path that preserves both old
+and new, "importing sqlb costs nothing" stops being true and has to leave
+the pitch rather than be softened, and sqlb becomes unusable on any driver
+but pgx — a population this project's Postgres-only stance had already
+made small, but not zero. The actual port cost less than estimated inside
+the engine itself — an afternoon for `Executor` and the handle, since the
+`rowSource` seam did exactly the job it was written for — and most of the
+real work landed in test harnesses that had to fake a `pgx.Rows` and
+`pgx.Tx` instead of a `database/sql` driver, and in examples that still
+needed a `*sql.DB` for goose's migration runner over the same pool. Two
+real bugs surfaced only once the flip reached a real Postgres, both cases
+of pgx handing back exactly what the database sent where the old bridge
+had been quietly tidying it: a catalog column read as a one-byte string
+instead of empty, misclassifying every ordinary column as generated, and
+a rejected write arriving as an empty result set with the real error left
+on a separate field, misreported by the scanner as "no columns matched."
+Neither was reachable from the database-free suite, which is the argument
+for a Postgres-backed test module restated with a concrete example.
+Revisit if the modules needing a truly shared transaction turn out to be
+a short, containable list, which would make this an expensive answer to a
+narrow problem; if pgvector support stops mattering because those tables
+stay permanently outside the registry, leaving only the transaction
+argument; or if a consumer arrives that isn't pgx-native for a real
+platform reason rather than a preference — thin ground today, since every
+application this library targets already runs pgx and `lib/pq` points its
+own users at pgx now.
 
 ### Computed fields
 
