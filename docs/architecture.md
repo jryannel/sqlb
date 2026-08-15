@@ -2087,7 +2087,60 @@ second adapter rather than a configuration of this one.
 
 ### Search is ilike until it cannot be
 
-_(pending merge from `docs/adr/0037-search-is-ilike-until-it-cannot-be.md`)_
+`?search=ada` fans out across every `Searchable` column as a disjunction
+of escaped `ILIKE '%ada%'`, and both outside adoption evaluations named
+`tsvector` — Postgres's real full-text type — as a gap: it can't be
+declared, `migrate` can't render it, and `introspect` refuses a table that
+has one, the same "cannot be adopted at all" severity that got array
+columns built. Full text doesn't get the same treatment, because ILIKE is
+the right default rather than a placeholder for it, and the two are
+different operations wearing similar names. A substring match is what a
+filter box does — no index required to be correct, no configuration
+needed to be predictable, no dictionary to explain itself; a user typing
+`ada` gets rows containing `ada`, including `Nowlada`, which is
+occasionally wrong and never surprising. Full text stems, drops stop
+words, ranks, and depends on a text-search configuration that's a property
+of the deployment rather than the column — better for prose, worse for
+identifiers, and which any given `Searchable` column actually wants isn't
+something the schema can say on its own.
+
+So `?search` stays ILIKE, and a `tsvector` column doesn't ship. What makes
+this a refusal rather than a plan is that full text isn't one feature the
+way arrays were: beyond a type, a DDL arm and an `introspect` mapping, it
+needs a GIN requirement, a named text-search configuration, an operator, a
+ranking function, and — the sharp problem — an answer to generated
+columns, since a `tsvector` is almost always database-maintained and
+`migrate.Diff` renders neither generated columns nor triggers. A feature
+that stopped at the column type would declare something the migration
+layer can't actually maintain, which is worse than not declaring it at
+all, because it looks complete. Nobody has asked for a specific shape
+either — stemmed `?search`, a separately-ranked `?q=`, and a `Filterable`
+`@@` operator are three different features the adoption census doesn't
+distinguish between. A schema with a `tsvector` column today keeps that
+column out of the registry, with `introspect` reporting it rather than
+silently dropping it, while `?search` keeps working over whatever text
+columns the schema does declare — the table can't be fully schema-first,
+but the module adopts with an asterisk rather than not at all, a strictly
+weaker gap than the one that justified building arrays.
+
+The cost of change is asymmetric in the safe direction: nothing declares
+a `tsvector` today, so a new operator or column type is purely additive.
+The one expensive move would be redefining what `?search` already means —
+if full text later took over the existing parameter, every deployed
+search box would change behavior without its request changing — so
+whatever ships lands as a new spelling, not a silent redefinition of the
+old one. An opaque `tsvector` passthrough was considered and rejected for
+the same reason an opaque vector-column passthrough was: the typed slot is
+the small half of either feature, and a third record reaching that same
+conclusion is itself evidence. Revisit if a real port can't be adopted
+because its search box is genuinely a `tsvector` query rather than merely
+missing a nicety — the arrays argument, applied here; if a specific
+query shape gets named, such as stemming or ranking, since either is
+smaller than the general feature and could ship alone; if `migrate` learns
+to render generated columns for an unrelated reason, removing the sharp
+dependency; or if ILIKE becomes a performance problem before an
+expressiveness one, which argues for a trigram index rather than for full
+text.
 
 ### Collections are flat
 
