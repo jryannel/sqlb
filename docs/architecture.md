@@ -51,7 +51,7 @@ Almost everything else follows from those two.
 | Package | Responsibility | Depends on |
 |---|---|---|
 | `schema` | The declarative DSL and its validation. Design-time only; nothing at runtime imports it. | nothing |
-| `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`. | stdlib only |
+| `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`, and HTTP authentication middleware (`auth.go`). | stdlib only |
 | `filter` | URL grammar → predicates, validated against model capabilities. | `sqlb` |
 | `migrate` | Diffs two schemas into changes, renders them as Postgres DDL, and writes migration files for goose, golang-migrate or plain SQL. Does not apply them. | `schema` |
 | `introspect` | Reads `pg_catalog` back into a `*schema.Registry`, and reports every construct the DSL cannot express. Design-time; connects through a `sqlb.Executor`, so the handle is the caller's. | `schema`, `sqlb` |
@@ -143,7 +143,8 @@ twice; `rest` logs it and returns the success it achieved.
 
 ## Where safety lives
 
-Four independent mechanisms, each covering what the others cannot:
+Four independent mechanisms inside the query path, each covering what the
+others cannot — plus authentication, below, sitting in front of all four:
 
 **Bind parameters.** Values never reach SQL text. There is one `bind` method on
 the compiler and no way to interpolate a value around it.
@@ -163,6 +164,18 @@ time.
 
 **Query hooks.** Tenant scoping applies to every read of a model, including
 reads issued by generated handlers, because both go through the same builder.
+
+**Authentication is a separate mechanism from the four above, composing
+with rather than replacing them**
+([ADR-0059](#a-verifier-composes-with-the-principal-seam)). `Middleware[T]`
+(`auth.go`) verifies who is calling and writes the result to the context via
+`WithPrincipal`; query hooks then read it back with `PrincipalFrom[T]` to
+decide what that caller may see. An app can swap `Middleware[T]`'s
+`Verifier[T]` — WorkOS, Clerk, Zitadel, a self-hosted JWT, more than one
+realm at once — without touching a hook, and can change a hook's
+row-scoping without touching how identity was established. Neither seam
+substitutes for the other: `Middleware[T]` answering 200 says only that the
+credential was valid, not what rows the resulting principal may reach.
 
 Two smaller rails worth knowing: `Update` and `Delete` without a `WHERE` return
 `ErrUnscoped` until `Everything()` is called explicitly, and LIKE
@@ -3478,4 +3491,85 @@ wrong default rather than the common case, or if every real project's
 `Migrate` function turns out to be the same ten lines, which would mean
 withholding a shipped migration adapter is optimizing against a dependency
 nobody actually minded.
+
+### A Verifier composes with the principal seam
+
+An earlier decision already answered how sqlb publishes an extension point
+without owning the assembly around it
+([ADR-0044](#the-container-is-an-adapter)): a minimal, stdlib-only context
+contract — `WithPrincipal`/`PrincipalFrom[T]` in `principal.go` — with
+anything opinionated, which router, which provider, kept as a copy-paste
+example rather than an import. That record also named its own
+reconsideration trigger: a second author writing an sqlb-shaped module.
+Four such authors arrived at once — applications wanting WorkOS, Clerk,
+Zitadel, or a self-hosted JWT/session scheme, each about to write the same
+shape of middleware, extract a credential, verify it, call `WithPrincipal`,
+independently. `example/tasks/auth/` and `example/fxapp/access/` already
+proved the pattern works; what neither proved is that it needs restating by
+hand every time.
+
+`Verifier[T]`, `Middleware[T]`, `TransientError`, and `BearerToken` are
+published in `auth.go` at the module root, next to `principal.go`, with
+zero new dependencies. `Verifier[T]` stays generic over the application's
+own principal type rather than sqlb defining a canonical `Principal`
+struct — the same choice `PrincipalFrom[T]` already made, extended to the
+thing that produces a principal rather than just the thing that carries
+one. Credential extraction is a separate, composable piece from
+verification (`CredentialExtractor`, with `BearerToken` as the
+stdlib-shaped default): WorkOS's AuthKit and Clerk's hosted UI commonly
+hand back session state via a cookie for browser flows, while Zitadel and
+self-hosted JWT are bearer-token-shaped, so hardcoding one extraction
+strategy into `Middleware` would make it wrong for half its named targets.
+A `Verify` failure is 401 unless it opts into `TransientError`, which
+answers 500 instead — a provider outage and a rejected credential are
+different failures for an operator paging on 5xx and for a client deciding
+whether to retry, and collapsing them loses that distinction. This is
+opt-in rather than a required interface method, because a `Verifier` with
+no network call to fail, local JWT verification, has no transient failure
+mode to report; return `TransientError` by value, since `Middleware`'s
+`errors.As` check targets the value type and a pointer silently falls
+through to 401. Provider adapters — WorkOS, Clerk, Zitadel — stay worked
+examples under `example/`, each its own Go module, not published
+`go get`-able packages: sqlb core is dependency-locked to pgx only
+([ADR-0040](#the-driver-is-a-dependency)), an adapter needs its provider's
+SDK, which must never reach sqlb's own `go.mod`, and this is ADR-0044's
+rule exercised for auth specifically rather than a new one. `Middleware[T]`
+also carries no public-path allow-list the way
+`example/tasks/auth/middleware.go` does — not a gap so much as the same
+ADR-0044 rule applied to path matching: `rest.Server.Handler` and any
+router already let an app mount `Middleware[T]` on only the subtree that
+needs protection, so an allow-list opinion in core would duplicate the
+app's own router and still have to pick subtree-vs-exact-match itself;
+`example/tasks/auth/middleware.go`'s allow-list stays the worked example
+for an app that wants deny-by-default-with-exceptions, and core stays
+silent on the policy.
+
+Four independent auth integrations share one seam instead of four
+reimplementations of "extract, verify, `WithPrincipal`," and the 401-vs-500
+split is testable and tested once in core rather than once per adapter.
+The cost is that `Verifier[T]` commits to a one-credential, one-call shape:
+an app needing multi-factor verification, or a provider whose check
+genuinely needs two round trips, doesn't fit `Verify(ctx, cred) (T, error)`
+directly and has to compose its own `Verifier[T]` around the parts it
+needs — multi-provider chaining within one realm was scoped out
+deliberately, not an oversight. Widening (`Middleware` gaining an optional
+parameter, a second failure taxonomy) is free; narrowing is cheap today
+too, since nothing outside `auth.go` and its own tests calls `Verifier[T]`
+or `Middleware[T]` yet — the honest cost of changing the signature is zero
+until the first adapter depends on it. Two smaller calls made along the
+way, both left for later evidence rather than built speculatively:
+`Middleware` doesn't set `WWW-Authenticate`, since it's generic over
+`CredentialExtractor` and doesn't know the extractor is bearer-shaped (an
+app-specific wrapper can add it), and `Verify`'s error carries no typed
+reason beyond transient-or-not, since the detail message deliberately
+never echoes the underlying error and a richer type would have nowhere
+visible to surface today.
+
+Revisit if a second application's `Verifier[T]` needs a signature
+`Verify(ctx, cred) (T, error)` can't express, or if a real adapter — once
+WorkOS, Clerk, or Zitadel land — finds `TransientError` insufficient, for
+instance a provider whose rate-limit response is neither "reject the
+credential" nor cleanly "unreachable." No real adapter exists yet as of
+this writing; those are separate follow-on plans and will be the evidence
+that answers this.
 
