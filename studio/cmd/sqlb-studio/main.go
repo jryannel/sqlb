@@ -1,6 +1,6 @@
 // Command sqlb-studio serves a read-only, generic browser over a sqlb.json
 // manifest. It carries no per-application knowledge — see the studio package
-// doc and docs/adr/0053 in the parent module.
+// doc and docs/architecture.md's manifest decision in the parent module.
 package main
 
 import (

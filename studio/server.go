@@ -31,7 +31,8 @@ var templateFuncs = template.FuncMap{
 // Server renders a Manifest as a browsable data/schema explorer. Schema
 // pages need only the manifest; the data pages call APIBase with the
 // operator's own bearer token (see session.go) — the browser inherits
-// whatever that token can already see, and nothing more (docs/adr/0053).
+// whatever that token can already see, and nothing more (docs/architecture.md,
+// "The manifest describes what cannot be guessed").
 type Server struct {
 	manifest *schema.Manifest
 	apiBase  string
