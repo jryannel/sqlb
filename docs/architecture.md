@@ -3113,7 +3113,59 @@ rather than earn a schema field.
 
 ### A singleton is an op that removes the id
 
-_(pending merge from `docs/adr/0052-a-singleton-is-an-op-that-removes-the-id.md`)_
+A table keyed by the column that scopes it has exactly one row per
+caller — billing settings per org, a profile per user — and neither
+existing shape fits it. `OpList` answers `{items:[…]}` for a resource that
+is definitionally singular, leaving every client to unwrap `items[0]`
+forever with nothing in the document saying so. `OpRead` at
+`/resource/{id}` makes the client send back its own tenant id, a value the
+server already holds and the scope hook already enforces, so the segment
+is redundant when it matches and a lie when it doesn't — a mismatch reads
+as a 404 that actually means "you typed your own name wrong." Real
+adopters facing this kept a hand-written handler rather than generate
+either shape, which is the evidence that a third op belongs in the
+vocabulary rather than that the table is unusual.
+
+`OpSingleton` removes the `{id}` segment from the whole resource instead
+of adding a route beside it: `GET <path>` answers the caller's one row as
+a bare object, `PATCH`/`DELETE <path>` replace the id-scoped forms, and
+`OpList`/`OpRead` are refused alongside it — the first because it's the
+same route, the second because it's the exact question this op exists to
+delete. It needs no primary key, which is what lets a table keyed only by
+its tenant column be a resource at all, and it's refused outright on any
+model with no `Scoped` column, both at generate time and at mount. That
+refusal is the whole design, not a side constraint: a singleton's row is
+the row the scope hook leaves — there is no key in the path and no key
+predicate in the statement, so the handler issues an unfiltered `SELECT`
+and relies entirely on `BeforeQuery` to narrow it. Without the
+`Scoped`-requires-a-hook chain already enforced elsewhere in the system,
+an unconfined singleton table would answer an arbitrary row on read and
+reach every row on write — the default-open failure the scoping design
+exists to close, arriving through a door that op alone didn't cover. It's
+also the strongest form of that check: elsewhere a missing hook merely
+widens an answer the client could still narrow by naming a row; here it
+picks one at random, and two matching rows is a 500 rather than a silent
+first-of-two, because serving one of them is exactly the wrong answer this
+package refuses to give quietly anywhere else.
+
+A `Singleton bool` modifier on the existing read op was rejected because
+the manifest and `restcompat` are keyed by operation, and a document
+saying `operations: ["read"]` at `/settings` would no longer say whether
+an `{id}` exists — the distinction has to live in the operation, not a
+flag beside it. A second op just for the singleton write was rejected as
+needless multiplication, since "this resource has no id" is one fact, not
+one per HTTP verb. And allowing `OpRead` to coexist with `OpSingleton` was
+refused for now on the general rule that refusals are cheap to relax
+later and expensive to tighten once someone depends on them. A singleton
+also reports no filterable, sortable or searchable columns anywhere,
+regardless of what the columns themselves declare, since the one `GET`
+rejects every query parameter but `?expand` and publishing that vocabulary
+would document requests that only ever 400. Revisit if adopters keep
+reaching for a hand-written handler anyway because the `Scoped`
+requirement doesn't fit their table, which would mean the requirement
+needs revisiting rather than the op, or if a resource turns out to want
+both a singleton and a collection route at once, which would mean the
+modifier design was right and this was the wrong axis.
 
 ### The manifest describes what cannot be guessed
 
