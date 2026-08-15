@@ -425,7 +425,36 @@ functions while keeping the builder itself generic.
 
 ### Capabilities are opt in
 
-_(pending merge from `docs/adr/0006-capabilities-are-opt-in.md`)_
+Exposing a table over a dynamic filter API means deciding what a client may
+ask about. PostgREST's model — everything in the exposed schema is fair
+game, with row-level security as the guard — puts the whole schema one
+policy mistake away from public, and turns "which columns can a client
+filter on" into a question answered by reading policies rather than the
+table. sqlb instead makes every capability opt-in per column: `Filterable`,
+`Sortable`, `Searchable`, `Expandable`, `Hidden`. A column that does not
+declare a capability cannot be reached through it, and the request is
+rejected with a 400 rather than silently ignored.
+
+`Hidden` goes further than the others: a hidden column is reported as
+*unknown* rather than *not filterable*, so its existence cannot be probed
+from the rejection, and declaring a column both `Hidden` and `Filterable` is
+a schema validation error, because a filterable secret can be recovered a
+character at a time. `filter.Apply` owns the projection and defaults to
+non-hidden columns, so a handler that forgets to specify one cannot leak a
+hidden column by omission.
+
+The payoff is that the blast radius of exposing a table is legible from the
+schema file alone — adding a column never silently widens the API — and an
+index can be guaranteed for every filterable column, because the set is
+finite and declared. The cost is friction by design: every new filter needs
+a schema edit and a regeneration. That cost is deliberately asymmetric in
+the other direction too — loosening the default later is nearly
+irreversible, since clients would come to depend on filters that opt-in
+never granted, and tightening after that breaks them in ways that are hard
+to see coming. Tightening from here stays cheap, because nothing is exposed
+that was not declared. Revisit if the declare-and-regenerate loop becomes
+the dominant complaint from people building views, which would argue for a
+per-resource permissive mode that still excludes `Hidden`.
 
 ### Generated rest handlers
 
