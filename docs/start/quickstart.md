@@ -38,6 +38,34 @@ other:
   written by hand. See [Using your own structs](structs-first.md); nothing here
   requires the DSL.
 
+## Or scaffold it
+
+The five steps below, run for you. `sqlb init` writes a project with one
+table, everything `generate` produces from it, and a server built on
+`rest.Serve` — most of the way through step 4 in about five commands:
+
+```bash
+go install github.com/jryannel/sqlb/cmd/sqlb@latest
+sqlb init -module github.com/you/blog
+cd blog
+go mod tidy
+go generate ./...
+go run ./cmd/server
+```
+
+`init` writes the project and prints those last three commands rather than
+running them itself — each needs something it cannot promise: `go mod tidy`
+needs the network to resolve a module it just started depending on, and
+`go generate` needs that resolution to have already happened. What lands on
+disk is `blogschema/schema.go` (one `Task` table, exposed as CRUD), the four
+generated files [step 2](#2-generate) below produces from it, and a
+`cmd/server/main.go` built on [`rest.Serve`](../rest/README.md#serve-the-whole-server)
+with migrations applied from disk at startup — `<dir>` must not already
+contain a `go.mod`.
+
+The rest of this page builds the same shape by hand, one decision at a time —
+worth reading once a single table stops being enough.
+
 ## 1. Declare a schema
 
 The schema is ordinary Go, in a package of its own. It lives apart from the
@@ -235,6 +263,11 @@ http.ListenAndServe(":8080", router)
 You now have list, read, create, patch and delete for every exposed table, with
 filtering, sorting, search, pagination and an OpenAPI document built from each
 column's capabilities. See [Mounting resources](../rest/README.md).
+
+That snippet is the HTTP layer alone. The pool-open, migrate, listen,
+graceful-shutdown code around it is identical in every sqlb server, and
+`rest.Serve` writes it once for you — see [Serve: the whole
+server](../rest/README.md#serve-the-whole-server).
 
 ## 5. Scope every read
 

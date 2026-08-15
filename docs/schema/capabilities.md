@@ -250,9 +250,14 @@ reaches the models a request arrives at through `?expand` as well.
 
 See [ADR-0054](../adr/0054-a-named-scope-is-releasable-at-the-mount.md).
 
+Releasing a scope changes what rows a query can see, not who may ask — a
+worked admin mount pairs it with a route guard. See [A cross-tenant admin
+surface](../rest/admin.md).
+
 ## Next
 
 - [References and relations](references.md) — `Expandable` and its inverse
 - [Hooks](../queries/hooks.md) — the registrations `Scoped` obliges
+- [A cross-tenant admin surface](../rest/admin.md) — releasing a scope, end to end
 - [Rejections](../rest/errors.md) — what a refused capability looks like on the
   wire
