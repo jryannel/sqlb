@@ -272,6 +272,31 @@ func guardNested(ctx context.Context, exec Executor, preds []Pred, exprs []Expr)
 	return w.check(ctx, exec)
 }
 
+// guardFrom is guardNested's counterpart for [Update.From]: the CTE's query is
+// compiled straight into the surrounding statement rather than run, so a model
+// with a registered BeforeQuery hook needs the same refusal a nested subquery
+// gets, for the reason [Subquery]'s own doc comment gives — and any subquery
+// nested inside *that* query needs the same check applied one level down.
+func guardFrom(ctx context.Context, exec Executor, name string, q Subquery) error {
+	if q == nil {
+		return nil
+	}
+	unresolved, err := q.subUnresolved(ctx, exec)
+	if err != nil {
+		return err
+	}
+	if unresolved != "" {
+		return fmt.Errorf(
+			"sqlb: From(%q) is over %s, whose reads are confined by a registered query hook "+
+				"that a CTE source does not run; resolve it first — "+
+				"sub, err := sqlb.Query[%s]()….Resolved(ctx, db) — and pass the result to From",
+			name, unresolved, unresolved)
+	}
+	var w subqueryWalk
+	q.walkSubqueries(&w)
+	return w.check(ctx, exec)
+}
+
 // subquery renders a nested SELECT, checking that it is the shape the
 // surrounding operator can use.
 func (c *compiler) subquery(n SubqueryExpr) {

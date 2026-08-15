@@ -500,7 +500,12 @@ type Update[T any] struct {
 	where    []Pred
 	all      bool
 	computed map[string]bool
-	err      error
+	// fromName and fromQuery are set together, by From. fromQuery is nil for
+	// every statement that does not call it, which is what SQL and Resolved
+	// branch on.
+	fromName  string
+	fromQuery Subquery
+	err       error
 }
 
 type assignment struct {
@@ -563,6 +568,54 @@ func (u *Update[T]) Everything() *Update[T] {
 	return u
 }
 
+// From feeds query into the update as a CTE: `WITH name AS (query) UPDATE …
+// FROM name …`. It exists for exactly one shape — the Postgres queue-claim
+// idiom, where a batch is selected with ForUpdate().SkipLocked() and the same
+// statement both marks and returns the rows it locked, in one round trip
+// instead of the two an explicit transaction otherwise needs (#174):
+//
+//	claimed := sqlb.Query[Job]().Select(sqlb.F("id")).
+//	    Where(sqlb.F("status").Eq("pending")).
+//	    OrderBy(sqlb.F("id").Asc()).Limit(n).
+//	    ForUpdate().SkipLocked()
+//
+//	sqlb.UpdateRows[Job]().
+//	    From("claimed", claimed).
+//	    Set("status", "claimed").
+//	    Where(sqlb.F("id").EqField(sqlb.F("id").Qualify("claimed"))).
+//	    Exec(ctx, db)
+//
+// This is not a general CTE facility, and building one is deliberately out of
+// scope: a `From` on `Update` covers the queue-claim shape, which is the shape
+// asked for, without the surrounding statement needing to say what several
+// arbitrary CTEs would mean together.
+//
+// query is compiled straight into the surrounding statement — sharing its bind
+// numbering, the same way a nested [Subquery] does — rather than being run, so
+// it needs to arrive already resolved: call query.Resolved(ctx, db) first if
+// its model has a registered BeforeQuery hook, and pass the result. An
+// unresolved query is refused rather than silently compiled with its scope
+// missing, for the reason [Subquery]'s own doc comment gives.
+//
+// name becomes both the CTE's name and, since it brings a second table into
+// the statement, what an unqualified column reference in Set, SetExpr, Where
+// or RETURNING resolves to when it is not the CTE's — [Field.Qualify] is how a
+// predicate names the CTE's own column instead, as the Where above does.
+func (u *Update[T]) From(name string, query Subquery) *Update[T] {
+	if name == "" {
+		return u.fail("sqlb: From needs a CTE name")
+	}
+	if query == nil {
+		return u.fail("sqlb: From(%q) needs a query", name)
+	}
+	if err := query.Err(); err != nil {
+		return u.fail("sqlb: From(%q): %s", name, err)
+	}
+	u.fromName = name
+	u.fromQuery = query
+	return u
+}
+
 // WithComputed adds the named computed columns to the statement's RETURNING.
 //
 // It is [Builder.WithComputed] for a write, and the default is the same: none.
@@ -610,9 +663,32 @@ func (u *Update[T]) SQL() (string, []any, error) {
 	c := newCompiler(u.dialect)
 	// A WHERE may name a derived column even though a SET may not.
 	defer c.withComputed(u.model.Table, computedSetOf(u.model))()
+
+	// The CTE compiles first, so its own binds — a LIMIT's argument, a WHERE
+	// inside the SELECT — take the earlier positions and the outer statement's
+	// binds continue the numbering rather than the two colliding. compileSub
+	// shares this compiler for exactly that reason; see [Subquery].
+	if u.fromQuery != nil {
+		c.write("WITH ")
+		c.ident(u.fromName)
+		c.write(" AS (")
+		u.fromQuery.compileSub(c)
+		c.write(") ")
+	}
+
 	c.write("UPDATE ")
 	c.table(u.model.Table)
 	c.write(" SET ")
+
+	// From brings a second table into the statement, so from here on an
+	// unqualified column is the same ambiguity Builder.compile qualifies
+	// against for a join — resolving it to the target table is what a caller
+	// meant, the same argument as there. A statement with no From leaves
+	// c.base empty and every column renders exactly as it always did.
+	if u.fromQuery != nil {
+		defer c.qualifyTo(u.model.Table)()
+	}
+
 	for n, a := range u.sets {
 		if n > 0 {
 			c.write(", ")
@@ -620,6 +696,10 @@ func (u *Update[T]) SQL() (string, []any, error) {
 		c.ident(a.column)
 		c.write(" = ")
 		c.expr(a.value)
+	}
+	if u.fromQuery != nil {
+		c.write(" FROM ")
+		c.ident(u.fromName)
 	}
 	if len(u.where) > 0 {
 		c.write(" WHERE ")
@@ -659,6 +739,13 @@ func (u *Update[T]) Resolved(ctx context.Context, db Executor) (*Update[T], erro
 	}
 	if err := guardNested(ctx, db, stmt.where, exprs); err != nil {
 		return nil, err
+	}
+	// From's query is compiled straight into this statement rather than run,
+	// the same reason a nested Subquery is; see guardFrom.
+	if stmt.fromQuery != nil {
+		if err := guardFrom(ctx, db, stmt.fromName, stmt.fromQuery); err != nil {
+			return nil, err
+		}
 	}
 	return stmt, nil
 }
@@ -971,6 +1058,15 @@ func quoteList(names []string) string {
 //
 // Computed columns are not in it by default. See [writeComputed] for the
 // argument, and WithComputed on [Insert], [Update] and [Delete] for the opt-in.
+//
+// A stored column renders through [compiler.column] rather than a bare
+// [compiler.ident], so that it picks up c.base when one is set. Every caller
+// but a From-bearing [Update] leaves c.base empty and gets exactly the bare
+// name this always rendered; [Update.From] brings a second table — the CTE —
+// into the statement, and RETURNING can see both of them, so an unqualified
+// column already ambiguous in SET and WHERE is the same ambiguity here if the
+// CTE happens to project a column of the same name (it does, in the queue-claim
+// shape From exists for: the claimed id).
 func writeReturning(c *compiler, m *Model, computed map[string]bool) {
 	c.write(" RETURNING ")
 	first := true
@@ -988,7 +1084,7 @@ func writeReturning(c *compiler, m *Model, computed map[string]bool) {
 			c.ident(col.Name)
 			continue
 		}
-		c.ident(col.Name)
+		c.column(Column{Name: col.Name})
 	}
 }
 
