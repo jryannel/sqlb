@@ -2726,7 +2726,89 @@ in the wrong place.
 
 ### The stream is a seam
 
-_(pending merge from `docs/adr/0045-the-stream-is-a-seam.md`)_
+The [change feed outbox](#change-feed-outbox) decided durability — a row
+written in the same transaction as the change, a dispatcher woken by
+`LISTEN/NOTIFY` — and left everything downstream of it unbuilt: an
+endpoint, a wire format, a reconnection story, and a decision about what a
+subscriber is actually sent. An adoption review looking for what sqlb
+offered a real application's live-update endpoint found nothing and
+recommended building on infrastructure that already existed rather than
+waiting. What changed the calculus was that `AfterCommit` had since
+shipped and generated writes started wrapping themselves in a
+transaction, which made the correct moment to publish a change — after
+the commit, never inside it — reachable from every write sqlb issues,
+without needing the outbox's durability to get there first. So the stream
+splits into a transport with a `Source` behind it: `rest.Events` mounts
+the endpoint and owns every HTTP concern — `Last-Event-ID`, heartbeats,
+the retry hint, a per-subscriber filter — while knowing nothing about
+where a delivery actually comes from, so the outbox dispatcher can later
+implement `Source` and replace the interim implementation with the
+endpoint, wire format and every client left untouched.
+
+The first `Source` is deliberately in-process — `rest.Broker` fans out
+only to subscribers connected to the same process, is at-most-once, and
+is single-replica — and says so at the top of its own doc comment rather
+than in a changelog, because the failure it produces (a client that never
+learns a row changed and shows stale data forever) is invisible from the
+outside and won't surface in a test the way it will in a two-replica
+deployment behind a load balancer. A subscriber receives an invalidation —
+`{table, key, op}` — never a row, the same choice the outbox decision
+made, and building it sharpened why: a payload would have to be produced
+per subscriber under that subscriber's own scope or the resource's query
+hooks would never run on it, and a change feed that skips the tenant scope
+hands one tenant's rows to another. Sending only the address of a change
+keeps the ordinary read path the one and only thing that ever reads,
+which is what lets every rule that path enforces keep holding. The tenant
+value itself — read off whatever column the model declared as its scoping
+column — travels only as far as the filter hook that decides whether an
+event is this subscriber's; it's deliberately never serialised onto the
+wire, since a subscriber already knows its own tenant id and putting it on
+the wire would only enlarge a contract that's expensive to change later
+for no benefit. Every failure converts into a disconnect rather than a
+silent drop: a subscriber that falls behind its buffer is disconnected,
+not skipped; a reconnection whose `Last-Event-ID` predates the retained
+history gets an explicit reset event rather than silence; an unparseable
+`Last-Event-ID` gets the same reset rather than being read as a fresh
+connection. The rule behind all three is that a dropped event is a client
+wrong forever, while a dropped connection is a client that reconnects and
+converges — so when in doubt, the design drops the connection. Writes
+reach the feed through the same hook mechanism as tenant scoping, not
+through the REST handlers directly, because wiring the handlers would
+leave the feed silent for exactly the writes most likely to matter — a
+background job, a migration, an admin script — the identical argument for
+why query scoping lives in a hook rather than in each handler.
+
+This buys a live view working today, on one replica, with zero schema
+change and zero new infrastructure, and it settles the client contract —
+the endpoint, the two event types, `Last-Event-ID` behaviour — against a
+running implementation now, so the outbox lands later as a source swap
+rather than a client migration; when it did land, the contract held
+exactly as hoped, with the dispatcher slotting in as a second `Source`
+implementation and only one addition needed (an optional interface a
+durable publisher can implement to record inside the writing transaction
+while the in-process broker keeps announcing after it). The cost that no
+amount of documentation fully retires is a feature correct on one replica
+and quietly wrong on two — what documentation can do is put that limit
+where a reader meets it first, which is where it sits. What's explicitly
+not addressed: cross-table ordering, authorization beyond whatever the
+filter hook chooses to check, WebSocket, and any delivery guarantee at
+all while running on the in-process broker. Cost of change is sharply
+split: swapping the source is one constructor call, cheap by construction
+and the entire point of the seam, while the wire is deliberately the
+smallest thing that works — three fields, two event types — because
+changing its shape means a new version of the endpoint, not an edit, and
+hand-written frontend code that no generator will ever update is written
+against it too. Revisit if a third source can't make its positions dense
+— a per-partition Kafka offset or NATS sequence number would have to
+either fake a position or reset on every reconnect, which the outbox's
+own dense, commit-ordered ids sidestepped but a partitioned source can't;
+if `Filter` turns out to be where authorization actually lives rather
+than a hook a few applications happen to set, which would argue for
+making it a declared, mount-time-checked obligation the way tenant
+scoping already is; or if disconnect-on-overflow shows up as reconnect
+storms under a real write burst, answerable by a larger buffer or by
+collapsing queued invalidations per table before the buffer fills, sound
+specifically because two invalidations for the same table really are one.
 
 ### A negation is sqls
 
