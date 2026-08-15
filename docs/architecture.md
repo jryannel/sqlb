@@ -1320,7 +1320,54 @@ inside instead of outside.
 
 ### Expansion is one statement
 
-_(pending merge from `docs/adr/0025-expansion-is-one-statement.md`)_
+`?expand=author` had been parsed since the filter grammar existed and refused
+by every surface that could otherwise answer it, and building it forced three
+decisions. The obvious implementation reads the page, collects the foreign
+keys, and issues a second `SELECT … WHERE id IN (…)` — inheriting every hook,
+filter and capability check on the target for free, and unable to be made
+consistent: the second query runs at a later snapshot, so a row deleted
+between the two produces a contradictory answer, the foreign key set but the
+expanded object null, both in one response. Fixing that with a
+repeatable-read transaction would make every list request pay for a problem
+only expansion has. Whether the target's columns could be trusted wholesale
+was the second question: building the expanded object with one call over
+every column of the target row would carry hidden columns like a password
+hash straight across the join — not a corner case, a leak in the shipped
+example. And then, once a join-based version was built, tested across three
+packages and green, Postgres refused the statement outright as an ambiguous
+column reference, because the predicate-building code produced unqualified
+column references that were fine in single-table SQL and invalid the moment
+a second table entered the query — the in-memory test driver had been
+validating what someone expected rather than what Postgres actually accepts.
+
+So expansion compiles to one statement: a `LEFT JOIN` per relation, and a
+`json_build_object` over the target's non-hidden columns built explicitly
+column by column rather than with a wholesale row-to-json call, so a hidden
+column can't survive the join by construction — verified by reading the raw
+JSON the database produced, not the decoded struct, since a struct silently
+drops an unmapped key and would pass even with the hash sitting in the
+response. A join matching nothing yields `NULL`, not an object of nulls. An
+unqualified column resolves to the base table, but only once something is
+actually joined, so single-table SQL keeps the plain column names a human
+reading a logged query wants. And expansion goes one level deep only.
+
+This buys consistency by construction — one snapshot, so the foreign key and
+the expanded object can never disagree — at no transaction cost, with the
+projection staying exactly as wide as the base type. The cost fell mostly on
+hooks: getting a soft-delete or tenant-scoping predicate to apply correctly
+to the joined table required rewriting it onto the join's alias before
+splicing it into the `ON` clause, and a predicate that can't be requalified
+with certainty — a raw SQL fragment, or one naming a table that isn't part of
+the join — fails the query outright rather than being silently dropped, since
+a dropped scope predicate is the same leak arriving by a quieter route. The
+join is also unconditional per named relation, with no query-time budget
+beyond joining on a primary key, so an unindexed expandable foreign key is
+something linting has to catch rather than something the runtime protects
+against. Revisit if nesting is ever wanted — `?expand=author.org` reopens the
+one-statement argument, and it's weaker for a nested relation whose
+inconsistency window a client can barely observe anyway — or if expansion
+turns out to be the measurably slow query on a real screen, at which point a
+batched second query becomes worth its inconsistency on a per-resource basis.
 
 ### Vectors declare their index
 
