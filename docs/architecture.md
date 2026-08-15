@@ -2812,7 +2812,44 @@ specifically because two invalidations for the same table really are one.
 
 ### A negation is sqls
 
-_(pending merge from `docs/adr/0046-a-negation-is-sqls.md`)_
+Every negation in the filter surface — `neq`, `nin`, the containment
+complements `nhas`/`nhasany`/`nhasall`/`nhasdoc`, and the JSON tree's group
+`not` — uses SQL's three-valued logic: a row that is NULL in the column under
+test matches neither an operator nor its complement. That reads as a bug to
+anyone expecting set semantics, where the complement of a set is everything
+else, and the fix keeps getting proposed as `IS NOT TRUE` on the group form
+alone. That fix is rejected structurally, not on taste: a leaf complement's
+negation lives inside one token (`nhas` cannot be decorated), so `IS NOT
+TRUE` could only ever apply to the group spelling, leaving
+`?labels=nhas.urgent` and `?not=(labels.has.urgent)` — the same logical
+filter — returning different rows depending on which of two equivalent
+spellings a caller happened to write. That disagreement has no
+documentation home; it belongs to neither the operator, the column, nor the
+group, only to which spelling was picked, which is strictly worse than the
+surprise it set out to fix.
+
+Set semantics everywhere — `neq` as `IS DISTINCT FROM`, `nin` as
+`NOT IN (…) OR col IS NULL`, and so on — would dissolve the dilemma
+entirely and is arguably the better filter language. It is foreclosed
+anyway: `compatibility.md` freezes the filter grammar as a wire format on
+the promise that existing spellings never change meaning, and a change to
+what `neq` returns is invisible to a deployed client, to an agent replaying
+`sqlb.json`, and to `restcompat`'s capability diff alike — no parameter is
+removed, no request is rejected, so nothing can detect or migrate the
+break. So negation stays SQL's negation everywhere, documented at each
+place a caller meets it, with the escape hatch spelled out beside it —
+`?or=(labels.nhas.urgent,labels.isnull)`. The one asymmetry in the shipped
+behavior, `OneOf` translating a nil member into `IN (…) OR col IS NULL`
+while `NotOneOf` does not mirror it, is deliberate: that translation
+repairs a filter that could never match anything, which is a different act
+from choosing which rows a well-formed negation returns. The door left open
+is a second, additive vocabulary — null-inclusive operators landing
+alongside the existing ones rather than redefining them — provided every
+new spelling lands in both the URL grammar and the JSON tree at once, so
+the same seam doesn't reopen one level up. Revisit if the escape hatch
+turns out to be unspellable in some position, most likely inside a nested
+negated group — that would be a correctness argument, and it would outrank
+the compatibility freeze.
 
 ### No default hook registry
 
