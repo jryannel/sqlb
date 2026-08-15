@@ -952,7 +952,42 @@ guards need a shared harness that constructs the failure for them.
 
 ### Enums as text and check
 
-_(pending merge from `docs/adr/0017-enums-as-text-and-check.md`)_
+`schema.Enum("status", "draft", "live")` declares a column constrained to a
+fixed set, and Postgres has a native type for exactly this — the obvious
+choice right up to the point the list has to change, which is one of the most
+ordinary schema edits there is. A native enum value cannot be removed; the
+route is a replacement type, a rewrite of every column using the old one, and
+a drop. Adding a value cannot happen in the same transaction that reads it, so
+a change needing that drags every unrelated change sharing its migration file
+out of its transaction too. And the type is schema-level, not table-level, so
+under this project's module prefixing two modules declaring their own
+`status` enum collide in a namespace neither owns. Against that, the native
+type buys storage compactness, a defined sort order, and type-level rejection
+at every call site.
+
+So an enum column compiles to `text` with a named `CHECK` constraint —
+`CHECK ("status" IN ('draft', 'live'))` — rather than a native type. Changing
+the list becomes an ordinary `DROP CONSTRAINT` plus `ADD CONSTRAINT`, which
+the diff engine already does for every other constraint: no special case, no
+new object type, no transaction exception. Removing a value from the list
+isn't marked destructive, because it can't lose data — Postgres rejects the
+whole `ADD CONSTRAINT` if any existing row would violate it — so it renders
+live, with a comment naming the values no longer permitted, since the fix
+lives in the rows rather than the migration.
+
+The cost is more storage than a native enum's four bytes, no implicit sort
+order — `ORDER BY status` sorts alphabetically, and declaration order needs an
+explicit `CASE` — and a bad value rejected at insert time by the constraint
+rather than at parse time by a type system. The direction of that cost is
+deliberately the cheap one to be wrong in: nothing outside the DDL renderer
+knows the representation, so moving to a native enum later is confined and
+mechanical, while moving away from one would mean rewriting every table that
+used it. Revisit if declaration-order sorting is needed in more than one or
+two places (the likely answer is an explicit ordinal column, not a native
+enum), if a consumer's tooling reads `pg_enum` and can't be taught to read
+`pg_constraint` instead, or if the text column's width becomes measurably
+significant — at which point the right escalation is a lookup table, which is
+also the natural move once a value list acquires attributes of its own.
 
 ### Tooling scoped to tracked files
 
