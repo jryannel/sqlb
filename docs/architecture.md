@@ -1887,7 +1887,72 @@ a lint.
 
 ### One column addresses a row
 
-_(pending merge from `docs/adr/0034-one-column-addresses-a-row.md`)_
+`schema.Validate` has always refused a second `PrimaryKey()` on a table,
+but the refusal shipped unexplained, and an outside evaluation asked
+plainly whether it meant "no composite primary keys" or an undocumented
+"surrogate key required" stance — unable to tell which, and therefore
+unable to tell whether the cost it was about to pay (twenty-six composite
+primary keys, across fifteen tables in one real codebase) was permanent.
+Five of the six places a composite key would touch have mechanical
+answers nobody had written yet — a tuple cursor is a row-value comparison
+Postgres plans as well as the scalar form. The sixth doesn't, and it's the
+whole decision: the URL. `/tasks/{workspace}/{id}` collides with
+sub-resource paths in a way that depends on what an application mounts —
+a conflict surfacing at someone else's mount site — and `/tasks/{a},{b}`
+invents an encoding that then needs an escape for a key containing a
+comma. Either becomes wire format on the first response, alongside a
+tuple cursor payload and generated client cache keys, so the real question
+was never whether sqlb *could* carry a composite key but whether guessing
+its URL spelling was worth freezing before anyone had asked for one.
+
+So one column addresses a row, and what a table needs is bounded by what
+it does rather than by a blanket refusal: a table queried only through the
+builder needs nothing, since offset paging and an unaddressed model work
+fine without one; a table that's cursor-paged or expandable needs one
+column, since the cursor breaks ties on it and an expansion aggregates by
+it; a table exposed for read, update or delete needs one column, since
+`/resource/{id}` is one path segment. A join table with a genuine
+composite key, queried through the builder and never exposed over REST,
+needs no surrogate at all — `UniqueIndex("a", "b")` states the real key
+and Postgres enforces it, and the constraint bites only on addressing.
+Where a table does need addressing, the composite key doesn't disappear,
+it changes job: a surrogate key carries identity and a `UniqueIndex`
+keeps the real key real, a pairing already natural enough to appear in the
+worked multi-tenant example for unrelated reasons. This is also narrower
+than what shipped: the registry refuses a second `PrimaryKey()`
+everywhere, while the actual argument only reaches tables that are
+addressed, cursor-paged or expandable — a real gap between the record and
+the code, since a table that is none of those three pays a refusal the
+reasoning here never asked for. One deployment already hit exactly that
+case and reported it "didn't block me", because an upsert's conflict
+target can still name a composite key directly even without a declared
+primary key — so the table loses the ability to *declare* the key it has,
+not the ability to work, and narrowing the refusal to just the tables that
+need it stays the right next change without being urgent.
+
+What's bought is that a row has exactly one spelling everywhere it's
+named — the URL, the cursor payload, the `?expand` aggregation, the
+generated cache key — each of which is a frozen wire format that would
+otherwise need its own independently-invented tuple encoding, permanent
+from its first response. What it costs is real: an adopter with a
+composite-keyed table too central to leave on hand-written SQL pays a
+migration this project doesn't, and a table gains a surrogate column its
+domain has no use for. The asymmetry runs the useful direction — widening
+to tuple support later is additive, since a one-element tuple is exactly
+today's behavior, while narrowing is impossible the moment a
+composite-keyed row has a URL a client has already built a request
+against. One alternative is underrated and worth reaching for first: a
+join table with a natural composite key, queried by a couple of static
+queries and never exposed, fits comfortably on the sqlc side of the
+line this project already draws for tables it doesn't want to own.
+Revisit if a real schema needs a composite key on a table that is
+genuinely none of addressed, expandable or cursor-paged, which argues for
+moving the refusal into the mount check and the cursor logic instead of
+the registry; if a surrogate-key migration ever actually stops an
+adoption, meaning the constraint is landing on the wrong party; or if a
+second consumer needs tuple cursors regardless, at which point the
+marginal cost of full composite-key support falls to the URL spelling
+alone.
 
 ### Type overrides
 
