@@ -276,3 +276,245 @@ working is worse than no test, so those are exercised as real build attempts.
   relations do not expand in turn, and there is no `?expand=list.workspace`.
   One level is a join per relation and a bounded statement; nesting is where a
   depth limit and a cost model have to be argued for, and neither has been.
+
+## Decisions
+
+Decisions that shaped this codebase, folded in one at a time from a former
+`docs/adr/` directory of individually numbered records. Each subsection below
+used to be its own file; the reasoning now lives here, and its history lives
+in this file's git history rather than in a separate directory — `git log --follow -p -L /^### <heading>/,/^### /:docs/architecture.md` finds the commit that made or last revised a given decision. A change to a
+decision below gets its own commit, and the commit message carries the *why*,
+the way an ADR's body used to.
+
+### Postgres only
+
+_(pending merge from `docs/adr/0001-postgres-only.md`)_
+
+### Queries are values
+
+_(pending merge from `docs/adr/0002-queries-are-values.md`)_
+
+### One ast two producers
+
+_(pending merge from `docs/adr/0003-one-ast-two-producers.md`)_
+
+### Schema as go dsl
+
+_(pending merge from `docs/adr/0004-schema-as-go-dsl.md`)_
+
+### Runtime query engine
+
+_(pending merge from `docs/adr/0005-runtime-query-engine.md`)_
+
+### Capabilities are opt in
+
+_(pending merge from `docs/adr/0006-capabilities-are-opt-in.md`)_
+
+### Generated rest handlers
+
+_(pending merge from `docs/adr/0007-generated-rest-handlers.md`)_
+
+### Hooks as domain seam
+
+_(pending merge from `docs/adr/0008-hooks-as-domain-seam.md`)_
+
+### Typed column facade
+
+_(pending merge from `docs/adr/0009-typed-column-facade.md`)_
+
+### Codegen is optional
+
+_(pending merge from `docs/adr/0010-codegen-is-optional.md`)_
+
+### Actionable errors
+
+_(pending merge from `docs/adr/0011-actionable-errors.md`)_
+
+### Change feed outbox
+
+_(pending merge from `docs/adr/0012-change-feed-outbox.md`)_
+
+### No internal split
+
+_(pending merge from `docs/adr/0013-no-internal-split.md`)_
+
+### Migrations and import
+
+_(pending merge from `docs/adr/0014-migrations-and-import.md`)_
+
+### Module isolation
+
+_(pending merge from `docs/adr/0015-module-isolation.md`)_
+
+### Guards proven both ways
+
+_(pending merge from `docs/adr/0016-guards-proven-both-ways.md`)_
+
+### Enums as text and check
+
+_(pending merge from `docs/adr/0017-enums-as-text-and-check.md`)_
+
+### Tooling scoped to tracked files
+
+_(pending merge from `docs/adr/0018-tooling-scoped-to-tracked-files.md`)_
+
+### Pgbouncer in the path
+
+_(pending merge from `docs/adr/0019-pgbouncer-in-the-path.md`)_
+
+### Transaction scoped handle
+
+_(pending merge from `docs/adr/0020-transaction-scoped-handle.md`)_
+
+### Hooks receive an event
+
+_(pending merge from `docs/adr/0021-hooks-receive-an-event.md`)_
+
+### References declare their inverse
+
+_(pending merge from `docs/adr/0022-references-declare-their-inverse.md`)_
+
+### Mixins carry behaviour
+
+_(pending merge from `docs/adr/0023-mixins-carry-behaviour.md`)_
+
+### No annotation slot
+
+_(pending merge from `docs/adr/0024-no-annotation-slot.md`)_
+
+### Expansion is one statement
+
+_(pending merge from `docs/adr/0025-expansion-is-one-statement.md`)_
+
+### Vectors declare their index
+
+_(pending merge from `docs/adr/0026-vectors-declare-their-index.md`)_
+
+### Keyset pagination
+
+_(pending merge from `docs/adr/0027-keyset-pagination.md`)_
+
+### Typescript client
+
+_(pending merge from `docs/adr/0028-typescript-client.md`)_
+
+### Go cli
+
+_(pending merge from `docs/adr/0029-go-cli.md`)_
+
+### Declared scope is required
+
+_(pending merge from `docs/adr/0030-declared-scope-is-required.md`)_
+
+### Dart client
+
+_(pending merge from `docs/adr/0031-dart-client.md`)_
+
+### Sqlb command
+
+_(pending merge from `docs/adr/0032-sqlb-command.md`)_
+
+### Array columns
+
+_(pending merge from `docs/adr/0033-array-columns.md`)_
+
+### One column addresses a row
+
+_(pending merge from `docs/adr/0034-one-column-addresses-a-row.md`)_
+
+### Type overrides
+
+_(pending merge from `docs/adr/0035-type-overrides.md`)_
+
+### The wire is the column name
+
+_(pending merge from `docs/adr/0036-the-wire-is-the-column-name.md`)_
+
+### Search is ilike until it cannot be
+
+_(pending merge from `docs/adr/0037-search-is-ilike-until-it-cannot-be.md`)_
+
+### Collections are flat
+
+_(pending merge from `docs/adr/0038-collections-are-flat.md`)_
+
+### A schema edit is an api edit
+
+_(pending merge from `docs/adr/0039-a-schema-edit-is-an-api-edit.md`)_
+
+### The driver is a dependency
+
+_(pending merge from `docs/adr/0040-the-driver-is-a-dependency.md`)_
+
+### Computed fields
+
+_(pending merge from `docs/adr/0041-computed-fields.md`)_
+
+### The exit is generated
+
+_(pending merge from `docs/adr/0042-the-exit-is-generated.md`)_
+
+### Declared actions
+
+_(pending merge from `docs/adr/0043-declared-actions.md`)_
+
+### The container is an adapter
+
+_(pending merge from `docs/adr/0044-the-container-is-an-adapter.md`)_
+
+### The stream is a seam
+
+_(pending merge from `docs/adr/0045-the-stream-is-a-seam.md`)_
+
+### A negation is sqls
+
+_(pending merge from `docs/adr/0046-a-negation-is-sqls.md`)_
+
+### No default hook registry
+
+_(pending merge from `docs/adr/0047-no-default-hook-registry.md`)_
+
+### Auto incrementing keys
+
+_(pending merge from `docs/adr/0048-auto-incrementing-keys.md`)_
+
+### The skill is generated
+
+_(pending merge from `docs/adr/0049-the-skill-is-generated.md`)_
+
+### Reachability is a property of the mount
+
+_(pending merge from `docs/adr/0050-reachability-is-a-property-of-the-mount.md`)_
+
+### A gap in the declaration is reported
+
+_(pending merge from `docs/adr/0051-a-gap-in-the-declaration-is-reported.md`)_
+
+### A singleton is an op that removes the id
+
+_(pending merge from `docs/adr/0052-a-singleton-is-an-op-that-removes-the-id.md`)_
+
+### The manifest describes what cannot be guessed
+
+_(pending merge from `docs/adr/0053-the-manifest-describes-what-cannot-be-guessed.md`)_
+
+### A named scope is releasable at the mount
+
+_(pending merge from `docs/adr/0054-a-named-scope-is-releasable-at-the-mount.md`)_
+
+### A nested query runs nobodys hooks
+
+_(pending merge from `docs/adr/0055-a-nested-query-runs-nobodys-hooks.md`)_
+
+### A junction is a table
+
+_(pending merge from `docs/adr/0056-a-junction-is-a-table.md`)_
+
+### A read is a query and a row scoped write is a mutation
+
+_(pending merge from `docs/adr/0057-a-read-is-a-query-and-a-row-scoped-write-is-a-mutation.md`)_
+
+### Serve owns the boilerplate mount is the seam
+
+_(pending merge from `docs/adr/0058-serve-owns-the-boilerplate-mount-is-the-seam.md`)_
+
