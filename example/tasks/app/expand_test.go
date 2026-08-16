@@ -303,6 +303,13 @@ func TestExpandOfAOneToOneRelationIsAnObjectNotAnEnvelope(t *testing.T) {
 // A list still says "none" rather than omitting the key (TestTasksCarryNoListUnlessAsked
 // covers "did not ask"); the one-to-one case adds a third answer a capped
 // collection never needed: "asked, and there simply is no row."
+//
+// The key must be present with a null value, not simply missing — an omitted
+// key and a key holding JSON null decode to the same Go nil through
+// map[string]any, so a bare "!= nil" would pass whether or not the server
+// sent the key at all. Checked with the two-value map read instead, which is
+// the only way to tell "asked, and there is no row" (this test) from "did not
+// ask" (the second half below, and TestTasksCarryNoListUnlessAsked).
 func TestExpandOfAOneToOneRelationIsNullWhenAbsent(t *testing.T) {
 	server := newServer(t, freshDB(t))
 	alice := account(t, server, "alice@example.com", "Acme")
@@ -312,8 +319,47 @@ func TestExpandOfAOneToOneRelationIsNullWhenAbsent(t *testing.T) {
 	if len(got.Items) != 1 {
 		t.Fatalf("got %d users, want 1: %s", len(got.Items), mustJSON(got.Items))
 	}
-	if got.Items[0]["profile"] != nil {
+	v, ok := got.Items[0]["profile"]
+	if !ok {
+		t.Fatalf(`expected "profile" to be present with a null value, but the key was absent: %s`,
+			mustJSON(got.Items[0]))
+	}
+	if v != nil {
 		t.Errorf("expected profile to be null when absent, got: %s", mustJSON(got.Items[0]))
+	}
+
+	// Without ?expand=profile the key is not there at all — the distinction
+	// the assertion above exists to prove, mirroring the contract
+	// TestTasksCarryNoListUnlessAsked keeps for the collection-shaped case.
+	plain := alice.get("/users").expect(http.StatusOK).list()
+	if _, present := plain.Items[0]["profile"]; present {
+		t.Errorf("the relation was serialised without being asked for: %s", mustJSON(plain.Items[0]))
+	}
+}
+
+// profiles has no workspace_id (see the note on taskschema.Profile), so
+// app/hooks.go scopes POST /profiles by looking the named user_id up through
+// the already-scoped users query rather than by a predicate on profiles
+// itself. This is the direct proof, the same case TestWorkspacesAreIsolated
+// makes for every table that does have a workspace_id to filter by: Bob must
+// not be able to plant a profile against a user in a workspace he does not
+// share.
+func TestProfileCreateIsScopedToTheCallersWorkspace(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	bob := account(t, server, "bob@example.com", "Globex")
+
+	// Same answer a nonexistent user_id gets: 404, not 403 — Bob is not told
+	// whether alice's id exists, only that his request matched nothing.
+	bob.post("/profiles", map[string]any{
+		"user_id": alice.userID,
+		"bio":     "planted from another workspace",
+	}).expect(http.StatusNotFound)
+
+	// And nothing landed: Alice still has no profile to expand.
+	got := alice.get("/users?expand=profile").expect(http.StatusOK).list()
+	if v, ok := got.Items[0]["profile"]; !ok || v != nil {
+		t.Errorf("a cross-workspace create should not have landed: %s", mustJSON(got.Items[0]))
 	}
 }
 

@@ -641,38 +641,11 @@ export interface ProfileListParams<S extends ProfileColumn = ProfileColumn> {
 }
 
 /**
- * Parameters for `GET /profiles/{id}`.
- *
- * There is no `select` here: the item endpoint rejects unknown query
- * parameters and does not declare one.
- */
-export type ProfileGetParams = Record<string, never>;
-
-/**
  * A Profile as one request asked for it: the selected columns, plus the relations
  * it expanded.
  */
 export type ProfileRow<S extends ProfileColumn = ProfileColumn> =
   Pick<Profile, S | 'id'>;
-
-/** `GET /profiles` — the filtered, sorted, paged collection. */
-export function listProfiles<S extends ProfileColumn = ProfileColumn>(
-  request: Transport,
-  params: ProfileListParams<S> = {},
-  signal?: AbortSignal,
-): Promise<Page<ProfileRow<S>>> {
-  return request({ method: 'GET', path: '/profiles', query: encodeListQuery(params), signal });
-}
-
-/** `GET /profiles/{id}` — one row by primary key. */
-export function getProfile(
-  request: Transport,
-  id: string | number,
-  params: ProfileGetParams = {},
-  signal?: AbortSignal,
-): Promise<ProfileRow<ProfileColumn>> {
-  return request({ method: 'GET', path: itemPath('/profiles', id), query: encodeItemQuery(params), signal });
-}
 
 /** `POST /profiles` — create a row. */
 export function createProfile(request: Transport, body: ProfileCreate, signal?: AbortSignal): Promise<Profile> {

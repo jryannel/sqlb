@@ -29,10 +29,7 @@ import type {
   MembershipCreate,
   MembershipGetParams,
   MembershipListParams,
-  ProfileColumn,
   ProfileCreate,
-  ProfileGetParams,
-  ProfileListParams,
   TaskColumn,
   TaskCreate,
   TaskExpand,
@@ -60,7 +57,6 @@ import {
   getComment,
   getList,
   getMembership,
-  getProfile,
   getTask,
   getUser,
   getWorkspace,
@@ -68,12 +64,10 @@ import {
   listKeys,
   listLists,
   listMemberships,
-  listProfiles,
   listTasks,
   listUsers,
   listWorkspaces,
   membershipKeys,
-  profileKeys,
   taskKeys,
   updateList,
   updateTask,
@@ -229,36 +223,6 @@ export function membershipMutations(request: Transport) {
 }
 
 // -------------------------------------------------------------- /profiles
-
-/**
- * Read options for /profiles, bound to a transport.
- *
- * `queryOptions` objects rather than hooks: an options object is spread and
- * overridden — `{ ...queries.list(p), staleTime: 30_000 }` — where a hook is
- * copied out and edited, which is the signal that a seam is in the wrong
- * place.
- */
-export function profileQueries(request: Transport) {
-  return {
-    list: <S extends ProfileColumn = ProfileColumn>(params: ProfileListParams<S> = {}) =>
-      queryOptions({
-        queryKey: profileKeys.list(params),
-        queryFn: ({ signal }) => listProfiles(request, params, signal),
-      }),
-    infinite: <S extends ProfileColumn = ProfileColumn>(params: Omit<ProfileListParams<S>, 'page' | 'cursor'> = {}) =>
-      infiniteQueryOptions({
-        queryKey: profileKeys.infinite(params),
-        queryFn: ({ pageParam, signal }) => listProfiles(request, { ...params, cursor: pageParam }, signal),
-        initialPageParam: undefined as string | undefined,
-        getNextPageParam: (last) => last.next_cursor,
-      }),
-    detail: (id: string | number, params: ProfileGetParams = {}) =>
-      queryOptions({
-        queryKey: profileKeys.detail(id, params),
-        queryFn: ({ signal }) => getProfile(request, id, params, signal),
-      }),
-  };
-}
 
 /**
  * Write options for /profiles, bound to a transport.

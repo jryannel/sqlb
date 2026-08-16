@@ -509,9 +509,7 @@
       "rest": {
         "path": "/profiles",
         "operations": [
-          "create",
-          "read",
-          "list"
+          "create"
         ],
         "defaultPageSize": 0,
         "maxPageSize": 0,

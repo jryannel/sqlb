@@ -28,6 +28,8 @@ type opts struct {
 	statusValues       []string  // enum values; nil keeps the baseline three
 	ops                schema.Op // 0 keeps the baseline op set
 	authorUnique       bool      // Unique() on posts.author: its Inverse "posts" becomes one-to-one
+	postsNotExpandable bool      // Inverse("posts") with no InverseExpandable: a name, not a contract
+	noPostsInverse     bool      // no Inverse("posts") at all: the forward Ref names no reverse relation
 
 	// wire declares the schema's wire spelling. The zero value is Verbatim,
 	// which is also what it means, so the baseline blog needs no case at all.
@@ -47,8 +49,13 @@ func blog(o opts) *schema.Registry {
 	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey()).
 		Expose(schema.REST{Ops: schema.OpRead | schema.OpList})
 
-	author := schema.Ref("author", authors).Filterable().Expandable().
-		Inverse("posts").InverseExpandable()
+	author := schema.Ref("author", authors).Filterable().Expandable()
+	if !o.noPostsInverse {
+		author = author.Inverse("posts")
+		if !o.postsNotExpandable {
+			author = author.InverseExpandable()
+		}
+	}
 	if o.authorUnique {
 		author = author.Unique()
 	}
@@ -146,6 +153,40 @@ func TestUniqueFKChangesInverseFromCollectionToObject(t *testing.T) {
 	assertBreaking(t, breaks, restcompat.FacetExpand, "posts")
 	if !mentions(breaks, "one-to-one") {
 		t.Errorf("the summary should say why it breaks:\n%s", render(breaks))
+	}
+}
+
+// The other direction of the same flip — object back to collection — gets its
+// own test rather than trusting the branch inside diffField symmetrically, the
+// convention TestWireCaseFlipBreaksInBothDirections already keeps for this
+// file's other two-way comparisons.
+func TestUniqueFKRemovedRevertsInverseToCollection(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{authorUnique: true}), blog(opts{}))
+	assertBreaking(t, breaks, restcompat.FacetExpand, "posts")
+	if !mentions(breaks, "no longer a unique FK") {
+		t.Errorf("the summary should say why it breaks:\n%s", render(breaks))
+	}
+}
+
+// Guard-proven-both-ways (ADR-0016) companion to the two tests above: a bare
+// Inverse("posts") with no InverseExpandable never emits a Go field, never
+// exposes an ?expand parameter and never changes the wire, so it must not be
+// part of the captured contract at all.
+//
+// Removing the Inverse name entirely is the case that actually catches an
+// unfiltered Capture: dropping it makes "posts" disappear from authors'
+// captured fields, and if a non-expandable one had been recorded as present
+// (hidden=false, writeOnly=false — indistinguishable from a real response
+// field to diffRemoved's inResponse() check), this would report a false
+// "field removed from responses" for a field the generated response never
+// had.
+func TestNonExpandableInverseProducesNoFinding(t *testing.T) {
+	breaks := restcompat.Diff(
+		blog(opts{postsNotExpandable: true}),
+		blog(opts{noPostsInverse: true}),
+	)
+	if len(breaks) != 0 {
+		t.Errorf("a non-expandable inverse is not part of the contract, want no findings:\n%s", render(breaks))
 	}
 }
 

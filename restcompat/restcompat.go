@@ -576,9 +576,13 @@ type ResourceSnap struct {
 // the primary-key flag, the index list, the constraint names — are deliberately
 // absent: they do not change how a client couples to the field.
 type FieldSnap struct {
-	Name        string   `json:"name"`
-	Rel         string   `json:"rel,omitempty"`
-	Type        string   `json:"type"`
+	Name string `json:"name"`
+	Rel  string `json:"rel,omitempty"`
+	// Type is omitempty because an inverse-relation entry (see the loop in
+	// Capture that appends those) has none — it is a relation to another
+	// table, not a scalar column — and every real column's Type is always
+	// non-empty, so nothing that used to be recorded stops being recorded.
+	Type        string   `json:"type,omitempty"`
 	Array       bool     `json:"array,omitempty"`
 	Size        int      `json:"size,omitempty"`
 	Enum        []string `json:"enum,omitempty"`
@@ -667,11 +671,23 @@ func Capture(r *schema.Registry) Snapshot {
 		// expandableRelations (codegen/models.go) walks Inverses(t) rather than
 		// leaving the reverse relation implicit in the source's Ref.
 		//
+		// Only an Expandable one, matching inversesOf and expandableRelations
+		// (codegen/models.go, "A declared-but-unexposed inverse names the
+		// relationship for the manifest and stops there"): a bare Inverse(name)
+		// with no InverseExpandable never emits a Go field, never exposes an
+		// ?expand parameter, and never changes the wire — it is a name in the
+		// manifest, not a contract. Capturing it anyway made removing one look
+		// like a breaking "field removed from responses", for a field the
+		// generated response never had.
+		//
 		// ReadOnly is set unconditionally: an expand relation is never a
 		// create- or patch-body field, and leaving it false would make
 		// diffAdded misclassify a newly-declared Inverse as a required create
 		// field the moment it is captured, which it never is.
 		for _, inv := range r.Inverses(t) {
+			if !inv.Expandable {
+				continue
+			}
 			res.Fields = append(res.Fields, FieldSnap{
 				Name:       inv.Name,
 				Rel:        inv.Name,

@@ -140,7 +140,6 @@
         {
           "name": "tasks",
           "rel": "tasks",
-          "type": "",
           "read_only": true,
           "expandable": true
         }
@@ -206,9 +205,7 @@
     {
       "path": "/profiles",
       "ops": [
-        "create",
-        "read",
-        "list"
+        "create"
       ],
       "fields": [
         {
@@ -450,7 +447,6 @@
         {
           "name": "profile",
           "rel": "profile",
-          "type": "",
           "read_only": true,
           "expandable": true,
           "one_to_one": true

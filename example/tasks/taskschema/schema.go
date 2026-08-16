@@ -74,6 +74,26 @@ var User = schema.Table("users",
 // declared below to the row or null — never the {items, has_more} envelope
 // every other Inverse relation in this schema returns, because at most one
 // profile can ever point back at a given user.
+//
+// Only OpCreate is exposed — no GET /profiles, no GET /profiles/{id} — and
+// that is a tenancy constraint, not an oversight. profiles has no
+// workspace_id: a profile is 1:1 with a User, and User is the one table in
+// this schema that is *global* rather than workspace-owned (a login reaches
+// every workspace it is a member of), so there is no single workspace a
+// profile could carry either. That leaves this schema no way to declare a
+// Scoped column for it — every other exposed table's tenant boundary is
+// either a workspace_id (Scoped, ReadOnly, filtered by app/hooks.go's
+// scopeReads) or, for User itself, a membership subquery. The subquery answer
+// does not carry over: app/hooks.go's User hook needs RawPred (a membership
+// test is not expressible with F() and comparison operators), and a RawPred
+// BeforeQuery hook cannot be requalified onto a join alias (sqlb/qualify.go)
+// — so registering the same hook here would make every GET
+// /users?expand=profile fail at request time, breaking the one endpoint this
+// table exists to prove. Direct listing is left unexposed rather than
+// shipped unscoped; app/hooks.go's Profile BeforeCreate hook closes the
+// write-side version of the same gap by checking user_id against the
+// caller's own already-scoped membership, one row at a time, rather than
+// with a query-level predicate.
 var Profile = schema.Table("profiles",
 	schema.UUIDv7("id").PrimaryKey(),
 	// Unique is what makes this one-to-one (no separate schema verb for it —
@@ -89,7 +109,7 @@ var Profile = schema.Table("profiles",
 	Describe("A user's extended profile. One-to-one with users: user_id is unique.").
 	Expose(schema.REST{
 		Path: "/profiles",
-		Ops:  schema.OpCreate | schema.OpRead | schema.OpList,
+		Ops:  schema.OpCreate,
 	})
 
 // Membership is what makes a user part of a workspace, and carries the role

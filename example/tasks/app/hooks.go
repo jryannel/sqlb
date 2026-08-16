@@ -242,6 +242,38 @@ func Register(log *slog.Logger) *sqlb.Registry {
 		})
 	})
 
+	// profiles has no workspace_id and no BeforeQuery "tenant" hook — see the
+	// note on taskschema.Profile for why: it is 1:1 with the global User, and
+	// the membership-subquery answer User's own hook uses cannot be reused
+	// here, because that hook is RawPred and a RawPred BeforeQuery hook on an
+	// expansion target cannot be requalified onto a join alias
+	// (sqlb/qualify.go) — registering it on Profile would make every GET
+	// /users?expand=profile fail at request time.
+	//
+	// So the write side is checked row by row instead of by a query-level
+	// predicate: tasks.User is already correctly scoped by its own "tenant"
+	// hook, so a user this query cannot find is either nonexistent or not
+	// this caller's to see, and either way the same 404 is the right and
+	// honest answer — the same choice comments.BeforeCreate makes above for a
+	// task another workspace's caller named. Without this, POST /profiles
+	// would let any authenticated caller plant a profile for a user_id
+	// belonging to a workspace they are not a member of.
+	sqlb.On[tasks.Profile](reg).BeforeCreate(func(ctx context.Context, p *tasks.Profile) error {
+		tx, ok := sqlb.TxFrom(ctx)
+		if !ok {
+			return fmt.Errorf("app: a profile must be created inside a transaction")
+		}
+		switch _, err := sqlb.Query[tasks.User]().
+			Where(tasks.UserCols.ID.Eq(p.UserID)).
+			One(ctx, tx); {
+		case errors.Is(err, sqlb.ErrNotFound):
+			return huma.Error404NotFound("no user matched")
+		case err != nil:
+			return fmt.Errorf("reading the user: %w", err)
+		}
+		return nil
+	})
+
 	sqlb.On[tasks.Membership](reg).BeforeCreate(func(ctx context.Context, m *tasks.Membership) error {
 		c, err := claimsOrError(ctx)
 		if err != nil {

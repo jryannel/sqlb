@@ -32,7 +32,7 @@ A schema edit is also an API edit. `sqlb impact` reports what it did to the REST
 | `comments` | `/comments` | `create` `read` `list` | 50, max 100 |
 | `lists` | `/lists` | `create` `read` `update` `list` | 25, max 100 |
 | `memberships` | `/memberships` | `create` `read` `delete` `list` | 25, max 100 |
-| `profiles` | `/profiles` | `create` `read` `list` | *default* |
+| `profiles` | `/profiles` | `create` | *default* |
 | `tasks` | `/tasks` | `create` `read` `update` `list` | 20, max 100 |
 | `users` | `/users` | `read` `list` | max 100 |
 | `workspaces` | `/workspaces` | `read` `list` | *default* |

@@ -387,7 +387,7 @@ func Register(api huma.API, db sqlb.Executor, actions Actions) error {
 		Path:        "/profiles",
 		Name:        "profile",
 		Tag:         "profiles",
-		Ops:         rest.OpCreate | rest.OpRead | rest.OpList,
+		Ops:         rest.OpCreate,
 		Description: "A user's extended profile. One-to-one with users: user_id is unique.",
 	}); err != nil {
 		return err
