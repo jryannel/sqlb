@@ -318,9 +318,18 @@ func (b *Builder[T]) compileExpansions(c *compiler) {
 		c.write(" AS ")
 		c.ident(alias)
 		c.write(" ON ")
-		c.column(Column{Table: alias, Name: target.PK.Name})
-		c.write(" = ")
-		c.column(Column{Table: b.from(), Name: rel.FK.Name})
+		if rel.Reverse {
+			// The mirror image of the forward case, and of the correlated
+			// WHERE compileCollection writes for a capped collection: the
+			// foreign key lives on the target, not on this row.
+			c.column(Column{Table: alias, Name: rel.FK.Name})
+			c.write(" = ")
+			c.column(Column{Table: b.from(), Name: b.model.PK.Name})
+		} else {
+			c.column(Column{Table: alias, Name: target.PK.Name})
+			c.write(" = ")
+			c.column(Column{Table: b.from(), Name: rel.FK.Name})
+		}
 
 		// The target's scope goes in ON rather than in WHERE, and the
 		// difference is the whole behaviour of a LEFT JOIN: in WHERE it would
