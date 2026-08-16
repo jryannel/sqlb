@@ -83,7 +83,8 @@ type Claims struct {
 }
 
 // Verifier implements sqlb.Verifier[T]: it verifies a WorkOS AuthKit
-// access token and maps the result to T via the mapper supplied to New.
+// access token and maps the result to T via the mapper supplied at
+// construction.
 type Verifier[T any] struct {
 	jwks     keyfunc.Keyfunc
 	clientID string
@@ -121,8 +122,16 @@ func New[T any](ctx context.Context, clientID string, mapper func(Claims) T) (*V
 // NewWithKeyfunc builds a Verifier from an already-constructed
 // keyfunc.Keyfunc, skipping New's network fetch. It exists for tests that
 // need a Verifier backed by an in-memory key set
-// (keyfunc.NewJWKSetJSON) rather than a live JWKS URL — production code
-// should call New.
+// (keyfunc.NewJWKSetJSON) rather than a live JWKS URL, and for callers that
+// need a keyfunc.Keyfunc New cannot express — a pinned key set or one
+// backed by multiple JWKS URLs — production code that just needs the
+// standard WorkOS JWKS endpoint should call New.
+//
+// Unlike New, this constructor does not validate clientID or mapper: it
+// cannot fail, by design, so a bad configuration is not rejected here.
+// Verify rejects every token if clientID is empty or mapper is nil, rather
+// than either silently under-checking client_id or panicking on the first
+// valid token.
 func NewWithKeyfunc[T any](jwks keyfunc.Keyfunc, clientID string, mapper func(Claims) T) *Verifier[T] {
 	return &Verifier[T]{jwks: jwks, clientID: clientID, mapper: mapper}
 }
@@ -137,10 +146,30 @@ func NewWithKeyfunc[T any](jwks keyfunc.Keyfunc, clientID string, mapper func(Cl
 func (v *Verifier[T]) Verify(ctx context.Context, cred string) (T, error) {
 	var zero T
 
+	// Guard against a Verifier built via NewWithKeyfunc with a bad
+	// configuration: NewWithKeyfunc, unlike New, cannot fail and so cannot
+	// reject these up front. Checking here means every token is rejected
+	// rather than the client_id check silently degrading to "" == "" or
+	// v.mapper panicking on the first valid token.
+	if v.clientID == "" {
+		return zero, errors.New("authworkos: clientID is empty")
+	}
+	if v.mapper == nil {
+		return zero, errors.New("authworkos: mapper is nil")
+	}
+
 	claims := jwt.MapClaims{}
 	_, err := jwt.ParseWithClaims(cred, claims, v.jwks.Keyfunc,
 		jwt.WithIssuer(issuer),
 		jwt.WithExpirationRequired(),
+		// WorkOS AuthKit access tokens are RS256; pinning the algorithm
+		// before the signature is used closes the classic RS256-to-HS256
+		// confusion attack, where a forged token signed with the RSA public
+		// key's bytes as an HMAC secret would otherwise be accepted by a
+		// verifier that trusts whatever alg the token claims. See
+		// example/tasks/auth/jwt.go's doc comment for why this is one of
+		// the three mistakes that turn a JWT verifier into a bypass.
+		jwt.WithValidMethods([]string{"RS256"}),
 	)
 	if err != nil {
 		return zero, fmt.Errorf("authworkos: %w", err)

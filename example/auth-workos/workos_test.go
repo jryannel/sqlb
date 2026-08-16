@@ -3,9 +3,11 @@ package authworkos_test
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -37,9 +39,9 @@ func newTestRSAKey(t *testing.T) *rsa.PrivateKey {
 }
 
 // newTestKeyfunc builds a keyfunc.Keyfunc from key's public half,
-// published under testKeyID — the same shape keyfunc.NewDefaultCtx would
-// build from a live JWKS URL, but from an in-memory JSON document rather
-// than an HTTP fetch, so most tests need no network and no
+// published under testKeyID — the same shape keyfunc.NewDefaultOverrideCtx
+// would build from a live JWKS URL, but from an in-memory JSON document
+// rather than an HTTP fetch, so most tests need no network and no
 // httptest.Server.
 func newTestKeyfunc(t *testing.T, key *rsa.PrivateKey) keyfunc.Keyfunc {
 	t.Helper()
@@ -133,7 +135,7 @@ type testPrincipal struct {
 // newTestVerifier builds a Verifier[testPrincipal] wired directly to a
 // keyfunc.Keyfunc built by the harness, via NewWithKeyfunc rather than
 // New — every test in this package uses this path. New's own successful
-// path (workos.GetJWKSURL plus a real keyfunc.NewDefaultCtx
+// path (workos.GetJWKSURL plus a real keyfunc.NewDefaultOverrideCtx
 // fetch) is never exercised against a live endpoint anywhere in this
 // suite, on purpose: the Global Constraints forbid a live WorkOS call in
 // CI, and NewWithKeyfunc exists specifically so the rest of the package's
@@ -169,6 +171,39 @@ func TestVerify_Accepts(t *testing.T) {
 	}
 	if principal != want {
 		t.Fatalf("principal = %+v, want %+v", principal, want)
+	}
+}
+
+// TestVerify_AcceptsMapsEveryClaimsField widens the mapper to capture the
+// full authworkos.Claims value rather than testPrincipal's subset (Subject,
+// OrgID, Role only), so SessionID, ClientID, Roles, Permissions — and the
+// stringSliceClaim helper behind Roles/Permissions, including its []any
+// type assertion and per-element string filter — are actually exercised.
+// TestVerify_Accepts above is left alone so tests that build on
+// newTestVerifier's narrower testPrincipal shape don't have to change.
+func TestVerify_AcceptsMapsEveryClaimsField(t *testing.T) {
+	key := newTestRSAKey(t)
+	kf := newTestKeyfunc(t, key)
+	v := authworkos.NewWithKeyfunc(kf, "client_test123", func(c authworkos.Claims) authworkos.Claims {
+		return c
+	})
+	token := mintToken(t, key, validClaims())
+
+	got, err := v.Verify(t.Context(), token)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	want := authworkos.Claims{
+		Subject:     "user_01HBEQKA6K4QJAS93VPE39W1JT",
+		SessionID:   "session_01HQSXZGF8FHF7A9ZZFCW4387R",
+		ClientID:    "client_test123",
+		OrgID:       "org_01HRDMC6CM357W30QMHMQ96Q0S",
+		Role:        "member",
+		Roles:       []string{"member"},
+		Permissions: []string{"posts:read", "posts:write"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("claims = %+v, want %+v", got, want)
 	}
 }
 
@@ -238,6 +273,27 @@ func TestVerify_RejectsWrongClientID(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsEmptyConfiguredClientID proves NewWithKeyfunc, which
+// skips New's up-front validation, cannot be turned into an accept-anything
+// Verifier by leaving clientID empty. Without Verify's own guard, an empty
+// v.clientID would make the client_id check degrade to "" == "" and accept
+// a validly-signed token that carries no client_id claim at all — this
+// mints exactly that token and asserts it is still rejected.
+func TestVerify_RejectsEmptyConfiguredClientID(t *testing.T) {
+	key := newTestRSAKey(t)
+	kf := newTestKeyfunc(t, key)
+	v := authworkos.NewWithKeyfunc(kf, "", func(c authworkos.Claims) testPrincipal {
+		return testPrincipal{UserID: c.Subject, OrgID: c.OrgID, Role: c.Role}
+	})
+	claims := validClaims()
+	delete(claims, "client_id")
+	token := mintToken(t, key, claims)
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted a token with no client_id claim against a Verifier with an empty configured client_id")
+	}
+}
+
 func TestVerify_RejectsWrongSigningKey(t *testing.T) {
 	registeredKey := newTestRSAKey(t)
 	forgedKey := newTestRSAKey(t) // never published in the keyset below
@@ -246,6 +302,35 @@ func TestVerify_RejectsWrongSigningKey(t *testing.T) {
 
 	if _, err := v.Verify(t.Context(), token); err == nil {
 		t.Fatal("Verify accepted a token signed with an unregistered key")
+	}
+}
+
+// TestVerify_RejectsAlgorithmConfusion is the classic RS256-to-HS256
+// algorithm-confusion attack: an RSA public key is public by definition —
+// it is served over the JWKS endpoint — so an attacker who knows it can
+// sign a forged token with HS256 using the public key's own bytes as the
+// HMAC secret. A verifier that lets the token's header pick the algorithm,
+// rather than pinning it itself, treats that HMAC signature as valid
+// because it never checks the key was meant to be asymmetric. Verify pins
+// jwt.WithValidMethods([]string{"RS256"}) specifically to close this.
+func TestVerify_RejectsAlgorithmConfusion(t *testing.T) {
+	key := newTestRSAKey(t)
+	v := newTestVerifier(t, key, "client_test123")
+
+	secret, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		t.Fatalf("x509.MarshalPKIXPublicKey: %v", err)
+	}
+
+	forged := jwt.NewWithClaims(jwt.SigningMethodHS256, validClaims())
+	forged.Header["kid"] = testKeyID
+	token, err := forged.SignedString(secret)
+	if err != nil {
+		t.Fatalf("forged.SignedString: %v", err)
+	}
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted an HS256 token forged with the RSA public key's bytes as the HMAC secret")
 	}
 }
 
