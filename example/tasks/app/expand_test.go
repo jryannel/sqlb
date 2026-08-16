@@ -332,6 +332,9 @@ func TestExpandOfAOneToOneRelationIsNullWhenAbsent(t *testing.T) {
 	// the assertion above exists to prove, mirroring the contract
 	// TestTasksCarryNoListUnlessAsked keeps for the collection-shaped case.
 	plain := alice.get("/users").expect(http.StatusOK).list()
+	if len(plain.Items) != 1 {
+		t.Fatalf("got %d users, want 1: %s", len(plain.Items), mustJSON(plain.Items))
+	}
 	if _, present := plain.Items[0]["profile"]; present {
 		t.Errorf("the relation was serialised without being asked for: %s", mustJSON(plain.Items[0]))
 	}
@@ -360,6 +363,29 @@ func TestProfileCreateIsScopedToTheCallersWorkspace(t *testing.T) {
 	got := alice.get("/users?expand=profile").expect(http.StatusOK).list()
 	if v, ok := got.Items[0]["profile"]; !ok || v != nil {
 		t.Errorf("a cross-workspace create should not have landed: %s", mustJSON(got.Items[0]))
+	}
+}
+
+// taskschema.Profile exposes only OpCreate — the comment on it explains why:
+// profiles has no workspace_id to scope a list by, so a served GET would leak
+// across tenants the way TestProfileCreateIsScopedToTheCallersWorkspace's
+// POST case once did. That decision lives in Ops: schema.OpCreate, prose a
+// future schema edit could silently widen (adding OpRead/OpList back) without
+// any generated surface objecting — this is the gate that would catch it: if
+// GET /profiles or GET /profiles/{id} ever start responding, this fails.
+func TestProfilesHasNoReadableEndpoint(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	profileID := alice.profileID(alice.userID, "Backend engineer.")
+
+	resp := alice.get("/profiles")
+	if resp.Code == http.StatusOK {
+		t.Fatalf("GET /profiles answered 200; profiles must stay create-only, or its tenancy scope has no read-side check: %s", resp.Body)
+	}
+
+	resp = alice.get("/profiles/" + profileID)
+	if resp.Code == http.StatusOK {
+		t.Fatalf("GET /profiles/{id} answered 200; profiles must stay create-only, or its tenancy scope has no read-side check: %s", resp.Body)
 	}
 }
 

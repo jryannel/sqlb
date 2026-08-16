@@ -434,12 +434,15 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 		if !inv.Expandable {
 			continue
 		}
-		fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. */\n", inv.Name)
 		if inv.OneToOne {
+			fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. */\n", inv.Name)
 			fmt.Fprintf(b, "  %s?: %s | null;\n", tsProp(inv.Name), TypeName(inv.Table.LocalName()))
 			continue
 		}
-		fmt.Fprintf(b, "  /** Capped at %d rows. */\n", inv.Cap())
+		// One block, not two adjacent ones: two adjacent `/** */` comments only
+		// let the last one attach in TS tooling, silently dropping "Filled in
+		// by `expand`" from hover docs for every ordinary collection relation.
+		fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. Capped at %d rows. */\n", inv.Name, inv.Cap())
 		fmt.Fprintf(b, "  %s?: Collection<%s>;\n", tsProp(inv.Name), TypeName(inv.Table.LocalName()))
 	}
 	fmt.Fprintln(b, "}")

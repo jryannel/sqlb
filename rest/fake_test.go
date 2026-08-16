@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/internal/pgfake"
 )
 
@@ -356,6 +357,35 @@ func docCols() []string { return []string{"id", "org_id", "title", "__expand_org
 func docRow(id, title string, org []byte) []any {
 	return []any{id, "acme", title, org}
 }
+
+// OneToOneUser and OneToOneProfile exercise a unique-FK-backed reverse
+// relation, the shape codegen emits for a Ref(...).Unique() Inverse: Profile
+// is a bare pointer with the `reverse` token, not a *sqlb.Collection. Tasks
+// sits beside it as an ordinary capped-collection reverse relation, so a
+// schema test can prove the OpenAPI nullable fix touches one-to-one and
+// leaves a real collection alone.
+type OneToOneUser struct {
+	ID      string                         `db:"id" json:"id" sqlb:"pk"`
+	Name    string                         `db:"name" json:"name"`
+	Profile *OneToOneProfile               `db:"-" json:"profile,omitempty" sqlb:"expands=user_id,reverse"`
+	Tasks   *sqlb.Collection[OneToOneTask] `db:"-" json:"tasks,omitempty" sqlb:"expands=user_id,limit=50"`
+}
+
+func (OneToOneUser) TableName() string { return "one_to_one_users" }
+
+type OneToOneProfile struct {
+	ID     string `db:"id" json:"id" sqlb:"pk"`
+	UserID string `db:"user_id" json:"user_id"`
+}
+
+func (OneToOneProfile) TableName() string { return "one_to_one_profiles" }
+
+type OneToOneTask struct {
+	ID     string `db:"id" json:"id" sqlb:"pk"`
+	UserID string `db:"user_id" json:"user_id"`
+}
+
+func (OneToOneTask) TableName() string { return "one_to_one_tasks" }
 
 // Ledger has no primary key, which a list-only resource is allowed to have.
 // It is the case cursor paging cannot serve: with no unique column there is no

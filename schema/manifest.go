@@ -71,13 +71,21 @@ type InverseManifest struct {
 	Table  string `json:"table"`
 	Column string `json:"column"`
 	// Order is the column an expansion sorts the collected rows by, with a
-	// leading "-" for descending. Empty means the primary key.
+	// leading "-" for descending. Empty means the primary key. Meaningless
+	// when OneToOne, since there is at most one row to order.
 	Order string `json:"order,omitempty"`
 	// Limit is how many rows one expansion returns at most, with the default
 	// already resolved: a client reading this is never left to guess the cap.
 	// Past it the response reports has_more and the caller pages the collected
-	// table's own endpoint by Column.
+	// table's own endpoint by Column. Omitted when OneToOne: a unique FK's
+	// reverse relation returns the one row or null, never a capped envelope,
+	// so a limit would misdescribe it as the collection it is not.
 	Limit int `json:"limit,omitempty"`
+	// OneToOne reports that the foreign key backing this relation is unique,
+	// so an expansion returns one row or null rather than the capped
+	// {items, has_more} envelope every other reverse relation uses. See
+	// InverseRelation.OneToOne and ADR-0060.
+	OneToOne bool `json:"oneToOne,omitempty"`
 	// Expandable reports whether ?expand on this table may ask for it. A
 	// relation that is named but not expandable is still described here,
 	// because the relationship exists whether or not this endpoint serves it.
@@ -364,14 +372,20 @@ func (t *TableDef) manifest(inverses []InverseRelation, wire WireCase) TableMani
 	}
 
 	for _, inv := range inverses {
-		tm.CollectedBy = append(tm.CollectedBy, InverseManifest{
+		im := InverseManifest{
 			Name:       inv.Name,
 			Table:      inv.Table.Name(),
 			Column:     inv.Column,
 			Order:      inv.Order,
-			Limit:      inv.Cap(),
+			OneToOne:   inv.OneToOne,
 			Expandable: inv.Expandable,
-		})
+		}
+		// A one-to-one relation has no cap to report: it is one row or null,
+		// never the capped collection Limit describes.
+		if !inv.OneToOne {
+			im.Limit = inv.Cap()
+		}
+		tm.CollectedBy = append(tm.CollectedBy, im)
 	}
 
 	if t.rest != nil {

@@ -758,6 +758,82 @@ func TestInversesReportsCollectionForNonUniqueFK(t *testing.T) {
 	}
 }
 
+// The manifest is the published, wire-facing description — InverseRelation's
+// OneToOne has to reach InverseManifest too, or every consumer of sqlb.json
+// (the SKILL.md generator among them) keeps describing a unique FK's reverse
+// relation as a capped collection with a limit it will never actually hit.
+func TestManifestReportsOneToOneAndOmitsLimitForAUniqueFK(t *testing.T) {
+	r := schema.NewRegistry()
+	users := r.Table("users", schema.UUIDv7("id").PrimaryKey())
+	r.Table("profiles",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("user", users).Unique().Inverse("profile").InverseExpandable(),
+	)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+
+	m := r.BuildManifest()
+	var inv *schema.InverseManifest
+	for _, tm := range m.Tables {
+		if tm.Name != "users" {
+			continue
+		}
+		for i := range tm.CollectedBy {
+			if tm.CollectedBy[i].Name == "profile" {
+				inv = &tm.CollectedBy[i]
+			}
+		}
+	}
+	if inv == nil {
+		t.Fatal("no profile inverse found in the users manifest")
+	}
+	if !inv.OneToOne {
+		t.Errorf("OneToOne = false, want true")
+	}
+	if inv.Limit != 0 {
+		t.Errorf("Limit = %d, want 0 (a one-to-one relation has no cap to report)", inv.Limit)
+	}
+}
+
+// The guard-proven-both-ways companion: an ordinary collection's manifest
+// entry must keep reporting OneToOne = false and its resolved cap, or the
+// fix above could have suppressed Limit for every relation rather than only
+// the one-to-one ones.
+func TestManifestStillReportsLimitForAPlainCollection(t *testing.T) {
+	r := schema.NewRegistry()
+	lists := r.Table("lists", schema.UUIDv7("id").PrimaryKey())
+	r.Table("tasks",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("list", lists).Inverse("tasks").InverseExpandable(),
+	)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+
+	m := r.BuildManifest()
+	var inv *schema.InverseManifest
+	for _, tm := range m.Tables {
+		if tm.Name != "lists" {
+			continue
+		}
+		for i := range tm.CollectedBy {
+			if tm.CollectedBy[i].Name == "tasks" {
+				inv = &tm.CollectedBy[i]
+			}
+		}
+	}
+	if inv == nil {
+		t.Fatal("no tasks inverse found in the lists manifest")
+	}
+	if inv.OneToOne {
+		t.Errorf("OneToOne = true, want false")
+	}
+	if inv.Limit == 0 {
+		t.Errorf("Limit = 0, want the resolved default cap")
+	}
+}
+
 // A named inverse that nothing exposed is still a fact about the schema, and it
 // is not an error: exposure is a separate decision (ADR-0006).
 func TestAnUnexposedInverseIsNamedButNotExpandable(t *testing.T) {

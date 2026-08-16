@@ -57,8 +57,7 @@ export interface List {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  /** Filled in by `expand: ['tasks']`, absent otherwise. */
-  /** Capped at 20 rows. */
+  /** Filled in by `expand: ['tasks']`, absent otherwise. Capped at 20 rows. */
   tasks?: Collection<Task>;
 }
 
@@ -616,7 +615,6 @@ export type ProfileSort = 'created_at' | '-created_at' | 'updated_at' | '-update
  */
 export type ProfileWhere = {
   id?: Cond<string>;
-  user_id?: Cond<string>;
 };
 
 /** Parameters for `GET /profiles`. */

@@ -101,7 +101,12 @@ var Profile = schema.Table("profiles",
 	// InverseExpandable is the separate decision that exposes it through
 	// ?expand on /users; declaring one without the other would leave "profile"
 	// in the manifest with no endpoint that can ever return it.
-	schema.Ref("user", User).OnDelete(schema.Cascade).Unique().Filterable().
+	//
+	// Not Filterable: this table has no GET at all (see the Ops below), so a
+	// filter capability here would buy nothing and only generate a misleading
+	// `?user_id=eq.…` example and a ProfileWhere/ProfileColumn client type for
+	// a query parameter no route ever reads.
+	schema.Ref("user", User).OnDelete(schema.Cascade).Unique().
 		Inverse("profile").InverseExpandable(),
 	schema.Text("bio").Nullable(),
 	schema.Timestamps(),

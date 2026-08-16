@@ -3531,9 +3531,35 @@ The cost this decision does carry belongs to a hypothetical outside adopter
 who declared `Ref(...).Unique()` before this shipped and generated clients
 against the old collection shape: regenerating flips the field's type, and
 every call site reading `.items[0]` or checking `.hasMore`/`.has_more` needs
-the mechanical edit `compatibility.md`'s carve-out names. Revisit if a
-one-to-one relation ever needs to say more than "the row, or none" — a
-soft-deleted child's tombstone, say — which the bare nullable shape cannot
-express and the list envelope's `has_more` never could either, arguing for a
-third shape rather than reusing either existing one.
+the mechanical edit `compatibility.md`'s carve-out names.
+
+The inference is narrower than "structurally one-to-one," on purpose. A
+table-level `Unique(a, b)`/`UniqueIndex(a, b)` that happens to include the FK
+column does not set `OneToOne` — only a single-column `Field.Unique()`
+directly on the `Ref`'s own column does, since that is the only case where
+the column itself cannot repeat. And a FK column that is *also* the table's
+own primary key — `profiles.id IS user_id`, the idiomatic shared-PK one-to-one
+SQL pattern, Django's `OneToOneField(primary_key=True)` — does not set
+`OneToOne` either, even though a primary key is exactly as repeat-proof as a
+`Unique()` column: `Field.PrimaryKey()` sets `PrimaryKey`, `ReadOnly` and
+`Filterable`, not `Unique`, and `Registry.Inverses` reads only `d.Unique`.
+This is a real gap the design spec never considered, not a deliberate
+exclusion the way the composite case above is — it is recorded here rather
+than closed because extending the derivation to `d.Unique || d.PrimaryKey`
+is a behavior change reaching every schema anywhere that declares a
+PK-backed FK today, silently flipping their generated shape on the next
+`sqlb generate`, which is not a change to make without its own review. No
+schema in this repository happens to use the pattern, so nothing here would
+regress — but that is not the same claim as "safe for every adopter."
+Revisit if a PK-backed FK turns up in a real schema wanting this shape:
+either extend the derivation (auditing every downstream consumer of
+`Registry.Inverses`/`InverseRelation.OneToOne` first, the way this entry
+had nothing to migrate only because nothing here used the shape yet) or add
+`.OneToOne()` as the explicit opt-in this feature deliberately did not
+build, scoped to exactly the PK-backed case the inference misses.
+
+Revisit also if a one-to-one relation ever needs to say more than "the row,
+or none" — a soft-deleted child's tombstone, say — which the bare nullable
+shape cannot express and the list envelope's `has_more` never could either,
+arguing for a third shape rather than reusing either existing one.
 

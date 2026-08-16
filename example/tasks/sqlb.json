@@ -468,9 +468,6 @@
           "name": "user_id",
           "type": "uuid",
           "goType": "string",
-          "capabilities": [
-            "filter"
-          ],
           "references": {
             "relation": "user",
             "table": "users",
@@ -514,8 +511,7 @@
         "defaultPageSize": 0,
         "maxPageSize": 0,
         "filterable": [
-          "id",
-          "user_id"
+          "id"
         ],
         "sortable": [
           "created_at",
@@ -524,8 +520,7 @@
         "searchable": [],
         "examples": [
           "GET /profiles?id=eq.VALUE",
-          "GET /profiles?sort=-created_at\u0026page=2\u0026per_page=20",
-          "GET /profiles?or=(id.eq.A,user_id.eq.B)"
+          "GET /profiles?sort=-created_at\u0026page=2\u0026per_page=20"
         ]
       }
     },
@@ -914,7 +909,7 @@
           "name": "profile",
           "table": "profiles",
           "column": "user_id",
-          "limit": 50,
+          "oneToOne": true,
           "expandable": true
         }
       ],

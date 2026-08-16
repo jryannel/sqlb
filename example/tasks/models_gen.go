@@ -66,7 +66,7 @@ func (Membership) TableName() string { return "memberships" }
 // Profile a user's extended profile. One-to-one with users: user_id is unique.
 type Profile struct {
 	ID        string    `db:"id" json:"id" sqlb:"type:uuid,pk,default,filter,readonly"`
-	UserID    string    `db:"user_id" json:"user_id" sqlb:"type:uuid,filter"`
+	UserID    string    `db:"user_id" json:"user_id" sqlb:"type:uuid"`
 	Bio       *string   `db:"bio" json:"bio" sqlb:"type:text"`
 	CreatedAt time.Time `db:"created_at" json:"created_at" sqlb:"type:timestamptz,default,sort,readonly"`
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at" sqlb:"type:timestamptz,default,sort,readonly"`

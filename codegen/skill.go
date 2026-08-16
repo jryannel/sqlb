@@ -278,11 +278,17 @@ func skillResource(b *strings.Builder, t schema.TableManifest) {
 
 	if len(t.CollectedBy) > 0 {
 		b.WriteString("**Collects.** Rows of another table this one gathers, and the name " +
-			"`?expand` knows them by.\n\n")
-		b.WriteString("| Relation | Table | Via | Expandable |\n|---|---|---|---|\n")
+			"`?expand` knows them by. Most relations are collections, capped and paged with " +
+			"`has_more`; a relation backed by a unique foreign key is one-to-one instead and " +
+			"an expansion returns the single row or `null`, never the capped envelope.\n\n")
+		b.WriteString("| Relation | Table | Via | Expandable | Returns |\n|---|---|---|---|---|\n")
 		for _, inv := range t.CollectedBy {
-			fmt.Fprintf(b, "| `%s` | `%s` | `%s` | %s |\n",
-				inv.Name, inv.Table, inv.Column, yesNo(inv.Expandable))
+			returns := fmt.Sprintf("capped collection, %d max", inv.Limit)
+			if inv.OneToOne {
+				returns = "one row, or absent"
+			}
+			fmt.Fprintf(b, "| `%s` | `%s` | `%s` | %s | %s |\n",
+				inv.Name, inv.Table, inv.Column, yesNo(inv.Expandable), returns)
 		}
 		b.WriteString("\n")
 	}

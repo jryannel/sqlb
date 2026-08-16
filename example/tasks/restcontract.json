@@ -218,8 +218,7 @@
         {
           "name": "user_id",
           "rel": "user",
-          "type": "uuid",
-          "filterable": true
+          "type": "uuid"
         },
         {
           "name": "bio",

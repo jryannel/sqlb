@@ -311,6 +311,11 @@ func (b *Builder[T]) compileExpansions(c *compiler) {
 				name, target.Type.Name())
 			return
 		}
+		if rel.Reverse && b.model.PK == nil {
+			c.fail("cannot expand %q: %s has no primary key for its children to point at",
+				name, b.model.Type.Name())
+			return
+		}
 
 		alias := expandAlias(name)
 		c.write(" LEFT JOIN ")

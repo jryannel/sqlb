@@ -61,11 +61,11 @@ Addressed by `id`. `/lists`
 | Searchable | `name`, `description` |
 | Expandable | `tasks` |
 
-**Collects.** Rows of another table this one gathers, and the name `?expand` knows them by.
+**Collects.** Rows of another table this one gathers, and the name `?expand` knows them by. Most relations are collections, capped and paged with `has_more`; a relation backed by a unique foreign key is one-to-one instead and an expansion returns the single row or `null`, never the capped envelope.
 
-| Relation | Table | Via | Expandable |
-|---|---|---|---|
-| `tasks` | `tasks` | `list_id` | yes |
+| Relation | Table | Via | Expandable | Returns |
+|---|---|---|---|---|
+| `tasks` | `tasks` | `list_id` | yes | capped collection, 20 max |
 
 ### `memberships`
 
@@ -86,7 +86,7 @@ Addressed by `id`. `/profiles`
 
 | Capability | Columns |
 |---|---|
-| Filterable | `id`, `user_id` |
+| Filterable | `id` |
 | Sortable | `created_at`, `updated_at` |
 | Searchable | *none* |
 | Expandable | *none* |
@@ -125,11 +125,11 @@ Addressed by `id`. `/users`
 | Searchable | `email`, `name` |
 | Expandable | `profile` |
 
-**Collects.** Rows of another table this one gathers, and the name `?expand` knows them by.
+**Collects.** Rows of another table this one gathers, and the name `?expand` knows them by. Most relations are collections, capped and paged with `has_more`; a relation backed by a unique foreign key is one-to-one instead and an expansion returns the single row or `null`, never the capped envelope.
 
-| Relation | Table | Via | Expandable |
-|---|---|---|---|
-| `profile` | `profiles` | `user_id` | yes |
+| Relation | Table | Via | Expandable | Returns |
+|---|---|---|---|---|
+| `profile` | `profiles` | `user_id` | yes | one row, or absent |
 
 ### `workspaces`
 

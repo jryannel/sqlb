@@ -2320,17 +2320,13 @@ enum ProfileSort implements WireValue {
 /// column's own — so a filter the server would answer 400 to does not compile.
 class ProfileWhere {
   /// Builds a filter. Every column is optional; naming two conjoins them.
-  const ProfileWhere({this.id, this.userId});
+  const ProfileWhere({this.id});
 
   /// Conditions on profiles.id.
   final Cond<String>? id;
 
-  /// Conditions on profiles.user_id.
-  final Cond<String>? userId;
-
   void _encode(_Query out) {
     id?._encode(out, 'id');
-    userId?._encode(out, 'user_id');
   }
 }
 
