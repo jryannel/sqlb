@@ -70,9 +70,10 @@ func renderModels(opts Options) ([]byte, error) {
 		}
 		// An expanded collection lands in a sqlb.Collection. Models are
 		// otherwise importable without sqlb — a table with neither a reverse
-		// relation nor a vector column stays that way.
+		// relation nor a vector column stays that way. A one-to-one inverse emits
+		// a bare pointer instead, so it does not need the import.
 		for _, inv := range opts.Registry.Inverses(t) {
-			if inv.Expandable {
+			if inv.Expandable && !inv.OneToOne {
 				imports["github.com/jryannel/sqlb"] = true
 			}
 		}
@@ -175,6 +176,11 @@ func renderModels(opts Options) ([]byte, error) {
 			return nil, err
 		}
 		for _, inv := range inverses {
+			if inv.oneToOne {
+				fmt.Fprintf(b, "\t%s *%s `db:\"-\" json:%q sqlb:%q` // filled in by ?expand=%s\n",
+					inv.field, inv.target, inv.relation+",omitempty", inv.tag, inv.relation)
+				continue
+			}
 			fmt.Fprintf(b, "\t%s *sqlb.Collection[%s] `db:\"-\" json:%q sqlb:%q` // filled in by ?expand=%s\n",
 				inv.field, inv.target, inv.relation+",omitempty", inv.tag, inv.relation)
 		}
@@ -302,6 +308,7 @@ type inverse struct {
 	target   string // Go type of the child model, e.g. "Task"
 	relation string // name on the wire, e.g. "tasks"
 	tag      string // the sqlb tag, e.g. "expands=list_id,order=-created_at"
+	oneToOne bool   // emit a bare pointer instead of *sqlb.Collection[T]
 }
 
 // inversesOf returns the collection fields to emit on t, one per reference
@@ -339,15 +346,20 @@ func inversesOf(reg *schema.Registry, t *schema.TableDef) ([]inverse, error) {
 		// engine's, and the number would then live in two places with only one
 		// of them readable from the file.
 		tag := "expands=" + inv.Column
-		if inv.Order != "" {
-			tag += ",order=" + inv.Order
+		if inv.OneToOne {
+			tag += ",reverse"
+		} else {
+			if inv.Order != "" {
+				tag += ",order=" + inv.Order
+			}
+			tag += ",limit=" + strconv.Itoa(inv.Cap())
 		}
-		tag += ",limit=" + strconv.Itoa(inv.Cap())
 		out = append(out, inverse{
 			field:    name,
 			target:   TypeName(inv.Table.LocalName()),
 			relation: inv.Name,
 			tag:      tag,
+			oneToOne: inv.OneToOne,
 		})
 	}
 	return out, nil
