@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/jryannel/sqlb"
 	"github.com/jryannel/sqlb/rest"
 )
 
@@ -349,5 +350,73 @@ func TestListDocumentsEveryGroupParameter(t *testing.T) {
 	}
 	if d := params["not"].Description; !strings.Contains(d, "NOT (a AND b)") {
 		t.Errorf("not: description should state how several conditions read, got %q", d)
+	}
+}
+
+// mountOneToOneUser registers OneToOneUser, whose Profile field is the bare
+// pointer a unique-FK-backed Inverse codegens: a one-to-one reverse relation,
+// alongside Tasks, an ordinary capped-collection reverse relation.
+func mountOneToOneUser(t *testing.T, db sqlb.Executor) humatest.TestAPI {
+	t.Helper()
+	_, api := humatest.New(t, huma.DefaultConfig("Test", "1.0.0"))
+	if err := rest.Resource[OneToOneUser, rest.None[OneToOneUser], rest.None[OneToOneUser]](api, db, rest.Options{
+		Path: "/one-to-one-users", Name: "one_to_one_user", Ops: rest.OpRead | rest.OpList,
+		Expandable: []string{"profile", "tasks"},
+	}); err != nil {
+		t.Fatalf("mounting the resource: %v", err)
+	}
+	return api
+}
+
+// The server sends `"profile": null` when a unique-FK-backed Inverse's target
+// is absent (proven end to end by example/tasks/app's
+// TestExpandOfAOneToOneRelationIsNullWhenAbsent) — so the document has to say
+// null is a legal value for that property, not just the bare $ref a plain
+// struct pointer would otherwise get. Without this, a strict OpenAPI
+// validator or a generator built from the document would reject a real
+// response.
+func TestOneToOneExpandFieldSchemaAdmitsNull(t *testing.T) {
+	db := newFakeDB(t)
+	api := mountOneToOneUser(t, db.db)
+
+	schema := api.OpenAPI().Components.Schemas.Map()["OneToOneUser"]
+	if schema == nil {
+		t.Fatal("no OneToOneUser schema in the document")
+	}
+	profile := schema.Properties["profile"]
+	if profile == nil {
+		t.Fatal("no profile property documented")
+	}
+	if profile.Ref != "" {
+		t.Fatalf("profile is a bare $ref (%s), so a validator would reject the null the server actually sends", profile.Ref)
+	}
+	if len(profile.AnyOf) != 2 {
+		t.Fatalf("profile should be anyOf [$ref, null], got %+v", profile)
+	}
+	var sawRef, sawNull bool
+	for _, alt := range profile.AnyOf {
+		switch {
+		case alt.Ref != "":
+			sawRef = true
+		case alt.Type == "null":
+			sawNull = true
+		}
+	}
+	if !sawRef {
+		t.Errorf("profile's anyOf has no $ref to OneToOneProfile: %+v", profile.AnyOf)
+	}
+	if !sawNull {
+		t.Errorf("profile's anyOf has no null branch: %+v", profile.AnyOf)
+	}
+
+	// Guard-proven-both-ways: an ordinary capped collection must not be swept
+	// up by the same widening — it already reports absence as an empty items
+	// list, never null, so its schema stays exactly what a plain relation gets.
+	tasks := schema.Properties["tasks"]
+	if tasks == nil {
+		t.Fatal("no tasks property documented")
+	}
+	if tasks.Ref == "" {
+		t.Errorf("tasks (a capped collection) should still be a bare $ref, got %+v", tasks)
 	}
 }

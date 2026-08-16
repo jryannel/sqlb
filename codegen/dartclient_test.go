@@ -443,3 +443,21 @@ func TestDartRefusesCollidingMembers(t *testing.T) {
 		t.Errorf("the error should name the member that collided, got: %v", err)
 	}
 }
+
+func TestDartOneToOneInverseIsNullableGetterNotCollection(t *testing.T) {
+	src := generateDart(t, oneToOneFixture())
+	if !contains(src, "Profile? get profile => _one('profile', Profile.fromJson);") {
+		t.Errorf("one-to-one inverse should use _one(...), got:\n%s", src)
+	}
+	if contains(src, "Collection<Profile>? get profile") {
+		t.Errorf("one-to-one inverse must not use the Collection<T> getter:\n%s", src)
+	}
+}
+
+// Guard-proven-both-ways companion.
+func TestDartNonUniqueInverseStillUsesCollectionGetter(t *testing.T) {
+	src := generateDart(t, tsFixture())
+	if !contains(src, "Collection<Post>? get posts => _many('posts', Post.fromJson);") {
+		t.Errorf("non-unique inverse should still use _many(...), got:\n%s", src)
+	}
+}

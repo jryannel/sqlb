@@ -110,6 +110,12 @@
           "has_default": true,
           "read_only": true,
           "sortable": true
+        },
+        {
+          "name": "notes",
+          "rel": "notes",
+          "read_only": true,
+          "expandable": true
         }
       ]
     }

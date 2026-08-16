@@ -66,6 +66,57 @@ var User = schema.Table("users",
 	// in to. Either way the create belongs in a hand-written handler.
 	Expose(schema.REST{Ops: schema.OpRead | schema.OpList, MaxPageSize: 100})
 
+// Profile is a user's extended profile, split into a table of its own rather
+// than columns on User because it exists for one reason: user_id carries a
+// single-column Unique constraint, which is what makes the relation
+// structurally one-to-one and is the fixture the reverse side proves itself
+// against end to end. GET /users?expand=profile resolves through the Inverse
+// declared below to the row or null — never the {items, has_more} envelope
+// every other Inverse relation in this schema returns, because at most one
+// profile can ever point back at a given user.
+//
+// Only OpCreate is exposed — no GET /profiles, no GET /profiles/{id} — and
+// that is a tenancy constraint, not an oversight. profiles has no
+// workspace_id: a profile is 1:1 with a User, and User is the one table in
+// this schema that is *global* rather than workspace-owned (a login reaches
+// every workspace it is a member of), so there is no single workspace a
+// profile could carry either. That leaves this schema no way to declare a
+// Scoped column for it — every other exposed table's tenant boundary is
+// either a workspace_id (Scoped, ReadOnly, filtered by app/hooks.go's
+// scopeReads) or, for User itself, a membership subquery. The subquery answer
+// does not carry over: app/hooks.go's User hook needs RawPred (a membership
+// test is not expressible with F() and comparison operators), and a RawPred
+// BeforeQuery hook cannot be requalified onto a join alias (sqlb/qualify.go)
+// — so registering the same hook here would make every GET
+// /users?expand=profile fail at request time, breaking the one endpoint this
+// table exists to prove. Direct listing is left unexposed rather than
+// shipped unscoped; app/hooks.go's Profile BeforeCreate hook closes the
+// write-side version of the same gap by checking user_id against the
+// caller's own already-scoped membership, one row at a time, rather than
+// with a query-level predicate.
+var Profile = schema.Table("profiles",
+	schema.UUIDv7("id").PrimaryKey(),
+	// Unique is what makes this one-to-one (no separate schema verb for it —
+	// the constraint already says so). Inverse names the reverse relation, and
+	// InverseExpandable is the separate decision that exposes it through
+	// ?expand on /users; declaring one without the other would leave "profile"
+	// in the manifest with no endpoint that can ever return it.
+	//
+	// Not Filterable: this table has no GET at all (see the Ops below), so a
+	// filter capability here would buy nothing and only generate a misleading
+	// `?user_id=eq.…` example and a ProfileWhere/ProfileColumn client type for
+	// a query parameter no route ever reads.
+	schema.Ref("user", User).OnDelete(schema.Cascade).Unique().
+		Inverse("profile").InverseExpandable(),
+	schema.Text("bio").Nullable(),
+	schema.Timestamps(),
+).
+	Describe("A user's extended profile. One-to-one with users: user_id is unique.").
+	Expose(schema.REST{
+		Path: "/profiles",
+		Ops:  schema.OpCreate,
+	})
+
 // Membership is what makes a user part of a workspace, and carries the role
 // that authorisation reads. It is also the table the login endpoint consults to
 // decide which workspaces a token may be issued for.

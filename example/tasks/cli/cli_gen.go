@@ -157,6 +157,7 @@ what that resource accepts.`,
 	root.AddCommand(newCommentsCommand(c))
 	root.AddCommand(newListsCommand(c))
 	root.AddCommand(newMembershipsCommand(c))
+	root.AddCommand(newProfilesCommand(c))
 	root.AddCommand(newTasksCommand(c))
 	root.AddCommand(newUsersCommand(c))
 	root.AddCommand(newWorkspacesCommand(c))
@@ -870,6 +871,55 @@ nothing to print.`,
 	}
 }
 
+// ---------------------------------------------------------------- /profiles
+
+// newProfilesCommand groups the operations /profiles exposes.
+func newProfilesCommand(c *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "profiles",
+		Short: "A user's extended profile. One-to-one with users: user_id is unique",
+	}
+	cmd.AddCommand(newProfilesCreateCommand(c))
+	return cmd
+}
+
+// newProfilesCreateCommand is Post /profiles.
+func newProfilesCreateCommand(c *client.Client) *cobra.Command {
+	var (
+		valUserID string
+		valBio    string
+	)
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create one profile",
+		Args:  cobra.NoArgs,
+		Long: `POST /profiles
+
+Read-only columns have no flag: the database or a BeforeCreate hook owns them,
+so there is nothing for a caller to send. A column with a default is optional,
+and leaving it out means the database supplies the value rather than the zero
+value overwriting it.`,
+		Example: "  taskctl profiles create --user-id <user_id>",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			body := map[string]any{}
+			if cmd.Flags().Changed("user-id") {
+				body["user_id"] = valUserID
+			}
+			if cmd.Flags().Changed("bio") {
+				body["bio"] = valBio
+			}
+			return runRequest(c, cmd, client.Request{Method: http.MethodPost, Path: "/profiles", Body: body}, false)
+		},
+	}
+	flags := cmd.Flags()
+	flags.StringVar(&valUserID, "user-id", "",
+		"UUID. References users. Required.")
+	_ = cmd.MarkFlagRequired("user-id")
+	flags.StringVar(&valBio, "bio", "",
+		"Optional; left out, the column is null.")
+	return cmd
+}
+
 // ------------------------------------------------------------------- /tasks
 
 // newTasksCommand groups the operations /tasks exposes.
@@ -1339,6 +1389,7 @@ func newUsersListCommand(c *client.Client) *cobra.Command {
 		filterName  []string
 		sort        []string
 		select_     []string
+		expand      []string
 		search      string
 		page        int
 		perPage     int
@@ -1390,6 +1441,9 @@ filtered, sorted or searched by any spelling.`,
 			if len(select_) > 0 {
 				q.Set("select", strings.Join(select_, ","))
 			}
+			if len(expand) > 0 {
+				q.Set("expand", strings.Join(expand, ","))
+			}
 			if cmd.Flags().Changed("page") {
 				q.Set("page", strconv.Itoa(page))
 			}
@@ -1427,6 +1481,9 @@ Columns: name, created_at, updated_at.`)
 absent from the response rather than present and empty.
 Columns: id, email, name, created_at, updated_at.`)
 	registerCompletion(cmd, "select", []string{"id", "email", "name", "created_at", "updated_at"})
+	flags.StringSliceVar(&expand, "expand", nil,
+		"Relations to embed in each row. Relations: profile.")
+	registerCompletion(cmd, "expand", []string{"profile"})
 	flags.StringVar(&search, "search", "",
 		"Case-insensitive substring match, fanned out across email, name.")
 	flags.IntVar(&page, "page", 1, "Page number, 1-based.")
@@ -1446,6 +1503,7 @@ cursor, so a concurrent insert cannot make it read a row twice.`)
 
 // newUsersGetCommand is GET /users/{id}.
 func newUsersGetCommand(c *client.Client) *cobra.Command {
+	var expand []string
 	cmd := &cobra.Command{
 		Use:   "get <id>",
 		Short: "Fetch one user by primary key",
@@ -1453,13 +1511,22 @@ func newUsersGetCommand(c *client.Client) *cobra.Command {
 
 The item endpoint declares no query parameters but expand, and rejects any
 other rather than answering a question that was not asked.`,
-		Example: "  taskctl users get <id>",
-		Args:    cobra.ExactArgs(1),
+		Example: `  taskctl users get <id>
+
+  # With profile embedded, in one request
+  taskctl users get <id> --expand profile`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := url.Values{}
+			if len(expand) > 0 {
+				q.Set("expand", strings.Join(expand, ","))
+			}
 			return runRequest(c, cmd, client.Request{Method: http.MethodGet, Path: client.ItemPath("/users", args[0]), Query: q}, false)
 		},
 	}
+	cmd.Flags().StringSliceVar(&expand, "expand", nil,
+		"Relations to embed. Relations: profile.")
+	registerCompletion(cmd, "expand", []string{"profile"})
 	return cmd
 }
 

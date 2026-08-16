@@ -271,6 +271,124 @@ func TestACollectionIsCappedAndSaysSo(t *testing.T) {
 	}
 }
 
+// The one-to-one direction: a unique FK's Inverse resolves to the target row
+// or null, never the {items, has_more} envelope every other reverse relation
+// in this schema uses. profiles.user_id carries a single-column Unique
+// constraint, which is what makes taskschema.Profile's Inverse("profile") on
+// User structurally one-to-one — see the design doc's "Compatibility"
+// section for why this is a deliberate break of the Frozen list envelope.
+func TestExpandOfAOneToOneRelationIsAnObjectNotAnEnvelope(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	alice.profileID(alice.userID, "Backend engineer.")
+
+	got := alice.get("/users?expand=profile").expect(http.StatusOK).list()
+	if len(got.Items) != 1 {
+		t.Fatalf("got %d users, want 1: %s", len(got.Items), mustJSON(got.Items))
+	}
+
+	profile, ok := got.Items[0]["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected profile to be a plain object, got %T: %s",
+			got.Items[0]["profile"], mustJSON(got.Items[0]))
+	}
+	if _, hasEnvelope := profile["items"]; hasEnvelope {
+		t.Errorf("a one-to-one expansion must not use the {items, has_more} envelope: %s", mustJSON(profile))
+	}
+	if profile["bio"] != "Backend engineer." {
+		t.Errorf("expansion did not carry the profile's columns: %s", mustJSON(profile))
+	}
+}
+
+// A list still says "none" rather than omitting the key (TestTasksCarryNoListUnlessAsked
+// covers "did not ask"); the one-to-one case adds a third answer a capped
+// collection never needed: "asked, and there simply is no row."
+//
+// The key must be present with a null value, not simply missing — an omitted
+// key and a key holding JSON null decode to the same Go nil through
+// map[string]any, so a bare "!= nil" would pass whether or not the server
+// sent the key at all. Checked with the two-value map read instead, which is
+// the only way to tell "asked, and there is no row" (this test) from "did not
+// ask" (the second half below, and TestTasksCarryNoListUnlessAsked).
+func TestExpandOfAOneToOneRelationIsNullWhenAbsent(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	// alice's user has no profile row created for this test.
+
+	got := alice.get("/users?expand=profile").expect(http.StatusOK).list()
+	if len(got.Items) != 1 {
+		t.Fatalf("got %d users, want 1: %s", len(got.Items), mustJSON(got.Items))
+	}
+	v, ok := got.Items[0]["profile"]
+	if !ok {
+		t.Fatalf(`expected "profile" to be present with a null value, but the key was absent: %s`,
+			mustJSON(got.Items[0]))
+	}
+	if v != nil {
+		t.Errorf("expected profile to be null when absent, got: %s", mustJSON(got.Items[0]))
+	}
+
+	// Without ?expand=profile the key is not there at all — the distinction
+	// the assertion above exists to prove, mirroring the contract
+	// TestTasksCarryNoListUnlessAsked keeps for the collection-shaped case.
+	plain := alice.get("/users").expect(http.StatusOK).list()
+	if len(plain.Items) != 1 {
+		t.Fatalf("got %d users, want 1: %s", len(plain.Items), mustJSON(plain.Items))
+	}
+	if _, present := plain.Items[0]["profile"]; present {
+		t.Errorf("the relation was serialised without being asked for: %s", mustJSON(plain.Items[0]))
+	}
+}
+
+// profiles has no workspace_id (see the note on taskschema.Profile), so
+// app/hooks.go scopes POST /profiles by looking the named user_id up through
+// the already-scoped users query rather than by a predicate on profiles
+// itself. This is the direct proof, the same case TestWorkspacesAreIsolated
+// makes for every table that does have a workspace_id to filter by: Bob must
+// not be able to plant a profile against a user in a workspace he does not
+// share.
+func TestProfileCreateIsScopedToTheCallersWorkspace(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	bob := account(t, server, "bob@example.com", "Globex")
+
+	// Same answer a nonexistent user_id gets: 404, not 403 — Bob is not told
+	// whether alice's id exists, only that his request matched nothing.
+	bob.post("/profiles", map[string]any{
+		"user_id": alice.userID,
+		"bio":     "planted from another workspace",
+	}).expect(http.StatusNotFound)
+
+	// And nothing landed: Alice still has no profile to expand.
+	got := alice.get("/users?expand=profile").expect(http.StatusOK).list()
+	if v, ok := got.Items[0]["profile"]; !ok || v != nil {
+		t.Errorf("a cross-workspace create should not have landed: %s", mustJSON(got.Items[0]))
+	}
+}
+
+// taskschema.Profile exposes only OpCreate — the comment on it explains why:
+// profiles has no workspace_id to scope a list by, so a served GET would leak
+// across tenants the way TestProfileCreateIsScopedToTheCallersWorkspace's
+// POST case once did. That decision lives in Ops: schema.OpCreate, prose a
+// future schema edit could silently widen (adding OpRead/OpList back) without
+// any generated surface objecting — this is the gate that would catch it: if
+// GET /profiles or GET /profiles/{id} ever start responding, this fails.
+func TestProfilesHasNoReadableEndpoint(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	profileID := alice.profileID(alice.userID, "Backend engineer.")
+
+	resp := alice.get("/profiles")
+	if resp.Code == http.StatusOK {
+		t.Fatalf("GET /profiles answered 200; profiles must stay create-only, or its tenancy scope has no read-side check: %s", resp.Body)
+	}
+
+	resp = alice.get("/profiles/" + profileID)
+	if resp.Code == http.StatusOK {
+		t.Fatalf("GET /profiles/{id} answered 200; profiles must stay create-only, or its tenancy scope has no read-side check: %s", resp.Body)
+	}
+}
+
 // One statement, whichever direction it runs in: a list expanding its tasks
 // while a task expands its list is the same page count either way, and the
 // collection must not multiply the rows it hangs off.

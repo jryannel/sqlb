@@ -568,8 +568,67 @@ func (r row[T]) Schema(reg huma.Registry) *huma.Schema {
 	s := reg.Schema(reflect.TypeFor[T](), true, "")
 	if resolved := deref(reg, s); resolved != nil {
 		resolved.Required = nil
+		nullifyOneToOne(resolved, reflect.TypeFor[T]())
 	}
 	return s
+}
+
+// nullifyOneToOne widens a one-to-one reverse relation's property to admit
+// null, matching what the server actually sends when the relation is absent
+// (compileExpansions' LEFT JOIN, not the capped-collection envelope).
+//
+// It cannot use the `nullable` struct tag every other nullable field in this
+// codebase uses: huma refuses that combination outright for a $ref field
+// (schema.go panics with "nullable is not supported for field ... which is
+// type '$ref'", because OpenAPI has no clean way to say "nullable" and "ref"
+// in the same breath — setting Schema.Nullable on a $ref schema serialises as
+// the nonsensical `"type": ["", "null"]`, since a $ref schema carries no Type
+// of its own to pair "null" with). The 3.1-native way to say "this ref, or
+// null" is the anyOf form used below, the same shape this document's own
+// components/schemas would use for a nullable $ref if huma emitted one at
+// all.
+//
+// A field qualifies by the same marker relation.go's tag parser recognises: a
+// bare `reverse` token in its `sqlb` tag. The forward and capped-collection
+// cases are untouched — a capped collection already reports absence as an
+// empty items list, never null, so it has nothing to widen.
+func nullifyOneToOne(s *huma.Schema, t reflect.Type) {
+	if t.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !isOneToOneField(f) {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		orig, ok := s.Properties[name]
+		if !ok || orig == nil || orig.Ref == "" {
+			continue
+		}
+		s.Properties[name] = &huma.Schema{AnyOf: []*huma.Schema{orig, {Type: "null"}}}
+	}
+}
+
+// isOneToOneField reports whether f is the bare-pointer field the Go codegen
+// emits for a one-to-one reverse relation: the `reverse` token, split on
+// commas the way relation.go's own relationTag parser splits it, rather than
+// a substring match that could mismatch a future tag value containing
+// "reverse" as part of a longer word.
+func isOneToOneField(f reflect.StructField) bool {
+	tag, ok := f.Tag.Lookup("sqlb")
+	if !ok {
+		return false
+	}
+	for part := range strings.SplitSeq(tag, ",") {
+		if part == "reverse" {
+			return true
+		}
+	}
+	return false
 }
 
 // deref follows a $ref back to the schema it names, so that a registered

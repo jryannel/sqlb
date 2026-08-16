@@ -256,6 +256,7 @@ type tsRelation struct {
 	target   string // TypeScript type of the expanded rows
 	forward  bool   // a reference on this table, rather than one pointing at it
 	nullable bool   // the reference column is nullable, so the relation may be null
+	oneToOne bool   // an inverse relation backed by a unique FK — one row or null
 }
 
 func (r tsResource) hasExpand() bool { return len(r.relations) > 0 }
@@ -368,7 +369,11 @@ func tsRelationOf(reg *schema.Registry, t *schema.TableDef, name string) (tsRela
 	}
 	for _, inv := range reg.Inverses(t) {
 		if inv.Expandable && inv.Name == name {
-			return tsRelation{name: name, target: TypeName(inv.Table.LocalName())}, nil
+			return tsRelation{
+				name:     name,
+				target:   TypeName(inv.Table.LocalName()),
+				oneToOne: inv.OneToOne,
+			}, nil
 		}
 	}
 	return tsRelation{}, fmt.Errorf("codegen: table %s: no relation named %q", t.Name(), name)
@@ -429,7 +434,15 @@ func tsRowTypes(b *bytes.Buffer, reg *schema.Registry, t *schema.TableDef) {
 		if !inv.Expandable {
 			continue
 		}
-		fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, capped at %d rows. */\n", inv.Name, inv.Cap())
+		if inv.OneToOne {
+			fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. */\n", inv.Name)
+			fmt.Fprintf(b, "  %s?: %s | null;\n", tsProp(inv.Name), TypeName(inv.Table.LocalName()))
+			continue
+		}
+		// One block, not two adjacent ones: two adjacent `/** */` comments only
+		// let the last one attach in TS tooling, silently dropping "Filled in
+		// by `expand`" from hover docs for every ordinary collection relation.
+		fmt.Fprintf(b, "  /** Filled in by `expand: ['%s']`, absent otherwise. Capped at %d rows. */\n", inv.Name, inv.Cap())
 		fmt.Fprintf(b, "  %s?: Collection<%s>;\n", tsProp(inv.Name), TypeName(inv.Table.LocalName()))
 	}
 	fmt.Fprintln(b, "}")
@@ -1046,6 +1059,9 @@ func tsCondType(typeName string, d *schema.FieldDesc) string {
 
 func tsRelationType(rel tsRelation) string {
 	if !rel.forward {
+		if rel.oneToOne {
+			return rel.target + " | null"
+		}
 		return "Collection<" + rel.target + ">"
 	}
 	if rel.nullable {

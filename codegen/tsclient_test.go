@@ -511,3 +511,50 @@ func section(t *testing.T, src, from, to string) string {
 	}
 	return rest[:end+len(to)]
 }
+
+func oneToOneTSFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	users := r.Table("users", schema.UUIDv7("id").PrimaryKey())
+	r.Table("profiles",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("user", users).Unique().
+			Expandable().Inverse("profile").InverseExpandable(),
+	)
+	return r
+}
+
+func TestTSOneToOneInverseIsNullableObjectNotCollection(t *testing.T) {
+	files := generateTS(t, oneToOneTSFixture())
+	client := files["client.gen.ts"]
+	if !contains(client, `profile?: Profile | null;`) {
+		t.Errorf("one-to-one inverse should type as Profile | null, got:\n%s", client)
+	}
+	if contains(client, "profile?: Collection<Profile>") {
+		t.Errorf("one-to-one inverse must not use the Collection<T> envelope:\n%s", client)
+	}
+}
+
+// Guard-proven-both-ways companion — ordinary inverse relations keep their
+// existing Collection<T> shape.
+func TestTSNonUniqueInverseStillUsesCollection(t *testing.T) {
+	files := generateTS(t, tsFixture())
+	client := files["client.gen.ts"]
+	if !contains(client, "Collection<Post>") {
+		t.Errorf("non-unique inverse should still use Collection<Post>, got:\n%s", client)
+	}
+}
+
+// A capped collection's row-interface doc comment used to split across two
+// adjacent `/** */` blocks, of which TS tooling only surfaces the second on
+// hover — silently dropping "Filled in by `expand`" for every ordinary
+// collection relation. It has to be one block.
+func TestTSCollectionDocCommentIsOneBlock(t *testing.T) {
+	files := generateTS(t, tsFixture())
+	client := files["client.gen.ts"]
+	if !contains(client, "/** Filled in by `expand: ['posts']`, absent otherwise. Capped at 50 rows. */") {
+		t.Errorf("collection relation's doc comment should be one merged block, got:\n%s", client)
+	}
+	if contains(client, "/** Filled in by `expand: ['posts']`, absent otherwise. */\n  /** Capped at 50 rows. */") {
+		t.Errorf("collection relation's doc comment should not split into two adjacent blocks:\n%s", client)
+	}
+}

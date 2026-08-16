@@ -79,6 +79,37 @@ func TestSkillNamesAnEmptyCapability(t *testing.T) {
 	}
 }
 
+// The Collects table used to describe a one-to-one relation exactly the way
+// it describes a real collection — same columns, no cap shown either way — so
+// an agent reading the generated SKILL.md had no way to tell that `profile`
+// returns one row or null while `tasks` returns a capped, paged collection.
+func TestSkillDistinguishesOneToOneFromACappedCollection(t *testing.T) {
+	r := schema.NewRegistry()
+	users := r.Table("users", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.OpList})
+	r.Table("profiles",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("user", users).Unique().Expandable().
+			Inverse("profile").InverseExpandable(),
+	)
+	lists := r.Table("lists", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.OpList})
+	r.Table("tasks",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("list", lists).Expandable().
+			Inverse("tasks").InverseExpandable(),
+	)
+
+	skill, _, _ := renderSkillInto(t, r, "./s")
+
+	if !contains(skill, "| `profile` | `profiles` | `user_id` | yes | one row, or absent |") {
+		t.Errorf("a one-to-one relation should say it returns one row or absent:\n%s", skill)
+	}
+	if !contains(skill, "| `tasks` | `tasks` | `list_id` | yes | capped collection, 50 max |") {
+		t.Errorf("an ordinary collection should still state its resolved cap:\n%s", skill)
+	}
+}
+
 // The trust boundary, and the reason this emitter carries structure rather than
 // prose. `sqlb introspect` reads a column comment off a live database and calls
 // Field.Comment, so a comment is not necessarily first-party text — and this file

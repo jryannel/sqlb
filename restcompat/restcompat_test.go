@@ -27,6 +27,9 @@ type opts struct {
 	publishedNullsLast bool      // declare NULLS LAST on published_at (#88)
 	statusValues       []string  // enum values; nil keeps the baseline three
 	ops                schema.Op // 0 keeps the baseline op set
+	authorUnique       bool      // Unique() on posts.author: its Inverse "posts" becomes one-to-one
+	postsNotExpandable bool      // Inverse("posts") with no InverseExpandable: a name, not a contract
+	noPostsInverse     bool      // no Inverse("posts") at all: the forward Ref names no reverse relation
 
 	// wire declares the schema's wire spelling. The zero value is Verbatim,
 	// which is also what it means, so the baseline blog needs no case at all.
@@ -35,12 +38,27 @@ type opts struct {
 
 const baseOps = schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList
 
-// blog builds a registry holding the blog's posts table (and an unexposed
-// authors table for the reference to point at), edited per o.
+// blog builds a registry holding the blog's posts table and an authors table
+// for the reference to point at, edited per o. authors is exposed and its Ref
+// from posts is InverseExpandable — GET /authors?expand=posts — so that
+// o.authorUnique has a REST contract to change the shape of; an unexposed
+// reverse relation is invisible to a client and so has nothing to break.
 func blog(o opts) *schema.Registry {
 	r := schema.NewRegistry().WireCase(o.wire)
 
-	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey())
+	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.OpRead | schema.OpList})
+
+	author := schema.Ref("author", authors).Filterable().Expandable()
+	if !o.noPostsInverse {
+		author = author.Inverse("posts")
+		if !o.postsNotExpandable {
+			author = author.InverseExpandable()
+		}
+	}
+	if o.authorUnique {
+		author = author.Unique()
+	}
 
 	title := schema.Text(pick(o.titleName, "title")).Searchable().Sortable()
 	if o.titleName != "" {
@@ -77,7 +95,7 @@ func blog(o opts) *schema.Registry {
 
 	fields := []schema.FieldSpec{
 		schema.UUIDv7("id").PrimaryKey(),
-		schema.Ref("author", authors).Filterable().Expandable().Inverse("posts"),
+		author,
 		title,
 		schema.Text("body").Searchable(),
 		status,
@@ -122,6 +140,54 @@ func TestRenameIsAWireBreak(t *testing.T) {
 		t.Errorf("rename should be reported as a rename, not a drop and add:\n%s", render(breaks))
 	}
 	assertNoAdditive(t, breaks) // it is a rename, not a new field
+}
+
+// A unique FK's Inverse changing shape from a collection envelope to a
+// nullable object is a response-facet break, the same category a rename is —
+// a client reading `.items` off it would break, just as one reading a
+// renamed field would. docs/compatibility.md carves this out of the Frozen
+// list-envelope entry (ADR-0040's precedent: a Frozen guarantee broken once
+// before, deliberately, pre-1.0).
+func TestUniqueFKChangesInverseFromCollectionToObject(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{authorUnique: true}))
+	assertBreaking(t, breaks, restcompat.FacetExpand, "posts")
+	if !mentions(breaks, "one-to-one") {
+		t.Errorf("the summary should say why it breaks:\n%s", render(breaks))
+	}
+}
+
+// The other direction of the same flip — object back to collection — gets its
+// own test rather than trusting the branch inside diffField symmetrically, the
+// convention TestWireCaseFlipBreaksInBothDirections already keeps for this
+// file's other two-way comparisons.
+func TestUniqueFKRemovedRevertsInverseToCollection(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{authorUnique: true}), blog(opts{}))
+	assertBreaking(t, breaks, restcompat.FacetExpand, "posts")
+	if !mentions(breaks, "no longer a unique FK") {
+		t.Errorf("the summary should say why it breaks:\n%s", render(breaks))
+	}
+}
+
+// Guard-proven-both-ways (ADR-0016) companion to the two tests above: a bare
+// Inverse("posts") with no InverseExpandable never emits a Go field, never
+// exposes an ?expand parameter and never changes the wire, so it must not be
+// part of the captured contract at all.
+//
+// Removing the Inverse name entirely is the case that actually catches an
+// unfiltered Capture: dropping it makes "posts" disappear from authors'
+// captured fields, and if a non-expandable one had been recorded as present
+// (hidden=false, writeOnly=false — indistinguishable from a real response
+// field to diffRemoved's inResponse() check), this would report a false
+// "field removed from responses" for a field the generated response never
+// had.
+func TestNonExpandableInverseProducesNoFinding(t *testing.T) {
+	breaks := restcompat.Diff(
+		blog(opts{postsNotExpandable: true}),
+		blog(opts{noPostsInverse: true}),
+	)
+	if len(breaks) != 0 {
+		t.Errorf("a non-expandable inverse is not part of the contract, want no findings:\n%s", render(breaks))
+	}
 }
 
 // Un-exposing a filter changes the contract while emitting no DDL at all — the

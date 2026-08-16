@@ -45,9 +45,10 @@ func newServer(t *testing.T, db *pgxpool.Pool) http.Handler {
 
 // client is a thin wrapper that carries a bearer token.
 type client struct {
-	t     *testing.T
-	h     http.Handler
-	token string
+	t      *testing.T
+	h      http.Handler
+	token  string
+	userID string // set by account(); "" for the anonymous client
 }
 
 type response struct {
@@ -173,7 +174,21 @@ func account(t *testing.T, h http.Handler, email, workspace string) *client {
 	if !ok || token == "" {
 		t.Fatalf("register returned no token: %v", body)
 	}
-	return &client{t: t, h: h, token: token}
+	userID, ok := body["user_id"].(string)
+	if !ok || userID == "" {
+		t.Fatalf("register returned no user_id: %v", body)
+	}
+	return &client{t: t, h: h, token: token, userID: userID}
+}
+
+// profileID creates a profile for the given user and returns its id.
+func (c *client) profileID(userID, bio string) string {
+	c.t.Helper()
+	body := c.post("/profiles", map[string]any{
+		"user_id": userID,
+		"bio":     bio,
+	}).expect(http.StatusCreated).item()
+	return id(c.t, body)
 }
 
 // listID creates a list and returns its id.

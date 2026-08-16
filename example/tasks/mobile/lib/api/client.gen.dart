@@ -1106,6 +1106,62 @@ class MembershipCreate {
   };
 }
 
+// ------------------------------------------------------------------- profiles
+
+/// A user's extended profile. One-to-one with users: user_id is unique.
+///
+/// Reading a column the request did not return throws MissingColumn rather
+/// than yielding null, so a projection that dropped a column is reported
+/// where it is used instead of somewhere further out.
+class Profile extends Row {
+  /// Wraps one decoded response object. Columns are read on access.
+  Profile.fromJson(super.json) : super.fromJson();
+
+  /// The table this row came from.
+  static const String table = 'profiles';
+
+  /// The profiles.id column.
+  String get id => _str('id');
+
+  /// The profiles.user_id column.
+  String get userId => _str('user_id');
+
+  /// The profiles.bio column.
+  String? get bio => _strOrNull('bio');
+
+  /// The profiles.created_at column.
+  DateTime get createdAt => _time('created_at');
+
+  /// The profiles.updated_at column.
+  DateTime get updatedAt => _time('updated_at');
+
+  /// Whether the request that produced this row returned [column].
+  bool has(ProfileColumn column) => _present(column.wire);
+}
+
+/// The request body for creating a Profile.
+///
+/// Read-only columns are absent: the database or a BeforeCreate hook owns
+/// them. A column with a default is optional, and leaving one out means the
+/// database supplies the value.
+class ProfileCreate {
+  /// Builds a request body. A property with no default here is one the
+  /// database has none for.
+  const ProfileCreate({required this.userId, this.bio});
+
+  /// The profiles.user_id column.
+  final String userId;
+
+  /// The profiles.bio column.
+  final String? bio;
+
+  /// The JSON body. Absent properties are the ones left unset.
+  Map<String, dynamic> toJson() => {
+    'user_id': _wire(userId),
+    if (bio != null) 'bio': _wire(bio),
+  };
+}
+
 // ---------------------------------------------------------------------- tasks
 
 /// The tasks.status column's value set.
@@ -1389,6 +1445,9 @@ class User extends Row {
 
   /// The users.updated_at column.
   DateTime get updatedAt => _time('updated_at');
+
+  /// Filled in by expand: [UserExpand.profile], null otherwise.
+  Profile? get profile => _one('profile', Profile.fromJson);
 
   /// Whether the request that produced this row returned [column].
   bool has(UserColumn column) => _present(column.wire);
@@ -2209,6 +2268,79 @@ CursorPager<Membership> membershipPager(
   );
 }
 
+// ------------------------------------------------------------------ /profiles
+
+/// Columns [select] may name. The primary key is always returned.
+enum ProfileColumn implements WireValue {
+  /// The profiles.id column.
+  id('id'),
+
+  /// The profiles.user_id column.
+  userId('user_id'),
+
+  /// The profiles.bio column.
+  bio('bio'),
+
+  /// The profiles.created_at column.
+  createdAt('created_at'),
+
+  /// The profiles.updated_at column.
+  updatedAt('updated_at');
+
+  const ProfileColumn(this.wire);
+
+  @override
+  final String wire;
+}
+
+/// Sortable columns. Take [asc] or [desc] to get a term [sort] accepts.
+enum ProfileSort implements WireValue {
+  /// Order by profiles.created_at.
+  createdAt('created_at'),
+
+  /// Order by profiles.updated_at.
+  updatedAt('updated_at');
+
+  const ProfileSort(this.wire);
+
+  @override
+  final String wire;
+
+  /// Ascending.
+  SortTerm get asc => SortTerm(wire);
+
+  /// Descending.
+  SortTerm get desc => SortTerm('-$wire');
+}
+
+/// Filter conditions, one property per filterable column.
+///
+/// The condition type is narrowed by the column: pattern operators exist only
+/// on text, null tests only on a nullable column, and the value type is the
+/// column's own — so a filter the server would answer 400 to does not compile.
+class ProfileWhere {
+  /// Builds a filter. Every column is optional; naming two conjoins them.
+  const ProfileWhere({this.id});
+
+  /// Conditions on profiles.id.
+  final Cond<String>? id;
+
+  void _encode(_Query out) {
+    id?._encode(out, 'id');
+  }
+}
+
+/// POST /profiles — create a row.
+Future<Profile> createProfile(
+  Transport request,
+  ProfileCreate body, {
+  Object? cancel,
+}) async {
+  const path = '/profiles';
+  final json = await request(_post(path, body.toJson(), cancel));
+  return _row(json, Profile.fromJson);
+}
+
 // --------------------------------------------------------------------- /tasks
 
 /// Columns [select] may name. The primary key is always returned.
@@ -2639,6 +2771,17 @@ enum UserSort implements WireValue {
   SortTerm get desc => SortTerm('-$wire');
 }
 
+/// Relations [expand] may name.
+enum UserExpand implements WireValue {
+  /// The profile relation, one row.
+  profile('profile');
+
+  const UserExpand(this.wire);
+
+  @override
+  final String wire;
+}
+
 /// Filter conditions, one property per filterable column.
 ///
 /// The condition type is narrowed by the column: pattern operators exist only
@@ -2673,6 +2816,7 @@ class UserListParams {
     this.search,
     this.sort,
     this.select,
+    this.expand,
     this.page,
     this.perPage,
     this.cursor,
@@ -2694,6 +2838,9 @@ class UserListParams {
   /// reading one off the row throws MissingColumn. The primary key comes back
   /// whether or not it was asked for.
   final List<UserColumn>? select;
+
+  /// Relations to pull in alongside each row.
+  final List<UserExpand>? expand;
 
   /// One-based page number. Prefer [cursor] for a deep walk.
   final int? page;
@@ -2722,6 +2869,7 @@ class UserListParams {
     search: search,
     sort: sort,
     select: select,
+    expand: expand,
     perPage: perPage,
     cursor: cursor,
     countExact: countExact,
@@ -2738,6 +2886,9 @@ class UserListParams {
     }
     if (select != null && select!.isNotEmpty) {
       out.set('select', select!.map((column) => column.wire).join(','));
+    }
+    if (expand != null && expand!.isNotEmpty) {
+      out.set('expand', expand!.map((relation) => relation.wire).join(','));
     }
     if (page != null) out.set('page', '$page');
     if (perPage != null) out.set('per_page', '$perPage');
@@ -2758,10 +2909,19 @@ class UserListParams {
 /// parameters and does not declare one.
 class UserGetParams {
   /// Builds a request.
-  const UserGetParams();
+  const UserGetParams({this.expand});
 
-  /// Always empty: this endpoint takes no parameters.
-  String toQuery() => '';
+  /// Relations to pull in alongside the row.
+  final List<UserExpand>? expand;
+
+  /// Encodes these parameters into the server's query grammar.
+  String toQuery() {
+    final out = _Query();
+    if (expand != null && expand!.isNotEmpty) {
+      out.set('expand', expand!.map((relation) => relation.wire).join(','));
+    }
+    return out.build();
+  }
 }
 
 /// GET /users — the filtered, sorted, paged collection.
@@ -3030,6 +3190,9 @@ enum TableName implements WireValue {
 
   /// The memberships table, served at /memberships.
   memberships('memberships'),
+
+  /// The profiles table, served at /profiles.
+  profiles('profiles'),
 
   /// The tasks table, served at /tasks.
   tasks('tasks'),

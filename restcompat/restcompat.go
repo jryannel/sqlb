@@ -345,6 +345,23 @@ func diffField(path string, o, n *fieldView, add func(Break)) {
 	}
 	capDelta(path, FacetExpand, n.relName, o.expandable, n.expandable,
 		"expand relation removed", "expand relation added", add)
+	// A unique FK's Inverse resolves to the target row or null instead of the
+	// {items, has_more} collection envelope every other expand relation uses
+	// (docs/compatibility.md's carve-out on the Frozen list-envelope entry).
+	// Flipping .Unique() on the forward Ref therefore changes the shape of an
+	// already-expandable relation without adding or removing it — the case
+	// capDelta above cannot see, since both sides stay expandable=true.
+	if o.expandable && n.expandable && o.oneToOne != n.oneToOne {
+		if n.oneToOne {
+			add(Break{LevelBreaking, path, FacetExpand, n.relName,
+				"the forward reference became a unique FK; this expansion is now one-to-one and " +
+					"returns the target row or null instead of the {items, has_more} collection envelope"})
+		} else {
+			add(Break{LevelBreaking, path, FacetExpand, n.relName,
+				"the forward reference is no longer a unique FK; this expansion reverts to the " +
+					"{items, has_more} collection envelope instead of the target row or null"})
+		}
+	}
 
 	// Writability. ReadOnly and Immutable were captured in the snapshot and
 	// never compared, so three writer-side contract breaks passed the gate
@@ -559,9 +576,13 @@ type ResourceSnap struct {
 // the primary-key flag, the index list, the constraint names — are deliberately
 // absent: they do not change how a client couples to the field.
 type FieldSnap struct {
-	Name        string   `json:"name"`
-	Rel         string   `json:"rel,omitempty"`
-	Type        string   `json:"type"`
+	Name string `json:"name"`
+	Rel  string `json:"rel,omitempty"`
+	// Type is omitempty because an inverse-relation entry (see the loop in
+	// Capture that appends those) has none — it is a relation to another
+	// table, not a scalar column — and every real column's Type is always
+	// non-empty, so nothing that used to be recorded stops being recorded.
+	Type        string   `json:"type,omitempty"`
 	Array       bool     `json:"array,omitempty"`
 	Size        int      `json:"size,omitempty"`
 	Enum        []string `json:"enum,omitempty"`
@@ -576,6 +597,12 @@ type FieldSnap struct {
 	SortNulls   string   `json:"sort_nulls,omitempty"`
 	Expandable  bool     `json:"expandable,omitempty"`
 	RenamedFrom string   `json:"renamed_from,omitempty"`
+	// OneToOne marks a reverse (Inverse) relation whose forward Ref carries a
+	// single-column unique constraint, so ?expand resolves it to the target row
+	// or null rather than the {items, has_more} collection envelope every other
+	// expand relation uses. Meaningless — and always false — on anything but an
+	// inverse-relation entry; see the loop in Capture that appends those.
+	OneToOne bool `json:"one_to_one,omitempty"`
 }
 
 // canonicalOps is the fixed order operations are captured and compared in, so a
@@ -637,6 +664,38 @@ func Capture(r *schema.Registry) Snapshot {
 			}
 			res.Fields = append(res.Fields, fs)
 		}
+		// The reverse side of every Ref that named an Inverse and points at t:
+		// the field the target gains, not the column the source declares.
+		// Captured here, on t's own resource, because that is where a caller
+		// actually observes it — GET t.Path?expand=<name> — the same reason
+		// expandableRelations (codegen/models.go) walks Inverses(t) rather than
+		// leaving the reverse relation implicit in the source's Ref.
+		//
+		// Only an Expandable one, matching inversesOf and expandableRelations
+		// (codegen/models.go, "A declared-but-unexposed inverse names the
+		// relationship for the manifest and stops there"): a bare Inverse(name)
+		// with no InverseExpandable never emits a Go field, never exposes an
+		// ?expand parameter, and never changes the wire — it is a name in the
+		// manifest, not a contract. Capturing it anyway made removing one look
+		// like a breaking "field removed from responses", for a field the
+		// generated response never had.
+		//
+		// ReadOnly is set unconditionally: an expand relation is never a
+		// create- or patch-body field, and leaving it false would make
+		// diffAdded misclassify a newly-declared Inverse as a required create
+		// field the moment it is captured, which it never is.
+		for _, inv := range r.Inverses(t) {
+			if !inv.Expandable {
+				continue
+			}
+			res.Fields = append(res.Fields, FieldSnap{
+				Name:       inv.Name,
+				Rel:        inv.Name,
+				ReadOnly:   true,
+				Expandable: inv.Expandable,
+				OneToOne:   inv.OneToOne,
+			})
+		}
 		res.Actions = captureActions(t, path)
 		s.Resources = append(s.Resources, res)
 	}
@@ -682,6 +741,10 @@ type fieldView struct {
 	sortable   bool
 	sortNulls  string
 	expandable bool
+	// oneToOne is only ever true on an inverse-relation entry (see the
+	// Inverses loop in Capture); zero on every real column, so comparing it
+	// is a no-op wherever a shape change is not the thing that happened.
+	oneToOne bool
 
 	// renamedFrom is not a property of the contract but the hint that matches
 	// this field to its old name across the diff. Kept on the view so the
@@ -730,6 +793,7 @@ func index(s Snapshot) map[string]resource {
 				sortable:    fs.Sortable,
 				sortNulls:   fs.SortNulls,
 				expandable:  fs.Expandable,
+				oneToOne:    fs.OneToOne,
 				renamedFrom: fs.RenamedFrom,
 			}
 			res.order = append(res.order, fs.Name)

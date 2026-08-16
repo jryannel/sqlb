@@ -198,10 +198,11 @@ func (r dartResource) itemRoute() string {
 // dartRelation is one entry of a resource's ?expand vocabulary, in the
 // direction it is served.
 type dartRelation struct {
-	name    string // wire name, e.g. "list"
-	member  string // Dart getter, e.g. "list"
-	target  string // Dart type of the expanded rows
-	forward bool   // a reference on this table, rather than one pointing at it
+	name     string // wire name, e.g. "list"
+	member   string // Dart getter, e.g. "list"
+	target   string // Dart type of the expanded rows
+	forward  bool   // a reference on this table, rather than one pointing at it
+	oneToOne bool   // an inverse relation backed by a unique FK — one row or null
 }
 
 func (r dartResource) hasExpand() bool { return len(r.relations) > 0 }
@@ -303,9 +304,10 @@ func dartRelationOf(reg *schema.Registry, t *schema.TableDef, name string) (dart
 	for _, inv := range reg.Inverses(t) {
 		if inv.Expandable && inv.Name == name {
 			return dartRelation{
-				name:   name,
-				member: dartMember(name),
-				target: dartRowType(inv.Table),
+				name:     name,
+				member:   dartMember(name),
+				target:   dartRowType(inv.Table),
+				oneToOne: inv.OneToOne,
 			}, nil
 		}
 	}
@@ -458,6 +460,13 @@ func dartRowMembers(reg *schema.Registry, t *schema.TableDef, exclude map[string
 		member := dartMember(inv.Name)
 		if err := claim(member, "inverse relation "+inv.Name); err != nil {
 			return nil, err
+		}
+		if inv.OneToOne {
+			out = append(out, dartRowMember{
+				doc:    fmt.Sprintf("Filled in by expand: [%sExpand.%s], null otherwise.", base, member),
+				getter: dartForwardGetter(dartRelation{name: inv.Name, member: member, target: dartRowType(inv.Table)}),
+			})
+			continue
 		}
 		out = append(out, dartRowMember{
 			doc: fmt.Sprintf("Filled in by expand: [%sExpand.%s], null otherwise. Capped at %d rows;\nCollection.hasMore reports truncation.",
@@ -854,7 +863,7 @@ func dartResourceSection(b *bytes.Buffer, reg *schema.Registry, r dartResource) 
 		var docs, names, wires []string
 		for _, rel := range r.relations {
 			kind := "The %s relation, one row."
-			if !rel.forward {
+			if !rel.forward && !rel.oneToOne {
 				kind = "The %s relation, a capped collection."
 			}
 			docs = append(docs, fmt.Sprintf(kind, rel.name))

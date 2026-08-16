@@ -54,6 +54,12 @@
           "has_default": true,
           "read_only": true,
           "sortable": true
+        },
+        {
+          "name": "posts",
+          "rel": "posts",
+          "read_only": true,
+          "expandable": true
         }
       ]
     },
@@ -95,6 +101,12 @@
           "has_default": true,
           "read_only": true,
           "sortable": true
+        },
+        {
+          "name": "authors",
+          "rel": "authors",
+          "read_only": true,
+          "expandable": true
         }
       ]
     },

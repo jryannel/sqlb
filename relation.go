@@ -73,6 +73,13 @@ type RelationInfo struct {
 	// Collection reports that this relation is the reverse direction — many
 	// rows of the target pointing back at one row of this model.
 	Collection bool
+	// Reverse reports that this relation's foreign key lives on the target,
+	// not on this row — true for both a capped Collection and a one-to-one
+	// reverse relation. Collection narrows it further to "and there may be
+	// more than one". FK resolution and the query compiler's join direction
+	// both key off Reverse; only the capped-envelope machinery keys off
+	// Collection specifically.
+	Reverse bool
 	// Order is the child column a collection is ordered by, with the target's
 	// primary key appended as a tiebreaker. Empty means the primary key alone.
 	// Under a cap, a non-total order does not reshuffle the result, it decides
@@ -103,13 +110,14 @@ type RelationInfo struct {
 func (r *RelationInfo) Target() (*Model, error) {
 	r.once.Do(func() {
 		r.target, r.err = modelOfType(r.Elem)
-		if r.err != nil || !r.Collection {
+		if r.err != nil || !r.Reverse {
 			return
 		}
-		// A collection joins on a column of the *target*, so it cannot be
-		// resolved while this model is being built — the target may expand
-		// back, and building it then would recurse. It resolves here instead,
-		// with the target, the first time anything asks to expand.
+		// A reverse relation — a collection or a one-to-one reverse — joins on
+		// a column of the *target*, so it cannot be resolved while this model
+		// is being built — the target may expand back, and building it then
+		// would recurse. It resolves here instead, with the target, the first
+		// time anything asks to expand.
 		col := r.target.Column(r.fkName)
 		if col == nil {
 			r.err = fmt.Errorf(
@@ -146,10 +154,11 @@ func (r *RelationInfo) Target() (*Model, error) {
 // the model rather than writing through it.
 //
 // A forward relation's foreign key is rebased through remap rather than looked
-// up by name, so it follows its column through a Describe rename. A collection's
-// belongs to the *target* model and is resolved with the target inside Target,
-// so there is nothing to rebase and leaving it nil is the unresolved state the
-// copy should start in.
+// up by name, so it follows its column through a Describe rename. A reverse
+// relation's — a collection's or a one-to-one reverse's — belongs to the
+// *target* model and is resolved with the target inside Target, so there is
+// nothing to rebase and leaving it nil is the unresolved state the copy
+// should start in.
 func (r *RelationInfo) clone(remap map[*ColumnInfo]*ColumnInfo) *RelationInfo {
 	c := &RelationInfo{
 		Name:       r.Name,
@@ -157,12 +166,13 @@ func (r *RelationInfo) clone(remap map[*ColumnInfo]*ColumnInfo) *RelationInfo {
 		Index:      r.Index,
 		Elem:       r.Elem,
 		Collection: r.Collection,
+		Reverse:    r.Reverse,
 		Order:      r.Order,
 		OrderDesc:  r.OrderDesc,
 		Limit:      r.Limit,
 		fkName:     r.fkName,
 	}
-	if !r.Collection {
+	if !r.Reverse {
 		c.FK = remap[r.FK]
 	}
 	return c
@@ -195,13 +205,16 @@ func (m *Model) RelationNames() []string {
 	return out
 }
 
-// relationTag is the `sqlb` tag of a relation field: the column it expands, and
-// for a collection the order and cap that decide which children are returned.
+// relationTag is the `sqlb` tag of a relation field: the column it expands,
+// for a collection the order and cap that decide which children are
+// returned, and for a one-to-one reverse relation the `reverse` token that
+// says the column belongs to the target, not to this row.
 type relationTag struct {
-	fk    string
-	order string
-	desc  bool
-	limit int
+	fk      string
+	order   string
+	desc    bool
+	limit   int
+	reverse bool
 }
 
 // expansionOf reads the `expands=<column>` capability, which marks a field as
@@ -228,6 +241,12 @@ func expansionOf(tag string) (relationTag, bool, error) {
 					"sqlb: %q is not a usable expansion limit: want a positive whole number", part)
 			}
 			rt.limit = n
+		case part == "reverse":
+			// A one-to-one reverse relation: the field is a plain struct (not
+			// a Collection), but the foreign key still lives on the target,
+			// not on this row — the same join direction a collection uses,
+			// without the cap or the has_more envelope.
+			rt.reverse = true
 		}
 	}
 	return rt, found, nil
@@ -254,6 +273,29 @@ func newRelation(sf reflect.StructField, index []int, rt relationTag) (*Relation
 	// on, so it is read before anything else about the type.
 	if elem, isCollection := collectionElem(sf.Type); isCollection {
 		r.Collection = true
+		r.Reverse = true
+		r.Elem = elem
+		return r, nil
+	}
+
+	if rt.reverse {
+		if rt.order != "" || rt.limit != 0 {
+			return nil, fmt.Errorf(
+				"sqlb: field %s expands %q with reverse and declares order or limit, which only a "+
+					"capped collection uses; a one-to-one reverse relation has no order to break ties "+
+					"in and nothing to cap",
+				sf.Name, rt.fk)
+		}
+		r.Reverse = true
+		elem := sf.Type
+		if elem.Kind() == reflect.Pointer {
+			elem = elem.Elem()
+		}
+		if elem.Kind() != reflect.Struct {
+			return nil, fmt.Errorf(
+				"sqlb: field %s expands %q with reverse but is %s, want a struct or a pointer to one",
+				sf.Name, rt.fk, sf.Type.Kind())
+		}
 		r.Elem = elem
 		return r, nil
 	}
@@ -292,10 +334,11 @@ func relationName(sf reflect.StructField) string {
 // column is known.
 func resolveRelations(m *Model) error {
 	for _, r := range m.Relations {
-		// A collection's column belongs to the target, and resolving it here
-		// would mean building the target's model in the middle of building
-		// this one. RelationInfo.Target does it instead, lazily and once.
-		if r.Collection {
+		// A reverse relation's column — a collection's or a one-to-one
+		// reverse's — belongs to the target, and resolving it here would mean
+		// building the target's model in the middle of building this one.
+		// RelationInfo.Target does it instead, lazily and once.
+		if r.Reverse {
 			continue
 		}
 		col := m.Column(r.fkName)

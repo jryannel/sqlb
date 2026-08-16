@@ -29,6 +29,7 @@ import type {
   MembershipCreate,
   MembershipGetParams,
   MembershipListParams,
+  ProfileCreate,
   TaskColumn,
   TaskCreate,
   TaskExpand,
@@ -37,6 +38,7 @@ import type {
   TaskPatch,
   Transport,
   UserColumn,
+  UserExpand,
   UserGetParams,
   UserListParams,
   WorkspaceColumn,
@@ -49,6 +51,7 @@ import {
   createComment,
   createList,
   createMembership,
+  createProfile,
   createTask,
   deleteMembership,
   getComment,
@@ -219,6 +222,23 @@ export function membershipMutations(request: Transport) {
   };
 }
 
+// -------------------------------------------------------------- /profiles
+
+/**
+ * Write options for /profiles, bound to a transport.
+ *
+ * `mutationFn` and nothing else: what a write should invalidate is a policy
+ * this file cannot derive, so it is spread in rather than edited out —
+ * `useMutation({ ...profileMutations(request).create, onSuccess })`.
+ */
+export function profileMutations(request: Transport) {
+  return {
+    create: mutationOptions({
+      mutationFn: (body: ProfileCreate) => createProfile(request, body),
+    }),
+  };
+}
+
 // ----------------------------------------------------------------- /tasks
 
 /**
@@ -284,19 +304,19 @@ export function taskMutations(request: Transport) {
  */
 export function userQueries(request: Transport) {
   return {
-    list: <S extends UserColumn = UserColumn>(params: UserListParams<S> = {}) =>
+    list: <S extends UserColumn = UserColumn, E extends UserExpand = never>(params: UserListParams<S, E> = {}) =>
       queryOptions({
         queryKey: userKeys.list(params),
         queryFn: ({ signal }) => listUsers(request, params, signal),
       }),
-    infinite: <S extends UserColumn = UserColumn>(params: Omit<UserListParams<S>, 'page' | 'cursor'> = {}) =>
+    infinite: <S extends UserColumn = UserColumn, E extends UserExpand = never>(params: Omit<UserListParams<S, E>, 'page' | 'cursor'> = {}) =>
       infiniteQueryOptions({
         queryKey: userKeys.infinite(params),
         queryFn: ({ pageParam, signal }) => listUsers(request, { ...params, cursor: pageParam }, signal),
         initialPageParam: undefined as string | undefined,
         getNextPageParam: (last) => last.next_cursor,
       }),
-    detail: (id: string | number, params: UserGetParams = {}) =>
+    detail: <E extends UserExpand = never>(id: string | number, params: UserGetParams<E> = {}) =>
       queryOptions({
         queryKey: userKeys.detail(id, params),
         queryFn: ({ signal }) => getUser(request, id, params, signal),

@@ -736,3 +736,37 @@ func TestGeneratedRegisterCarriesTheInverseRelation(t *testing.T) {
 		t.Errorf("the forward relation should be unaffected:\n%s", src)
 	}
 }
+
+// oneToOneFixture is a Ref().Unique() FK — a genuine one-to-one, unlike
+// inverseFixture's ordinary one-to-many "authors"→"posts" relation.
+func oneToOneFixture() *schema.Registry {
+	r := schema.NewRegistry()
+	users := r.Table("users", schema.UUIDv7("id").PrimaryKey())
+	r.Table("profiles",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.Ref("user", users).Unique().
+			Expandable().Inverse("profile").InverseExpandable(),
+	)
+	return r
+}
+
+func TestOneToOneInverseEmitsAPointerNotACollection(t *testing.T) {
+	files := generate(t, oneToOneFixture())
+	models := files["models_gen.go"]
+	if !contains(models, `Profile *Profile `+"`"+`db:"-" json:"profile,omitempty" sqlb:"expands=user_id,reverse"`+"`") {
+		t.Errorf("one-to-one inverse should emit a bare *Profile with a reverse tag, got:\n%s", models)
+	}
+	if contains(models, "sqlb.Collection[Profile]") {
+		t.Errorf("one-to-one inverse must not emit the capped-collection type:\n%s", models)
+	}
+}
+
+// The guard-proven-both-ways companion: an ordinary (non-unique) inverse
+// must keep emitting the collection shape unchanged.
+func TestNonUniqueInverseStillEmitsACollection(t *testing.T) {
+	files := generate(t, inverseFixture())
+	models := files["models_gen.go"]
+	if !contains(models, "sqlb.Collection[Post]") {
+		t.Errorf("non-unique inverse should still emit sqlb.Collection[Post], got:\n%s", models)
+	}
+}

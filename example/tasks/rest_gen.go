@@ -153,6 +153,24 @@ func (c MembershipCreate) Row() (*Membership, error) {
 	return row, nil
 }
 
+// ProfileCreate is the request body for creating a Profile.
+//
+// Read-only columns are absent: the database or a BeforeCreate hook owns them.
+// A column with a default is optional, so leaving it out means the database
+// supplies the value rather than the zero value overwriting it.
+type ProfileCreate struct {
+	UserID string  `json:"user_id"`
+	Bio    *string `json:"bio,omitempty"`
+}
+
+// Row builds the row to insert. It satisfies rest.CreateBody.
+func (c ProfileCreate) Row() (*Profile, error) {
+	row := &Profile{}
+	row.UserID = c.UserID
+	row.Bio = c.Bio
+	return row, nil
+}
+
 // TaskCreate is the request body for creating a Task.
 //
 // Read-only columns are absent: the database or a BeforeCreate hook owns them.
@@ -365,6 +383,15 @@ func Register(api huma.API, db sqlb.Executor, actions Actions) error {
 	}); err != nil {
 		return err
 	}
+	if err := rest.Resource[Profile, ProfileCreate, rest.None[Profile]](api, db, rest.Options{
+		Path:        "/profiles",
+		Name:        "profile",
+		Tag:         "profiles",
+		Ops:         rest.OpCreate,
+		Description: "A user's extended profile. One-to-one with users: user_id is unique.",
+	}); err != nil {
+		return err
+	}
 	tasksOptions := rest.Options{
 		Path:            "/tasks",
 		Name:            "task",
@@ -397,6 +424,7 @@ func Register(api huma.API, db sqlb.Executor, actions Actions) error {
 		Tag:         "users",
 		Ops:         rest.OpRead | rest.OpList,
 		MaxPageSize: 100,
+		Expandable:  []string{"profile"},
 	}); err != nil {
 		return err
 	}

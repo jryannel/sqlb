@@ -69,6 +69,35 @@ or deployed clients, not just call sites.
   no next page and `total` only when `?count=exact` asked for it. The key names
   and which of them may be absent are frozen; *adding* an optional key is
   additive and breaks no client that ignores unknown ones.
+
+  **This entry broke once, deliberately, before 1.0, for one relation shape.**
+  A reverse `Inverse` relation backed by a single-column `Ref(...).Unique()`
+  foreign key can never match more than one row — the constraint already says
+  so — so it no longer expands to `{items, has_more}` at all. It expands to
+  the target row, or `null`.
+  [ADR-0060](architecture.md#a-unique-foreign-key-is-already-one-to-one)
+  decided it: the shape was wrong for exactly this case since before the
+  envelope was frozen, and the fix was pre-1.0-or-never for the same reason
+  `Executor` was — after the tag, the same edit is a major version and a hand
+  migration for every consumer. Nothing in this codebase's own examples
+  needed that migration, because no schema here declared a unique forward
+  reference before the feature that made this decision. The mechanical edit,
+  for anyone who did: regenerate the generated Go model and the TypeScript
+  and Dart clients, then fix any call site reading `.items`/`.has_more` (Go)
+  or `.items`/`.hasMore` (TypeScript, Dart) off that relation's expansion to
+  read the value directly — nil-check the pointer in Go, null-check it in
+  TypeScript and Dart. Every other relation shape keeps the envelope
+  unchanged.
+
+  Building this also closed a gap in `restcompat`/`sqlb impact`: `Capture`
+  had never walked `Registry.Inverses` at all, so an exposed reverse relation
+  of *any* shape — capped collection or one-to-one — was invisible to the
+  contract diff before this work, not merely misdescribed. An adopter with a
+  checked-in `restcontract.json` predating this change sees every exposed
+  `Inverse` reported as newly additive (`response.<name> field added`,
+  `expand.<name> expand relation added`) the first time `sqlb impact` runs
+  afterward — additive, so it does not fail `-error`, but it needs one
+  `sqlb impact -write` to bring the baseline current.
 - **The generated DDL's shape** — `migrate.Diff` output for a given pair of
   schemas may improve, but a migration already written and applied is never
   reinterpreted.
