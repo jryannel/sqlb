@@ -3479,3 +3479,61 @@ wrong default rather than the common case, or if every real project's
 withholding a shipped migration adapter is optimizing against a dependency
 nobody actually minded.
 
+### A unique foreign key is already one-to-one
+
+`docs/compatibility.md` freezes the list envelope — `{items, page, per_page,
+has_more, next_cursor?, total?}` — for every `Inverse` relation, because a
+capped reverse expansion has always needed to say it might be partial
+([ADR-0022](#references-declare-their-inverse)). That shape is right when
+more than one child row can exist. It was never right for a
+`Ref(...).Unique()`: the constraint that makes a foreign key column
+one-to-one already lived in the database, but nothing downstream read it, so
+a unique `profiles.user_id` still generated `sqlb.Collection[Profile]` in Go
+and `{items, hasMore}` in both clients for a relation that can never hold
+more than one row, and every caller had to know out of band that `.items`
+would never exceed length one and unwrap it by hand.
+
+`Registry.Inverses` now sets `InverseRelation.OneToOne` wherever the
+referencing field it is walking carries a single-column `Unique` alongside
+its `Reference` — no new schema verb, and no state stored on `Reference`
+itself. That is deliberately not the same move as `Filterable`, `Sortable`
+or `Expandable` ([ADR-0006](#capabilities-are-opt-in)): those are policy a
+schema author opts into, because "can a client ask about this column" has no
+single right answer. Whether a foreign key can address more than one row is
+not a policy question — it is a fact the `UNIQUE` constraint already states,
+and inferring `OneToOne` from `.Unique()` keeps the DSL from asking an
+author to declare a second time what the database already enforces.
+`RelationInfo.Reverse` carries the same distinction into the query compiler,
+separating "the foreign key lives on the target" — true of both a capped
+collection and a one-to-one reverse relation — from `Collection`'s narrower
+"and there may be more than one": a one-to-one `Inverse` now joins through
+the same `LEFT JOIN` machinery a forward reference already used, with the
+`ON` clause's two sides swapped, rather than the correlated-subquery-with-cap
+path built for the general reverse case
+([ADR-0025](#expansion-is-one-statement)). Go, TypeScript and Dart codegen
+follow the same signal: a one-to-one `Inverse` field generates a bare
+pointer, `Target | null`, and a nullable getter, never the paged-collection
+type, and `ExpandOrder`/`ExpandLimit` on a unique-backed `Inverse` is now a
+schema validation error, since neither means anything once at most one row
+can ever match.
+
+That breaks the Frozen list-envelope guarantee for this one relation shape,
+the same move [ADR-0040](#the-driver-is-a-dependency) made for `Executor`: a
+pre-1.0-or-never trade, because breaking a Frozen surface only gets more
+expensive once a version tag turns the same edit into a major version and a
+hand migration for every consumer. Unlike `Executor`, there was nothing here
+to migrate away from inside this codebase: no schema anywhere in this
+repository declared a unique forward reference before this feature — the
+only one, `profiles.user_id`, was added specifically to prove this shape
+end to end — so nothing here reads `.items`/`.has_more` off a one-to-one
+relation today, because that shape has never been correct for that case.
+The cost this decision does carry belongs to a hypothetical outside adopter
+who declared `Ref(...).Unique()` before this shipped and generated clients
+against the old collection shape: regenerating flips the field's type, and
+every call site reading `.items[0]` or checking `.hasMore`/`.has_more` needs
+the mechanical edit `compatibility.md`'s carve-out names. Revisit if a
+one-to-one relation ever needs to say more than "the row, or none" — a
+soft-deleted child's tombstone, say — which the bare nullable shape cannot
+express and the list envelope's `has_more` never could either, arguing for a
+third shape rather than reusing either existing one.
+
