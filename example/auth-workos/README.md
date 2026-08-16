@@ -61,6 +61,6 @@ outage from a rejected token.
 mise run test-auth-workos
 ```
 
-Database-free and network-free: the suite verifies JWTs against an
-in-memory JWKS built from a freshly generated RSA key, never a live WorkOS
-endpoint.
+Database-free: the suite verifies JWTs against an in-memory or
+httptest-served JWKS built from a freshly generated RSA key, never a live
+WorkOS endpoint or a database.

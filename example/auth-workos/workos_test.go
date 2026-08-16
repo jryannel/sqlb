@@ -294,6 +294,21 @@ func TestVerify_RejectsEmptyConfiguredClientID(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsNilMapper proves the other half of Verify's
+// NewWithKeyfunc guard: a nil mapper is rejected with a plain error rather
+// than reaching v.mapper(...) and panicking on the first otherwise-valid
+// token.
+func TestVerify_RejectsNilMapper(t *testing.T) {
+	key := newTestRSAKey(t)
+	kf := newTestKeyfunc(t, key)
+	v := authworkos.NewWithKeyfunc[testPrincipal](kf, "client_test123", nil)
+	token := mintToken(t, key, validClaims())
+
+	if _, err := v.Verify(t.Context(), token); err == nil {
+		t.Fatal("Verify accepted a token against a Verifier with a nil mapper")
+	}
+}
+
 func TestVerify_RejectsWrongSigningKey(t *testing.T) {
 	registeredKey := newTestRSAKey(t)
 	forgedKey := newTestRSAKey(t) // never published in the keyset below
@@ -312,7 +327,14 @@ func TestVerify_RejectsWrongSigningKey(t *testing.T) {
 // HMAC secret. A verifier that lets the token's header pick the algorithm,
 // rather than pinning it itself, treats that HMAC signature as valid
 // because it never checks the key was meant to be asymmetric. Verify pins
-// jwt.WithValidMethods([]string{"RS256"}) specifically to close this.
+// jwt.WithValidMethods([]string{"RS256"}) specifically to close this —
+// though this particular forged token is also rejected without that pin,
+// since golang-jwt's HMAC verifier independently refuses a key that isn't
+// []byte (keyfunc always hands back an *rsa.PublicKey here). The pin is
+// what closes the general case: a Keyfunc that ever hands back raw bytes
+// for some key would make this exact test pass even with the pin removed,
+// which is why the pin exists as an explicit check rather than relying on
+// that incidental behavior.
 func TestVerify_RejectsAlgorithmConfusion(t *testing.T) {
 	key := newTestRSAKey(t)
 	v := newTestVerifier(t, key, "client_test123")

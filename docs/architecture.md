@@ -3556,8 +3556,8 @@ deliberately, not an oversight. Widening (`Middleware` gaining an optional
 parameter, a second failure taxonomy) is free; narrowing was cheap before
 the first adapter depended on it — a first one now exists,
 `example/auth-workos`, so the honest cost of changing the signature is no
-longer zero. Two smaller calls made along the
-way, both left for later evidence rather than built speculatively:
+longer zero. Two smaller calls made along the way, both left for later
+evidence rather than built speculatively:
 `Middleware` doesn't set `WWW-Authenticate`, since it's generic over
 `CredentialExtractor` and doesn't know the extractor is bearer-shaped (an
 app-specific wrapper can add it), and `Verify`'s error carries no typed
@@ -3574,9 +3574,12 @@ the `TransientError` question, just not the way the rate-limit scenario
 above speculated: golang-jwt and keyfunc collapse "JWKS unreachable" and
 "unrecognized signing key" into the same wrapped error, so `Verify` has no
 reliable signal to report as transient and correctly never returns one —
-the outage case is instead fully handled by `New` failing at construction,
-before any request-time path is reached. `TransientError` holds up; it was
-just never going to be exercised from inside `Verify` for this adapter.
+the outage case that matters most, WorkOS being unreachable at startup, is
+caught by `New` failing at construction instead; an outage that begins
+*after* startup surfaces at request time as an indistinguishable rejected
+credential, the same collapse this paragraph already describes.
+`TransientError` holds up; it was just never going to be exercised from
+inside `Verify` for this adapter.
 
 ### Fx wiring is generated, not a runtime library
 
