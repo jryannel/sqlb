@@ -271,6 +271,52 @@ func TestACollectionIsCappedAndSaysSo(t *testing.T) {
 	}
 }
 
+// The one-to-one direction: a unique FK's Inverse resolves to the target row
+// or null, never the {items, has_more} envelope every other reverse relation
+// in this schema uses. profiles.user_id carries a single-column Unique
+// constraint, which is what makes taskschema.Profile's Inverse("profile") on
+// User structurally one-to-one — see the design doc's "Compatibility"
+// section for why this is a deliberate break of the Frozen list envelope.
+func TestExpandOfAOneToOneRelationIsAnObjectNotAnEnvelope(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	alice.profileID(alice.userID, "Backend engineer.")
+
+	got := alice.get("/users?expand=profile").expect(http.StatusOK).list()
+	if len(got.Items) != 1 {
+		t.Fatalf("got %d users, want 1: %s", len(got.Items), mustJSON(got.Items))
+	}
+
+	profile, ok := got.Items[0]["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected profile to be a plain object, got %T: %s",
+			got.Items[0]["profile"], mustJSON(got.Items[0]))
+	}
+	if _, hasEnvelope := profile["items"]; hasEnvelope {
+		t.Errorf("a one-to-one expansion must not use the {items, has_more} envelope: %s", mustJSON(profile))
+	}
+	if profile["bio"] != "Backend engineer." {
+		t.Errorf("expansion did not carry the profile's columns: %s", mustJSON(profile))
+	}
+}
+
+// A list still says "none" rather than omitting the key (TestTasksCarryNoListUnlessAsked
+// covers "did not ask"); the one-to-one case adds a third answer a capped
+// collection never needed: "asked, and there simply is no row."
+func TestExpandOfAOneToOneRelationIsNullWhenAbsent(t *testing.T) {
+	server := newServer(t, freshDB(t))
+	alice := account(t, server, "alice@example.com", "Acme")
+	// alice's user has no profile row created for this test.
+
+	got := alice.get("/users?expand=profile").expect(http.StatusOK).list()
+	if len(got.Items) != 1 {
+		t.Fatalf("got %d users, want 1: %s", len(got.Items), mustJSON(got.Items))
+	}
+	if got.Items[0]["profile"] != nil {
+		t.Errorf("expected profile to be null when absent, got: %s", mustJSON(got.Items[0]))
+	}
+}
+
 // One statement, whichever direction it runs in: a list expanding its tasks
 // while a task expands its list is the same page count either way, and the
 // collection must not multiply the rows it hangs off.

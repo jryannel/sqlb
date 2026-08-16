@@ -136,6 +136,13 @@
           "type": "timestamptz",
           "nullable": true,
           "read_only": true
+        },
+        {
+          "name": "tasks",
+          "rel": "tasks",
+          "type": "",
+          "read_only": true,
+          "expandable": true
         }
       ]
     },
@@ -179,6 +186,48 @@
           "has_default": true,
           "filterable": true,
           "sortable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "has_default": true,
+          "read_only": true,
+          "sortable": true
+        }
+      ]
+    },
+    {
+      "path": "/profiles",
+      "ops": [
+        "create",
+        "read",
+        "list"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "has_default": true,
+          "read_only": true,
+          "filterable": true
+        },
+        {
+          "name": "user_id",
+          "rel": "user",
+          "type": "uuid",
+          "filterable": true
+        },
+        {
+          "name": "bio",
+          "type": "text",
+          "nullable": true
         },
         {
           "name": "created_at",
@@ -397,6 +446,14 @@
           "has_default": true,
           "read_only": true,
           "sortable": true
+        },
+        {
+          "name": "profile",
+          "rel": "profile",
+          "type": "",
+          "read_only": true,
+          "expandable": true,
+          "one_to_one": true
         }
       ]
     },

@@ -57,7 +57,8 @@ export interface List {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  /** Filled in by `expand: ['tasks']`, capped at 20 rows. */
+  /** Filled in by `expand: ['tasks']`, absent otherwise. */
+  /** Capped at 20 rows. */
   tasks?: Collection<Task>;
 }
 
@@ -115,6 +116,28 @@ export interface Membership {
 export interface MembershipCreate {
   user_id: string;
   role?: MembershipRole;
+}
+
+// --------------------------------------------------------------- profiles
+
+/** A user's extended profile. One-to-one with users: user_id is unique. */
+export interface Profile {
+  id: string;
+  user_id: string;
+  bio: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * The request body for creating a Profile.
+ *
+ * Read-only columns are absent: the database or a BeforeCreate hook owns
+ * them. A column with a default is optional.
+ */
+export interface ProfileCreate {
+  user_id: string;
+  bio?: string | null;
 }
 
 // ------------------------------------------------------------------ tasks
@@ -204,6 +227,8 @@ export interface User {
   name: string;
   created_at: string;
   updated_at: string;
+  /** Filled in by `expand: ['profile']`, absent otherwise. */
+  profile?: Profile | null;
 }
 
 // ------------------------------------------------------------- workspaces
@@ -569,6 +594,105 @@ export const membershipKeys = {
   detail: (id: string | number, params: unknown = {}) => ['memberships', 'detail', String(id), params] as const,
 };
 
+// -------------------------------------------------------------- /profiles
+
+/** Columns `select` may name. The primary key is always returned. */
+export type ProfileColumn =
+  | 'id'
+  | 'user_id'
+  | 'bio'
+  | 'created_at'
+  | 'updated_at';
+
+/** Sortable columns, with their descending forms. */
+export type ProfileSort = 'created_at' | '-created_at' | 'updated_at' | '-updated_at';
+
+/**
+ * Filter conditions, one property per filterable column.
+ *
+ * A bare value is equality; an object names operators. The operator set is
+ * narrowed by column type, so a pattern match against a number and a null
+ * test against a non-nullable column do not compile.
+ */
+export type ProfileWhere = {
+  id?: Cond<string>;
+  user_id?: Cond<string>;
+};
+
+/** Parameters for `GET /profiles`. */
+export interface ProfileListParams<S extends ProfileColumn = ProfileColumn> {
+  where?: ProfileWhere;
+  /** Ordering, most significant first. */
+  sort?: ProfileSort | readonly ProfileSort[];
+  /** Columns to return. Omitted columns are absent from the response, and the
+   * response type narrows to match. */
+  select?: readonly S[];
+  page?: number;
+  per_page?: number;
+  /** Resume after a `next_cursor` from a previous response. Cannot be combined
+   * with `page`, and is only valid for the `sort` it was issued under. */
+  cursor?: string;
+  /** Ask for a total row count, which costs a second query. */
+  count?: 'exact';
+  /** Parameters this vocabulary cannot express, appended verbatim. Reaching for
+   * it often means the typed layer is in the wrong place — ADR-0028 says so and
+   * names it as the signal to watch. */
+  params?: Record<string, string | readonly string[]>;
+}
+
+/**
+ * Parameters for `GET /profiles/{id}`.
+ *
+ * There is no `select` here: the item endpoint rejects unknown query
+ * parameters and does not declare one.
+ */
+export type ProfileGetParams = Record<string, never>;
+
+/**
+ * A Profile as one request asked for it: the selected columns, plus the relations
+ * it expanded.
+ */
+export type ProfileRow<S extends ProfileColumn = ProfileColumn> =
+  Pick<Profile, S | 'id'>;
+
+/** `GET /profiles` — the filtered, sorted, paged collection. */
+export function listProfiles<S extends ProfileColumn = ProfileColumn>(
+  request: Transport,
+  params: ProfileListParams<S> = {},
+  signal?: AbortSignal,
+): Promise<Page<ProfileRow<S>>> {
+  return request({ method: 'GET', path: '/profiles', query: encodeListQuery(params), signal });
+}
+
+/** `GET /profiles/{id}` — one row by primary key. */
+export function getProfile(
+  request: Transport,
+  id: string | number,
+  params: ProfileGetParams = {},
+  signal?: AbortSignal,
+): Promise<ProfileRow<ProfileColumn>> {
+  return request({ method: 'GET', path: itemPath('/profiles', id), query: encodeItemQuery(params), signal });
+}
+
+/** `POST /profiles` — create a row. */
+export function createProfile(request: Transport, body: ProfileCreate, signal?: AbortSignal): Promise<Profile> {
+  return request({ method: 'POST', path: '/profiles', body, signal });
+}
+
+/**
+ * Cache keys for /profiles. Deriving them is what keeps a mutation's invalidation
+ * and a change-feed subscriber's invalidation from being two lists that can
+ * disagree.
+ */
+export const profileKeys = {
+  all: () => ['profiles'] as const,
+  lists: () => ['profiles', 'list'] as const,
+  list: (params: unknown = {}) => ['profiles', 'list', params] as const,
+  infinite: (params: unknown = {}) => ['profiles', 'infinite', params] as const,
+  details: () => ['profiles', 'detail'] as const,
+  detail: (id: string | number, params: unknown = {}) => ['profiles', 'detail', String(id), params] as const,
+};
+
 // ----------------------------------------------------------------- /tasks
 
 /** Columns `select` may name. The primary key is always returned. */
@@ -746,6 +870,9 @@ export type UserSort =
   | 'updated_at'
   | '-updated_at';
 
+/** Relations `expand` may name. */
+export type UserExpand = 'profile';
+
 /**
  * Filter conditions, one property per filterable column.
  *
@@ -760,7 +887,7 @@ export type UserWhere = {
 };
 
 /** Parameters for `GET /users`. */
-export interface UserListParams<S extends UserColumn = UserColumn> {
+export interface UserListParams<S extends UserColumn = UserColumn, E extends UserExpand = never> {
   where?: UserWhere;
   /** Case-insensitive substring match, fanned out over the searchable columns. */
   search?: string;
@@ -769,6 +896,7 @@ export interface UserListParams<S extends UserColumn = UserColumn> {
   /** Columns to return. Omitted columns are absent from the response, and the
    * response type narrows to match. */
   select?: readonly S[];
+  expand?: readonly E[];
   page?: number;
   per_page?: number;
   /** Resume after a `next_cursor` from a previous response. Cannot be combined
@@ -788,31 +916,34 @@ export interface UserListParams<S extends UserColumn = UserColumn> {
  * There is no `select` here: the item endpoint rejects unknown query
  * parameters and does not declare one.
  */
-export type UserGetParams = Record<string, never>;
+export interface UserGetParams<E extends UserExpand = never> {
+  expand?: readonly E[];
+}
 
 /**
  * A User as one request asked for it: the selected columns, plus the relations
  * it expanded.
  */
-export type UserRow<S extends UserColumn = UserColumn> =
-  Pick<User, S | 'id'>;
+export type UserRow<S extends UserColumn = UserColumn, E extends UserExpand = never> =
+  Pick<User, S | 'id'>
+  & ('profile' extends E ? { profile: Profile | null } : unknown);
 
 /** `GET /users` — the filtered, sorted, paged collection. */
-export function listUsers<S extends UserColumn = UserColumn>(
+export function listUsers<S extends UserColumn = UserColumn, E extends UserExpand = never>(
   request: Transport,
-  params: UserListParams<S> = {},
+  params: UserListParams<S, E> = {},
   signal?: AbortSignal,
-): Promise<Page<UserRow<S>>> {
+): Promise<Page<UserRow<S, E>>> {
   return request({ method: 'GET', path: '/users', query: encodeListQuery(params), signal });
 }
 
 /** `GET /users/{id}` — one row by primary key. */
-export function getUser(
+export function getUser<E extends UserExpand = never>(
   request: Transport,
   id: string | number,
-  params: UserGetParams = {},
+  params: UserGetParams<E> = {},
   signal?: AbortSignal,
-): Promise<UserRow<UserColumn>> {
+): Promise<UserRow<UserColumn, E>> {
   return request({ method: 'GET', path: itemPath('/users', id), query: encodeItemQuery(params), signal });
 }
 
@@ -943,6 +1074,7 @@ export const keysByTable = {
   comments: commentKeys,
   lists: listKeys,
   memberships: membershipKeys,
+  profiles: profileKeys,
   tasks: taskKeys,
   users: userKeys,
   workspaces: workspaceKeys,

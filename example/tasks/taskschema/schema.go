@@ -66,6 +66,32 @@ var User = schema.Table("users",
 	// in to. Either way the create belongs in a hand-written handler.
 	Expose(schema.REST{Ops: schema.OpRead | schema.OpList, MaxPageSize: 100})
 
+// Profile is a user's extended profile, split into a table of its own rather
+// than columns on User because it exists for one reason: user_id carries a
+// single-column Unique constraint, which is what makes the relation
+// structurally one-to-one and is the fixture the reverse side proves itself
+// against end to end. GET /users?expand=profile resolves through the Inverse
+// declared below to the row or null — never the {items, has_more} envelope
+// every other Inverse relation in this schema returns, because at most one
+// profile can ever point back at a given user.
+var Profile = schema.Table("profiles",
+	schema.UUIDv7("id").PrimaryKey(),
+	// Unique is what makes this one-to-one (no separate schema verb for it —
+	// the constraint already says so). Inverse names the reverse relation, and
+	// InverseExpandable is the separate decision that exposes it through
+	// ?expand on /users; declaring one without the other would leave "profile"
+	// in the manifest with no endpoint that can ever return it.
+	schema.Ref("user", User).OnDelete(schema.Cascade).Unique().Filterable().
+		Inverse("profile").InverseExpandable(),
+	schema.Text("bio").Nullable(),
+	schema.Timestamps(),
+).
+	Describe("A user's extended profile. One-to-one with users: user_id is unique.").
+	Expose(schema.REST{
+		Path: "/profiles",
+		Ops:  schema.OpCreate | schema.OpRead | schema.OpList,
+	})
+
 // Membership is what makes a user part of a workspace, and carries the role
 // that authorisation reads. It is also the table the login endpoint consults to
 // decide which workspaces a token may be issued for.

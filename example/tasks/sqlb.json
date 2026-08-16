@@ -450,6 +450,88 @@
       }
     },
     {
+      "name": "profiles",
+      "comment": "A user's extended profile. One-to-one with users: user_id is unique.",
+      "primaryKey": "id",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "goType": "string",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "filter"
+          ]
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "goType": "string",
+          "capabilities": [
+            "filter"
+          ],
+          "references": {
+            "relation": "user",
+            "table": "users",
+            "column": "id",
+            "onDelete": "CASCADE",
+            "enforced": true
+          }
+        },
+        {
+          "name": "bio",
+          "type": "text",
+          "goType": "*string",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "goType": "time.Time",
+          "hasDefault": true,
+          "readOnly": true,
+          "capabilities": [
+            "sort"
+          ]
+        }
+      ],
+      "rest": {
+        "path": "/profiles",
+        "operations": [
+          "create",
+          "read",
+          "list"
+        ],
+        "defaultPageSize": 0,
+        "maxPageSize": 0,
+        "filterable": [
+          "id",
+          "user_id"
+        ],
+        "sortable": [
+          "created_at",
+          "updated_at"
+        ],
+        "searchable": [],
+        "examples": [
+          "GET /profiles?id=eq.VALUE",
+          "GET /profiles?sort=-created_at\u0026page=2\u0026per_page=20",
+          "GET /profiles?or=(id.eq.A,user_id.eq.B)"
+        ]
+      }
+    },
+    {
       "name": "tasks",
       "comment": "A unit of work, belonging to one list.",
       "primaryKey": "id",
@@ -829,6 +911,15 @@
           ]
         }
       ],
+      "collectedBy": [
+        {
+          "name": "profile",
+          "table": "profiles",
+          "column": "user_id",
+          "limit": 50,
+          "expandable": true
+        }
+      ],
       "rest": {
         "path": "/users",
         "operations": [
@@ -851,10 +942,14 @@
           "email",
           "name"
         ],
+        "expandable": [
+          "profile"
+        ],
         "examples": [
           "GET /users?id=eq.VALUE",
           "GET /users?sort=-name\u0026page=2\u0026per_page=20",
           "GET /users?search=TERM",
+          "GET /users?expand=profile",
           "GET /users?or=(id.eq.A,email.eq.B)"
         ]
       }

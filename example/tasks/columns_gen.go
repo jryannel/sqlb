@@ -263,6 +263,67 @@ func (u *MembershipUpdate) Where(preds ...sqlb.Pred) *MembershipUpdate {
 // cover, such as Everything, SetExpr, Exec and One.
 func (u *MembershipUpdate) Stmt() *sqlb.Update[Membership] { return u.stmt }
 
+type profileColumns struct {
+	ID        sqlb.Col[string]
+	UserID    sqlb.Col[string]
+	Bio       sqlb.TextCol[string]
+	CreatedAt sqlb.Col[time.Time]
+	UpdatedAt sqlb.Col[time.Time]
+}
+
+// ProfileCols are the typed columns of profiles.
+var ProfileCols = profileColumns{
+	ID:        sqlb.Typed[string]("id"),
+	UserID:    sqlb.Typed[string]("user_id"),
+	Bio:       sqlb.TextColumn[string]("bio"),
+	CreatedAt: sqlb.Typed[time.Time]("created_at"),
+	UpdatedAt: sqlb.Typed[time.Time]("updated_at"),
+}
+
+// ProfileUpdate is a typed update statement for profiles.
+type ProfileUpdate struct {
+	stmt *sqlb.Update[Profile]
+}
+
+// UpdateProfile starts a typed update.
+func UpdateProfile() *ProfileUpdate {
+	return &ProfileUpdate{stmt: sqlb.UpdateRows[Profile]()}
+}
+
+// SetUserID sets user_id.
+func (u *ProfileUpdate) SetUserID(v string) *ProfileUpdate {
+	u.stmt.Set("user_id", v)
+	return u
+}
+
+// SetBio sets bio.
+func (u *ProfileUpdate) SetBio(v *string) *ProfileUpdate {
+	u.stmt.Set("bio", v)
+	return u
+}
+
+// SetCreatedAt sets created_at.
+func (u *ProfileUpdate) SetCreatedAt(v time.Time) *ProfileUpdate {
+	u.stmt.Set("created_at", v)
+	return u
+}
+
+// SetUpdatedAt sets updated_at.
+func (u *ProfileUpdate) SetUpdatedAt(v time.Time) *ProfileUpdate {
+	u.stmt.Set("updated_at", v)
+	return u
+}
+
+// Where narrows the affected rows.
+func (u *ProfileUpdate) Where(preds ...sqlb.Pred) *ProfileUpdate {
+	u.stmt.Where(preds...)
+	return u
+}
+
+// Stmt exposes the underlying statement for what the wrapper does not
+// cover, such as Everything, SetExpr, Exec and One.
+func (u *ProfileUpdate) Stmt() *sqlb.Update[Profile] { return u.stmt }
+
 type taskColumns struct {
 	ID           sqlb.Col[string]
 	WorkspaceID  sqlb.Col[string]

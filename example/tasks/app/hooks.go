@@ -105,13 +105,22 @@ func Register(log *slog.Logger) *sqlb.Registry {
 	// version of the alternative — fetching the member ids first and passing
 	// them to In() — which is the same query split in two with a race in the
 	// middle.
+	//
+	// "users"."id" is qualified rather than bare "id", for the reason
+	// TestExpandDoesNotMakeTheOtherParametersAmbiguous (app/expand_test.go)
+	// documents for every other request-supplied parameter: GET
+	// /users?expand=profile joins in profiles, which has an "id" column of its
+	// own, and Postgres refuses a bare "id" the moment a second table in the
+	// statement has one too (SQLSTATE 42702). This predicate is hand-written
+	// SQL, so it does not get that qualification for free the way the
+	// builder's own columns do — it has to say so itself.
 	sqlb.On[tasks.User](reg).Scope("tenant").BeforeQuery(func(ctx context.Context, q *sqlb.Builder[tasks.User]) error {
 		workspace, err := workspaceOf(ctx)
 		if err != nil {
 			return err
 		}
 		q.Where(sqlb.RawPred(
-			`"id" IN (SELECT "user_id" FROM "memberships" WHERE "workspace_id" = ?)`,
+			`"users"."id" IN (SELECT "user_id" FROM "memberships" WHERE "workspace_id" = ?)`,
 			workspace))
 		return nil
 	})

@@ -27,6 +27,7 @@ type opts struct {
 	publishedNullsLast bool      // declare NULLS LAST on published_at (#88)
 	statusValues       []string  // enum values; nil keeps the baseline three
 	ops                schema.Op // 0 keeps the baseline op set
+	authorUnique       bool      // Unique() on posts.author: its Inverse "posts" becomes one-to-one
 
 	// wire declares the schema's wire spelling. The zero value is Verbatim,
 	// which is also what it means, so the baseline blog needs no case at all.
@@ -35,12 +36,22 @@ type opts struct {
 
 const baseOps = schema.OpCreate | schema.OpRead | schema.OpUpdate | schema.OpList
 
-// blog builds a registry holding the blog's posts table (and an unexposed
-// authors table for the reference to point at), edited per o.
+// blog builds a registry holding the blog's posts table and an authors table
+// for the reference to point at, edited per o. authors is exposed and its Ref
+// from posts is InverseExpandable — GET /authors?expand=posts — so that
+// o.authorUnique has a REST contract to change the shape of; an unexposed
+// reverse relation is invisible to a client and so has nothing to break.
 func blog(o opts) *schema.Registry {
 	r := schema.NewRegistry().WireCase(o.wire)
 
-	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey())
+	authors := r.Table("authors", schema.UUIDv7("id").PrimaryKey()).
+		Expose(schema.REST{Ops: schema.OpRead | schema.OpList})
+
+	author := schema.Ref("author", authors).Filterable().Expandable().
+		Inverse("posts").InverseExpandable()
+	if o.authorUnique {
+		author = author.Unique()
+	}
 
 	title := schema.Text(pick(o.titleName, "title")).Searchable().Sortable()
 	if o.titleName != "" {
@@ -77,7 +88,7 @@ func blog(o opts) *schema.Registry {
 
 	fields := []schema.FieldSpec{
 		schema.UUIDv7("id").PrimaryKey(),
-		schema.Ref("author", authors).Filterable().Expandable().Inverse("posts"),
+		author,
 		title,
 		schema.Text("body").Searchable(),
 		status,
@@ -122,6 +133,20 @@ func TestRenameIsAWireBreak(t *testing.T) {
 		t.Errorf("rename should be reported as a rename, not a drop and add:\n%s", render(breaks))
 	}
 	assertNoAdditive(t, breaks) // it is a rename, not a new field
+}
+
+// A unique FK's Inverse changing shape from a collection envelope to a
+// nullable object is a response-facet break, the same category a rename is —
+// a client reading `.items` off it would break, just as one reading a
+// renamed field would. docs/compatibility.md carves this out of the Frozen
+// list-envelope entry (ADR-0040's precedent: a Frozen guarantee broken once
+// before, deliberately, pre-1.0).
+func TestUniqueFKChangesInverseFromCollectionToObject(t *testing.T) {
+	breaks := restcompat.Diff(blog(opts{}), blog(opts{authorUnique: true}))
+	assertBreaking(t, breaks, restcompat.FacetExpand, "posts")
+	if !mentions(breaks, "one-to-one") {
+		t.Errorf("the summary should say why it breaks:\n%s", render(breaks))
+	}
 }
 
 // Un-exposing a filter changes the contract while emitting no DDL at all — the

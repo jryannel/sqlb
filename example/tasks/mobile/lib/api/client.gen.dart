@@ -1106,6 +1106,62 @@ class MembershipCreate {
   };
 }
 
+// ------------------------------------------------------------------- profiles
+
+/// A user's extended profile. One-to-one with users: user_id is unique.
+///
+/// Reading a column the request did not return throws MissingColumn rather
+/// than yielding null, so a projection that dropped a column is reported
+/// where it is used instead of somewhere further out.
+class Profile extends Row {
+  /// Wraps one decoded response object. Columns are read on access.
+  Profile.fromJson(super.json) : super.fromJson();
+
+  /// The table this row came from.
+  static const String table = 'profiles';
+
+  /// The profiles.id column.
+  String get id => _str('id');
+
+  /// The profiles.user_id column.
+  String get userId => _str('user_id');
+
+  /// The profiles.bio column.
+  String? get bio => _strOrNull('bio');
+
+  /// The profiles.created_at column.
+  DateTime get createdAt => _time('created_at');
+
+  /// The profiles.updated_at column.
+  DateTime get updatedAt => _time('updated_at');
+
+  /// Whether the request that produced this row returned [column].
+  bool has(ProfileColumn column) => _present(column.wire);
+}
+
+/// The request body for creating a Profile.
+///
+/// Read-only columns are absent: the database or a BeforeCreate hook owns
+/// them. A column with a default is optional, and leaving one out means the
+/// database supplies the value.
+class ProfileCreate {
+  /// Builds a request body. A property with no default here is one the
+  /// database has none for.
+  const ProfileCreate({required this.userId, this.bio});
+
+  /// The profiles.user_id column.
+  final String userId;
+
+  /// The profiles.bio column.
+  final String? bio;
+
+  /// The JSON body. Absent properties are the ones left unset.
+  Map<String, dynamic> toJson() => {
+    'user_id': _wire(userId),
+    if (bio != null) 'bio': _wire(bio),
+  };
+}
+
 // ---------------------------------------------------------------------- tasks
 
 /// The tasks.status column's value set.
@@ -1389,6 +1445,9 @@ class User extends Row {
 
   /// The users.updated_at column.
   DateTime get updatedAt => _time('updated_at');
+
+  /// Filled in by expand: [UserExpand.profile], null otherwise.
+  Profile? get profile => _one('profile', Profile.fromJson);
 
   /// Whether the request that produced this row returned [column].
   bool has(UserColumn column) => _present(column.wire);
@@ -2209,6 +2268,216 @@ CursorPager<Membership> membershipPager(
   );
 }
 
+// ------------------------------------------------------------------ /profiles
+
+/// Columns [select] may name. The primary key is always returned.
+enum ProfileColumn implements WireValue {
+  /// The profiles.id column.
+  id('id'),
+
+  /// The profiles.user_id column.
+  userId('user_id'),
+
+  /// The profiles.bio column.
+  bio('bio'),
+
+  /// The profiles.created_at column.
+  createdAt('created_at'),
+
+  /// The profiles.updated_at column.
+  updatedAt('updated_at');
+
+  const ProfileColumn(this.wire);
+
+  @override
+  final String wire;
+}
+
+/// Sortable columns. Take [asc] or [desc] to get a term [sort] accepts.
+enum ProfileSort implements WireValue {
+  /// Order by profiles.created_at.
+  createdAt('created_at'),
+
+  /// Order by profiles.updated_at.
+  updatedAt('updated_at');
+
+  const ProfileSort(this.wire);
+
+  @override
+  final String wire;
+
+  /// Ascending.
+  SortTerm get asc => SortTerm(wire);
+
+  /// Descending.
+  SortTerm get desc => SortTerm('-$wire');
+}
+
+/// Filter conditions, one property per filterable column.
+///
+/// The condition type is narrowed by the column: pattern operators exist only
+/// on text, null tests only on a nullable column, and the value type is the
+/// column's own — so a filter the server would answer 400 to does not compile.
+class ProfileWhere {
+  /// Builds a filter. Every column is optional; naming two conjoins them.
+  const ProfileWhere({this.id, this.userId});
+
+  /// Conditions on profiles.id.
+  final Cond<String>? id;
+
+  /// Conditions on profiles.user_id.
+  final Cond<String>? userId;
+
+  void _encode(_Query out) {
+    id?._encode(out, 'id');
+    userId?._encode(out, 'user_id');
+  }
+}
+
+/// Parameters for GET /profiles.
+class ProfileListParams {
+  /// Builds a request. Every parameter is optional; the defaults are the
+  /// server's.
+  const ProfileListParams({
+    this.where,
+    this.sort,
+    this.select,
+    this.page,
+    this.perPage,
+    this.cursor,
+    this.countExact = false,
+    this.params,
+  });
+
+  /// Filter conditions. Repeating a column conjoins its conditions.
+  final ProfileWhere? where;
+
+  /// Ordering, most significant first.
+  final List<SortTerm>? sort;
+
+  /// Columns to return. Omitted columns are absent from the response, and
+  /// reading one off the row throws MissingColumn. The primary key comes back
+  /// whether or not it was asked for.
+  final List<ProfileColumn>? select;
+
+  /// One-based page number. Prefer [cursor] for a deep walk.
+  final int? page;
+
+  /// Rows per page. The server caps this.
+  final int? perPage;
+
+  /// Resume after a nextCursor from a previous response. Cannot be combined
+  /// with [page], and is only valid for the [sort] it was issued under.
+  final String? cursor;
+
+  /// Ask for a total row count, which costs the server a second query.
+  final bool countExact;
+
+  /// Parameters this vocabulary cannot express, appended verbatim. Reaching
+  /// for it often means the typed layer is in the wrong place — ADR-0028 says
+  /// so and names it as the signal to watch.
+  final Map<String, List<String>>? params;
+
+  /// The same parameters, resuming after [cursor].
+  ///
+  /// [page] is dropped: a page number and a cursor are two answers to where a
+  /// page starts, and the server accepts only one of them.
+  ProfileListParams withCursor(String? cursor) => ProfileListParams(
+    where: where,
+    sort: sort,
+    select: select,
+    perPage: perPage,
+    cursor: cursor,
+    countExact: countExact,
+    params: params,
+  );
+
+  /// Encodes these parameters into the server's query grammar.
+  String toQuery() {
+    final out = _Query();
+    where?._encode(out);
+    if (sort != null && sort!.isNotEmpty) {
+      out.set('sort', sort!.map((term) => term.wire).join(','));
+    }
+    if (select != null && select!.isNotEmpty) {
+      out.set('select', select!.map((column) => column.wire).join(','));
+    }
+    if (page != null) out.set('page', '$page');
+    if (perPage != null) out.set('per_page', '$perPage');
+    if (cursor != null) out.set('cursor', cursor!);
+    if (countExact) out.set('count', 'exact');
+    params?.forEach((key, values) {
+      for (final value in values) {
+        out.add(key, value);
+      }
+    });
+    return out.build();
+  }
+}
+
+/// Parameters for GET /profiles/{id}.
+///
+/// There is no [select] here: the item endpoint rejects unknown query
+/// parameters and does not declare one.
+class ProfileGetParams {
+  /// Builds a request.
+  const ProfileGetParams();
+
+  /// Always empty: this endpoint takes no parameters.
+  String toQuery() => '';
+}
+
+/// GET /profiles — the filtered, sorted, paged collection.
+Future<Page<Profile>> listProfiles(
+  Transport request, {
+  ProfileListParams params = const ProfileListParams(),
+  Object? cancel,
+}) async {
+  const path = '/profiles';
+  final json = await request(_get(path, params.toQuery(), cancel));
+  return _page(json, Profile.fromJson);
+}
+
+/// GET /profiles/{id} — one row by primary key.
+Future<Profile> getProfile(
+  Transport request,
+  Object id, {
+  ProfileGetParams params = const ProfileGetParams(),
+  Object? cancel,
+}) async {
+  final path = _itemPath('/profiles', id);
+  final json = await request(_get(path, params.toQuery(), cancel));
+  return _row(json, Profile.fromJson);
+}
+
+/// POST /profiles — create a row.
+Future<Profile> createProfile(
+  Transport request,
+  ProfileCreate body, {
+  Object? cancel,
+}) async {
+  const path = '/profiles';
+  final json = await request(_post(path, body.toJson(), cancel));
+  return _row(json, Profile.fromJson);
+}
+
+/// A cursor walk over /profiles, for a list that loads as it is scrolled.
+///
+/// [params] is the filter and ordering the whole walk runs under. Its [page]
+/// and [cursor] are ignored: the pager owns where a page starts.
+///
+/// There is no cancel token, unlike the single-request functions. A walk is
+/// many requests and a Dio CancelToken is one-shot, so cancelling to abandon
+/// one page would poison every page after it.
+CursorPager<Profile> profilePager(
+  Transport request, {
+  ProfileListParams params = const ProfileListParams(),
+}) {
+  return CursorPager<Profile>(
+    (cursor) => listProfiles(request, params: params.withCursor(cursor)),
+  );
+}
+
 // --------------------------------------------------------------------- /tasks
 
 /// Columns [select] may name. The primary key is always returned.
@@ -2639,6 +2908,17 @@ enum UserSort implements WireValue {
   SortTerm get desc => SortTerm('-$wire');
 }
 
+/// Relations [expand] may name.
+enum UserExpand implements WireValue {
+  /// The profile relation, one row.
+  profile('profile');
+
+  const UserExpand(this.wire);
+
+  @override
+  final String wire;
+}
+
 /// Filter conditions, one property per filterable column.
 ///
 /// The condition type is narrowed by the column: pattern operators exist only
@@ -2673,6 +2953,7 @@ class UserListParams {
     this.search,
     this.sort,
     this.select,
+    this.expand,
     this.page,
     this.perPage,
     this.cursor,
@@ -2694,6 +2975,9 @@ class UserListParams {
   /// reading one off the row throws MissingColumn. The primary key comes back
   /// whether or not it was asked for.
   final List<UserColumn>? select;
+
+  /// Relations to pull in alongside each row.
+  final List<UserExpand>? expand;
 
   /// One-based page number. Prefer [cursor] for a deep walk.
   final int? page;
@@ -2722,6 +3006,7 @@ class UserListParams {
     search: search,
     sort: sort,
     select: select,
+    expand: expand,
     perPage: perPage,
     cursor: cursor,
     countExact: countExact,
@@ -2738,6 +3023,9 @@ class UserListParams {
     }
     if (select != null && select!.isNotEmpty) {
       out.set('select', select!.map((column) => column.wire).join(','));
+    }
+    if (expand != null && expand!.isNotEmpty) {
+      out.set('expand', expand!.map((relation) => relation.wire).join(','));
     }
     if (page != null) out.set('page', '$page');
     if (perPage != null) out.set('per_page', '$perPage');
@@ -2758,10 +3046,19 @@ class UserListParams {
 /// parameters and does not declare one.
 class UserGetParams {
   /// Builds a request.
-  const UserGetParams();
+  const UserGetParams({this.expand});
 
-  /// Always empty: this endpoint takes no parameters.
-  String toQuery() => '';
+  /// Relations to pull in alongside the row.
+  final List<UserExpand>? expand;
+
+  /// Encodes these parameters into the server's query grammar.
+  String toQuery() {
+    final out = _Query();
+    if (expand != null && expand!.isNotEmpty) {
+      out.set('expand', expand!.map((relation) => relation.wire).join(','));
+    }
+    return out.build();
+  }
 }
 
 /// GET /users — the filtered, sorted, paged collection.
@@ -3030,6 +3327,9 @@ enum TableName implements WireValue {
 
   /// The memberships table, served at /memberships.
   memberships('memberships'),
+
+  /// The profiles table, served at /profiles.
+  profiles('profiles'),
 
   /// The tasks table, served at /tasks.
   tasks('tasks'),
