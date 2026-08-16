@@ -1279,13 +1279,29 @@ func (d *differ) indexCreated(tgt *schema.TableDef, idx schema.Index, note strin
 	// CONCURRENTLY would lock it against writes for the duration.
 	needs, needsTable := indexNeeds(tgt.Name(), idx)
 	d.createIndexes = append(d.createIndexes, Change{
-		Comment:      "index " + idx.Name + note,
+		Comment:      "index " + idx.Name + note + concurrentIndexRetryNote(),
 		Up:           createIndex(tgt, idx, true),
 		Down:         dropIndex(idx.Name, true),
 		Stage:        StageConcurrent,
 		needsColumns: needs,
 		needsTable:   needsTable,
 	})
+}
+
+// concurrentIndexRetryNote warns about the failure mode CONCURRENTLY has and
+// a plain CREATE INDEX does not: it builds outside the migration's own
+// transaction, so a build that fails — most commonly a unique or partial
+// unique index meeting a row that already violates it, which Diff has no way
+// to see coming since it never touches the database — does not roll back.
+// Postgres leaves the catalog entry in place, marked invalid, instead of
+// removing it. Reissuing the identical Up then fails with "already exists",
+// an error that no longer names the real problem, unless the invalid index
+// is dropped first — which is exactly what this change's own Down does.
+func concurrentIndexRetryNote() string {
+	return " (builds outside this migration's transaction: a failed build " +
+		"leaves an invalid index behind rather than rolling back — run this " +
+		"change's Down before retrying, or the retry fails with a confusing " +
+		`"already exists" instead of the real error)`
 }
 
 // coversDroppedColumn reports whether the index spans a column the target no

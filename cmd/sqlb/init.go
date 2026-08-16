@@ -49,6 +49,7 @@ What it writes:
     <pkg>schema/sqlb.go     SqlbProject, so ` + "`sqlb generate`" + ` and ` + "`sqlb migrate`" + ` know where output goes
     migrations/             empty; the first migration is a command away, not a file here
     cmd/server/main.go      rest.NewServer, migrations applied from disk at startup
+    sqlb.md                 next steps, a command cheat-sheet, and the REST query grammar
 
 <pkg> is the last path segment of -module, lower-cased to a Go identifier.
 
@@ -111,6 +112,7 @@ func initCmd(args []string, stdout, stderr io.Writer) error {
 		{filepath.Join(data.SchemaPkg, "schema.go"), initSchemaGo},
 		{filepath.Join(data.SchemaPkg, "sqlb.go"), initSqlbGo},
 		{filepath.Join("cmd", "server", "main.go"), initMainGo},
+		{"sqlb.md", initSqlbMd},
 	}
 	for _, f := range files {
 		full := filepath.Join(dir, f.path)
@@ -133,6 +135,8 @@ func initCmd(args []string, stdout, stderr io.Writer) error {
     %s/sqlb.go
     migrations/            (empty)
     cmd/server/main.go
+    sqlb.md                 the next steps below, plus a command and capability
+                            cheat-sheet, so they outlive this shell
 
 Next:
 
@@ -354,4 +358,104 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	return goose.UpContext(ctx, db, "migrations")
 }
+`
+
+// initSqlbMd is the durable form of the "Next:" block init prints to stdout,
+// plus enough of a command and vocabulary cheat-sheet that a second developer
+// — or the first one, in six months — does not have to reconstruct it from
+// terminal scrollback or from reading rest/params.go and schema/field.go
+// directly. It restates rather than links where sqlb.dev is not guaranteed to
+// match this binary's version; it links where the answer is long and lives in
+// the module this project already imports.
+const initSqlbMd = `# {{.Pkg}}
+
+What ` + "`sqlb init`" + ` scaffolded, and how to keep working in it.
+
+## Next steps
+
+    cd .
+    go mod tidy
+    go generate ./...
+    # if that printed "run go mod tidy again", do — a schema feature can pull
+    # in a dependency go generate only now writes an import for
+    go run github.com/jryannel/sqlb/cmd/sqlb migrate -name initial_schema ./{{.SchemaPkg}}
+    export {{.EnvPrefix}}_DATABASE_URL='postgres://user:pass@localhost:5432/{{.Pkg}}?sslmode=disable'
+    go run ./cmd/server
+
+Then http://localhost:8080/docs for the generated API.
+
+## Commands
+
+Run from the module root; ` + "`<pkg>`" + ` below means ` + "`./{{.SchemaPkg}}`" + `.
+
+    sqlb generate <pkg>          write every artefact the schema declares
+    sqlb check <pkg>             report stale artefacts, write nothing; also
+                                 runs Lint and prints its (advisory) diagnostics
+    sqlb migrate -name <n> <pkg> write the migration that closes the gap
+                                 between the migration history and the schema
+    sqlb impact <pkg>            report how a schema edit changes the REST
+                                 contract, against a checked-in baseline
+    sqlb eject <pkg>             write the exit: the schema as SQL and the
+                                 resources as plain handlers, no sqlb import
+    sqlb docs <pkg>              write the feature checklist: one section per
+                                 endpoint, with a notes block a rerun preserves
+    sqlb survey <src> <dst>      the adoption probe — report which tables of an
+                                 existing (undeclared) database sqlb could
+                                 describe, and why not
+    sqlb introspect -dsn <dsn>   read a database and report, or write, the
+                                 schema DSL declaration for it
+
+` + "`sqlb help`" + ` prints the full flag list for each. generate, impact, eject and docs
+need no database; check needs one only when given ` + "`-database`" + `; migrate replays the
+committed migration history into a scratch Postgres (the schema's ` + "`ShadowDB`" + `),
+except for the first migration, which diffs against nothing.
+
+## Schema capability vocabulary
+
+A column has no behavior beyond storage until a capability turns it on —
+nothing is filterable, sortable or searchable by default
+(github.com/jryannel/sqlb/schema's doc comment is the full reference; this is
+the at-a-glance version):
+
+    .Filterable()    reachable by ` + "`?column=op.value`" + ` on the list endpoint
+    .Sortable()      reachable by ` + "`?sort=column`" + ` / ` + "`?sort=-column`" + `
+    .Searchable()    included in ` + "`?search=`" + `'s substring fan-out
+    .Expandable()    reachable by ` + "`?expand=relation`" + ` (on a Ref column)
+    .Hidden()        never read back through the generated surface
+    .ReadOnly()      accepted on read, refused on create/update
+    .Scoped()        every generated query, and the write ops, are confined by
+                     this column's registered hook — see rest/doc.go's "reads
+                     are hooked" section
+    .Unique()        a unique constraint, and — combined with .Filterable() —
+                     a single-row lookup by that column
+    .Nullable()      the Go type becomes a pointer / sql null-wrapper
+    .Default(v)      omitted from create leaves the database default in place
+
+## REST query grammar
+
+Generated list endpoints share one grammar (rest/params.go documents each
+parameter per-resource, scoped to that resource's actual capable columns —
+this is the shape, not a specific resource's parameter list):
+
+    ?column=value                 shorthand for eq
+    ?column=op.value              gt, gte, lt, lte, ne, in, nin, between,
+                                  like, ilike, contains, startswith, endswith
+                                  (pattern ops need a text column)
+    ?column=eq.a&column=eq.b      repeated params conjoin
+    ?or=(a.eq.1,b.eq.2)           disjunction group; ?and=, ?not= too
+    ?filter=<url-encoded JSON>    arbitrary and/or nesting the grammar above
+                                  cannot spell — see the ` + "`filter`" + ` param's own
+                                  description in the generated OpenAPI doc
+    ?expand=relation              only relations declared .Expandable()
+    ?sort=col,-col2                most significant first; ` + "`-`" + ` for descending
+    ?select=col,col2               omitted columns are absent, not null
+    ?search=text                   across every .Searchable() column
+    ?page=N&per_page=N             or ?limit=&?offset=
+    ?cursor=<token>                keyset paging; prefer this for a full walk
+    ?count=exact                   include the total row count (costs a query)
+
+The exact operators and enums a given endpoint accepts are in its entry at
+http://localhost:8080/docs once the server is running — that document is
+generated from this same schema, so it never drifts from what the columns
+above actually declare.
 `

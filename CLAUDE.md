@@ -38,13 +38,14 @@ the API reference is the Go doc comments.
 
 ## Layout
 
-Four Go modules. `go test ./...` at the root covers **only the first**:
+Five Go modules. `go test ./...` at the root covers **only the first**:
 
 | | |
 |---|---|
 | `.` | the engine — builder, compiler, hooks, model cache. 19 files at the root, which is the package |
 | `pgtest/` | round-trip tests against real Postgres in containers. Its own module so the engine's suite stays database-free |
 | `example/tasks/`, `example/fxapp/` | worked applications, each with its own gate |
+| `example/auth-workos/` | a `sqlb.Verifier[T]` adapter for WorkOS AuthKit — its own module so the WorkOS SDK and JWT/JWKS dependencies never reach sqlb core's `go.mod` |
 
 Packages: `schema` (the DSL), `codegen` (emitters), `rest` (Huma mount),
 `filter` (URL → predicate), `migrate` (diff → DDL), `introspect` (database →

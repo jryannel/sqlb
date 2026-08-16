@@ -133,7 +133,7 @@ every product composes, and the product.
 | | |
 |---|---|
 | `Platform()` ([`platform.go`](platform.go)) | The process logger, and the fxkit glue fed by this app's env: pool, migrations, handles, chi + Huma, server lifetime. |
-| `store` | The generated package, plus one hand-written file contributing its migrations and its resources. |
+| `store` | The generated package. `wiring_gen.go`'s `FxModule` contributes its migrations and its resources; `module.go` is one line composing it into `fx.Module("store", …)`. |
 | `access` | Which space a request speaks for: a bearer key per space, verified in constant time, stored through the principal seam. |
 | `spaces` | The tenant — provisioning, the slug-to-id directory the hooks resolve against, and the rule that confines the table itself. |
 | `notes` | The feature: the space boundary for notes, and the one endpoint the generator does not write. |

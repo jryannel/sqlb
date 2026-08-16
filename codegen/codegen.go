@@ -210,6 +210,37 @@ type Options struct {
 	// that produced one.
 	SkillSchemaPackage string
 
+	// WiringDir emits this schema's fx wiring — an `fx.Option` value named
+	// FxModule, joining the migration history and the resource mount to the
+	// value groups WiringMigrations and WiringOperations name — into a
+	// directory relative to Dir. Empty means the wiring lands directly in Dir
+	// itself, alongside models_gen.go and rest_gen.go, which is the right
+	// default: "output module-local, into Options.Dir, never a shared
+	// directory" is the property that keeps two modules' wiring from
+	// clobbering each other the way #142 did for SkillDir.
+	//
+	// Setting WiringDir alone emits nothing: what is actually generated is
+	// gated on WiringMigrations and WiringOperations, each independently, so
+	// a project with only a resource mount to contribute leaves
+	// WiringMigrations unset and gets no migrations-shaped provider (ADR-0059).
+	WiringDir     string
+	WiringPackage string
+	WiringFile    string
+
+	// WiringMigrations and WiringOperations each configure one fx
+	// value-group contribution: the migration history and the resource
+	// mount. See WiringSet's fields for what each carries and ADR-0059 for
+	// why there are exactly these two shapes and not a general one.
+	//
+	// WiringOperations is silently skipped, the same way RestFile is, when
+	// the schema exposes no REST resource — there is no Register function
+	// generated to call. It is also refused outright when the schema
+	// declares actions or queries: Register then needs hand-written
+	// Actions/Queries funcs this emitter cannot supply, so that module wires
+	// its resource mount by hand instead.
+	WiringMigrations WiringSet
+	WiringOperations WiringSet
+
 	// Types replaces the Go type emitted for the columns each override
 	// matches — the sqlc `overrides:` equivalent, and the reason a codebase
 	// whose ids are uuid.UUID rather than string can generate its models
@@ -423,6 +454,9 @@ func (o Options) validate() error {
 				"or digit — the agent tooling names a skill by its directory, and one it cannot "+
 				"load is quietly absent rather than an error. Try %q",
 			o.SkillName, defaultSkillName+"-something")
+	}
+	if err := o.wiringValidate(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -666,6 +700,17 @@ func render(opts Options) (map[string][]byte, error) {
 			if src != nil {
 				files[filepath.Join(opts.CLIDir, name)] = src
 			}
+		}
+	}
+	if opts.WiringMigrations.Type != "" || opts.WiringOperations.Type != "" {
+		src, err := renderWiring(opts)
+		if err != nil {
+			return nil, err
+		}
+		// nil means there was nothing to contribute — see renderWiring — and
+		// should not leave an empty file behind, the same as RestFile and CLIFile.
+		if src != nil {
+			files[filepath.Join(opts.WiringDir, opts.wiringFile())] = src
 		}
 	}
 	return files, nil

@@ -51,7 +51,7 @@ Almost everything else follows from those two.
 | Package | Responsibility | Depends on |
 |---|---|---|
 | `schema` | The declarative DSL and its validation. Design-time only; nothing at runtime imports it. | nothing |
-| `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`. | stdlib only |
+| `.` (`sqlb`) | AST, Postgres compiler, generic builder, model reflection, mutations, hooks, `Describe`, and HTTP authentication middleware (`auth.go`). | stdlib only |
 | `filter` | URL grammar → predicates, validated against model capabilities. | `sqlb` |
 | `migrate` | Diffs two schemas into changes, renders them as Postgres DDL, and writes migration files for goose, golang-migrate or plain SQL. Does not apply them. | `schema` |
 | `introspect` | Reads `pg_catalog` back into a `*schema.Registry`, and reports every construct the DSL cannot express. Design-time; connects through a `sqlb.Executor`, so the handle is the caller's. | `schema`, `sqlb` |
@@ -143,7 +143,8 @@ twice; `rest` logs it and returns the success it achieved.
 
 ## Where safety lives
 
-Four independent mechanisms, each covering what the others cannot:
+Four independent mechanisms inside the query path, each covering what the
+others cannot — plus authentication, below, sitting in front of all four:
 
 **Bind parameters.** Values never reach SQL text. There is one `bind` method on
 the compiler and no way to interpolate a value around it.
@@ -163,6 +164,18 @@ time.
 
 **Query hooks.** Tenant scoping applies to every read of a model, including
 reads issued by generated handlers, because both go through the same builder.
+
+**Authentication is a separate mechanism from the four above, composing
+with rather than replacing them**
+([ADR-0059](#a-verifier-composes-with-the-principal-seam)). `Middleware[T]`
+(`auth.go`) verifies who is calling and writes the result to the context via
+`WithPrincipal`; query hooks then read it back with `PrincipalFrom[T]` to
+decide what that caller may see. An app can swap `Middleware[T]`'s
+`Verifier[T]` — WorkOS, Clerk, Zitadel, a self-hosted JWT, more than one
+realm at once — without touching a hook, and can change a hook's
+row-scoping without touching how identity was established. Neither seam
+substitutes for the other: `Middleware[T]` answering 200 says only that the
+credential was valid, not what rows the resulting principal may reach.
 
 Two smaller rails worth knowing: `Update` and `Delete` without a `WHERE` return
 `ErrUnscoped` until `Everything()` is called explicitly, and LIKE
@@ -3478,6 +3491,153 @@ wrong default rather than the common case, or if every real project's
 `Migrate` function turns out to be the same ten lines, which would mean
 withholding a shipped migration adapter is optimizing against a dependency
 nobody actually minded.
+
+### A Verifier composes with the principal seam
+
+An earlier decision already answered how sqlb publishes an extension point
+without owning the assembly around it
+([ADR-0044](#the-container-is-an-adapter)): a minimal, stdlib-only context
+contract — `WithPrincipal`/`PrincipalFrom[T]` in `principal.go` — with
+anything opinionated, which router, which provider, kept as a copy-paste
+example rather than an import. That record also named its own
+reconsideration trigger: a second author writing an sqlb-shaped module.
+Four such authors arrived at once — applications wanting WorkOS, Clerk,
+Zitadel, or a self-hosted JWT/session scheme, each about to write the same
+shape of middleware, extract a credential, verify it, call `WithPrincipal`,
+independently. `example/tasks/auth/` and `example/fxapp/access/` already
+proved the pattern works; what neither proved is that it needs restating by
+hand every time.
+
+`Verifier[T]`, `Middleware[T]`, `TransientError`, and `BearerToken` are
+published in `auth.go` at the module root, next to `principal.go`, with
+zero new dependencies. `Verifier[T]` stays generic over the application's
+own principal type rather than sqlb defining a canonical `Principal`
+struct — the same choice `PrincipalFrom[T]` already made, extended to the
+thing that produces a principal rather than just the thing that carries
+one. Credential extraction is a separate, composable piece from
+verification (`CredentialExtractor`, with `BearerToken` as the
+stdlib-shaped default): WorkOS's AuthKit and Clerk's hosted UI commonly
+hand back session state via a cookie for browser flows, while Zitadel and
+self-hosted JWT are bearer-token-shaped, so hardcoding one extraction
+strategy into `Middleware` would make it wrong for half its named targets.
+A `Verify` failure is 401 unless it opts into `TransientError`, which
+answers 500 instead — a provider outage and a rejected credential are
+different failures for an operator paging on 5xx and for a client deciding
+whether to retry, and collapsing them loses that distinction. This is
+opt-in rather than a required interface method, because a `Verifier` with
+no network call to fail, local JWT verification, has no transient failure
+mode to report; return `TransientError` by value, since `Middleware`'s
+`errors.As` check targets the value type and a pointer silently falls
+through to 401. Provider adapters — WorkOS, Clerk, Zitadel — stay worked
+examples under `example/`, each its own Go module, not published
+`go get`-able packages: sqlb core is dependency-locked to pgx only
+([ADR-0040](#the-driver-is-a-dependency)), an adapter needs its provider's
+SDK, which must never reach sqlb's own `go.mod`, and this is ADR-0044's
+rule exercised for auth specifically rather than a new one. `Middleware[T]`
+also carries no public-path allow-list the way
+`example/tasks/auth/middleware.go` does — not a gap so much as the same
+ADR-0044 rule applied to path matching: `rest.Server.Handler` and any
+router already let an app mount `Middleware[T]` on only the subtree that
+needs protection, so an allow-list opinion in core would duplicate the
+app's own router and still have to pick subtree-vs-exact-match itself;
+`example/tasks/auth/middleware.go`'s allow-list stays the worked example
+for an app that wants deny-by-default-with-exceptions, and core stays
+silent on the policy.
+
+Four independent auth integrations share one seam instead of four
+reimplementations of "extract, verify, `WithPrincipal`," and the 401-vs-500
+split is testable and tested once in core rather than once per adapter.
+The cost is that `Verifier[T]` commits to a one-credential, one-call shape:
+an app needing multi-factor verification, or a provider whose check
+genuinely needs two round trips, doesn't fit `Verify(ctx, cred) (T, error)`
+directly and has to compose its own `Verifier[T]` around the parts it
+needs — multi-provider chaining within one realm was scoped out
+deliberately, not an oversight. Widening (`Middleware` gaining an optional
+parameter, a second failure taxonomy) is free; narrowing was cheap before
+the first adapter depended on it — a first one now exists,
+`example/auth-workos`, so the honest cost of changing the signature is no
+longer zero. Two smaller calls made along the way, both left for later
+evidence rather than built speculatively:
+`Middleware` doesn't set `WWW-Authenticate`, since it's generic over
+`CredentialExtractor` and doesn't know the extractor is bearer-shaped (an
+app-specific wrapper can add it), and `Verify`'s error carries no typed
+reason beyond transient-or-not, since the detail message deliberately
+never echoes the underlying error and a richer type would have nowhere
+visible to surface today.
+
+Revisit if a second application's `Verifier[T]` needs a signature
+`Verify(ctx, cred) (T, error)` can't express, or if a real adapter finds
+`TransientError` insufficient, for instance a provider whose rate-limit
+response is neither "reject the credential" nor cleanly "unreachable."
+`example/auth-workos` is that first real adapter, and it already answered
+the `TransientError` question, just not the way the rate-limit scenario
+above speculated: golang-jwt and keyfunc collapse "JWKS unreachable" and
+"unrecognized signing key" into the same wrapped error, so `Verify` has no
+reliable signal to report as transient and correctly never returns one —
+the outage case that matters most, WorkOS being unreachable at startup, is
+caught by `New` failing at construction instead; an outage that begins
+*after* startup surfaces at request time as an indistinguishable rejected
+credential, the same collapse this paragraph already describes.
+`TransientError` holds up; it was just never going to be exercised from
+inside `Verify` for this adapter.
+
+### Fx wiring is generated, not a runtime library
+
+sqlb emits models, the manifest, the REST resource, three clients and a
+skill from a schema declaration, but nothing that makes a schema-owning
+module a *unit* in the host's dependency-injection graph — even though two
+of the three things a module contributes there are already fully
+determined by the declaration: the migration history and the resource
+mount. A real 38-module uber-go/fx consumer measured what that costs by
+hand: 78 byte-identical migration providers, 183 operation-set literals,
+209 `fx.Module(...)` declarations. This was tried once already as a
+runtime library, and rejected on the merits rather than the idea: its
+value-group vocabulary matched the consumer's contracts name for name, but
+importing it pulled chi, goose and huma into a graph that already had
+them, duplicating contracts the platform already held — a runtime
+dependency can't avoid dragging sqlb's own choice of router and migration
+runner along, no matter how well the vocabulary lines up. A generated file
+doesn't have that problem: it references the host's own types by a
+fully-qualified string and imports only what the consuming module already
+depends on, at the cost of sqlb needing to be told two names a schema
+can't derive — which fx value group a mount joins (an access-surface
+decision, not a schema property), and a module's fx identity when its
+registry is genuinely unnamed on purpose.
+
+`codegen.Options` grows `WiringMigrations` and `WiringOperations`, each a
+`WiringSet{Type, Group, Name, EmbedDir}` — two named fields rather than a
+slice, because the two contributions have different shapes (`EmbedDir`
+means "the directory of `.sql` files to embed" on one and is refused on
+the other) and one `codegen.Options` never has a second migration history
+or a second resource mount to contribute. `Type` is a fully-qualified
+`"import/path.TypeName"` string, so a wrong name is a compile error in the
+generated file rather than a provider that silently joins no group. What's
+emitted is one `fx.Option` value, `FxModule`, never a wrapped
+`fx.Module(name, ...)` — the hand-written module composes it
+(`fx.Module("store", FxModule)`), so a module with more to say adds it
+beside the generated value instead of inside it, and `FxModule` never
+carries a hand edit to lose when the schema changes and it regenerates.
+Nothing is emitted for hooks, since a `Scoped` column already refuses to
+mount without one and generating hook wiring would mean sqlb generating
+unreviewed authorization policy; nothing is emitted when the schema
+declares actions or queries either, since `Register` would need
+hand-written funcs the emitter has no way to supply — an honest refusal
+rather than a generated call that fails to compile.
+
+The measured result was `example/fxapp`'s `store/module.go` shrinking from
+a hand-written provider pair to one line composing `FxModule`, the exact
+shape the 38-module consumer's copies were measured at. The cost is a
+fifth emitter over the same declaration, a documented limitation in
+`WiringSet.Type`'s assumption that a package's name is its import path's
+last segment, and coverage that's partial by design — a module declaring
+actions or queries wires its resource mount by hand and gets no operations
+contribution at all. Revisit if a second DI container shows up in a real
+consumer wanting the same two contributions, if the actions/queries
+refusal turns out to be reachable often enough that most modules with a
+REST surface hit it, or if a host package's name diverging from its
+directory turns up in practice — untested against a real consumer, and the
+failure today is an import that doesn't exist rather than a clean
+rejection at generate time.
 
 ### A unique foreign key is already one-to-one
 
