@@ -3553,11 +3553,11 @@ genuinely needs two round trips, doesn't fit `Verify(ctx, cred) (T, error)`
 directly and has to compose its own `Verifier[T]` around the parts it
 needs — multi-provider chaining within one realm was scoped out
 deliberately, not an oversight. Widening (`Middleware` gaining an optional
-parameter, a second failure taxonomy) is free; narrowing is cheap today
-too, since nothing outside `auth.go` and its own tests calls `Verifier[T]`
-or `Middleware[T]` yet — the honest cost of changing the signature is zero
-until the first adapter depends on it. Two smaller calls made along the
-way, both left for later evidence rather than built speculatively:
+parameter, a second failure taxonomy) is free; narrowing was cheap before
+the first adapter depended on it — a first one now exists,
+`example/auth-workos`, so the honest cost of changing the signature is no
+longer zero. Two smaller calls made along the way, both left for later
+evidence rather than built speculatively:
 `Middleware` doesn't set `WWW-Authenticate`, since it's generic over
 `CredentialExtractor` and doesn't know the extractor is bearer-shaped (an
 app-specific wrapper can add it), and `Verify`'s error carries no typed
@@ -3566,12 +3566,20 @@ never echoes the underlying error and a richer type would have nowhere
 visible to surface today.
 
 Revisit if a second application's `Verifier[T]` needs a signature
-`Verify(ctx, cred) (T, error)` can't express, or if a real adapter — once
-WorkOS, Clerk, or Zitadel land — finds `TransientError` insufficient, for
-instance a provider whose rate-limit response is neither "reject the
-credential" nor cleanly "unreachable." No real adapter exists yet as of
-this writing; those are separate follow-on plans and will be the evidence
-that answers this.
+`Verify(ctx, cred) (T, error)` can't express, or if a real adapter finds
+`TransientError` insufficient, for instance a provider whose rate-limit
+response is neither "reject the credential" nor cleanly "unreachable."
+`example/auth-workos` is that first real adapter, and it already answered
+the `TransientError` question, just not the way the rate-limit scenario
+above speculated: golang-jwt and keyfunc collapse "JWKS unreachable" and
+"unrecognized signing key" into the same wrapped error, so `Verify` has no
+reliable signal to report as transient and correctly never returns one —
+the outage case that matters most, WorkOS being unreachable at startup, is
+caught by `New` failing at construction instead; an outage that begins
+*after* startup surfaces at request time as an indistinguishable rejected
+credential, the same collapse this paragraph already describes.
+`TransientError` holds up; it was just never going to be exercised from
+inside `Verify` for this adapter.
 
 ### Fx wiring is generated, not a runtime library
 

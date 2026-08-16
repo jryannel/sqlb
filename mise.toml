@@ -147,6 +147,12 @@ set -e
 cd "$MISE_PROJECT_ROOT/example/fxapp" && go test ./...
 '''
 
+[tasks.test-auth-workos]
+description = "Run the WorkOS adapter's suite. Database-free, unlike test-demo/test-fx: the adapter verifies JWTs against an in-memory or httptest-served JWKS, never a live WorkOS endpoint or a database, so this needs no pg-up."
+run = '''
+cd "$MISE_PROJECT_ROOT/example/auth-workos" && go test ./...
+'''
+
 [tasks.test-ts]
 description = "Typecheck the generated TypeScript client and run its encoder tests. The typecheck is the test: the client's whole claim is that a misspelled column, an operator its column type does not accept, or a sort on a column that did not opt in fails at tsc. example/tasks/web/src/refusals.ts asserts each of those with @ts-expect-error, so a generator that widened a type would fail here."
 dir = "example/tasks/web"
@@ -198,23 +204,25 @@ go tool cover -func=coverage.out | tail -20
 '''
 
 [tasks.vet]
-description = "go vet across all four modules"
+description = "go vet across all five modules"
 run = '''
 set -e
 go vet ./...
 cd "$MISE_PROJECT_ROOT/pgtest" && go vet ./...
 cd "$MISE_PROJECT_ROOT/example/tasks" && go vet ./...
 cd "$MISE_PROJECT_ROOT/example/fxapp" && go vet ./...
+cd "$MISE_PROJECT_ROOT/example/auth-workos" && go vet ./...
 '''
 
 [tasks.lint]
-description = "golangci-lint across all four modules. Formatting is reported here rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\"."
+description = "golangci-lint across all five modules. Formatting is reported here rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\"."
 run = '''
 set -e
 golangci-lint run
 cd "$MISE_PROJECT_ROOT/pgtest" && golangci-lint run
 cd "$MISE_PROJECT_ROOT/example/tasks" && golangci-lint run
 cd "$MISE_PROJECT_ROOT/example/fxapp" && golangci-lint run
+cd "$MISE_PROJECT_ROOT/example/auth-workos" && golangci-lint run
 '''
 
 [tasks.lint-fix]
@@ -317,7 +325,7 @@ mise run heal
 # that need nothing but Go still pass. Every module, because `heal` regenerates
 # code the examples compile against and a break there is invisible from the root.
 echo
-for mod in . pgtest example/tasks example/fxapp; do
+for mod in . pgtest example/tasks example/fxapp example/auth-workos; do
   (cd "$MISE_PROJECT_ROOT/$mod" && go build ./...)
 done
 go test ./...
@@ -336,7 +344,7 @@ run = '''
 # Every module, because pgtest and the two examples have a go.mod each and an
 # untidied one there fails in CI exactly as confusingly as an untidied one here.
 status=0
-for mod in . pgtest example/tasks example/fxapp; do
+for mod in . pgtest example/tasks example/fxapp example/auth-workos; do
   cd "$MISE_PROJECT_ROOT/$mod"
   cp go.mod go.mod.bak
   [ -f go.sum ] && cp go.sum go.sum.bak
@@ -736,7 +744,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, tagline-check, test-race, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\". Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, tagline-check, test-race, test-auth-workos, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\". Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet
@@ -752,6 +760,7 @@ mise run eject-check
 # places that nothing links.
 mise run tagline-check
 mise run test-race
+mise run test-auth-workos
 mise run test-ts
 mise run test-dart
 mise run test-cli
