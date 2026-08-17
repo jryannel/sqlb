@@ -18,6 +18,9 @@ type secretColumns struct {
 
 // SecretCols are the typed columns of secrets.
 // Hidden columns are omitted: a predicate against one should not compile.
+// Omitted here: ciphertext, nonce, key_version.
+// Declaring LookupKey beside Hidden returns one to this facade, for the column
+// whose own value is how the row is found. It stays off the wire either way.
 var SecretCols = secretColumns{
 	ID:        sqlb.Typed[string]("id"),
 	OwnerKind: sqlb.TextColumn[string]("owner_kind"),
