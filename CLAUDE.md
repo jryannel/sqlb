@@ -74,7 +74,7 @@ target moved.
 
 ## Traps
 
-Four things that are not visible from where you would look for them.
+Five things that are not visible from where you would look for them.
 
 **The gate is two workflows, and a PR shows one.** `ci` and `pages` are
 separate on purpose — folding Astro into the gate would make Node a build
@@ -97,6 +97,10 @@ nothing links them yet. The column vocabulary used to have the same problem and
 no longer does: the guide names the constructors in prose and points at the
 reference page for the table, and `column-check` fails if that page and
 `schema/field.go` disagree about what exists.
+
+**`docs/howto/` is an index, not a section.** One page, and every recipe it
+names lives in the section that owns its subject. A new how-to belongs in that
+section with a row added here — not as a second page under `howto/`.
 
 **A fresh worktree has no `site/node_modules`.** `npm run build` fails with
 `astro: command not found` until `npm ci` in `site/`. Prefer `site-check`,

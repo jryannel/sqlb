@@ -74,6 +74,22 @@ const SOURCES = [
     },
   },
   {
+    // One page, and deliberately no more. Every recipe it names already lives
+    // in the section that owns its subject, because that is where someone
+    // reading about migrations should find the rollout page. What is missing
+    // without this is the other reader: the one who arrives with a task rather
+    // than a subject, and cannot know which of seven surfaces owns it. Django's
+    // howto/ is the same idea with the pages moved; moving them here would cost
+    // each section its reading order to buy one index.
+    dir: "docs/howto",
+    route: "howto",
+    sequence: ["index"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+    label: (slug) => (slug === "index" ? "By task" : null),
+  },
+  {
     dir: "docs/schema",
     route: "schema",
     sequence: ["index", "capabilities", "references"],

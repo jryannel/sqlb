@@ -73,6 +73,10 @@ capabilities over structs you already have, including stock
 [Refactoring a sqlc endpoint](../refactoring-from-sqlc.md) walks one all the way
 from static SQL to a generated resource, in four stages you can stop after.
 
+**Here with a specific task.** [How-to](../howto/README.md) indexes the recipes
+by the question rather than by the surface — adopting a database, moving one
+sqlc endpoint, renaming a column without breaking clients, getting out again.
+
 **Already have a database.** [Adopting a database](../migrations/adopting.md)
 reads it back into a schema file, and
 [Refactoring a database](../migrations/refactoring-a-database.md) is what
