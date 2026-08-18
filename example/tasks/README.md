@@ -230,7 +230,7 @@ CLI has no command for, the same asymmetry `web/src/api/http.ts` has.
 
 Run `mise run test-cli` to build it and exercise the wire format against an
 `httptest` server; no Docker.
-[ADR-0030](../../docs/architecture.md#go-cli) is the record.
+[ADR-0029](../../docs/architecture.md#go-cli) is the record.
 
 ## Two things sqlb does not do that this example works around
 
