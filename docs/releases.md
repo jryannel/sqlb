@@ -94,7 +94,8 @@ trusted, and `TransientError` is what separates a provider outage from a bad
 credential — a rejected token answers `401`, an unreachable identity provider
 answers `500`, because collapsing the two teaches a caller to retry the one
 thing retrying cannot fix
-([ADR-0059](architecture.md#a-verifier-composes-with-the-principal-seam)).
+(["A Verifier composes with the principal
+seam"](architecture.md#a-verifier-composes-with-the-principal-seam)).
 `example/auth-workos` is the first adapter, for WorkOS AuthKit, and it is its
 own Go module so the WorkOS SDK and the JWT/JWKS dependencies never reach sqlb
 core's `go.mod`. `TransientError` must be returned by value, not by pointer;
@@ -114,7 +115,8 @@ file, not a runtime surprise. What is emitted is one `fx.Option` value,
 `FxModule`, rather than a wrapped `fx.Module`, so the hand-written module
 composes it and the generated file never carries a hand edit. This was tried
 once as a runtime library and rejected, and the rejection is recorded with the
-design ([ADR-0059](architecture.md#fx-wiring-is-generated-not-a-runtime-library)).
+design (["Fx wiring is generated, not a runtime
+library"](architecture.md#fx-wiring-is-generated-not-a-runtime-library)).
 `example/fxapp`'s store module is the proof: two hand-written providers became
 `var Module = fx.Module("store", FxModule)`.
 
