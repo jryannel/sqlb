@@ -167,7 +167,8 @@ reads issued by generated handlers, because both go through the same builder.
 
 **Authentication is a separate mechanism from the four above, composing
 with rather than replacing them**
-([ADR-0059](#a-verifier-composes-with-the-principal-seam)). `Middleware[T]`
+(["A Verifier composes with the principal
+seam"](#a-verifier-composes-with-the-principal-seam)). `Middleware[T]`
 (`auth.go`) verifies who is calling and writes the result to the context via
 `WithPrincipal`; query hooks then read it back with `PrincipalFrom[T]` to
 decide what that caller may see. An app can swap `Middleware[T]`'s
