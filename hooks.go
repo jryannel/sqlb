@@ -28,7 +28,31 @@ import (
 //
 // Hooks are registered once at startup and run in registration order. A hook
 // returning an error aborts the operation and the error reaches the caller
-// unwrapped.
+// unwrapped — but "reaches the caller" means something specific once that
+// caller is [rest.Resource]: the status the request answers with is the
+// status the error carries, and an error that carries none answers 500.
+//
+// # An error's status is its own responsibility
+//
+// rest classifies what it can — a [ConstraintError] by its SQLSTATE,
+// [ErrBadCursor] as a bad request — and passes anything satisfying Huma's
+// StatusError straight through, because that is a status application code
+// already chose. Everything else is logged, not returned, and answered with a
+// sentence that says only that a request could not be completed — an
+// unclassified database error can name tables, columns and the statement that
+// failed, which belongs in a log and nowhere a client can read it
+// (docs/rest/errors.md). A hook's plain error falls into that last bucket. A
+// tenant-scoping BeforeQuery that returns errors.New("no tenant") for a
+// missing header is refusing the request correctly and answering 500, because
+// nothing about a bare error says 400.
+//
+//	return huma.Error400BadRequest("X-Workspace-Id is required")
+//
+// Getting the status right costs one call instead of one: huma.Error400BadRequest,
+// Error403Forbidden, Error404NotFound and their siblings all build a
+// huma.StatusError. example/tasks/app/errors.go works the pattern through a
+// package of its own, for the case where the same refusal is reachable from a
+// hook, a background job and a test that never builds a router.
 //
 // Registration names the registry it writes to, and the handle names the
 // registry it reads from. Neither reaches process-wide state, which is what
@@ -145,6 +169,10 @@ func On[T any](r *Registry) *Hooks[T] {
 // be requalified onto the alias, which means [RawPred] or a column belonging to
 // a table the expansion did not join, fails the query rather than being
 // dropped. See the expansion notes in expand.go.
+//
+// A refusal — no tenant, no permission — is the commonest error this hook
+// returns, and a plain one answers 500 over REST; see the Hooks doc comment
+// above for the status rule and the fix.
 func (h *Hooks[T]) BeforeQuery(fn func(context.Context, *Builder[T]) error) *Hooks[T] {
 	h.register(scopedFn[func(context.Context, *Builder[T]) error]{fn: fn})
 	return h
@@ -241,7 +269,8 @@ func (h *Hooks[T]) register(s scopedFn[func(context.Context, *Builder[T]) error]
 }
 
 // BeforeCreate runs on each row before insert, and may modify it: normalising
-// an email, deriving a slug, stamping an owner.
+// an email, deriving a slug, stamping an owner. It also refuses one, and an
+// error with no status answers 500 over REST — see the Hooks doc comment.
 func (h *Hooks[T]) BeforeCreate(fn func(context.Context, *T) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -265,7 +294,9 @@ func (h *Hooks[T]) AfterCreate(fn func(context.Context, *T) error) *Hooks[T] {
 }
 
 // BeforeUpdate runs before an update executes and receives the statement, so
-// it can force columns (an updated_at stamp) or narrow the affected rows.
+// it can force columns (an updated_at stamp) or narrow the affected rows, or
+// refuse it — with a status-bearing error, or it answers 500 over REST; see
+// the Hooks doc comment.
 func (h *Hooks[T]) BeforeUpdate(fn func(context.Context, *Update[T]) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -283,7 +314,9 @@ func (h *Hooks[T]) AfterUpdate(fn func(context.Context, []T) error) *Hooks[T] {
 	return h
 }
 
-// BeforeDelete runs before a delete executes and receives the statement.
+// BeforeDelete runs before a delete executes and receives the statement, and
+// may refuse it — with a status-bearing error, or it answers 500 over REST;
+// see the Hooks doc comment.
 func (h *Hooks[T]) BeforeDelete(fn func(context.Context, *Delete[T]) error) *Hooks[T] {
 	h.mu.Lock()
 	defer h.mu.Unlock()
