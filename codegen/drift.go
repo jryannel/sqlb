@@ -217,13 +217,20 @@ func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) s
 		line(stderr, "sqlb: the database matches the schema")
 		return ""
 	}
+	// A drop of an index nothing in the history created reads exactly like a
+	// drop of one sqlb built, and only one of them is intended (#268).
+	changes = noteIndexDrops(changes, current, declared, p.MigrationsDir)
 
 	// The changes are the answer, so they go to stdout: this is the one thing
 	// the command produces, and it is worth piping into a migration.
 	say(stderr, "sqlb: the database does not match the schema (%d differences):\n", len(changes))
 	for _, c := range changes {
-		if c.Comment != "" {
-			line(stdout, "-- "+c.Comment)
+		// One "--" per line: a comment can carry a note of its own now, and a
+		// second line without the marker would be SQL rather than prose.
+		for _, l := range strings.Split(c.Comment, "\n") {
+			if l != "" {
+				line(stdout, "-- "+l)
+			}
 		}
 		line(stdout, strings.TrimSpace(c.Up))
 	}

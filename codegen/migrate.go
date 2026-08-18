@@ -108,6 +108,10 @@ func runMigrate(p Project, target *schema.Registry, args []string, stdout, stder
 		line(stderr, "sqlb: the history already builds the declared schema; nothing to write")
 		return 0
 	}
+	// The first migration after upgrading past v0.14 can propose dropping a
+	// real index, and the statement that does it is indistinguishable from one
+	// the author asked for (#268). This is where the difference gets said.
+	changes = noteIndexDrops(changes, current, target, p.MigrationsDir)
 
 	if f.check {
 		// The migration counterpart of `sqlb check`, and the reason it is a
