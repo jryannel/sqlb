@@ -206,6 +206,21 @@ cache keys mechanically. Two hand-maintained invalidation lists drift; the bug
 that motivated this was `['draft', id]` against `['drafts', id]` in a client
 where mutations and an event stream each kept their own list.
 
+## Names come from table names
+
+A table's types are its own singularised name — `posts` → `Post` — and that
+name plus a suffix: `PostColumn`, `PostSort`, `PostWhere`, `PostListParams`,
+`PostCreate`, `PostPatch`. Two tables can therefore want the same name:
+`board_columns` singularises to `BoardColumn`, which is also what `boards`
+calls its selectable-column type.
+
+`sqlb generate` refuses that rather than writing a file the compiler rejects,
+naming the identifier, both tables, and what each contributed
+([#261](https://github.com/jryannel/sqlb/issues/261)). The fix is to rename one
+of the tables — the generated names follow. Before this check the generator
+reported success and `tsc` reported `TS2300: Duplicate identifier`, naming
+neither table.
+
 ## What is not generated
 
 Hooks, write policy, optimistic updates, a client object, an npm package. Hooks

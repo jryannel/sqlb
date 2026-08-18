@@ -121,6 +121,12 @@ func renderDartClient(opts Options) ([]byte, error) {
 	_, perClient := splitDartRuntime(body.String())
 	rest := perClient + body.String()
 
+	// Against the whole file rather than the schema's half, because a table
+	// named after a runtime type collides with it just as surely.
+	if err := dartCollision(opts.Registry, "the Dart client", rest); err != nil {
+		return nil, err
+	}
+
 	var b bytes.Buffer
 	b.WriteString(dartHeader)
 	b.WriteString(dartRuntimeImports(rest, opts.dartRuntimeFile()))

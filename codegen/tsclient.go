@@ -67,6 +67,10 @@ func renderTSClient(opts Options) ([]byte, error) {
 				"export it from tsRuntime, or the emitted client will not compile", name)
 	}
 
+	if err := tsCollision(opts.Registry, "the TypeScript client", body.String()); err != nil {
+		return nil, err
+	}
+
 	var b bytes.Buffer
 	b.WriteString(tsClientHeader)
 	b.WriteString(tsRuntimeImports(body.String(), opts.tsRuntimeImport()))
@@ -160,6 +164,10 @@ func renderTSQueries(opts Options) ([]byte, error) {
 				}
 			}
 		}
+	}
+
+	if err := tsCollision(opts.Registry, "the TypeScript queries file", body.String()); err != nil {
+		return nil, err
 	}
 
 	var b bytes.Buffer
