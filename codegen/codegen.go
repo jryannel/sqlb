@@ -506,10 +506,22 @@ func Generate(opts Options) ([]string, error) {
 }
 
 // generate is Generate's implementation, with one extra return Generate
-// throws away: whether any file it wrote differs from what was on disk before
-// this call, a missing file counting as different.
+// throws away: how many files it actually rewrote, a missing file counting as
+// a rewrite.
 //
-// The driver's "generate" verb (Run, in project.go) uses that bit to warn
+// A file whose rendered bytes match what is already on disk is not written at
+// all. That is not an optimisation — writing 9,000 lines is nothing — it is
+// what keeps a language server usable. gopls invalidates a package on the
+// filesystem event, not on the content: golang.org/x/tools/gopls@v0.21.1's
+// snapshot.clone marks the containing package and every package that imports
+// it as needing a re-typecheck for any watched write, and only skips the
+// heavier `go list` reload when the file hash is unchanged. Generated code is
+// what the rest of a project imports — in a typical layout models_gen.go sits
+// in the package everything depends on — so a no-op `go generate` used to
+// throw away the type information for the whole module. Not touching the file
+// means no event, and no event means nothing to re-index (#269).
+//
+// The driver's "generate" verb (Run, in project.go) uses the count to warn
 // that dependencies may have changed — the case in point being a schema that
 // newly reaches for outbox/events, which pulls huma's SSE adapter package
 // into rest_gen.go only once this call has produced code that imports it.
@@ -520,13 +532,13 @@ func Generate(opts Options) ([]string, error) {
 // of signal is a lot of surface for a warning that is cheap to over-fire — a
 // generate that only reformats a comment nudges once for nothing, which costs
 // far less than staying silent the time it matters.
-func generate(opts Options) (written []string, changed bool, err error) {
+func generate(opts Options) (written []string, rewrote int, err error) {
 	files, err := render(opts)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
-		return nil, false, err
+		return nil, 0, err
 	}
 	for _, name := range sortedKeys(files) {
 		path := filepath.Join(opts.Dir, name)
@@ -534,18 +546,21 @@ func generate(opts Options) (written []string, changed bool, err error) {
 		// into one — so the parent is created per file rather than once above.
 		if dir := filepath.Dir(path); dir != opts.Dir {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return nil, false, err
+				return nil, 0, err
 			}
 		}
-		if existing, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(existing, files[name]) {
-			changed = true
+		if existing, readErr := os.ReadFile(path); readErr == nil && bytes.Equal(existing, files[name]) {
+			// Byte-identical: leave the file, and its mtime, alone.
+			written = append(written, path)
+			continue
 		}
-		if err := os.WriteFile(path, files[name], 0o644); err != nil {
-			return nil, false, err
+		rewrote++
+		if err := replaceFile(path, files[name]); err != nil {
+			return nil, 0, err
 		}
 		written = append(written, path)
 	}
-	return written, changed, nil
+	return written, rewrote, nil
 }
 
 // Check reports which generated files are missing or out of date, without
@@ -797,4 +812,43 @@ func sortedKeys(m map[string][]byte) []string {
 		}
 	}
 	return out
+}
+
+// replaceFile writes data to path by way of a temporary file in the same
+// directory and a rename, so a reader never observes the file half-written.
+//
+// os.WriteFile truncates and then fills, which leaves a window in which the
+// file on disk is a prefix of valid Go — or empty. Nothing in a build notices,
+// because a build reads the tree once and after generate has returned. A
+// language server does not: gopls re-reads on the filesystem event, and a read
+// that lands in that window parses as a syntax error it then reports against
+// code the author did not write. Rename is atomic on every filesystem sqlb
+// targets, so the observable states are the old content and the new one.
+//
+// The temporary file is created alongside the target rather than in TMPDIR
+// because rename across filesystems fails, and /tmp is a different filesystem
+// often enough to matter. Its name begins with a dot for the same reason the
+// driver's scratch directory does: the go tool skips dot-prefixed files, so
+// one left behind by a kill between create and rename is invisible to a build
+// rather than a second `package` clause in the directory.
+func replaceFile(path string, data []byte) error {
+	dir, base := filepath.Split(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".tmp*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }() // no-op once the rename has succeeded
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// CreateTemp makes the file 0600; generated files are readable.
+	if err := os.Chmod(name, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
