@@ -75,9 +75,25 @@ func renderColumns(opts Options) ([]byte, error) {
 		fmt.Fprintln(b, "}")
 
 		fmt.Fprintf(b, "\n// %sCols are the typed columns of %s.\n", typeName, t.Name())
-		if omitted, kept := hiddenSplit(t); omitted > 0 || kept > 0 {
-			if omitted > 0 {
+		if omitted, kept := hiddenSplit(t); len(omitted) > 0 || kept > 0 {
+			if len(omitted) > 0 {
 				fmt.Fprintln(b, "// Hidden columns are omitted: a predicate against one should not compile.")
+				// Named, because the omission is what a reader of this file
+				// cannot see: the column is simply absent, and absent is also
+				// what a misspelling looks like.
+				for _, line := range commentList("Omitted here: ", omitted) {
+					fmt.Fprintln(b, line)
+				}
+				// The way back, but only where the word is not already in this
+				// comment. A reader whose table has a lookup key has met it two
+				// lines down; a reader whose table has none has no reason to
+				// know it exists, and the query they wanted — find the row by
+				// the secret it presents — is the one this facade looks unable
+				// to express (#256).
+				if kept == 0 {
+					fmt.Fprintln(b, "// Declaring LookupKey beside Hidden returns one to this facade, for the column")
+					fmt.Fprintln(b, "// whose own value is how the row is found. It stays off the wire either way.")
+				}
 			}
 			if kept > 0 {
 				fmt.Fprintln(b, "// A hidden column declaring LookupKey is here: it never leaves the process,")
@@ -176,20 +192,52 @@ func facadeFields(t *schema.TableDef) []*schema.Field {
 	return out
 }
 
-// hiddenSplit counts the two kinds of hidden column, which is what the facade's
-// own comment has to distinguish: a secret nothing may predicate on, and a
-// secret the row is found by.
-func hiddenSplit(t *schema.TableDef) (omitted, kept int) {
+// hiddenSplit separates the two kinds of hidden column, which is what the
+// facade's own comment has to distinguish: a secret nothing may predicate on,
+// and a secret the row is found by.
+//
+// The omitted ones are returned by name rather than counted. The kept ones have
+// a struct field naming them, so a count is enough there; the omitted ones have
+// nothing in the file at all, which is the case the comment exists to cover.
+func hiddenSplit(t *schema.TableDef) (omitted []string, kept int) {
 	for _, f := range t.Fields() {
 		switch d := f.Desc(); {
 		case !d.Hidden:
 		case d.LookupKey:
 			kept++
 		default:
-			omitted++
+			omitted = append(omitted, d.Name)
 		}
 	}
 	return omitted, kept
+}
+
+// commentList renders a lead-in and a list of names as comment lines, wrapped
+// so that a table with a dozen hidden columns does not emit one line gofmt will
+// not break and a reader will not read.
+func commentList(lead string, names []string) []string {
+	const width = 78 // "// " plus the Go convention’s 75
+
+	var lines []string
+	line := "// " + lead
+	for i, name := range names {
+		item := name
+		if i < len(names)-1 {
+			item += ","
+		} else {
+			item += "."
+		}
+		switch {
+		case line == "// "+lead:
+			line += item
+		case len(line)+1+len(item) <= width:
+			line += " " + item
+		default:
+			lines = append(lines, line)
+			line = "// " + item
+		}
+	}
+	return append(lines, line)
 }
 
 // writableFields are the columns the typed update can set.

@@ -491,6 +491,9 @@ type userColumns struct {
 
 // UserCols are the typed columns of users.
 // Hidden columns are omitted: a predicate against one should not compile.
+// Omitted here: password_hash.
+// Declaring LookupKey beside Hidden returns one to this facade, for the column
+// whose own value is how the row is found. It stays off the wire either way.
 var UserCols = userColumns{
 	ID:        sqlb.Typed[string]("id"),
 	Email:     sqlb.TextColumn[string]("email"),

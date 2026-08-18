@@ -19,6 +19,9 @@ type authorColumns struct {
 
 // AuthorCols are the typed columns of authors.
 // Hidden columns are omitted: a predicate against one should not compile.
+// Omitted here: password_hash.
+// Declaring LookupKey beside Hidden returns one to this facade, for the column
+// whose own value is how the row is found. It stays off the wire either way.
 var AuthorCols = authorColumns{
 	ID:        sqlb.Typed[string]("id"),
 	OrgID:     sqlb.Typed[string]("org_id"),
