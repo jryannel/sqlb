@@ -397,9 +397,16 @@ func (r *Registry) Table(name string, specs ...FieldSpec) *TableDef {
 	return t
 }
 
-// implicitIndexes are the indexes a column asked for without naming one — today
-// only an external reference, which exists to be joined on and scans the table
-// without one.
+// columnIndexes are the indexes a column asked for with [Field.Indexed] rather
+// than by naming one at the table level.
+//
+// Only a declaration puts one here. Until #259 an external reference carried
+// one implicitly, on the argument that a soft foreign key exists to be joined
+// on — true, and still the advice [Lint] gives, but an implication is not
+// something a registry built by reading a database can honour. introspect
+// imports a self-referencing key as an ExternalRef, so that registry claimed an
+// index the database did not have, and every diff against it proposed dropping
+// what was never created.
 //
 // They are resolved when the index set is read rather than appended here, and
 // that ordering is the whole of it: everything a declaration says about a table
@@ -409,7 +416,7 @@ func (r *Registry) Table(name string, specs ...FieldSpec) *TableDef {
 // declare an index on the same column ended up with two indexes of the same
 // name, and a registry introspect built carried an index the database does not
 // have (issues #54 and #55, found by the drift gate).
-func (t *TableDef) implicitIndexes() []Index {
+func (t *TableDef) columnIndexes() []Index {
 	var out []Index
 	for _, f := range t.fields {
 		if f.d.indexWanted && !t.hasLeadingIndex(f.d.Name) {
@@ -559,17 +566,17 @@ func (t *TableDef) Relations() []*Field {
 	return out
 }
 
-// Indexes returns the table's secondary indexes: the declared ones, and the
-// implicit index an external reference asks for when nothing else already
-// covers its column.
+// Indexes returns the table's secondary indexes: the ones named at the table
+// level, and the ones a column asked for with [Field.Indexed] where nothing
+// else already covers the column.
 func (t *TableDef) Indexes() []Index {
-	implicit := t.implicitIndexes()
-	if len(implicit) == 0 {
+	fromColumns := t.columnIndexes()
+	if len(fromColumns) == 0 {
 		return t.indexes
 	}
-	// Implicit first, which is where they were when Table added them, so the
-	// order of a generated migration does not depend on when this moved.
-	return append(implicit, t.indexes...)
+	// Column-declared first, which is where they were when Table added them, so
+	// the order of a generated migration does not depend on when this moved.
+	return append(fromColumns, t.indexes...)
 }
 
 // Checks returns the declared check constraints.
