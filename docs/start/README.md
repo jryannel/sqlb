@@ -53,6 +53,27 @@ sqlb takes the middle path: the REST filter grammar compiles into the *same*
 predicate AST your Go code produces. One compiler, one bind-parameter
 discipline, one set of hooks — two producers.
 
+## How this documentation is organized
+
+Four kinds of page, and knowing which you want saves reading the wrong one:
+
+- **[Start here](README.md)** — this section. Takes you through it step by step,
+  from `go get` to a running server.
+- **[Concepts](../concepts/README.md)** — the reasoning everything else assumes.
+  Five pages, one idea each, no API detail.
+- **[How-to](../howto/README.md)** — recipes, indexed by the task you arrived
+  with rather than the surface that owns it.
+- **[Reference](https://jryannel.github.io/sqlb/reference/)** — exactly what each
+  thing accepts, as tables rather than prose, plus a
+  [glossary](https://jryannel.github.io/sqlb/reference/glossary/) of the
+  vocabulary these pages use.
+
+Between the concepts and the reference sit the seven surface sections in the
+table above, one per thing derived from the declaration. The API reference is
+none of these: it is the Go doc comments on
+[pkg.go.dev](https://pkg.go.dev/github.com/jryannel/sqlb), where the compiled
+`Example` functions are attached to the symbols they document.
+
 ## What to read
 
 **New here.** [Quickstart](quickstart.md) goes from `go get` to a running
@@ -72,6 +93,10 @@ capabilities over structs you already have, including stock
 [sqlc](../with-sqlc.md) output, without editing them.
 [Refactoring a sqlc endpoint](../refactoring-from-sqlc.md) walks one all the way
 from static SQL to a generated resource, in four stages you can stop after.
+
+**Here with a specific task.** [How-to](../howto/README.md) indexes the recipes
+by the question rather than by the surface — adopting a database, moving one
+sqlc endpoint, renaming a column without breaking clients, getting out again.
 
 **Already have a database.** [Adopting a database](../migrations/adopting.md)
 reads it back into a schema file, and

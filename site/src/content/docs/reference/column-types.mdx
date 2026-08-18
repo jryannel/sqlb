@@ -33,6 +33,8 @@ Checked against `schema/field.go` and `schema/type.go`. The guide page is
 | `Time(name)` | `time` | `time.Time` | no |
 | `JSON(name)` | `jsonb` | `json.RawMessage` | not filterable at all |
 | `Bytes(name)` | `bytea` | `[]byte` | not filterable at all |
+| `Vector(name, dim)` | `vector(dim)` | `sqlb.Vector` | not filterable at all |
+| `Computed(name, t, expr)` | none — rendered as the expression | the Go type of `t` | follows `t` |
 
 "Pattern operators" means `like`, `ilike`, `contains`, `startswith` and
 `endswith`, which the filter grammar admits only where the Go field is a string
@@ -41,6 +43,18 @@ kind. `UUID` maps to `string`, so it accepts them — worth knowing, since
 
 `JSON` and `Bytes` cannot carry a filter value at all: coercion has no case for
 them, so a filter naming one is rejected. They are queryable from Go with `Raw`.
+
+`Vector(name, dim)` is a pgvector embedding, and the dimension is part of the
+type rather than a constraint on it — changing it is a migration. **It is
+`Hidden` and not optionally so**: twenty kilobytes of float has no client use,
+and serialising one by accident is a bandwidth bill. Go callers reading through
+the query engine still get it. It is storable and orderable and nothing else
+yet — no index kind, no metric declaration, no REST search operation.
+
+`Computed(name, t, expr)` is not a stored column: the query renders `expr` where
+a column name would go. It is a column everywhere else that matters — the row
+type, the JSON, the TypeScript and Dart types, the CLI column set — and
+`Hidden`, `Filterable` and `Sortable` gate it exactly as they gate a stored one.
 
 ## Arrays
 

@@ -36,24 +36,18 @@ This page covers the column vocabulary and the table-level constructs.
 
 ## Column types
 
-| Constructor | SQL type | Go type |
-|---|---|---|
-| `Text(name)` | `text` | `string` |
-| `Varchar(name, n)` | `varchar(n)` | `string` |
-| `SmallInt(name)` | `smallint` | `int16` |
-| `Int(name)` | `int` | `int32` |
-| `BigInt(name)` | `bigint` | `int64` |
-| `Real(name)` | `real` | `float32` |
-| `Float(name)` / `Numeric(name)` | `float` / `numeric` | `float64` |
-| `Numeric(name, p, s)` | `numeric(p, s)` | `float64` |
-| `Bool(name)` | `bool` | `bool` |
-| `UUID(name)` | `uuid` | `string` |
-| `Timestamp(name)` | `timestamptz` | `time.Time` |
-| `Date(name)` / `Time(name)` | `date` / `time` | `time.Time` |
-| `JSON(name)` | `jsonb` | `json.RawMessage` |
-| `Bytes(name)` | `bytea` | `[]byte` |
-| `Enum(name, values...)` | `text` + a check constraint | a named string type |
-| `SmallSerial(name)` / `Serial(name)` / `BigSerial(name)` | `smallserial` / `serial` / `bigserial` | `int16` / `int32` / `int64` |
+One constructor per Postgres type, each taking the column name: the text types
+(`Text`, `Varchar`, `Enum`), the numerics (`SmallInt`, `Int`, `BigInt`, `Real`,
+`Float`, `Numeric`, and the three serials), `Bool`, `UUID`, the time types
+(`Timestamp`, `Date`, `Time`), `JSON`, `Bytes`, `Vector` for an embedding, and
+`Computed` for an expression the table does not store.
+
+Each maps to exactly one SQL type and one Go type. **The list — every
+constructor, the SQL type it emits, the Go type codegen produces, and the filter
+operators it admits — is the [column type
+reference](https://jryannel.github.io/sqlb/reference/column-types/).** This page
+is about which one to reach for and what the declaration then costs; that page
+is the enumeration, and a check keeps it level with the source.
 
 Two shorthands cover the conventional cases. `UUIDv7(name)` is a UUID column
 defaulting to a generated, time-ordered v7 value — the usual primary key.
@@ -103,9 +97,6 @@ A `Bytes` column stays `[]byte` and an `Array()` column stays a slice, because
 nil is what a slice *is* when the value is absent; a pointer would add a second
 spelling for the same thing. `json.RawMessage` is a slice too, but a document
 type rather than a bag of bytes, so it takes the pointer like everything else.
-
-The full table, including which filter operators each type admits, is in the
-[column type reference](https://jryannel.github.io/sqlb/reference/column-types/).
 
 ### Arrays
 

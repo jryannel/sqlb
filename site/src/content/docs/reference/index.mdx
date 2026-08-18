@@ -11,7 +11,9 @@ mechanism, this says exactly what it accepts.
 
 Each page names the file it was checked against. They are hand-written, so they
 can fall behind the code — if one disagrees with the source, the source is
-right, and the page is a bug.
+right, and the page is a bug. One of them no longer can: `mise run column-check`
+fails if the column type page and `schema/field.go` disagree about what
+constructors exist, which is what let the guide page stop repeating that table.
 
 | | Checked against |
 |---|---|
@@ -21,6 +23,7 @@ right, and the page is a bug.
 | [Codegen options](/sqlb/reference/codegen/) — every field of `codegen.Options` and its default | `codegen/codegen.go` |
 | [Generated CLI](/sqlb/reference/cli/) — flags, environment variables, precedence | `codegen/gocli.go` |
 | [Rejections](/sqlb/reference/rejections/) — the problem document, and every message it can carry | `rest/errors.go`, `filter/filter.go` |
+| [Glossary](/sqlb/reference/glossary/) — the words sqlb uses for its own machinery | the pages that argue for each |
 
 ## Elsewhere
 

@@ -74,6 +74,22 @@ const SOURCES = [
     },
   },
   {
+    // One page, and deliberately no more. Every recipe it names already lives
+    // in the section that owns its subject, because that is where someone
+    // reading about migrations should find the rollout page. What is missing
+    // without this is the other reader: the one who arrives with a task rather
+    // than a subject, and cannot know which of seven surfaces owns it. Django's
+    // howto/ is the same idea with the pages moved; moving them here would cost
+    // each section its reading order to buy one index.
+    dir: "docs/howto",
+    route: "howto",
+    sequence: ["index"],
+    order(slug) {
+      return this.sequence.indexOf(slug);
+    },
+    label: (slug) => (slug === "index" ? "By task" : null),
+  },
+  {
     dir: "docs/schema",
     route: "schema",
     sequence: ["index", "capabilities", "references"],
@@ -146,7 +162,8 @@ const SOURCES = [
     // Named rather than globbed, so a new file in docs/ is not published by
     // accident — what belongs on the site is a decision each time.
     //
-    // Read in this order: what it is for, how it is built, what it promises,
+    // Read in this order: what it is for, what it believes, how it is built,
+    // what it promises,
     // how to leave, what it has shipped, what it has to do before that promise
     // becomes permanent, how it sits beside sqlc, how to move one endpoint
     // across, how many endpoints there are to move, and what an outside reader
@@ -163,6 +180,12 @@ const SOURCES = [
     // the release notes and that page is where they are.
     files: [
       "vision.md",
+      // Directly after the vision because it is the same argument one level
+      // down: vision.md says what sqlb is for, and this says what it believes
+      // about schema and API design -- and, per rule, whether the DSL enforces
+      // that belief or merely recommends it. Django files the equivalent under
+      // its project section as "Design philosophies" for the same reason.
+      "best-practices.md",
       "architecture.md",
       "compatibility.md",
       "eject.md",
@@ -408,6 +431,65 @@ async function checkSidebar(problems) {
   }
 }
 
+/**
+ * Every loose markdown file at the root of docs/ is either published or listed
+ * as deliberately not.
+ *
+ * The `files` list above already says publishing is a decision per file. What it
+ * did not say is anything about the files it leaves out, and docs/ had drifted
+ * into holding both — published prose beside dated review notes and working
+ * artefacts, with nothing to tell a reader or a writer which was which. A new
+ * file was silently unpublished, which is the wrong default for a directory
+ * whose stated purpose is prose for humans.
+ *
+ * So the two lists have to partition the directory: a file in neither is an
+ * error that names both options. Subdirectories are out of scope on purpose —
+ * each is a whole section with its own SOURCES entry, and docs/superpowers/
+ * holds plans and specs that are working material by definition.
+ */
+const UNPUBLISHED = new Map([
+  // Dated snapshots of one reader's attempt to adopt sqlb, kept because the
+  // tests and examples they produced cite them by path -- pgtest/pgtype_test.go
+  // names one, and a dozen example READMEs name the census. They are working
+  // notes rather than documentation: no reading order, no upkeep, and true only
+  // of the day they were written.
+  ["review-2026-07-28.md", "dated adoption snapshot, cited by the work it produced"],
+  ["review-2026-07-31-external.md", "dated outside read, superseded by review-adoption-readiness.md"],
+  ["review-adoption-existing-app.md", "dated adoption snapshot"],
+  ["review-adoption-multi-app.md", "dated adoption snapshot"],
+  ["review-adoption-port.md", "dated adoption snapshot, cited by pgtest/pgtype_test.go"],
+  ["review-adoption-port-multi-app.md", "dated adoption snapshot"],
+  // The census of cases the examples exist to settle. Cited by name from
+  // example/*/README.md and from the pgtest suites, so it is load-bearing --
+  // but it argues about which examples to write, which is a question for
+  // whoever writes them rather than for anyone using sqlb.
+  ["special-cases.md", "census of cases for the example suite, cited from example/ and pgtest/"],
+  ["special-cases-subject-go.md", "the same census for one subject, cited from pgtest/"],
+]);
+
+async function checkDocsRoot(problems) {
+  const project = SOURCES.find((s) => s.dir === "docs");
+  const published = new Set(project.files);
+  const onDisk = (await readdir(join(repo, "docs"))).filter((f) => f.endsWith(".md"));
+
+  for (const file of onDisk) {
+    if (published.has(file) || UNPUBLISHED.has(file)) continue;
+    problems.push(
+      `docs/${file}: neither published nor listed as deliberately unpublished — ` +
+        `add it to the "docs" source's files list, or to UNPUBLISHED with a reason`,
+    );
+  }
+  // The other direction: a reason left behind by a file that was published or
+  // deleted, which would otherwise sit there describing nothing.
+  for (const file of UNPUBLISHED.keys()) {
+    if (published.has(file)) {
+      problems.push(`docs/${file}: listed in UNPUBLISHED and also published`);
+    } else if (!onDisk.includes(file)) {
+      problems.push(`docs/${file}: listed in UNPUBLISHED but not on disk`);
+    }
+  }
+}
+
 /** Directories under src/content/docs that are written by hand, not generated. */
 const HAND_WRITTEN = new Set(["examples", "reference"]);
 
@@ -419,11 +501,12 @@ async function main() {
     bySource.push({ source, pages: await transform(source, routes, problems) });
   }
   await checkSidebar(problems);
+  await checkDocsRoot(problems);
 
   if (problems.length > 0) {
     console.error("sync-docs: the docs cannot be published as they stand:");
     for (const p of problems) console.error(`  ${p}`);
-    console.error("\nFix the link, publish its target by adding it to SOURCES, or give the section a sidebar group.");
+    console.error("\nFix the link, publish its target by adding it to SOURCES, give the section a sidebar group, or say why a file stays unpublished.");
     process.exit(1);
   }
 
