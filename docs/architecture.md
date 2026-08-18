@@ -3769,3 +3769,59 @@ diagnostic — that would mean a warning is too quiet for DDL this load-bearing,
 and the answer would be to make `Ref` refuse to be silent rather than to make
 it guess again: an explicit `.NotIndexed()` for the case where the index is
 genuinely unwanted, so the declaration has to say which it means.
+
+### Generated output is replaced, never rewritten
+
+`sqlb generate` used to write every file it rendered, whether or not the bytes
+had changed. Nothing in a build could tell the difference — a build reads the
+tree once, after generate has returned — so for two years the only cost was
+some wasted I/O.
+
+A language server is not a build. gopls invalidates on the filesystem event,
+not on the content: `snapshot.clone` marks the package containing a changed
+file, and every package that imports it, as needing a re-typecheck for any
+watched write, and only the heavier `go list` reload is skipped when the file
+hash turns out to be unchanged. Generated code is by construction what the rest
+of a project is built on — in the layout `sqlb init` produces, `models_gen.go`
+sits in the package every other package imports — so a `go generate` that
+changed nothing still threw away the type information for the whole module.
+Schema authoring is a loop of small edits and a regenerate after each, and most
+of those regenerates touch one file out of eight. The report was a consumer
+project whose editor spent its time re-indexing
+([#269](https://github.com/jryannel/sqlb/issues/269)).
+
+So a file whose rendered bytes match what is already on disk is not written at
+all, and one that differs is replaced by a rename rather than truncated and
+filled. The rename matters for the same reader: `os.WriteFile` leaves a window
+in which the file is a prefix of valid Go, and a language server that reads on
+the event can land in it and report a syntax error against code nobody wrote.
+
+Three alternatives were considered and rejected, because they all try to make
+the *tool* ignore the churn instead of not causing it:
+
+- **Move generated code to its own directory.** It would still be a package the
+  rest of the project imports, so its reverse-dependency cone is invalidated
+  exactly as before. This buys nothing and costs the import path.
+- **Flag the files as generated.** gopls already detects generated files — it
+  parses the `// Code generated … DO NOT EDIT.` header — but only to suppress
+  code actions and refuse edits to them. There is no marker that means "do not
+  index", and there could not be one: the symbols in these files are what the
+  hand-written code resolves against.
+- **`build.directoryFilters`.** It excludes a directory from the workspace
+  entirely, so the generated package would be unresolvable everywhere it is
+  used. That is not a quieter editor, it is a broken one.
+
+The one thing left that is genuinely per-event, rather than per-change, is the
+driver: `sqlb generate` compiles a program inside the module in order to import
+the schema package ([The driver is a dependency](#the-driver-is-a-dependency)),
+and a Go package appearing and vanishing in the workspace on every run would be
+worse than any rewrite, since an existential change forces the `go list` reload
+that a content change does not. It costs nothing because the scratch directory
+is named `.sqlb-driver-…`: Go's package loader skips directories beginning with
+`.`, so `go list ./...` never sees it and gopls has no package to invalidate.
+That was chosen for `.gitignore`'s sake rather than for this, and it is worth
+recording that it is now load-bearing twice.
+
+Revisit if a consumer reports churn that survives this — the next suspect would
+be the TypeScript and Dart output, whose language servers were not measured
+here, and the answer would be the same treatment rather than a different one.

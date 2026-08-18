@@ -233,7 +233,7 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		return runMigrate(p, opts.Registry, rest, stdout, stderr)
 
 	case "generate":
-		written, changed, err := generate(opts)
+		written, rewrote, err := generate(opts)
 		if err != nil {
 			line(stderr, err)
 			return 1
@@ -241,13 +241,19 @@ func Run(p Project, args []string, stdout, stderr io.Writer) int {
 		for _, f := range written {
 			line(stdout, f)
 		}
-		say(stderr, "sqlb: wrote %d files\n", len(written))
+		// Every file the generation owns is listed on stdout, because that is
+		// the manifest a caller wants. The count on stderr is the smaller
+		// number: what actually changed on disk. A file whose bytes already
+		// match is left untouched so a language server has no event to react
+		// to (#269), and saying "wrote" of a file nothing was written to would
+		// be the wrong report of that.
+		say(stderr, "sqlb: %d files, %d rewritten\n", len(written), rewrote)
 		// The nudge that closes #204: `go mod tidy` run before generate had
 		// no way to see an import generate is only now writing — outbox's
 		// SSE handler pulling in huma's adapters/sse package is the case
 		// that surfaced it. Fired on any content change rather than only a
 		// new import; see generate's doc comment in codegen.go for why.
-		if changed {
+		if rewrote > 0 {
 			say(stderr, "sqlb: generated output changed — dependencies may have changed too; run `go mod tidy` again\n")
 		}
 		return 0
