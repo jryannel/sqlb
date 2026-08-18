@@ -70,7 +70,9 @@ steps — `vet`, `lint`, `generate-check`, `impact-check`, `eject-check`,
 
 **`mise run site-check` needs no npm install.** It is the fast way to find out
 whether a docs edit can be published, and the check that catches a link whose
-target moved.
+target moved. It also refuses a new file at the root of `docs/` that is neither
+published nor listed in `UNPUBLISHED` with a reason — the directory holds both
+kinds and nothing else says which is which.
 
 ## Traps
 
