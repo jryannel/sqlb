@@ -788,6 +788,97 @@ fi
 echo "column-check: $(echo $constructors | wc -w | tr -d ' ') constructors, all reachable from the reference"
 '''
 
+[tasks.adr-check]
+description = "Fail if an ADR number does not name exactly one decision. The Decisions section of docs/architecture.md carries no numbers -- the headings are the identifiers and the numbers survive only in the citations -- so a number meaning two things contradicts no file and breaks no link, and nothing but this notices. It has happened: ADR-0059 was claimed by both the auth seam and the fx wiring decision, from parallel branches each numbering against the pre-consolidation docs/adr/ directory. Checks both directions, because they catch different bugs: a number pointing at two anchors is the collision, and an anchor cited under two numbers is the mislabel -- example/tasks/README.md called the Go CLI decision ADR-0030, which linked correctly and read correctly and was wrong. Also refuses a citation whose anchor is no longer a heading. Deliberately not checked: a bare prose mention that names no anchor, of which ADR-0004 and ADR-0018 are the only ones left with no anchored citation anywhere to define them -- inventing a mapping for those would encode the guess this gate exists to catch."
+run = '''
+set -e
+
+page=docs/architecture.md
+
+# docs/architecture.md, "Tooling scoped to tracked files" — .claude/worktrees/
+# holds other checkouts of this repository, and an unscoped walk would read a
+# citation out of one of those and blame this tree for it.
+if ! git ls-files --error-unmatch "$page" > /dev/null 2>&1; then
+  echo "adr-check: $page is not tracked, so there is nothing to check against" >&2
+  exit 1
+fi
+
+# The anchors the Decisions section defines. GitHub derives an anchor from a
+# heading by lowercasing it, dropping punctuation and hyphenating the spaces;
+# two headings carry a comma and that is the whole of the punctuation in play.
+# Headings outside that section are not decisions and are not citable as one.
+anchors=$(awk '/^## Decisions/ {d=1; next} d && /^## / {exit} d && /^### / {sub(/^### /, ""); print}' "$page" \
+  | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9 -]//g; s/ /-/g' | sort -u)
+
+# Every citation that names an anchor, as "number anchor file:line". Two forms
+# carry one: the markdown link used across docs/, and the Go doc link
+# definition used in package comments. A citation whose target has no "#" is
+# pointing at a pre-consolidation docs/adr/ path and is left alone — those
+# survive only in the dated artifacts under docs/superpowers/, which record
+# what was planned at the time rather than where the decision lives now.
+links=$(git ls-files -z | xargs -0 grep -IHnoE '\[ADR-[0-9]{4}\]\((\.\./)*(docs/)?architecture\.md#[a-z0-9-]+\)|\[ADR-[0-9]{4}\]\(#[a-z0-9-]+\)' 2>/dev/null \
+  | sed -E 's%^([^:]+):([0-9]+):\[(ADR-[0-9]{4})\]\([^#]*#([a-z0-9-]+)\)$%\3 \4 \1:\2%' || true)
+
+defs=$(git ls-files -z | xargs -0 grep -IHnoE '\[ADR-[0-9]{4}\]: [^ ]*architecture\.md#[a-z0-9-]+' 2>/dev/null \
+  | sed -E 's%^([^:]+):([0-9]+):\[(ADR-[0-9]{4})\]: [^ ]*#([a-z0-9-]+)$%\3 \4 \1:\2%' || true)
+
+cited=$(printf '%s\n%s\n' "$links" "$defs" | grep -v '^$' | sort -u)
+
+# The distinct claims being made, independent of how many places make each one.
+# Collapsing to pairs first is the whole check: a number cited fifty times is
+# not a conflict; a number cited twice against two anchors is.
+pairs=$(echo "$cited" | awk '{print $1, $2}' | sort -u)
+
+status=0
+
+# One number, one decision. This is the collision that folding the ADRs into
+# architecture.md made invisible: the headings stopped carrying numbers, so a
+# number meaning two things contradicted no file and broke no link.
+for n in $(echo "$pairs" | awk '{print $1}' | uniq -d); do
+  echo "adr-check: $n cites more than one decision --" >&2
+  for a in $(echo "$pairs" | awk -v n="$n" '$1 == n {print $2}'); do
+    echo "$cited" | awk -v n="$n" -v a="$a" '$1 == n && $2 == a {c++; if (c == 1) first = $3} END {printf "  %-46s %d citation%s, e.g. %s\n", a, c, (c == 1 ? "" : "s"), first}' >&2
+  done
+  status=1
+done
+
+# One decision, one number. The reverse, and not the same check: a citation can
+# carry the right anchor under the wrong number, which links correctly, reads
+# correctly, and is wrong. Nothing that follows links can see it.
+for a in $(echo "$pairs" | awk '{print $2}' | sort | uniq -d); do
+  echo "adr-check: the decision \"$a\" is cited under more than one number --" >&2
+  for n in $(echo "$pairs" | awk -v a="$a" '$2 == a {print $1}' | sort); do
+    echo "$cited" | awk -v n="$n" -v a="$a" '$1 == n && $2 == a {c++; if (c == 1) first = $3} END {printf "  %-10s %d citation%s, e.g. %s\n", n, c, (c == 1 ? "" : "s"), first}' >&2
+  done
+  status=1
+done
+
+# Every cited anchor is a heading that exists — a decision renamed without its
+# citations following, which no link checker sees either, because docs/ is
+# published to a site that resolves anchors client-side or not at all.
+for a in $(echo "$pairs" | awk '{print $2}' | sort -u); do
+  found=0
+  for h in $anchors; do
+    if [ "$h" = "$a" ]; then found=1; break; fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "adr-check: no decision in $page has the anchor \"$a\", cited at --" >&2
+    echo "$cited" | awk -v a="$a" '$2 == a {printf "  %-10s %s\n", $1, $3}' | sort -u | head -5 >&2
+    status=1
+  fi
+done
+
+if [ "$status" -ne 0 ]; then
+  echo >&2
+  echo "The heading is the identifier; the number is a label with no registry to" >&2
+  echo "allocate it from, which is how two branches once both reached for 0059." >&2
+  echo "Prefer naming the heading -- CLAUDE.md and the newer docs already do." >&2
+  exit 1
+fi
+
+echo "adr-check: $(echo "$pairs" | wc -l | tr -d ' ') numbers over $(echo "$cited" | wc -l | tr -d ' ') citations, each naming one of $(echo "$anchors" | wc -l | tr -d ' ') decisions"
+'''
+
 [tasks.bisect-check]
 description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
@@ -828,7 +919,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, tagline-check, column-check, test-race, test-auth-workos, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\". Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, tagline-check, column-check, adr-check, test-race, test-auth-workos, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\". Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet
@@ -846,6 +937,7 @@ mise run eject-check
 # repeating it, so nothing else would notice it falling behind the DSL.
 mise run tagline-check
 mise run column-check
+mise run adr-check
 mise run test-race
 mise run test-auth-workos
 mise run test-ts

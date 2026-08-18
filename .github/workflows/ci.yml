@@ -69,6 +69,11 @@ jobs:
       # table, so that page is now the only enumeration and nothing else would
       # notice it falling behind schema/field.go.
       - run: mise run column-check
+      # And the same shape again, over the decision citations. The Decisions
+      # section of docs/architecture.md carries no numbers, so a number that
+      # names two decisions -- as 0059 did, from two branches at once --
+      # contradicts no file and breaks no link for anything else to catch.
+      - run: mise run adr-check
       - run: mise run test-race
       - run: mise run test-auth-workos
       # Node comes from mise.toml, like Go and golangci-lint. This is the gate
