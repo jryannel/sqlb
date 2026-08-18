@@ -156,6 +156,37 @@ out loud what it deliberately is not.
   />
 </CardGrid>
 
+## How this documentation is organized
+
+Four kinds of page, and knowing which you want saves reading the wrong one:
+
+| | |
+|---|---|
+| **[Start here](/sqlb/start/)** | Takes you through it step by step, from `go get` to a running server. Begin here if you have not used sqlb before |
+| **[Concepts](/sqlb/concepts/)** | The reasoning everything else assumes — why a query is a value, why capabilities are opt-in. Five pages, one idea each, no API detail |
+| **[How-to](/sqlb/howto/)** | Recipes, indexed by the task you arrived with rather than the surface that owns it: adopting an existing database, moving one sqlc endpoint, renaming a column without breaking clients |
+| **[Reference](/sqlb/reference/)** | Exactly what each thing accepts, as tables rather than prose — every filter operator, every column type, every rejection. Assumes the concepts. A [glossary](/sqlb/reference/glossary/) covers the vocabulary |
+
+Between the concepts and the reference sit the seven surface sections — Schema,
+Queries, REST, the two SDKs, the CLI, Migrations — one per thing derived from
+the declaration. Each explains its own mechanism, and each is independently
+optional.
+
+The API reference is not here: it is the Go doc comments, on
+[pkg.go.dev](https://pkg.go.dev/github.com/jryannel/sqlb), with the compiled
+`Example` functions attached to the symbols they document.
+
+## Getting help
+
+- Stuck on a word? The [glossary](/sqlb/reference/glossary/) defines the ones
+  sqlb coined.
+- Rejected request you did not expect? Every message sqlb can send is in the
+  [rejection reference](/sqlb/reference/rejections/).
+- Wondering whether this fits your project? [How sqlb
+  compares](/sqlb/project/comparisons/) is honest about when not to use it.
+- Anything else — bugs, questions, a surface that should move —
+  [open an issue](https://github.com/jryannel/sqlb/issues).
+
 ## Status
 
 sqlb is pre-1.0, has one author and no observed consumers. That is the honest
