@@ -704,6 +704,90 @@ fi
 echo "tagline-check: $checked copies of the tagline agree"
 '''
 
+[tasks.column-check]
+description = "Fail if the column type reference and the schema DSL have drifted apart. The reference page is the single enumeration of the column vocabulary — docs/schema/README.md names the constructors in prose and points at that page rather than repeating the table, because for a while it did repeat it and the two copies disagreed: the guide had no Pattern operators column, and neither copy had `Vector` at all. Same class as tagline-check, and the same reason CLAUDE.md warns about the emitter docs mirroring `codegen.Options` by hand."
+run = '''
+set -e
+
+source=schema/field.go
+page=site/src/content/docs/reference/column-types.mdx
+
+# docs/architecture.md's "Tooling scoped to tracked files" decision, and the
+# same reason tagline-check says so: .claude/worktrees/ holds other checkouts of
+# this repository, and an unscoped read would validate one of those instead.
+for f in $source $page; do
+  if ! git ls-files --error-unmatch "$f" > /dev/null 2>&1; then
+    echo "column-check: $f is not tracked, so there is nothing to check against" >&2
+    exit 1
+  fi
+done
+
+# The three that carry a section of their own rather than a table row, because a
+# row would say less about them than the section does: Ref and ExternalRef emit
+# a relation as well as a column, and UUIDv7 is a UUID with a default. They
+# still have to be on the page -- this exempts them from the table, not from the
+# reference. An addition here is a decision, which is the point of naming them.
+sectioned="Ref ExternalRef UUIDv7"
+
+# What the DSL exports. A method cannot match: its line begins "func (f *Field)",
+# so the character after "func " is not uppercase.
+constructors=$(grep -E '^func [A-Z][A-Za-z0-9]*\(' "$source" \
+  | grep '\*Field' \
+  | sed 's/^func \([A-Za-z0-9]*\)(.*/\1/' \
+  | sort -u)
+
+# What the Constructors table claims. That table only: the rest of the page is
+# prose about modifiers, groups and table-level methods, none of them
+# constructors and all of them misses.
+rows=$(awk '/^## Constructors$/ {t=1; next} t && /^## / {exit} t && /^\| `/ {print}' "$page" \
+  | sed 's/^| `\([A-Za-z0-9]*\)(.*/\1/' \
+  | sort -u)
+
+status=0
+
+# Forward. The table is the enumeration, so a constructor missing from it is the
+# failure -- not merely one missing from the page. Checking the page instead was
+# the first draft of this gate, and it passed with the Vector row deleted
+# because a paragraph further down still said the word.
+for c in $constructors; do
+  case " $sectioned " in
+    *" $c "*)
+      # Boundary, not substring: "SmallInt(" would otherwise stand in for "Int(".
+      if ! grep -qE "(^|[^A-Za-z0-9_])$c\(" "$page"; then
+        echo "column-check: schema.$c has no section in $page and is exempt from the table" >&2
+        status=1
+      fi
+      continue
+      ;;
+  esac
+  found=0
+  for r in $rows; do
+    if [ "$r" = "$c" ]; then found=1; break; fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "column-check: schema.$c is exported by $source and has no row in the Constructors table" >&2
+    status=1
+  fi
+done
+
+# Reverse: every row names something that exists.
+for r in $rows; do
+  if ! grep -qE "^func $r\(" "$source"; then
+    echo "column-check: $page has a row for $r(), which $source does not export" >&2
+    status=1
+  fi
+done
+
+if [ "$status" -ne 0 ]; then
+  echo >&2
+  echo "The reference page is the enumeration. docs/schema/README.md points at it" >&2
+  echo "instead of repeating it, so a constructor missing there is missing everywhere." >&2
+  exit 1
+fi
+
+echo "column-check: $(echo $constructors | wc -w | tr -d ' ') constructors, all reachable from the reference"
+'''
+
 [tasks.bisect-check]
 description = "Verify every commit builds, vets and tests green on its own, not just at HEAD. Checks each commit out into a temp tree so a commit cannot be green by accident of later work. Keeps `git bisect` trustworthy; it is the guard that is easiest to lose without noticing. Set BASE to limit the range, e.g. BASE=origin/main..HEAD."
 run = '''
@@ -744,7 +828,7 @@ echo "every commit builds, vets and tests green in isolation"
 '''
 
 [tasks.ci]
-description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, tagline-check, test-race, test-auth-workos, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\". Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
+description = "The full gate. A faithful mirror of .github/workflows/ci.yml: vet, lint, tidy-check, deps-check, generate-check, impact-check, eject-check, tagline-check, column-check, test-race, test-auth-workos, test-ts, test-dart, test-cli, test-pg, test-demo, test-fx. Formatting is checked inside lint, by the gofmt formatter in .golangci.yml, rather than by a gate of its own — docs/architecture.md, \"Tooling scoped to tracked files\". Needs the test databases, which test-pg starts. Does not include bisect-check, which is not part of CI at all — run it by hand with `mise run bisect-check` if a commit-by-commit history matters for what you're doing. NOTE: this is here to reproduce a CI failure, not to run before every push — CI runs the same checks in two parallel jobs, and running them locally is the same work done serially while starving the machine. `mise run preflight` is what belongs in the push path."
 run = '''
 set -e
 mise run vet
@@ -754,11 +838,14 @@ mise run deps-check
 mise run generate-check
 mise run impact-check
 mise run eject-check
-# The gate here that checks prose rather than code, in this list rather than
-# beside it for the reason the others are: the tagline is the first sentence
-# anyone reads about this project, and it is written out by hand in four
-# places that nothing links.
+# The two gates here that check prose rather than code, in this list rather
+# than beside it for the reason the others are. The tagline is the first
+# sentence anyone reads about this project and it is written out by hand in
+# four places that nothing links; the column reference is the only enumeration
+# of the column vocabulary now that the guide points at it instead of
+# repeating it, so nothing else would notice it falling behind the DSL.
 mise run tagline-check
+mise run column-check
 mise run test-race
 mise run test-auth-workos
 mise run test-ts

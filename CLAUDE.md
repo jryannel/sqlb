@@ -65,8 +65,8 @@ for reproducing a CI failure rather than for routine use — CI is the gate. The
 database-backed suites read a DSN and start nothing; `mise run pg-up` provides
 it from `compose.yaml`, and the tasks that need it depend on that. Individual
 steps — `vet`, `lint`, `generate-check`, `impact-check`, `eject-check`,
-`test-race`, `test-pg`, `test-ts`, `test-dart`, `test-cli` — run on their own
-and `mise tasks` describes all 33.
+`tagline-check`, `column-check`, `test-race`, `test-pg`, `test-ts`,
+`test-dart`, `test-cli` — run on their own and `mise tasks` describes all 35.
 
 **`mise run site-check` needs no npm install.** It is the fast way to find out
 whether a docs edit can be published, and the check that catches a link whose
@@ -93,7 +93,10 @@ at.
 **Docs mirror source by hand.** `docs/typescript/README.md` and
 `docs/dart/README.md` restate what `codegen.Options` says about the files each
 emitter writes. Change an emitter's output and three places need the edit;
-nothing links them yet.
+nothing links them yet. The column vocabulary used to have the same problem and
+no longer does: the guide names the constructors in prose and points at the
+reference page for the table, and `column-check` fails if that page and
+`schema/field.go` disagree about what exists.
 
 **A fresh worktree has no `site/node_modules`.** `npm run build` fails with
 `astro: command not found` until `npm ci` in `site/`. Prefer `site-check`,
@@ -119,7 +122,8 @@ exclusions, one test failed and named the constraint while the fixpoint test
 ([docs/architecture.md, "Tooling scoped to tracked files"](docs/architecture.md#tooling-scoped-to-tracked-files)).
 
 **Prefer a failing check to a written-down rule.** `generate-check`,
-`eject-check`, `impact-check`, `deps-check` and `bisect-check` all exist
+`eject-check`, `impact-check`, `deps-check`, `column-check` and `bisect-check`
+all exist
 because a convention that is only documented is a convention that drifts. If
 you are about to add a paragraph telling someone to remember something,
 consider whether it can fail in CI instead. `deps-check` is a plain case: the

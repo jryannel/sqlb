@@ -64,6 +64,11 @@ jobs:
       # out by hand in four places that nothing links, so the copy the README
       # stops making is one the site keeps making.
       - run: mise run tagline-check
+      # The same shape, over the column vocabulary. docs/schema/README.md names
+      # the constructors in prose and points at the reference page for the
+      # table, so that page is now the only enumeration and nothing else would
+      # notice it falling behind schema/field.go.
+      - run: mise run column-check
       - run: mise run test-race
       - run: mise run test-auth-workos
       # Node comes from mise.toml, like Go and golangci-lint. This is the gate
