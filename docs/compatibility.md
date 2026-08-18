@@ -143,6 +143,26 @@ Named in advance, so the break is a documented plan rather than a surprise.
   genuinely cannot produce a `NULL`; leaving it off is the safe direction, since
   a pointer scans a non-null value fine. Stored columns are untouched, as is the
   structs-first path, where the Go field's own type has always carried this.
+- **An index is never inferred from a column's shape.** `ExternalRef` used to
+  imply a single-column btree, so a schema that declared one got an index it
+  never wrote down. It is gone: `Field.Indexed()` is how a column asks for its
+  own index, and `schema.Lint`'s `unindexed-ref` gives the advice the inference
+  was carrying ([ADR-0061](architecture.md#ddl-is-declared-never-inferred)).
+
+  It broke because an inference a declaration does not state is one a registry
+  read back out of a database cannot honour: `introspect` imports a
+  self-referencing foreign key as an `ExternalRef`, so the registry describing a
+  live database claimed an index that database did not have, and every migration
+  after the first proposed `DROP INDEX` for something nothing ever created
+  ([#259](https://github.com/jryannel/sqlb/issues/259)).
+
+  The mechanical edit is `.Indexed()` on every `ExternalRef` that was relying on
+  the implication. **Check before applying the first migration generated after
+  upgrading**: for a schema that does not make that edit, the diff proposes
+  dropping the index — clean SQL that silently removes an index a join depends
+  on, which is why this entry says so rather than leaving it to be discovered.
+  `sqlb check` names every unindexed reference under `unindexed-ref`, which is
+  the fastest way to find the ones that need the word.
 - **Terminal call signatures**, when Go 1.27 arrives. `sqlb.Collect[R](ctx, db,
   b)`, `filter.Apply(b, q)` and the `db` threaded through every terminal call
   all gain method forms, because a method on a concrete type cannot introduce a

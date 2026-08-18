@@ -109,9 +109,11 @@ type FieldDesc struct {
 	Scoped     bool // every exposed operation must be constrained by a hook
 	SoftDelete bool // the column a soft-delete predicate is expected to filter
 
-	// indexWanted marks a column that should carry an index even though the
-	// declaration does not name one — currently only external references,
-	// which exist to be joined on.
+	// indexWanted is [Field.Indexed]: a single-column btree on this column,
+	// named by the same convention the table-level form uses. It is a
+	// declaration like any other — nothing infers it from the column's shape,
+	// which is what keeps a registry read out of a database from claiming an
+	// index that database does not have (#259).
 	indexWanted bool
 
 	// ConstraintName pins the name of the constraint this column declares —
@@ -653,7 +655,6 @@ func Ref(name string, target *TableDef) *Field {
 func ExternalRef(relation, target string) *Field {
 	f := newField(relation+"_id", TypeUUID)
 	f.d.Ref = &Reference{Name: relation, Target: target, External: true}
-	f.d.indexWanted = true
 	return f
 }
 
@@ -885,6 +886,32 @@ func (f *Field) NotNull() *Field {
 // Unique adds a single-column unique constraint.
 func (f *Field) Unique() *Field {
 	f.d.Unique = true
+	return f
+}
+
+// Indexed adds a single-column btree index, named the way the table-level form
+// names it:
+//
+//	schema.Ref("parent", Category).Nullable().Indexed()
+//
+// It is the column-level spelling of Table.Index("parent_id"), and it is there
+// for the case that reads worst at the table level: a foreign key, where the
+// index belongs to the reference rather than to the table's own access
+// patterns. Anything with a method, an order, a predicate or a second column is
+// [Index] through [TableDef.AddIndex]; this word only says "and index it".
+//
+// It is skipped when the column already leads an index, is unique, or is the
+// primary key — Postgres can seek on those already, and a second index would be
+// storage that answers no query the first does not.
+//
+// Nothing implies it. A reference used to carry one on the strength of being a
+// reference, which was a rule the declaration did not state and a registry read
+// out of a database could not know had not been followed: introspect imports a
+// self-referencing key as an [ExternalRef], the implication put an index on it,
+// and every subsequent migration proposed dropping an index that never existed
+// (#259). An index is DDL, and DDL is declared here or it is not there.
+func (f *Field) Indexed() *Field {
+	f.d.indexWanted = true
 	return f
 }
 
@@ -1343,9 +1370,7 @@ func (d *FieldDesc) Capabilities() string {
 	return strings.Join(out, ",")
 }
 
-// IndexWanted reports whether this column implicitly asked for an index. An
-// external reference does, since a soft foreign key exists to be joined on and
-// one without an index scans the table.
+// IndexWanted reports whether the column declared [Field.Indexed].
 func (d *FieldDesc) IndexWanted() bool { return d.indexWanted }
 
 // Computed reports whether the column is an expression rather than storage.

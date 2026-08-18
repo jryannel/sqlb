@@ -248,9 +248,8 @@ func TestDiffForeignKeyDefaultActionsOmitted(t *testing.T) {
 }
 
 func TestDiffExternalRefHasNoForeignKey(t *testing.T) {
-	// An external reference is a column and an index, never a constraint:
-	// module isolation depends on there being nothing to migrate across the
-	// boundary (ADR-0015).
+	// An external reference is a column, never a constraint: module isolation
+	// depends on there being nothing to migrate across the boundary (ADR-0015).
 	target := build(func(r *schema.Registry) {
 		r.Table("invoices",
 			schema.UUIDv7("id").PrimaryKey(),
@@ -262,8 +261,22 @@ func TestDiffExternalRefHasNoForeignKey(t *testing.T) {
 		if strings.Contains(c.Up, "FOREIGN KEY") {
 			t.Fatalf("external reference produced a foreign key:\n%s", c.Up)
 		}
+		if strings.Contains(c.Up, "CREATE INDEX") {
+			t.Fatalf("an index nobody declared:\n%s", c.Up)
+		}
 	}
-	find(t, changes, `CREATE INDEX "invoices_tenant_id_idx"`)
+}
+
+// The index it does get is the one it asked for. Indexed is a declaration, and
+// this is the whole of what it changes in a migration.
+func TestDiffIndexedColumnCreatesItsIndex(t *testing.T) {
+	target := build(func(r *schema.Registry) {
+		r.Table("invoices",
+			schema.UUIDv7("id").PrimaryKey(),
+			schema.ExternalRef("tenant", "tenants.id").Indexed(),
+		)
+	})
+	find(t, diff(t, nil, target), `CREATE INDEX "invoices_tenant_id_idx"`)
 }
 
 func TestDiffNewTableIndexIsNotConcurrent(t *testing.T) {

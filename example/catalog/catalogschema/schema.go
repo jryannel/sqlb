@@ -45,6 +45,11 @@ var Category = schema.Table("categories",
 // cycle — a -> b -> a. A foreign key constrains what a column may point at,
 // not what shape the graph it draws is; see the README for what that gap
 // costs and why nothing here closes it.
+// Indexed, because every use this example has for the column reads through it:
+// listing a node's children filters on it, ?expand=parent joins on it, and
+// deleting a node makes Postgres check it for referents. Nothing infers that
+// from the column being a reference — an index is declared here or the database
+// does not have one (#259), and schema.Lint says so when it is missing.
 var _ = Category.AddField(
-	schema.Ref("parent", Category).Nullable().Filterable().Expandable(),
+	schema.Ref("parent", Category).Nullable().Filterable().Expandable().Indexed(),
 )

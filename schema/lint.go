@@ -73,6 +73,22 @@ func (ds Diagnostics) Warnings() Diagnostics {
 	return out
 }
 
+// alreadyNamed reports whether some earlier rule has already told the reader to
+// index this column. Four rules want the same index for different reasons, and
+// four warnings naming one column read as four problems.
+func alreadyNamed(ds Diagnostics, table, column string) bool {
+	for _, d := range ds {
+		if d.Table != table || d.Column != column {
+			continue
+		}
+		switch d.Rule {
+		case "unindexed-filter", "unindexed-sort", "unindexed-expand", "unindexed-inverse-expand":
+			return true
+		}
+	}
+	return false
+}
+
 // Lint checks the registry.
 func (r *Registry) Lint() Diagnostics {
 	var out Diagnostics
@@ -194,6 +210,26 @@ func (r *Registry) Lint() Diagnostics {
 					Severity: SeverityWarn,
 					Message:  "relation is expandable but its foreign key is not indexed, so expansion joins without one",
 					Fix:      fmt.Sprintf("add .Index(%q)", d.Name),
+				})
+			}
+
+			// A foreign key that nothing above has already spoken for. The
+			// other three rules each name a *read* that scans without an
+			// index; this one is about the write side, which has no capability
+			// to key off: a delete or update of the target row takes a
+			// referential-action check with it, and without an index that check
+			// scans this table once per affected row.
+			//
+			// Last of the four, and suppressed when one of them has already
+			// named the column, because a reader fixing one diagnostic fixes
+			// all of them with the same word.
+			if d.Ref != nil && !indexed[d.Name] && !alreadyNamed(out, t.name, d.Name) {
+				add(Diagnostic{
+					Rule: "unindexed-ref", Table: t.name, Column: d.Name,
+					Severity: SeverityWarn,
+					Message: "column is a reference and is not indexed, so a delete or update of the row it points at " +
+						"scans this table to enforce the referential action",
+					Fix: "add .Indexed() to the column",
 				})
 			}
 

@@ -3723,3 +3723,49 @@ or none" — a soft-deleted child's tombstone, say — which the bare nullable
 shape cannot express and the list envelope's `has_more` never could either,
 arguing for a third shape rather than reusing either existing one.
 
+
+### DDL is declared, never inferred
+
+`ExternalRef` used to imply a single-column index, on an argument that is
+correct as advice: a soft foreign key exists to be joined on, and one without
+an index scans the table. The index was synthesised when a table's index set
+was read, from nothing but the column's shape.
+
+That works while the only thing building registries is a declaration. It stops
+working the moment one is built by reading a database, because an inference
+cannot be checked against reality. `introspect` imports a self-referencing
+foreign key as an enforced `ExternalRef` — deliberately, since when that code
+was written a self-reference had no other spelling — so the registry
+*describing* a live database claimed an index that database did not have. The
+declared side, using the `AddField` form `example/catalog` documents, asked for
+no such index. `migrate.Diff` resolved the disagreement the only way it could:
+`DROP INDEX CONCURRENTLY` for an index nothing had created, on every run, and
+applying it failed with `42704`
+([#259](https://github.com/jryannel/sqlb/issues/259)). Hand-correcting the
+migration did not help — the phantom was regenerated from the same inference
+the next time anything else in the schema changed.
+
+So no DDL is inferred from a column's shape. An index is `Field.Indexed()` or a
+table-level `Index`/`AddIndex`, and a registry read out of a database reports
+the indexes that are in it. The advice the inference was carrying moves to the
+register that already carries this kind of advice: `schema.Lint`'s
+`unindexed-ref`, beside `unindexed-filter`, `unindexed-expand` and
+`unindexed-inverse-expand`, all four suppressed to one warning per column since
+one word fixes all of them ([ADR-0006](#capabilities-are-opt-in) is the same
+principle one layer up — nothing is filterable, sortable or selectable unless
+the column says so).
+
+What this costs is a schema that declared `ExternalRef` before v0.15.0 and got
+its index for free: the next diff proposes dropping it, which is clean SQL that
+silently removes an index a join depends on. That is a real break and it is
+taken deliberately, pre-1.0, with the mechanical edit — add `.Indexed()` — in
+the release notes and in `docs/compatibility.md`. The alternative, teaching
+`introspect` not to synthesise while leaving the inference in place, fixes the
+one reported symptom and leaves two spellings of the same reference producing
+different DDL, which is the mechanism rather than the instance.
+
+Revisit if unindexed foreign keys start showing up in real schemas despite the
+diagnostic — that would mean a warning is too quiet for DDL this load-bearing,
+and the answer would be to make `Ref` refuse to be silent rather than to make
+it guess again: an explicit `.NotIndexed()` for the case where the index is
+genuinely unwanted, so the declaration has to say which it means.

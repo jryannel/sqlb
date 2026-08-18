@@ -15,7 +15,7 @@ func billingModule() *schema.Registry {
 		schema.UUIDv7("id").PrimaryKey(),
 		// The tenants module is not imported. The relationship is declared by
 		// name and carries no foreign key.
-		schema.ExternalRef("tenant", "tenants.id").Filterable(),
+		schema.ExternalRef("tenant", "tenants.id").Filterable().Indexed(),
 		schema.Numeric("amount_due").Filterable().Sortable(),
 		schema.Timestamp("created_at").Sortable(),
 	).Index("created_at").Index("amount_due").
@@ -77,9 +77,10 @@ func TestExternalRefHasNoForeignKey(t *testing.T) {
 	}
 }
 
-// A soft foreign key exists to be joined on, so it gets an index without
-// having to remember one — and the index is visible, not applied invisibly.
-func TestExternalRefIsIndexed(t *testing.T) {
+// A soft foreign key exists to be joined on, so a module that declares one
+// declares its index too — and the index is visible in the declaration rather
+// than applied invisibly on the strength of the column being a reference.
+func TestExternalRefIsIndexedWhenItSaysSo(t *testing.T) {
 	billing := billingModule()
 	var found bool
 	for _, idx := range billing.Tables()[0].Indexes() {
@@ -91,10 +92,39 @@ func TestExternalRefIsIndexed(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("an external reference should be indexed")
+		t.Error("a column declaring Indexed should be indexed")
 	}
 	if w := billing.Lint().Warnings(); len(w) > 0 {
 		t.Errorf("this module should lint clean, got:\n%s", w)
+	}
+}
+
+// And a reference that does not say so is not indexed, which is the half that
+// used to be untrue: the index arrived from the column's shape, so a registry
+// introspect built out of a database claimed one that database did not have
+// (#259). Lint is what carries the advice now.
+func TestExternalRefIsNotIndexedByItself(t *testing.T) {
+	m := schema.NewModule("billing")
+	m.Table("invoices",
+		schema.UUIDv7("id").PrimaryKey(),
+		schema.ExternalRef("tenant", "tenants.id"),
+	)
+
+	if idx := m.Tables()[0].Indexes(); len(idx) != 0 {
+		t.Errorf("an undeclared index appeared: %+v", idx)
+	}
+
+	var named bool
+	for _, d := range m.Lint() {
+		if d.Rule == "unindexed-ref" && d.Column == "tenant_id" {
+			named = true
+			if !strings.Contains(d.Fix, ".Indexed()") {
+				t.Errorf("the fix should name the word that adds the index, got %q", d.Fix)
+			}
+		}
+	}
+	if !named {
+		t.Errorf("Lint said nothing about an unindexed reference:\n%s", m.Lint().Warnings())
 	}
 }
 

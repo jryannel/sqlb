@@ -364,6 +364,21 @@ moves is the query parameter it sends.
 
 ## Indexes and constraints
 
+A single-column btree can be declared on the column itself, which is where a
+foreign key's index reads best — the index belongs to the reference rather than
+to the table's own access patterns:
+
+```go
+schema.Ref("author", Author).Filterable().Indexed()
+```
+
+Nothing implies one. A reference used to carry an index because it is a
+reference, and that rule broke the migration differ
+([#259](https://github.com/jryannel/sqlb/issues/259)); `schema.Lint`'s
+`unindexed-ref` gives the advice now, and the declaration does the DDL.
+Everything with a method, an order, a predicate or a second column is
+table-level:
+
 ```go
 ).
     Index("org_id", "status").                       // composite

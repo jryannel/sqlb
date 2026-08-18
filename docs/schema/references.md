@@ -68,12 +68,21 @@ than in the forward direction.
 
 ## Across a module boundary
 
-`ExternalRef` emits the column and an index to join on, but **no foreign key**:
+`ExternalRef` emits the column but **no foreign key**:
 
 ```go
 // in the billing module, with no import of the tenants module
-schema.ExternalRef("tenant", "tenants.id").Filterable()
+schema.ExternalRef("tenant", "tenants.id").Filterable().Indexed()
 ```
+
+`.Indexed()` is the index to join on, and it is not implied. It used to be — a
+soft foreign key exists to be joined on, so the column carried one on the
+strength of its own shape. That rule was invisible to a registry read back out
+of a database, which is how a self-referencing key came to be imported as an
+`ExternalRef`, acquire an index the database did not have, and make every
+subsequent migration propose dropping it
+([#259](https://github.com/jryannel/sqlb/issues/259)). `schema.Lint` reports the
+missing index instead, under `unindexed-ref`.
 
 The two modules stay independently deployable and independently migratable, and
 either can move to its own database without dropping a constraint. Referential
