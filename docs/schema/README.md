@@ -678,6 +678,22 @@ That output is from `ExampleRegistry_Lint` in `schema/example_test.go`, so it is
 what the linter actually says. Both are worth running from a test — the loop
 here is `go test`, not a CLI.
 
+`sqlb check` runs `Lint()` too, and by default prints only the count:
+
+```
+sqlb: lint: 31 warn, 71 info — run `sqlb check -lint=warn` to list the warnings, -lint=all for every one
+sqlb: generated files are current
+sqlb: check passed
+```
+
+`-lint` takes `off`, `summary` (the default), `warn` or `all`. The floor is
+there because a fourteen-table schema produced 102 advisory lines and buried the
+verdict under them
+([#267](https://github.com/jryannel/sqlb/issues/267)); a project that has read
+its `info` notes once keeps the `warn` ones with `-lint=warn` and stops
+re-reading the rest. Whatever level you pick, the last line of `check` is its
+verdict.
+
 ## Next
 
 - [Capabilities](capabilities.md) — what each column lets the outside world do

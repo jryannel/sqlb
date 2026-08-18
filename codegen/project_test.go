@@ -148,7 +148,7 @@ func TestProjectCheckReportsLintDiagnostics(t *testing.T) {
 		t.Fatalf("generate: exit %d, output:\n%s", code, out)
 	}
 
-	code, out := run(t, p, "check")
+	code, out := run(t, p, "check", "-lint=all")
 	if code != 0 {
 		t.Fatalf("check must not fail on an advisory lint diagnostic: exit %d, output:\n%s", code, out)
 	}

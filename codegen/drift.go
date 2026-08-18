@@ -60,6 +60,7 @@ func runCheck(p Project, opts Options, args []string, stdout, stderr io.Writer) 
 	fs.SetOutput(stderr)
 	dsn := fs.String("database", "",
 		"also compare the declared schema against this live database, and fail on drift")
+	lint := fs.String("lint", string(lintSummary), lintLevelUsage)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -67,43 +68,42 @@ func runCheck(p Project, opts Options, args []string, stdout, stderr io.Writer) 
 		say(stderr, "sqlb: check takes no positional arguments, got %q\n", fs.Arg(0))
 		return 2
 	}
+	level, err := parseLintLevel(*lint)
+	if err != nil {
+		say(stderr, "sqlb: %v\n", err)
+		return 2
+	}
 
-	code := 0
+	// What follows is ordered advice first, verdicts last, because check
+	// answers two different questions in one stream and only one of them is
+	// the reason anybody ran it (#267). Every failure is recorded here rather
+	// than printed where it is found, so the command can close with a line
+	// that says what its exit code means — the property that makes the answer
+	// findable however long the advisory block above it grows.
+	var failures []string
 	stale, err := Check(opts)
 	if err != nil {
 		line(stderr, err)
 		return 1
 	}
-	if len(stale) > 0 {
-		// Naming the command that fixes it matters more here than anywhere else
-		// in sqlb: this message is read almost exclusively out of a CI log, by
-		// someone who is not in the directory and has no idea what the
-		// generator was called.
-		line(stderr, "sqlb: generated files are out of date; run: sqlb generate")
-		for _, f := range stale {
-			line(stderr, "  "+f)
-		}
-		code = 1
-	} else {
-		line(stderr, "sqlb: generated files are current")
-	}
 
 	// Lint answers a different question than staleness or drift: not "is this
 	// wrong" but "will this behave badly in production" (schema/lint.go).
 	// Advisory by the same rule the introspection report and the unprobed-check
-	// list above it already follow in this function — printed, never added to
-	// code — because #201 found the cost of silence here is real (every one of
-	// sixteen tables in a port carried the same unflagged mistake) but a schema
-	// can have a good reason to keep any one diagnostic, and a gate that cannot
-	// be right about that should not fail the build over it.
-	if diags := opts.Registry.Lint(); len(diags) > 0 {
+	// list already follow — printed, never added to the exit code — because
+	// #201 found the cost of silence here is real (every one of sixteen tables
+	// in a port carried the same unflagged mistake) but a schema can have a
+	// good reason to keep any one diagnostic, and a gate that cannot be right
+	// about that should not fail the build over it.
+	diags := opts.Registry.Lint()
+	if listed := level.listed(diags); len(listed) > 0 {
 		line(stderr, "sqlb: lint found:")
-		line(stderr, diags)
+		line(stderr, listed)
 	}
 
 	// A database is not needed for this one: it is a textual scan of the
 	// migration files already on disk, so it belongs in the fast half of
-	// check alongside the generated-file comparison above, not gated behind
+	// check alongside the generated-file comparison, not gated behind
 	// -database.
 	if p.MigrationsDir != "" {
 		violations, err := checkMigrationProvenance(p.MigrationsDir)
@@ -119,27 +119,55 @@ func runCheck(p Project, opts Options, args []string, stdout, stderr io.Writer) 
 			}
 			line(stderr, "sqlb: if the file is genuinely hand-composed, remove the header line — "+
 				"or render it with migrate.Options{Handwritten: true} so it never gets one")
-			code = 1
+			failures = append(failures, "a migration file's sqlb header cannot be trusted")
 		}
 	}
 
-	if *dsn == "" {
-		return code
+	if summary := level.summary(diags); summary != "" {
+		line(stderr, summary)
 	}
-	if driftCode := checkDrift(p, opts, *dsn, stdout, stderr); driftCode != 0 {
-		code = driftCode
+
+	if len(stale) > 0 {
+		// Naming the command that fixes it matters more here than anywhere else
+		// in sqlb: this message is read almost exclusively out of a CI log, by
+		// someone who is not in the directory and has no idea what the
+		// generator was called.
+		line(stderr, "sqlb: generated files are out of date; run: sqlb generate")
+		for _, f := range stale {
+			line(stderr, "  "+f)
+		}
+		failures = append(failures, "generated files are out of date")
+	} else {
+		line(stderr, "sqlb: generated files are current")
 	}
-	return code
+
+	if *dsn != "" {
+		if failure := checkDrift(p, opts, *dsn, stdout, stderr); failure != "" {
+			failures = append(failures, failure)
+		}
+	}
+
+	// The last line, always, whatever was printed above it and however much of
+	// it there was.
+	if len(failures) > 0 {
+		say(stderr, "sqlb: check failed: %s\n", strings.Join(failures, "; "))
+		return 1
+	}
+	line(stderr, "sqlb: check passed")
+	return 0
 }
 
-// checkDrift compares the declared schema against a live database.
-func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) int {
+// checkDrift compares the declared schema against a live database. It returns
+// the reason the check failed, or "" when the two agree — the caller collects
+// those into check's closing line rather than each half printing its own
+// verdict wherever it happens to finish (#267).
+func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) string {
 	ctx := context.Background()
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		say(stderr, "sqlb: connecting to the database: %v\n", err)
-		return 1
+		return "the database could not be reached"
 	}
 	defer pool.Close()
 
@@ -151,7 +179,7 @@ func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) i
 	})
 	if err != nil {
 		say(stderr, "sqlb: reading the database: %v\n", err)
-		return 1
+		return "the database could not be read"
 	}
 	// The report is what the database has and this package cannot describe. It
 	// is not drift — nothing here is wrong — but a gate that silently skipped
@@ -168,7 +196,7 @@ func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) i
 		Schema: p.PostgresSchema,
 	}); err != nil {
 		say(stderr, "sqlb: normalising the declared checks: %v\n", err)
-		return 1
+		return "the declared checks could not be normalised"
 	} else if len(unprobed) > 0 {
 		line(stderr, "sqlb: these checks could not be normalised, so they are compared as written:")
 		for _, u := range unprobed {
@@ -183,11 +211,11 @@ func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) i
 	changes, err := migrate.Diff(current, declared, diffOpts...)
 	if err != nil {
 		say(stderr, "sqlb: comparing the schema with the database: %v\n", err)
-		return 1
+		return "the schema and the database could not be compared"
 	}
 	if len(changes) == 0 {
 		line(stderr, "sqlb: the database matches the schema")
-		return 0
+		return ""
 	}
 
 	// The changes are the answer, so they go to stdout: this is the one thing
@@ -201,7 +229,7 @@ func checkDrift(p Project, opts Options, dsn string, stdout, stderr io.Writer) i
 	}
 	line(stderr, "sqlb: run `sqlb migrate -name <what_changed>` if the schema is right, "+
 		"or edit the declaration if the database is")
-	return 1
+	return "the database does not match the schema"
 }
 
 // declaredTableNames is the storage names of the declared tables, which is what
