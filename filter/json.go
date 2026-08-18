@@ -242,6 +242,9 @@ func (p *parser) jsonLeaf(n *Node) (sqlb.Pred, bool) {
 	if !ok {
 		return sqlb.Pred{}, false
 	}
+	if !p.refuseBareDate(col, n.Op, jsonStrings(n.Value), n.Field, n.Op) {
+		return sqlb.Pred{}, false
+	}
 	operands, ok := p.jsonOperands(col, elem, isArray, n, kind)
 	if !ok {
 		return sqlb.Pred{}, false
@@ -264,6 +267,15 @@ func (p *parser) jsonOperands(col *sqlb.ColumnInfo, elem reflect.Type, isArray b
 			return nil, false
 		}
 		return nil, true
+
+	case opDay:
+		s, ok := n.Value.(string)
+		if !ok || !isBareDate(s) {
+			p.errf(n.Field, n.Op, "operator %q takes a calendar date, e.g. {%q: {%q: %q}}",
+				n.Op, col.Wire, "day", "2026-09-01")
+			return nil, false
+		}
+		return []any{s}, true
 
 	case opPattern:
 		s, ok := n.Value.(string)
@@ -408,4 +420,23 @@ func jsonScalar(v any) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// jsonStrings is the string operands of a leaf's value, which is what the
+// bare-date refusal reads. A JSON filter spells a date as a string in both the
+// scalar and the list form, and anything else cannot be a date.
+func jsonStrings(v any) []string {
+	switch v := v.(type) {
+	case string:
+		return []string{v}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }

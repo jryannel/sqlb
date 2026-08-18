@@ -9,6 +9,7 @@
 ?labels=hasany.a,b            overlaps these; hasall.a,b contains all of them
 ?labels=nhas.urgent           the n-prefixed forms negate: nhasany, nhasall too
 ?metadata=hasdoc.{"lang":"de"}  a jsonb document contains this one; nhasdoc negates
+?starts_at=day.2026-09-01     a whole calendar day of a timestamp column
 ?deleted_at=isnull            null tests
 ?views=between.10,20          ranges
 ?or=(status.eq.draft,age.lt.18)   explicit disjunction, nestable

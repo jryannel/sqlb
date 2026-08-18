@@ -121,6 +121,17 @@ export interface NullCheck {
   notnull?: boolean;
 }
 
+/** The whole-day operator, offered only by timestamp columns.
+ *
+ * `{ day: '2026-09-01' }` matches every row whose timestamp falls on that
+ * calendar date in the database's time zone. It exists because equality cannot
+ * ask this: a bare date is midnight, and a stored timestamp is almost never
+ * exactly midnight, so `{ eq: '2026-09-01' }` matched nothing and said
+ * nothing. The server now refuses that spelling and names this one. */
+export interface DayMatch {
+  day?: string;
+}
+
 /** Pattern operators, offered only by text columns. */
 export interface TextMatch {
   like?: string;

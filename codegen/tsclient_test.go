@@ -126,10 +126,13 @@ func TestTSFilterOperatorsAreNarrowedByColumnType(t *testing.T) {
 	where := section(t, src, "export type PostWhere = {", "\n};")
 
 	for _, want := range []string{
-		"org_id?: Cond<string>;",                         // no pattern operators
-		"status?: Cond<PostStatus>;",                     // an enum compares by equality
-		"view_count?: Cond<number>;",                     // nor on a number
-		"published_at?: Cond<string | Date, NullCheck>;", // nullable → null tests
+		"org_id?: Cond<string>;",     // no pattern operators
+		"status?: Cond<PostStatus>;", // an enum compares by equality
+		"view_count?: Cond<number>;", // nor on a number
+		// A timestamp gets the whole-day operator, and being nullable it gets
+		// the null tests too — the extras compose rather than replacing one
+		// another (#241).
+		"published_at?: Cond<string | Date, DayMatch & NullCheck>;",
 	} {
 		if !contains(where, want) {
 			t.Errorf("filter conditions missing %q:\n%s", want, where)
@@ -139,6 +142,15 @@ func TestTSFilterOperatorsAreNarrowedByColumnType(t *testing.T) {
 	// the one column that gets the pattern operators.
 	if !contains(where, "title?: Cond<string, TextMatch>;") {
 		t.Errorf("a text column should offer the pattern operators:\n%s", where)
+	}
+	// And the day operator is offered to nothing else: it is the one operator
+	// whose absence used to be silent, so its presence must not be broad.
+	for _, line := range []string{"id?:", "org_id?:", "title?:", "status?:", "view_count?:"} {
+		for _, l := range strings.Split(where, "\n") {
+			if strings.Contains(l, line) && strings.Contains(l, "DayMatch") {
+				t.Errorf("a non-timestamp column offers the day operator:\n%s", l)
+			}
+		}
 	}
 }
 

@@ -47,10 +47,38 @@ operator name.
 | `nhasall` | `NOT (col @> $1)` | comma list | **array columns only** |
 | `hasdoc` | `col @> $1::jsonb` | a JSON document | **jsonb columns only** |
 | `nhasdoc` | `NOT (col @> $1::jsonb)` | a JSON document | **jsonb columns only** |
+| `day` | `col >= $1::date AND col < $2::date + 1` | a calendar date, `2026-09-01` | **date and timestamp columns only** |
 
 "Text column" means the Go field is a string kind, pointer or not. A pattern
 operator on any other column is rejected with
 `operator "contains" needs a text column, but views is int64`.
+
+### A whole day
+
+`?starts_at=day.2026-09-01` matches every row whose timestamp falls on that
+calendar date, in the database session's time zone — the same rows
+`starts_at::date = '2026-09-01'::date` selects, by a half-open range an index on
+the column can serve.
+
+It exists because equality cannot ask the question. A bare date is midnight, and
+a stored timestamp is almost never exactly midnight, so `?starts_at=eq.2026-09-01`
+returned zero rows, a 200, and nothing to notice. That spelling is now refused:
+
+```
+?starts_at=eq.2026-09-01
+400: starts_at is a timestamptz, so "2026-09-01" compares against midnight on
+     that date and matches almost nothing; ask for the whole day with
+     starts_at=day.2026-09-01, or give a full timestamp such as
+     starts_at=eq.2026-09-01T09:00:00Z
+```
+
+The refusal covers `eq`, `ne`, `in` and `nin`, which are the comparisons a date
+makes silently wrong. The ordering operators are untouched:
+`?starts_at=gte.2026-09-01` means "from midnight onwards", which is what it says.
+A `date` column is untouched too — there, equality against a date is exact — and
+so is a column whose type the model does not declare, since a hand-written model
+need not say what its columns are and an unknown type is not evidence of a
+mistake.
 
 ### Array columns
 

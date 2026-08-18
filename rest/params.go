@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jryannel/sqlb"
@@ -283,10 +284,20 @@ func filterDescription(col *sqlb.ColumnInfo) string {
 	if isText(col.Type) {
 		ops = append(ops, "like", "ilike", "contains", "startswith", "endswith")
 	}
-	return fmt.Sprintf(
-		"Filter on `%s`. Written `operator.value`, or a bare value for equality. "+
-			"Repeat the parameter to conjoin conditions. Operators: %s.",
-		col.Name, strings.Join(ops, ", "))
+	if isTime(col.Type) {
+		ops = append(ops, "day")
+	}
+	desc := "Filter on `%s`. Written `operator.value`, or a bare value for equality. " +
+		"Repeat the parameter to conjoin conditions. Operators: %s."
+	// The one operator that needs saying rather than listing: `day` exists
+	// because `eq` against a date cannot ask this question, and a caller who
+	// does not know that writes the equality and gets nothing back (#241).
+	if isTimestamp(col.PGType) {
+		desc += " `%[1]s=day.2026-09-01` matches that whole calendar day in the " +
+			"database's time zone; a bare date given to `eq`, `ne`, `in` or `nin` " +
+			"is refused, because it would compare against midnight."
+	}
+	return fmt.Sprintf(desc, col.Name, strings.Join(ops, ", "))
 }
 
 // isArray reports whether the column is a Postgres array. bytea and
@@ -294,6 +305,23 @@ func filterDescription(col *sqlb.ColumnInfo) string {
 func isArray(t reflect.Type) bool {
 	return t != nil && t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8
 }
+
+// isTime and isTimestamp are the two halves of the same question, and they need
+// different evidence: whether the operator applies at all is a Go-type
+// question, while whether a bare date is a trap depends on which of the three
+// Postgres types the column is — one Go type, three meanings (ColumnInfo.PGType).
+func isTime(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t == timeType
+}
+
+func isTimestamp(pgType string) bool {
+	return pgType == "timestamptz" || pgType == "timestamp"
+}
+
+var timeType = reflect.TypeOf(time.Time{})
 
 func isText(t reflect.Type) bool {
 	for t.Kind() == reflect.Pointer {

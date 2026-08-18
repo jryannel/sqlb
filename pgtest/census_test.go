@@ -281,26 +281,24 @@ func TestRelativeTimeWindowNeedsRawOrAGoComputedInstant(t *testing.T) {
 	}
 }
 
-// TestADayFilterAgainstTimestamptzSilentlyMatchesNothing is the missing
-// bind-parameter cast, which the port report ranks as the highest-value single
-// addition — under a test, because the bug it produces is silent.
+// TestADayFilterAgainstTimestamptzAnswersTheDay is the census row that was a
+// gap: `?day=eq.2026-07-30` against a timestamptz column became `at = $1`,
+// Postgres parsed the date as midnight in the session time zone, and the
+// comparison against a timestamp that is almost never exactly midnight returned
+// zero rows and no error — the worst combination, because there is nothing to
+// notice.
 //
-// `?day=eq.2026-07-30` against a timestamptz column becomes `at = $1` with a
-// text argument. Postgres infers the parameter as timestamptz, parses the date
-// as midnight in the session time zone, and compares it for equality against a
-// timestamp that is almost never exactly midnight. The result is zero rows and
-// no error — the worst combination, because there is nothing to notice.
+// This test used to assert that failure and say what would fix it: a cast the
+// builder could not express, because Field.Cast returns an Expr and every
+// comparison hangs off Field, so `at::date = $1::date` was writable in a SELECT
+// list and not in a WHERE clause. Both halves are now built (#241).
 //
-// What would fix it is a cast on the column side: `at::date = $1::date`. The
-// builder cannot express that at all. Field.Cast returns an Expr rather than a
-// Field, so nothing can hang a comparison off it, and a caller is left with
-// RawPred — which the REST filter parser has no way to reach.
-//
-// Deliberately not: a claim about which cast the fix should insert. Half-open
-// range predicates and ::date equality behave differently across time zones and
-// that choice is the design question; what is settled here is that today's
-// answer is wrong rather than merely absent.
-func TestADayFilterAgainstTimestamptzSilentlyMatchesNothing(t *testing.T) {
+// The design question it deliberately left open — half-open range or ::date
+// equality — is settled here as the range, and the two are asserted to select
+// the same rows. The range is what an index on the column can serve; the
+// equality is what reads more obviously, and it is the one this compares
+// against so that "the same set" is a claim under test rather than an argument.
+func TestADayFilterAgainstTimestamptzAnswersTheDay(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db := metersDB(t)
@@ -324,38 +322,35 @@ func TestADayFilterAgainstTimestamptzSilentlyMatchesNothing(t *testing.T) {
 	}
 	day := days[0].Day
 
-	n, err := sqlb.Query[Meter]().Where(sqlb.F("at").Eq(day)).Count(ctx, db)
+	n, err := sqlb.Query[Meter]().Where(sqlb.F("at").OnDay(day)).Count(ctx, db)
 	if err != nil {
 		t.Fatalf("day filter: %v", err)
 	}
-
-	if n != 0 {
-		t.Fatalf("a bare day filter matched %d rows; it is expected to match nothing today, "+
-			"so a non-zero count means the missing $1::date cast was added and this test should become its demonstration", n)
+	if n != 1 {
+		t.Errorf("OnDay matched %d rows, want the row written today", n)
 	}
 
-	// The predicate that answers the question, reachable only through Raw.
-	n, err = sqlb.Query[Meter]().
+	// The spelling this test was written to recommend, now that both are
+	// available: the same set, by a plan an index cannot serve.
+	cast, err := sqlb.Query[Meter]().
 		Where(sqlb.RawPred(`"at"::date = ?::date`, day)).Count(ctx, db)
 	if err != nil {
 		t.Fatalf("cast day filter: %v", err)
 	}
-	if n != 1 {
-		t.Errorf("cast day filter matched %d rows, want 1", n)
+	if cast != n {
+		t.Errorf("OnDay matched %d rows and ::date equality matched %d; they are meant to be the same set", n, cast)
 	}
 
-	// And the asymmetry that keeps the fix out of the builder. Field.Cast
-	// renders exactly the operand the predicate above needs — but it returns an
-	// Expr, which the projection accepts and which no comparison takes, because
-	// every comparison hangs off Field. So the cast is expressible in a SELECT
-	// list and not in a WHERE clause.
-	text, _, err := sqlb.Query[Meter]().ClearSelect().
-		Select(sqlb.Sel(sqlb.F("at").Cast("date")).As("day")).SQL()
+	// The bare comparison still means what it says — an instant, at midnight —
+	// and still matches nothing. That is correct for a builder: what changed is
+	// that the URL grammar refuses to compile it from a date, naming `day.`
+	// instead (filter/day_test.go).
+	bare, err := sqlb.Query[Meter]().Where(sqlb.F("at").Eq(day)).Count(ctx, db)
 	if err != nil {
-		t.Fatalf("a cast column is selectable: %v", err)
+		t.Fatalf("bare day filter: %v", err)
 	}
-	if !strings.Contains(text, `"at"::date`) {
-		t.Errorf("Field.Cast rendered %q, want it to carry ::date", text)
+	if bare != 0 {
+		t.Errorf("equality against midnight matched %d rows, want 0", bare)
 	}
 }
 

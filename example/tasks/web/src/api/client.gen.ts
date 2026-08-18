@@ -14,7 +14,7 @@
 // the response and the caller.
 //
 // ADR-0028, ADR-0036.
-import type { ArrayCond, Collection, Cond, NullCheck, Page, TextMatch, Transport } from './runtime.gen.ts';
+import type { ArrayCond, Collection, Cond, DayMatch, NullCheck, Page, TextMatch, Transport } from './runtime.gen.ts';
 import { encodeItemQuery, encodeListQuery, itemPath } from './runtime.gen.ts';
 export * from './runtime.gen.ts';
 
@@ -727,8 +727,8 @@ export type TaskWhere = {
   labels?: ArrayCond<string>;
   status?: Cond<TaskStatus>;
   priority?: Cond<TaskPriority>;
-  due_at?: Cond<string | Date, NullCheck>;
-  completed_at?: Cond<string | Date, NullCheck>;
+  due_at?: Cond<string | Date, DayMatch & NullCheck>;
+  completed_at?: Cond<string | Date, DayMatch & NullCheck>;
   comment_count?: Cond<number>;
 };
 

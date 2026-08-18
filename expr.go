@@ -3,6 +3,7 @@ package sqlb
 import (
 	"reflect"
 	"strings"
+	"time"
 )
 
 // Expr is a SQL expression node. The set of implementations is closed apart
@@ -463,6 +464,46 @@ func escapeLike(s string) string {
 // Cast returns the field cast to a SQL type. The type name is emitted
 // verbatim, so it must not come from user input.
 func (f Field) Cast(typ string) Expr { return Cast{Inner: f.Column(), Type: typ} }
+
+// OnDay matches a timestamp column against one calendar day:
+//
+//	sqlb.Query[Booking]().Where(sqlb.F("starts_at").OnDay("2026-09-01"))
+//
+// It compiles to a half-open range — `starts_at >= $1::date AND starts_at <
+// $2::date + 1` — which is the same set of rows `starts_at::date = $1::date`
+// selects, and unlike that spelling it is a range an index on the column can
+// serve.
+//
+// The day is bound as text and cast in Postgres, deliberately. A time.Time is
+// an instant, and an instant carries a time zone that is not the session's, so
+// binding one and letting Postgres take its date would answer a different
+// question either side of midnight; a calendar date has no such ambiguity, and
+// the session's time zone is the one the caller's "day" means. A time.Time
+// argument is therefore reduced to its own calendar date before binding.
+//
+// This exists because [Field.Cast] cannot be compared. Cast returns an Expr and
+// every comparison hangs off Field, so `at::date = $1::date` was expressible in
+// a SELECT list and not in a WHERE clause, and the only spelling that answered
+// the question was [RawPred] — which the filter grammar cannot reach, so
+// `?starts_at=eq.2026-09-01` compiled to an equality against midnight and
+// silently matched nothing (#241). The URL grammar's `day.` operator compiles
+// to this.
+func (f Field) OnDay(day any) Pred {
+	if t, ok := day.(time.Time); ok {
+		day = t.Format(time.DateOnly)
+	} else if t, ok := day.(*time.Time); ok && t != nil {
+		day = t.Format(time.DateOnly)
+	}
+	lo := Cast{Inner: Param{Value: day}, Type: "date"}
+	// date + 1 is the next day, in date arithmetic Postgres does itself. The
+	// literal is Raw rather than a bind because `date + $2` leaves Postgres to
+	// resolve an operator from an untyped parameter, which it refuses.
+	hi := Binary{Op: "+", Left: Cast{Inner: Param{Value: day}, Type: "date"}, Right: Raw{SQL: "1"}}
+	return And(
+		pred(Binary{Op: ">=", Left: f.Column(), Right: lo}),
+		pred(Binary{Op: "<", Left: f.Column(), Right: hi}),
+	)
+}
 
 // Col is a column reference carrying the column's Go type, so that comparands
 // are checked at compile time. Generated model packages declare one per column:
