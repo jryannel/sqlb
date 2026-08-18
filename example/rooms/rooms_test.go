@@ -162,13 +162,15 @@ func TestTheWhereClauseNarrowsWhatCollides(t *testing.T) {
 	}
 }
 
-// TestADayFilterAgainstTimestamptzSilentlyMatchesNothing adapts
-// pgtest/census_test.go's test of the same name to this schema. It is still
-// true, and it is exactly the bug shape a booking calendar's "what's on
-// today" view would ship: a filter that looks right, compiles, runs, and
-// answers zero rows for a day that has bookings on it — with no error to
-// notice.
-func TestADayFilterAgainstTimestamptzSilentlyMatchesNothing(t *testing.T) {
+// TestADayFilterAgainstTimestamptzAnswersTheDay is what
+// pgtest/census_test.go's test of the same shape became. It was written when
+// the answer was wrong: a "what's on today" view compiled, ran, and answered
+// zero rows for a day with bookings on it, because a bare date compares against
+// midnight and a booking is almost never at midnight (#241).
+//
+// It now demonstrates the fix on the schema that makes the failure concrete —
+// a booking calendar, whose whole purpose is answering "what is on this day".
+func TestADayFilterAgainstTimestamptzAnswersTheDay(t *testing.T) {
 	ctx := context.Background()
 	db := roomsDB(t)
 	room := seedRoom(t, ctx, db)
@@ -178,28 +180,45 @@ func TestADayFilterAgainstTimestamptzSilentlyMatchesNothing(t *testing.T) {
 	if _, err := sqlb.InsertRows(&b).One(ctx, db); err != nil {
 		t.Fatalf("seeding: %v", err)
 	}
+	// The day before, to prove the range has an upper bound as well as a lower
+	// one: a predicate that only said ">= the date" would match this too.
+	next := rooms.Booking{RoomID: room.ID, StartsAt: start.Add(24 * time.Hour),
+		EndsAt: start.Add(25 * time.Hour), Status: rooms.BookingStatusConfirmed}
+	if _, err := sqlb.InsertRows(&next).One(ctx, db); err != nil {
+		t.Fatalf("seeding the next day: %v", err)
+	}
 
 	day := "2026-09-01"
 
-	// The spelling a reader reaches for. It compiles, it runs, and it is wrong.
-	n, err := sqlb.Query[rooms.Booking]().Where(sqlb.F("starts_at").Eq(day)).Count(ctx, db)
+	n, err := sqlb.Query[rooms.Booking]().Where(sqlb.F("starts_at").OnDay(day)).Count(ctx, db)
 	if err != nil {
 		t.Fatalf("day filter: %v", err)
 	}
-	if n != 0 {
-		t.Fatalf("a bare day filter matched %d rows; it is expected to match nothing today, "+
-			"so a non-zero count means the missing $1::date cast was added and this test should become its demonstration", n)
+	if n != 1 {
+		t.Errorf("OnDay matched %d rows, want the one booking on that day", n)
 	}
 
-	// The only spelling that answers the question correctly, and it leaves the
-	// typed builder: RawPred is the sole route, and the REST filter parser
-	// cannot reach it.
-	n, err = sqlb.Query[rooms.Booking]().
+	// The same rows the cast spelling selects, which is the claim OnDay makes
+	// about being a rewrite rather than a different question.
+	cast, err := sqlb.Query[rooms.Booking]().
 		Where(sqlb.RawPred(`"starts_at"::date = ?::date`, day)).Count(ctx, db)
 	if err != nil {
 		t.Fatalf("cast day filter: %v", err)
 	}
-	if n != 1 {
-		t.Errorf("cast day filter matched %d rows, want 1", n)
+	if cast != n {
+		t.Errorf("OnDay matched %d rows and the ::date cast matched %d; they are meant to be the same set", n, cast)
+	}
+
+	// And the spelling a reader used to reach for is now refused by the filter
+	// grammar rather than answering nothing — see filter/day_test.go, which
+	// holds that half. The builder still compiles it, because Eq on a timestamp
+	// column is a legitimate exact comparison; what changed is that a request
+	// cannot ask for it by accident.
+	bare, err := sqlb.Query[rooms.Booking]().Where(sqlb.F("starts_at").Eq(day)).Count(ctx, db)
+	if err != nil {
+		t.Fatalf("bare day filter: %v", err)
+	}
+	if bare != 0 {
+		t.Errorf("an equality against midnight matched %d rows, want 0 — the point of OnDay", bare)
 	}
 }

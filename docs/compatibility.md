@@ -163,6 +163,21 @@ Named in advance, so the break is a documented plan rather than a surprise.
   on, which is why this entry says so rather than leaving it to be discovered.
   `sqlb check` names every unindexed reference under `unindexed-ref`, which is
   the fastest way to find the ones that need the word.
+- **A bare date given to `eq`, `ne`, `in` or `nin` on a timestamp column is now
+  a 400.** It used to compile to an equality against midnight and match almost
+  nothing, returning 200 with an empty page — a "what's on this day" view that
+  shipped and answered nothing
+  ([#241](https://github.com/jryannel/sqlb/issues/241)). The refusal names the
+  two ways to say what was meant, and the new `day` operator is the first of
+  them: `?starts_at=day.2026-09-01` matches that whole calendar day, as a
+  half-open range an index can serve.
+
+  The mechanical edit is `eq.` → `day.` where a whole day was meant, or a full
+  timestamp where an instant was. A client relying on the old behaviour was
+  relying on receiving no rows. `date` columns are untouched, the ordering
+  operators are untouched, and a model that does not declare its column types —
+  hand-written, without `Describe.SQLType` — is untouched too, since an unknown
+  type is not evidence of a mistake.
 - **Terminal call signatures**, when Go 1.27 arrives. `sqlb.Collect[R](ctx, db,
   b)`, `filter.Apply(b, q)` and the `db` threaded through every terminal call
   all gain method forms, because a method on a concrete type cannot introduce a

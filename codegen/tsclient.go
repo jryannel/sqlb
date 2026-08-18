@@ -1059,6 +1059,12 @@ func tsCondType(typeName string, d *schema.FieldDesc) string {
 		// Text keeps NullCheck last, as it was before arrays existed.
 		extras = append([]string{"TextMatch"}, extras...)
 	}
+	// A timestamp column, and not a date one: `day` is the operator that asks
+	// the question equality cannot, and on a date column equality already
+	// answers it (#241).
+	if d.Type == schema.TypeTimestamp {
+		extras = append([]string{"DayMatch"}, extras...)
+	}
 	if len(extras) == 0 {
 		return fmt.Sprintf("Cond<%s>", value)
 	}
@@ -1322,6 +1328,17 @@ export interface Comparison<V> {
 export interface NullCheck {
   isnull?: boolean;
   notnull?: boolean;
+}
+
+/** The whole-day operator, offered only by timestamp columns.
+ *
+ * ` + "`{ day: '2026-09-01' }`" + ` matches every row whose timestamp falls on that
+ * calendar date in the database's time zone. It exists because equality cannot
+ * ask this: a bare date is midnight, and a stored timestamp is almost never
+ * exactly midnight, so ` + "`{ eq: '2026-09-01' }`" + ` matched nothing and said
+ * nothing. The server now refuses that spelling and names this one. */
+export interface DayMatch {
+  day?: string;
 }
 
 /** Pattern operators, offered only by text columns. */

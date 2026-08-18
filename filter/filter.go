@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -621,6 +622,9 @@ const (
 	opSet
 	// opDoc takes a JSON document and asks a jsonb column to contain it.
 	opDoc
+	// opDay takes a calendar date and asks a timestamp column for that whole
+	// day, which equality cannot ask (#241).
+	opDay
 )
 
 var operators = map[string]opKind{
@@ -644,6 +648,15 @@ var operators = map[string]opKind{
 	// same ambiguity. `hasdoc` joins the `has` family instead, which is what
 	// containment is already spelled as here.
 	"hasdoc": opDoc,
+
+	// A whole calendar day, for a timestamp column. `eq` cannot express it: a
+	// date compares against midnight, and a timestamp is almost never exactly
+	// midnight, so the request that reads as "what is on this day" matched
+	// nothing and said nothing (#241). Not spelled as a bare date against `eq`
+	// for the reason ADR-0033 gives about `contains`: one operator meaning two
+	// things depending on the operand's shape is the ambiguity this grammar
+	// exists to remove.
+	"day": opDay,
 
 	// The negations of the four. The JSON tree can spell these with a `not`
 	// group, but the URL grammar conjoins by design and has nowhere to put one,
@@ -680,6 +693,11 @@ func (p *parser) build(col *sqlb.ColumnInfo, op, value, param, raw string) (sqlb
 	if !ok {
 		return sqlb.Pred{}, false
 	}
+	// Before coercion, because coercion is what loses the distinction: a date
+	// and a timestamp are one Go value afterwards.
+	if !p.refuseBareDate(col, op, splitTopLevel(value, ','), param, raw) {
+		return sqlb.Pred{}, false
+	}
 	operands, ok := p.urlOperands(col, elem, isArray, op, kind, value, param, raw)
 	if !ok {
 		return sqlb.Pred{}, false
@@ -712,6 +730,9 @@ func (p *parser) gateColumnKind(col *sqlb.ColumnInfo, op string, kind opKind, sh
 	case isArray && !arrayOperators[kind],
 		isArray && kind == opBinary && op != "eq" && op != "ne" && op != "neq":
 		p.errAllowed(param, raw, fmt.Sprintf("operator %q does not apply to the array column %s", op, col.Name), arrayOperatorNames())
+		return nil, false, false
+	case kind == opDay && !isTimeColumn(col):
+		p.errf(param, raw, "operator %q needs a date or timestamp column, but %s is %s", op, col.Name, col.Type)
 		return nil, false, false
 	case !isArray && (kind == opElem || kind == opSet):
 		p.errf(param, raw, "operator %q needs an array column, but %s is %s", op, col.Name, col.Type)
@@ -767,6 +788,13 @@ func (p *parser) urlOperands(col *sqlb.ColumnInfo, elem reflect.Type, isArray bo
 
 	case opSet:
 		return p.arrayOperand(elem, value, param, raw, op)
+
+	case opDay:
+		if !isBareDate(value) {
+			p.errf(param, raw, "operator %q takes a calendar date, e.g. %s=day.2026-09-01", op, col.Wire)
+			return nil, false
+		}
+		return []any{value}, true
 
 	case opDoc:
 		doc := strings.TrimSpace(value)
@@ -868,6 +896,12 @@ func (p *parser) applyOp(col *sqlb.ColumnInfo, f sqlb.Field, op string, kind opK
 			return f.NotHas(operands[0]), true
 		}
 		return f.Has(operands[0]), true
+
+	case opDay:
+		// The operand is the date as written. OnDay casts it in Postgres rather
+		// than parsing it here, because a Go time.Time is an instant and its
+		// date depends on a time zone that is not the session's.
+		return f.OnDay(operands[0]), true
 
 	case opDoc:
 		// Both frontends deliver the document as JSON text, which is what
@@ -1470,6 +1504,66 @@ func isTextColumn(col *sqlb.ColumnInfo) bool {
 		t = t.Elem()
 	}
 	return t.Kind() == reflect.String
+}
+
+// isTimeColumn reports whether a column holds a date or a timestamp. They are
+// one Go type and three things to Postgres, which is exactly why PGType exists
+// and why the refusal below reads it rather than this.
+func isTimeColumn(col *sqlb.ColumnInfo) bool {
+	t := col.Type
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t == timeType
+}
+
+// bareDate matches a date with no time part, which is the spelling that reads
+// as a day and compares as a midnight.
+var bareDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
+func isBareDate(s string) bool { return bareDate.MatchString(strings.TrimSpace(unquote(s))) }
+
+// refuseBareDate turns the silent case into a 400.
+//
+// `?starts_at=eq.2026-09-01` against a timestamptz column compiles to an
+// equality against midnight in the session's time zone, and a stored timestamp
+// is almost never exactly that — so the request a caller writes for "what is on
+// this day" matches nothing, returns 200, and gives nothing to notice (#241).
+// `ne` is the same trap pointed the other way, matching every row; `in` and
+// `nin` are the same comparison in a list.
+//
+// Only where the column's declared type says it is a timestamp. A date column
+// compares against a date correctly, and PGType is empty for a hand-written
+// model that has not said what its columns are — where the type is unknown this
+// says nothing rather than refusing a request that may be exactly right
+// (ColumnInfo.PGType: "every reader of it must treat unknown as a real answer").
+//
+// The ordering operators are deliberately untouched: `gte.2026-09-01` against a
+// timestamp means "from midnight onwards", which is what it says and what the
+// caller wants.
+func (p *parser) refuseBareDate(col *sqlb.ColumnInfo, op string, values []string, param, raw string) bool {
+	switch col.PGType {
+	case "timestamptz", "timestamp":
+	default:
+		return true
+	}
+	switch op {
+	case "eq", "ne", "neq", "in", "nin":
+	default:
+		return true
+	}
+	for _, v := range values {
+		if !isBareDate(v) {
+			continue
+		}
+		day := strings.TrimSpace(unquote(v))
+		p.errf(param, raw,
+			"%s is a %s, so %q compares against midnight on that date and matches almost nothing; "+
+				"ask for the whole day with %s=day.%s, or give a full timestamp such as %s=%s.%sT09:00:00Z",
+			col.Wire, col.PGType, day, col.Wire, day, col.Wire, op, day)
+		return false
+	}
+	return true
 }
 
 var jsonRawMessageType = reflect.TypeOf(json.RawMessage(nil))
