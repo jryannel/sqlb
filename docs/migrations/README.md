@@ -57,6 +57,32 @@ back live when that one does. Otherwise the file would not be a reviewable
 no-op but a migration that fails partway through, with a constraint naming a
 column the skipped statement never added.
 
+### An index drop says where the index came from
+
+`DROP INDEX` is not destructive in the sense above — no row is lost — so it is
+rendered live. But three different situations produce the same statement: an
+index you have stopped declaring, one somebody built by hand that the
+declaration never knew about, and, for one migration after upgrading past
+v0.14, one sqlb used to create by implication from a reference and no longer
+does ([#259](https://github.com/jryannel/sqlb/issues/259)). Only the first is
+an intended loss, and rebuilding a large index under `CONCURRENTLY` is not
+cheap.
+
+So `sqlb migrate` and `sqlb check -database` annotate the two they can
+recognise ([#268](https://github.com/jryannel/sqlb/issues/268)):
+
+```sql
+-- drop index messages_thread_id_idx
+-- note: no sqlb-generated migration in migrations ever created this index, so it was built by hand or by another tool and nothing in the declaration will put it back
+-- note: this indexes messages.thread_id, which the declaration still calls a reference and no declared index covers — sqlb v0.14 and earlier created this index by implication and v0.15 does not (#259). If it is wanted, declare it with .Indexed() on the reference rather than letting this drop it
+DROP INDEX CONCURRENTLY "messages_thread_id_idx";
+```
+
+The first note comes from the same scan `sqlb check` already makes over
+`MigrationsDir` for header provenance; the second from the index's shape
+against the declaration. A drop of an index sqlb built because the declaration
+asked for one carries neither, which is what keeps them worth reading.
+
 ### Renames are declared, never inferred
 
 A rename is indistinguishable from a drop plus an add when only the before and

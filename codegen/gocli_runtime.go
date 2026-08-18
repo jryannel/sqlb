@@ -29,6 +29,14 @@ type Request struct {
 	Query url.Values
 	// Body is marshalled as JSON when it is not nil.
 	Body any
+	// Header carries what a schema cannot derive: tenant selection, an
+	// idempotency key, a trace id propagated from whatever called this binary.
+	// Do applies it last, so a header set here replaces Accept, Content-Type
+	// or Authorization rather than being dropped behind them — the same
+	// precedence Client.Token already has over nothing, extended to a caller
+	// whose auth is not a bearer token at all (#254). Nothing generates this;
+	// it is for a hand-written command built on top of Client.Run.
+	Header http.Header
 }
 
 // Transport issues one request and returns the decoded response body, or nil
@@ -119,6 +127,15 @@ func (c *Client) Do(ctx context.Context, req Request) (json.RawMessage, error) {
 		payload = bytes.NewReader(raw)
 	}
 
+	// Bound by context rather than only by client.Timeout below, so that a
+	// caller who supplies HTTP — the seam a header with no other way in pushes
+	// a caller toward — does not silently lose --timeout along with it (#254).
+	if c.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		defer cancel()
+	}
+
 	r, err := http.NewRequestWithContext(ctx, req.Method, u, payload)
 	if err != nil {
 		return nil, err
@@ -129,6 +146,15 @@ func (c *Client) Do(ctx context.Context, req Request) (json.RawMessage, error) {
 	}
 	if c.Token != "" {
 		r.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	// req.Header is applied last and replaces rather than adds, so a caller
+	// whose auth is not Client.Token — a signature, a second identity header —
+	// can override anything derived above it (#254).
+	for k, vs := range req.Header {
+		r.Header.Del(k)
+		for _, v := range vs {
+			r.Header.Add(k, v)
+		}
 	}
 	if c.Verbose {
 		fmt.Fprintln(c.stderr(), req.Method, u)

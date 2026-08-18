@@ -1264,10 +1264,11 @@ func (d *differ) indexDropped(cur, tgt *schema.TableDef, orig, renamed schema.In
 	// lock this takes is one the migration was going to take anyway.
 	concurrent := !coversDroppedColumn(renamed, tgt)
 	d.dropIndexes = append(d.dropIndexes, Change{
-		Comment: "drop index " + orig.Name,
-		Up:      dropIndex(orig.Name, concurrent),
-		Down:    createIndex(cur, orig, concurrent),
-		Stage:   concurrentStage(concurrent),
+		Comment:    "drop index " + orig.Name,
+		Up:         dropIndex(orig.Name, concurrent),
+		Down:       createIndex(cur, orig, concurrent),
+		Stage:      concurrentStage(concurrent),
+		dropsIndex: orig.Name,
 	})
 }
 

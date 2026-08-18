@@ -149,6 +149,20 @@ type Change struct {
 	needsColumns []string
 	needsTable   string
 
+	// dropsIndex names the index a DROP INDEX change removes, which the SQL
+	// no longer says in a form a caller can read without parsing it back.
+	//
+	// It exists so a caller that knows something about where an index came
+	// from can say so above the statement: a drop of an index no
+	// sqlb-generated migration ever created is a different claim from a drop
+	// of one sqlb built, and the two are byte-identical DDL (issue #268).
+	// codegen's noteIndexDrops is the only reader.
+	//
+	// Unexported for the same reason needsColumns is: only Diff knows it, and
+	// a Change assembled by hand is drop-of-nothing as far as this is
+	// concerned.
+	dropsIndex string
+
 	// unblocked is the sequence that reaches the same state without holding
 	// the lock for the length of a scan, for the changes that have one. Unblock
 	// substitutes it and nothing else reads it.
@@ -159,6 +173,14 @@ type Change struct {
 	// and Unblock leaves it alone.
 	unblocked []Change
 }
+
+// DroppedIndex names the index this change drops, or "" when it drops none.
+//
+// It is the one thing a DROP INDEX cannot be asked about after the fact: the
+// statement carries the name, but reading it back means parsing SQL, and a
+// caller wanting to say something about the index — that nothing in the
+// migration history ever created it, say — should not have to.
+func (c Change) DroppedIndex() string { return c.dropsIndex }
 
 // Unblock replaces the changes that hold a long lock with the sequences that do
 // not, where such a sequence exists. There are three:

@@ -91,10 +91,10 @@ Usage:
                                      table, a server, a migration runner
     sqlb generate <package>          write every artefact the project declares
     sqlb check [flags] <package>     report stale artefacts, write nothing; also
-                                     runs Lint and prints its diagnostics, which
-                                     are advisory and never fail the command; with
-                                     -database, also report a declaration that no
-                                     longer describes the live database
+                                     counts Lint's diagnostics, which are advisory
+                                     and never fail the command; with -database,
+                                     also report a declaration that no longer
+                                     describes the live database
     sqlb migrate [flags] <package>   write the migration that closes the gap
                                      between the history and the schema
     sqlb impact [flags] <package>    report how the schema edit changes the REST
@@ -116,6 +116,8 @@ Flags for check:
 
     -database <dsn>       compare the declared schema against this database too,
                           and exit non-zero if they disagree
+    -lint <level>         how much of the lint result to print: off, summary
+                          (counts only, the default), warn, or all
 
 Flags for migrate:
 

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jryannel/sqlb/example/tasks/cli/client"
 )
@@ -383,5 +384,69 @@ func TestHiddenColumnsHaveNoFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown flag") {
 		t.Errorf("the failure should be an unknown flag, got: %v", err)
+	}
+}
+
+// #254: a header set on Request is the only way in for what a schema cannot
+// derive — tenant selection, a trace id — and it has to win over what Do
+// derives on its own, the same way a caller whose auth is a signature rather
+// than a bearer token needs to be able to replace Authorization outright.
+func TestRequestHeaderOverridesWhatDoDerives(t *testing.T) {
+	var got http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		emptyPage(w)
+	}))
+	defer server.Close()
+
+	c := &client.Client{BaseURL: server.URL, Token: "bearer-token"}
+	_, err := c.Do(context.Background(), client.Request{
+		Method: http.MethodGet,
+		Path:   "/tasks",
+		Header: http.Header{
+			"X-Workspace-Id": []string{"acme"},
+			"Authorization":  []string{"Signature abc123"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+
+	if got.Get("X-Workspace-Id") != "acme" {
+		t.Errorf("X-Workspace-Id = %q, want it to reach the wire", got.Get("X-Workspace-Id"))
+	}
+	if got.Get("Authorization") != "Signature abc123" {
+		t.Errorf("Authorization = %q, want the caller's header to replace the derived "+
+			"bearer token rather than sit beside it", got.Get("Authorization"))
+	}
+}
+
+// #254: setting Client.HTTP — the only seam a header had before Request
+// carried one — must not silently drop --timeout. A context deadline bounds
+// the request regardless of what http.Client is in play.
+func TestTimeoutBoundsARequestEvenWithACustomHTTPClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(200 * time.Millisecond):
+			emptyPage(w)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	c := &client.Client{
+		BaseURL: server.URL,
+		Timeout: 10 * time.Millisecond,
+		// A client the caller supplied, with no timeout of its own — the
+		// shape #254 reports as the trap: taking the seam that carries a
+		// header used to cost the flag silently.
+		HTTP: &http.Client{},
+	}
+	_, err := c.Do(context.Background(), client.Request{Method: http.MethodGet, Path: "/tasks"})
+	if err == nil {
+		t.Fatal("Do returned no error, so --timeout was silently dropped by the supplied HTTP client")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Errorf("Do failed for a reason other than the timeout: %v", err)
 	}
 }

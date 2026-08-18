@@ -237,6 +237,25 @@ cli.New(&cli.Client{
 Precedence is what a reader would expect: flag, then the field you set, then the
 environment, then the built-in default.
 
+A header the schema has no way to name — tenant selection, an idempotency key,
+a trace id — is a field on `Request` rather than a reason to replace
+`Transport`: `Request.Header` reaches the wire after `Accept`, `Content-Type`
+and the derived `Authorization`, so it replaces any of them rather than sitting
+beside them ([#254](https://github.com/jryannel/sqlb/issues/254)). Nothing
+generates it; a hand-written command built on `Client.Run` sets it directly:
+
+```go
+client.Run(ctx, cmd.OutOrStdout(), cli.Request{
+    Method: http.MethodGet,
+    Path:   "/tasks",
+    Header: http.Header{"X-Workspace-Id": []string{workspaceID}},
+}, false)
+```
+
+`--timeout` binds a `context.Context` deadline around the request, not only
+`http.Client.Timeout`, so setting `Client.HTTP` to reach for a custom
+`RoundTripper` no longer costs the flag along with it.
+
 ## Rejections
 
 A 400 arrives as the problem document with its allow-list intact, which is the

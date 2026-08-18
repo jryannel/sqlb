@@ -72,6 +72,15 @@ it goes to the log and the caller gets a sentence. An error that already carries
 a status is passed through unchanged, so a hook's deliberate refusal keeps the
 status it chose.
 
+The reverse also holds, and it is easy to miss from the hook's own type: a hook
+that returns a plain `errors.New(...)` carries no status, so it lands in the
+blunt case above and answers 500 — a refusal for a missing tenant header reads
+identically to a bug. Return a `huma.StatusError` instead —
+`huma.Error400BadRequest("X-Workspace-Id is required")` for that case — and
+[`sqlb.Hooks`'s doc comment](https://pkg.go.dev/github.com/jryannel/sqlb#Hooks)
+says the same thing from the side a hook author is actually looking at
+([#255](https://github.com/jryannel/sqlb/issues/255)).
+
 See [Mutations](../queries/mutations.md#when-the-database-refuses-a-write) for
 the Go side, including the driver classifier that fills in the constraint name.
 
