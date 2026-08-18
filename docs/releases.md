@@ -14,6 +14,202 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.15.0
+
+2026-08-18 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.15.0)
+
+Three deliberate breaks, more than any tag before it has carried at once. Each
+is a shape that was wrong before the surface it sits on was frozen, and each is
+fixed now because pre-1.0 is when the mechanical edit is still a paragraph
+rather than a major version. All three are named in
+[compatibility.md](compatibility.md) with the edit that fixes them. Alongside
+them: a pluggable authentication seam with its first provider adapter, generated
+`fx` wiring for a schema-owning module, and the 58 architecture decisions folded
+into one document.
+
+**BREAKING: a bare date given to `eq` on a timestamp column is a 400, and `day.`
+is what to write instead.** `?starts_at=eq.2026-09-01` against a `timestamptz`
+column compiled to an equality against midnight in the session's time zone. A
+stored timestamp is almost never exactly midnight, so the request a caller
+writes for "what is on this day" returned `200` and an empty page — a booking
+calendar's front screen, shipping and answering nothing, with no error to notice
+([#241](https://github.com/jryannel/sqlb/issues/241)). Both halves are fixed,
+because either alone leaves the trap open: `?starts_at=day.2026-09-01` compiles
+to `starts_at >= $1::date AND starts_at < $2::date + 1`, a half-open range an
+index on the column can serve, and the old spelling is now a refusal naming both
+ways to say what was meant. `Field.OnDay` is the builder half. The date is bound
+as text and cast in Postgres rather than parsed in Go, deliberately: a
+`time.Time` is an instant carrying a zone that is not the session's, so binding
+one answers a different question either side of midnight. Scoped to where a date
+is silently wrong — the ordering operators, `date` columns and models that do
+not declare their column types are all untouched. The mechanical edit is `eq.` →
+`day.` where a whole day was meant; a client relying on the old behaviour was
+relying on receiving no rows. Reaches the consumers: the OpenAPI parameter
+description names the operator and the refusal, and the TypeScript client offers
+`day` on timestamp columns only.
+
+**BREAKING: an index is declared, never inferred.** `sqlb migrate` proposed
+`DROP INDEX CONCURRENTLY` for an index nothing had created, on every run, for a
+self-referencing reference declared the way `example/catalog` documents;
+applying it failed with `42704` and hand-correcting the file did not help,
+because the next unrelated change regenerated the same phantom
+([#259](https://github.com/jryannel/sqlb/issues/259), found building an
+application on `v0.14.0`). The chain ran through an implication: `ExternalRef`
+implied a single-column btree, so a registry read back out of a live database
+claimed an index that database did not have, while the declared side asked for
+no such index. The inference is what broke, not `introspect`'s choice — an
+implication a declaration does not state is one that cannot be checked against
+reality. `Field.Indexed()` is how a column asks for its own index now, and the
+advice the implication was carrying moves to `schema.Lint`'s `unindexed-ref`
+([ADR-0061](architecture.md#ddl-is-declared-never-inferred)). The mechanical
+edit is `.Indexed()` on every `ExternalRef` that relied on it. **Read the first
+migration generated after upgrading before applying it**: without that edit the
+diff proposes dropping the index — clean SQL that silently removes an index a
+join depends on. `sqlb check` names every unindexed reference.
+
+**BREAKING: a unique foreign key expands to an object, not a collection.** A
+reverse `Inverse` relation backed by a single-column `Ref(...).Unique()` can
+never match more than one row — the constraint already says so — and yet its
+expansion was a capped `{items, has_more}` envelope in the wire shape and in all
+three clients. It is now the target row, or `null`. `OneToOne` is *derived* from
+`Field.Unique` rather than declared, because a unique foreign key is a
+structural fact and not a policy opt-in like `Filterable`, and the break is
+recorded against the frozen list envelope on purpose:
+pre-1.0-or-never, following the `Executor` precedent
+([ADR-0060](architecture.md#a-unique-foreign-key-is-already-one-to-one)).
+The mechanical edit is to regenerate the Go model and the TypeScript and Dart
+clients, then read the expansion directly — nil-check in Go, null-check in
+TypeScript and Dart — instead of unwrapping `items`/`has_more`. Building it
+closed a gap in `restcompat`/`sqlb impact` as well: `Capture` had never walked
+`Registry.Inverses` at all, so an exposed reverse relation of *any* shape was
+invisible to the contract diff. An adopter with a checked-in
+`restcontract.json` predating this needs a one-time re-record.
+
+**A pluggable auth seam, and a WorkOS adapter that proves it composes.** Four
+providers were reinventing the same middleware. `sqlb.Verifier[T]` is the seam:
+a `Verify(ctx, token) (T, error)` an adapter implements, `Middleware[T]` puts
+the verified credential in the request context as the principal the scoping
+hooks already read, `BearerToken` extracts a token the same way everywhere it is
+trusted, and `TransientError` is what separates a provider outage from a bad
+credential — a rejected token answers `401`, an unreachable identity provider
+answers `500`, because collapsing the two teaches a caller to retry the one
+thing retrying cannot fix
+([ADR-0059](architecture.md#a-verifier-composes-with-the-principal-seam)).
+`example/auth-workos` is the first adapter, for WorkOS AuthKit, and it is its
+own Go module so the WorkOS SDK and the JWT/JWKS dependencies never reach sqlb
+core's `go.mod`. `TransientError` must be returned by value, not by pointer;
+its doc comment says so, because that is the file an adapter author reads.
+
+**A module's `fx` wiring is generated, not hand-copied.** sqlb emitted models, a
+manifest, a REST resource, three clients and a skill, and nothing that makes a
+schema-owning module a *unit* in a host's `uber-go/fx` graph — though two of the
+three things a module contributes there are already fully determined by the
+declaration. Measured in a real 38-module consumer
+([#171](https://github.com/jryannel/sqlb/issues/171)): 78 byte-identical
+migration providers, 183 operation-set literals, 209 `fx.Module(...)`
+declarations. `codegen.Options` grows `WiringMigrations` and `WiringOperations`,
+each a `WiringSet{Type, Group, Name, EmbedDir}` naming the host's own types as
+`"import/path.TypeName"` — a wrong name is a compile error in the generated
+file, not a runtime surprise. What is emitted is one `fx.Option` value,
+`FxModule`, rather than a wrapped `fx.Module`, so the hand-written module
+composes it and the generated file never carries a hand edit. This was tried
+once as a runtime library and rejected, and the rejection is recorded with the
+design ([ADR-0059](architecture.md#fx-wiring-is-generated-not-a-runtime-library)).
+`example/fxapp`'s store module is the proof: two hand-written providers became
+`var Module = fx.Module("store", FxModule)`.
+
+**Claiming a locked batch is one statement now.** The Postgres queue-claim idiom
+is `WITH claimed AS (SELECT ... FOR UPDATE SKIP LOCKED) UPDATE ... FROM claimed
+... RETURNING ...`. sqlb had both halves and no way to join them, so the only
+spelling was two statements inside an explicit transaction — and a caller who
+forgot `WithTx` silently reintroduced the double-claim race `SKIP LOCKED` exists
+to prevent ([#174](https://github.com/jryannel/sqlb/issues/174)).
+`Update[T].From(name, query)` renders the CTE form. `query` is the existing
+`Subquery` interface, so it shares the statement's compiler and bind numbering,
+and it gets the same resolution discipline: an unresolved query over a hooked
+model is refused rather than compiled with its scope missing.
+
+### Also in the engine and the generators
+
+- **`sqlb.Match(expr)`** gives a predicate spanning more than one column a typed
+  entry point — `(on_hand - reserved) >= $1` — where `RawPred` was the only way
+  in, and a rename in a raw string is a runtime break in exactly the statement
+  most likely to be under contention
+  ([#221](https://github.com/jryannel/sqlb/pull/221)).
+- **`Field.SharedAs(name)`** makes two columns declaring the same enum one Go
+  type instead of two nominally incompatible ones. Opt-in on purpose: matching
+  value sets today is not evidence of shared meaning, and `Registry.Validate`
+  refuses two declarations under one name whose values or order disagree
+  ([#197](https://github.com/jryannel/sqlb/issues/197)).
+- **`sqlb check` reads back the header it writes.** A generated migration
+  somebody has hand-edited to add a `CREATE TRIGGER` was invisible to both
+  existing gates. `check` now fails on a header-bearing file containing DDL
+  sqlb's own emitters never write, no database needed. A file with no header is
+  not sqlb's to police ([#178](https://github.com/jryannel/sqlb/issues/178)).
+- **A generated client that would not compile is a generator error.** Two tables
+  can want the same name — `board_columns` singularises onto what `boards` calls
+  its column type — and the failure used to arrive from `tsc` as two lines
+  naming neither table. Both the TypeScript and the Dart emitter now read back
+  what they are about to write and refuse a duplicate declaration, naming the
+  identifier, both tables and what each contributed
+  ([#261](https://github.com/jryannel/sqlb/issues/261)).
+- **`schema.Lint` is wired into `check`.** Twelve advisory rules existed and
+  nothing called them. Page-size fields with no `OpList` are dead config and now
+  say so; a required `Text` column with no default is an info-level note before
+  it is a `422`; `unindexed-ref` carries the advice the dropped index inference
+  used to ([#201](https://github.com/jryannel/sqlb/issues/201),
+  [#223](https://github.com/jryannel/sqlb/pull/223)).
+- **A write's generated response type stops lying.** `v0.11.0` made a
+  create/update omit a `Needs`-carrying computed column from its JSON response;
+  the clients were never told, so `post.myAcknowledged` typechecked as `boolean`
+  while being `undefined` ([#188](https://github.com/jryannel/sqlb/issues/188)).
+- **The seq-scan diagnostic gates on cost, not rows.** A scan's `Plan Rows` is
+  what its filter *kept*, so the rule got quieter exactly as the query became
+  the textbook missing-index case
+  ([#176](https://github.com/jryannel/sqlb/issues/176)).
+- **The typed facade names what `Hidden` omitted, and the word that brings one
+  back.** A consumer building an `api_tokens` table concluded the facade could
+  not express the query that table exists for and went to `sqlb.F(...)`, meeting
+  `LookupKey` afterwards ([#256](https://github.com/jryannel/sqlb/issues/256)).
+- **`sqlb init` writes `sqlb.md`**, so a scaffolded project's next steps, command
+  cheat-sheet, capability vocabulary and REST query grammar survive the terminal
+  that printed them ([#244](https://github.com/jryannel/sqlb/issues/244)); and
+  `generate` nudges for a second `go mod tidy` when its output grew an import
+  ([#204](https://github.com/jryannel/sqlb/issues/204)). A template's own
+  `//go:generate` line is no longer a directive at this repository's root
+  ([#200](https://github.com/jryannel/sqlb/issues/200)).
+- **studio mounts on someone else's mux.** `NewServer(m, apiBase, basePath)` —
+  every link, asset and redirect used to be root-absolute, so `StripPrefix`
+  loaded the index page once and 404'd everything on it
+  ([#225](https://github.com/jryannel/sqlb/pull/225)).
+
+### Docs
+
+**The 58 architecture decisions are one document.** `docs/adr/` was a directory
+of individually numbered files, each with its own hand-maintained revisions log
+that nothing read. They are now `### ` sections of
+[architecture.md](architecture.md)'s Decisions, folded one commit at a time so
+that *changing* a decision's reasoning is a commit arguing for the change — the
+way every other commit here already has to be. `git log -G'### <heading>' --
+docs/architecture.md` finds every commit that touched one. The `/adr/` route and
+the `adr-check` gate that guarded the directory are both retired.
+
+**Six hard cases, built.** `docs/special-cases.md` named six things real
+Postgres applications write that sqlb had no worked example for. All six are now
+lean standalone modules under `example/` — `tasks-evolved` (a non-additive schema
+change), `meter` (arithmetic upsert, composite key, `date_trunc` rollup),
+`outbox` (competing consumers, retry, dead-letter), `rooms` (`EXCLUDE`
+constraints), `vault` (a payload only Go may write, polymorphic owner) and
+`catalog` (self-referencing tree, search escalation) — and building them found
+three of that page's own verdicts already stale.
+
+**Four new pages and a skill.** `rest.Serve`, `sqlb init` and the admin mount
+had no user-facing page; a webhook endpoint is not a table and so is not a
+resource; [comparisons](comparisons.md) answers the Supabase and PocketBase row
+an evaluator asks for first. And `skills/sqlb-authoring` is the writing-direction
+sibling of the generated skill — what the DSL can express at all, rather than
+what one project's schema exposes ([#203](https://github.com/jryannel/sqlb/issues/203)).
+
 ## v0.14.0
 
 2026-08-14 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.14.0)
