@@ -14,6 +14,61 @@ break a surface listed there, and the break is described here with the
 mechanical edit that fixes it. [The road to 1.0](release-1.0.md) says what has
 to be true before that promise becomes permanent.
 
+## v0.15.1
+
+2026-08-19 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.15.1)
+
+Five fixes, four of them reported against v0.15.0 and one a gate correction
+found by review. No API change.
+
+`sqlb check`'s advisory output defaulted to every note it had ever printed,
+so a fourteen-table schema produced 102 lines with the one line it was run
+for at the bottom of them
+([#267](https://github.com/jryannel/sqlb/issues/267)). `-lint` now takes a
+floor — `off`, `summary` (the new default), `warn` or `all` — and `runCheck`
+records each failure rather than printing a verdict wherever it happens to
+find one, closing with a single line naming what failed or `sqlb: check
+passed` as the last line every time.
+
+`sqlb migrate` proposed a clean, correct-looking `DROP INDEX CONCURRENTLY`
+for an index sqlb never built, byte-identical to a drop the author intended
+and to the phantom v0.14 used to emit
+([#268](https://github.com/jryannel/sqlb/issues/268), upgrade from v0.14).
+`migrate` and `check -database` now annotate a drop with why: no
+header-bearing migration ever created the index, or its shape still matches
+what the old inference would have produced.
+
+`Hooks`' doc comment said only that a hook's error "reaches the caller
+unwrapped," which reads as the caller seeing that error — what the caller
+actually sees, absent a status, is a 500 with a sentence
+([#255](https://github.com/jryannel/sqlb/issues/255)). The doc comment now
+states the rule and points at `example/tasks/app/errors.go` for the pattern.
+
+The generated Go client had one seam for a header the schema cannot
+derive — replacing `Transport`, which reimplements all of `Do` — and a
+custom `Client.HTTP` silently dropped `--timeout` with it
+([#254](https://github.com/jryannel/sqlb/issues/254)). `Request` gained a
+`Header` field, applied caller-wins after the derived headers, and `Do` now
+wraps the context with `Client.Timeout` directly regardless of what HTTP
+client is in play.
+
+`sqlb generate` wrote every rendered file unconditionally, so a no-op
+regenerate still touched `models_gen.go` and forced gopls to throw away and
+rebuild the whole module's type index
+([#269](https://github.com/jryannel/sqlb/issues/269)). `generate` now skips
+a file whose rendered bytes already match disk, and replaces one that does
+change via temp-file + rename, so a language server reading on the event
+never observes a syntactically broken half-write.
+
+`adr-check` now fails when a citation number names two decisions, or a
+decision is cited under two numbers. ADR-0059 had quietly meant both "A
+Verifier composes with the principal seam" and "Fx wiring is generated, not
+a runtime library" for two releases before anyone read the two citations
+side by side; `example/tasks/README.md` had separately mislabelled the Go
+CLI decision as ADR-0030 against 28 citations giving that number to
+"Declared scope is required." Both are fixed and the gate now catches a
+repeat.
+
 ## v0.15.0
 
 2026-08-18 · [tag](https://github.com/jryannel/sqlb/releases/tag/v0.15.0)
