@@ -467,6 +467,7 @@ const UNPUBLISHED = new Map([
   ["special-cases-subject-go.md", "the same census for one subject, cited from pgtest/"],
   ["codebase-review-2026-08-02.md", "dated main-branch review snapshot, true only of the revision it names"],
   ["django-orm-comparison-2026-08-15.md", "dated capability comparison from a point-in-time discussion, not upkept documentation"],
+  ["auth-support-2026-08-21.md", "point-in-time report on the auth seam, not upkept documentation"],
 ]);
 
 async function checkDocsRoot(problems) {
