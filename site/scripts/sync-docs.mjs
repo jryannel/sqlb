@@ -465,6 +465,8 @@ const UNPUBLISHED = new Map([
   // whoever writes them rather than for anyone using sqlb.
   ["special-cases.md", "census of cases for the example suite, cited from example/ and pgtest/"],
   ["special-cases-subject-go.md", "the same census for one subject, cited from pgtest/"],
+  ["codebase-review-2026-08-02.md", "dated main-branch review snapshot, true only of the revision it names"],
+  ["django-orm-comparison-2026-08-15.md", "dated capability comparison from a point-in-time discussion, not upkept documentation"],
 ]);
 
 async function checkDocsRoot(problems) {
