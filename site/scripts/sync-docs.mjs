@@ -108,7 +108,7 @@ const SOURCES = [
   {
     dir: "docs/rest",
     route: "rest",
-    sequence: ["index", "filtering", "pagination", "expand", "actions", "admin", "events", "webhooks", "errors", "compatibility"],
+    sequence: ["index", "filtering", "pagination", "expand", "actions", "auth", "admin", "events", "webhooks", "errors", "compatibility"],
     order(slug) {
       return this.sequence.indexOf(slug);
     },

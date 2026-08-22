@@ -313,6 +313,7 @@ quietest wrong answer in the system. See
 - [Pagination](pagination.md) — offset, cursors, and `total`
 - [Expanding relations](expand.md) — `?expand`, both directions
 - [Actions](actions.md) — a domain verb with a generated envelope
+- [Authenticating a request](auth.md) — the identity seam, and the second stage it does not cover
 - [A cross-tenant admin surface](admin.md) — releasing a scope, and guarding the route it needs
 - [Change events](events.md) — an SSE stream of invalidations, and what it does not promise
 - [Webhooks and HTTP callbacks](webhooks.md) — receiving Stripe/Clerk-style callbacks, and sending your own
