@@ -45,6 +45,34 @@ type Verifier[T any] interface {
 	Verify(ctx context.Context, cred string) (T, error)
 }
 
+// VerifierFunc adapts an ordinary function to [Verifier], the way
+// http.HandlerFunc adapts one to http.Handler.
+//
+// Most verifiers are a single function closing over one dependency — a token
+// service, a JWKS cache, a database handle — with no state beyond that
+// closure. Without this adapter each one still costs a named struct and a
+// method that does nothing but call through, which is a type declared to
+// satisfy an interface rather than to mean anything:
+//
+//	verify := sqlb.VerifierFunc[Claims](func(ctx context.Context, cred string) (Claims, error) {
+//	    t, err := pat.Resolve(ctx, cred)
+//	    if err != nil {
+//	        return Claims{}, err
+//	    }
+//	    return Claims{Subject: t.UserID}, nil
+//	})
+//	protected := sqlb.Middleware[Claims](verify, sqlb.BearerToken)
+//
+// A verifier that does have state — a JWKS refresher with a background
+// goroutine, say — is still better as a named type; this is for the ones that
+// do not.
+type VerifierFunc[T any] func(ctx context.Context, cred string) (T, error)
+
+// Verify calls f.
+func (f VerifierFunc[T]) Verify(ctx context.Context, cred string) (T, error) {
+	return f(ctx, cred)
+}
+
 // TransientError marks a Verify failure as not-a-verdict-on-the-credential —
 // a network error reaching the provider, a provider 5xx, a timeout — so
 // Middleware answers 500 instead of 401. "The provider is down" and "the
