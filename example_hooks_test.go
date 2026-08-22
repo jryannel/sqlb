@@ -205,3 +205,54 @@ func (e exampleExec) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 		OnRollback: func() error { exampleLog = append(exampleLog, "ROLLBACK"); return nil },
 	}, nil
 }
+
+// A background worker acts as a synthetic principal — "system", with a tenant
+// but no user row — so its reads and writes run the same rules a request's do.
+// One rule cannot answer for it: the one that asks who the caller is. Naming
+// that rule at registration is what lets a worker handle release exactly it
+// while every other rule stays live, instead of reaching for a second,
+// unhooked handle and dropping the tenant boundary along with it.
+func ExampleDB_WithoutScope() {
+	type claims struct{ Subject, Org string }
+
+	reg := sqlb.NewRegistry()
+	hooks := sqlb.On[Article](reg)
+
+	// Tenant-shaped, and deliberately unnamed: nothing may release it.
+	hooks.BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Article]) error {
+		c, ok := sqlb.PrincipalFrom[claims](ctx)
+		if !ok {
+			return errors.New("no principal on this context")
+		}
+		q.Where(sqlb.F("org_id").Eq(c.Org))
+		return nil
+	})
+
+	// Identity-shaped, and named: "system" is not a user id, so this question
+	// has no answer for a worker.
+	hooks.Scope("membership").BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Article]) error {
+		c, _ := sqlb.PrincipalFrom[claims](ctx)
+		q.Where(sqlb.F("author_id").Eq(c.Subject))
+		return nil
+	})
+
+	db := exampleDB(reg)
+	ctx := sqlb.WithPrincipal(context.Background(), claims{Subject: "system", Org: "acme"})
+
+	if _, err := sqlb.Query[Article]().All(ctx, db); err != nil {
+		panic(err)
+	}
+	fmt.Println("request:", whereClause())
+
+	// The worker's handle is built next to the registry, so which rule anyone
+	// is allowed to escape is readable from the wiring.
+	worker := db.WithoutScope("membership")
+	if _, err := sqlb.Query[Article]().All(ctx, worker); err != nil {
+		panic(err)
+	}
+	fmt.Println("worker: ", whereClause())
+
+	// Output:
+	// request: ("org_id" = $1) AND ("author_id" = $2)
+	// worker:  "org_id" = $1
+}

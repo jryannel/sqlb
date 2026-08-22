@@ -480,6 +480,71 @@ the set of callers allowed to pass it is the whole question. That is why there i
 no `db.Unscoped()`: the answer to "who may escalate" should be readable from the
 wiring, not from every call site that happens to hold a handle.
 
+### A background worker releases one rule, not all of them
+
+The second registry above is the blunt instrument, and it is the right one for
+the three cases it names. There is a fourth case that looks like them and is
+not, and reaching for `sys` there costs more than it should.
+
+An agent, a queue consumer or a scheduled job usually acts as a **synthetic
+principal** — `Claims{Subject: "system", Workspace: msg.WorkspaceID, Role:
+RoleOwner}` — precisely so its writes go through the same hooks a request's do.
+That is the right instinct. It breaks on the one hook whose rule is
+*identity-shaped* rather than tenant-shaped: a read scoped by "is this subject a
+member" has nothing to ask about `"system"`, and the failure is a 500 from
+whatever the subquery does with a subject that is not a user id.
+
+The cheap answer is to route that one call through an unhooked handle. It is
+also the wrong one: the boundary is being bypassed by hand to escape a single
+rule, and the bypass drops *all* the rules — a tenant-scoped read now issued
+with nothing confining it. One consumer arrived at four structs each carrying a
+`{Sys, Hooks}` pair, where which handle a call site holds is convention,
+invisible to the type system and to review
+([#276](https://github.com/jryannel/sqlb/issues/276)).
+
+**Name the rule at registration instead, and release that one at the handle.**
+A scope name is why `Scope` exists:
+
+```go
+// Registration: the identity-shaped rule gets a name; the tenant-shaped one
+// does not, because nothing should ever be released from it.
+sqlb.On[Workspace](reg).Scope("membership").BeforeQuery(func(ctx context.Context, q *sqlb.Builder[Workspace]) error {
+    claims, ok := sqlb.PrincipalFrom[Claims](ctx)
+    if !ok {
+        return errors.New("no principal on this context")   // fail closed
+    }
+    q.Where(sqlb.F("id").InQuery(
+        sqlb.Query[Membership]().
+            Select(sqlb.F("workspace_id")).
+            Where(sqlb.F("user_id").Eq(claims.Subject)),
+    ))
+    return nil
+})
+sqlb.On[Card](reg).BeforeQuery(scopeToWorkspace)   // unnamed: absolute
+
+// Wiring, next to the registry so the release is visible in one place.
+requests := db.WithHooks(reg)
+worker   := db.WithHooks(reg).WithoutScope("membership")
+```
+
+The worker handle still runs every workspace rule, every soft-delete rule and
+every audit stamp. What it does not run is the one question that has no meaning
+for a principal that is not a user. And the release is a property of how the
+handle was assembled — `grep -rn WithoutScope` lists every rule anyone is
+allowed to escape, which is the readable-from-the-wiring property the section
+above is arguing for.
+
+Two things this does not get you. A model declared `Scoped` whose *every*
+`BeforeQuery` has been released still refuses to mount
+([ADR-0030](../architecture.md#declared-scope-is-required)) — releasing is not a
+way past the obligation check, it is a way to satisfy it with the other rules.
+And `WithoutScope` alone is not a route guard; [a cross-tenant admin
+surface](../rest/admin.md) is the version with the guard attached.
+
+Reach for the second registry when there is no principal at all — sign-in, a
+migration, a test fixture. Reach for a named scope when there *is* one and a
+single rule cannot answer for it.
+
 ## Next
 
 - [Inspecting and tracing](inspecting.md) — seeing what a hook did
