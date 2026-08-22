@@ -357,6 +357,57 @@ Postgres error into a 409 that names the problem — which is a good reason. Whe
 there is no constraint underneath, two concurrent requests will both pass the
 check; see [where domain logic goes](../concepts/domain-logic.md).
 
+### And it narrows every write that is not a generated one
+
+The hook above works for free behind every generated handler, because
+`rest.Resource` wraps each create, update and delete in a transaction. It does
+not work behind a plain `sqlb.InsertRows(&p).Exec(ctx, db)` from a worker, a
+cron job or a hand-written endpoint: there is no transaction on that context,
+`TxFrom` returns `false`, and the hook refuses.
+
+**The refusal is data-dependent**, which is what makes this worth a section.
+A hook that only reaches for `TxFrom` on the branch that validates a reference
+lets every row through until the first row that carries one — so the write path
+is green in tests, green in staging, and fails on a Tuesday against production
+data. Two consumers have now written that sentence down in a comment beside a
+helper they had to invent
+([#275](https://github.com/jryannel/sqlb/issues/275)).
+
+Nothing states the requirement at the call site, the registration site, or at
+compile time — a hook is free to need something the handle does not provide,
+and the need lives in the hook body. So there are two halves to keeping it
+legible, and both are on you today:
+
+**Open the transaction at the call site.** A direct write against a model whose
+hooks read is a unit of work, and `WithTx` is one line:
+
+```go
+err := db.WithTx(ctx, func(ctx context.Context, tx *sqlb.DB) error {
+    return sqlb.InsertRows(&p).Exec(ctx, tx)   // ctx carries tx, so TxFrom resolves
+})
+```
+
+Note the `ctx` the closure receives, not the outer one: that is the one carrying
+the transaction. Passing the outer `ctx` compiles and leaves `TxFrom` right back
+where it started.
+
+**Make the refusal name the hook**, so the failure is one grep rather than one
+afternoon:
+
+```go
+tx, ok := sqlb.TxFrom(ctx)
+if !ok {
+    return huma.Error500InternalServerError(
+        "Post.BeforeCreate validates list_id and needs a transaction; " +
+            "wrap this write in db.WithTx")
+}
+```
+
+What is deliberately *not* offered is a `TxFrom` that falls back to the bare
+executor when there is no transaction. That would turn a validating read into
+an unconfined one — the hook would answer from outside the tenant's rules, and
+quietly — which is worse than the error it replaced.
+
 ## Locking order
 
 A hook is also where a lock is taken deliberately, and **it has to be taken in
