@@ -450,3 +450,105 @@ func TestTimeoutBoundsARequestEvenWithACustomHTTPClient(t *testing.T) {
 		t.Errorf("Do failed for a reason other than the timeout: %v", err)
 	}
 }
+
+// #257: a hand-written command is only "like a generated one" if it holds the
+// client the root's persistent flags are bound to. Constructing its own would
+// compile, run, and ignore --base-url, --token and --timeout — a failure that
+// looks like a working command right up until the first flag.
+//
+// Asserted through the flag rather than the field: --base-url is set on the
+// root and has to reach a command the root did not generate.
+func TestHandWrittenCommandSharesTheRootsConfiguration(t *testing.T) {
+	var (
+		gotPath  string
+		gotAuth  string
+		gotBody  map[string]any
+		gotQuery url.Values
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth, gotQuery = r.URL.Path, r.Header.Get("Authorization"), r.URL.Query()
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"token":"tok-1","user_id":"u-1","workspace_id":"w-1","role":"owner"}`))
+	}))
+	defer server.Close()
+
+	// Exactly what cmd/taskctl/main.go assembles: one client, the generated
+	// tree, and the command the generator cannot write.
+	c := &client.Client{}
+	root := New(c)
+	root.AddCommand(NewLoginCommand(c))
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{
+		"login",
+		"--base-url", server.URL, // the root's flag, on a command it did not generate
+		"--token", "ignored-for-login",
+		"--email", "you@example.com",
+		"--password", "correct horse battery staple",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("login: %v — output was %q", err, out.String())
+	}
+
+	if gotPath != "/auth/login" {
+		t.Fatalf("path = %q, want /auth/login; --base-url did not reach the hand-written command", gotPath)
+	}
+	if gotAuth != "Bearer ignored-for-login" {
+		t.Errorf("Authorization = %q, want the root's --token, since one client configures both halves", gotAuth)
+	}
+	if gotBody["email"] != "you@example.com" || gotBody["password"] != "correct horse battery staple" {
+		t.Errorf("body = %v, want the two required flags", gotBody)
+	}
+	// Absent rather than empty: the server reads a missing workspace as "the
+	// oldest membership" and an empty slug as one that matches nothing.
+	if _, ok := gotBody["workspace"]; ok {
+		t.Errorf("body carries workspace = %v with the flag unset", gotBody["workspace"])
+	}
+	if len(gotQuery) != 0 {
+		t.Errorf("query = %v, want none", gotQuery)
+	}
+
+	// Run's conventions, not reimplemented ones: the response is JSON on the
+	// command's own writer, indented unless --compact.
+	var printed map[string]any
+	if err := json.Unmarshal(out.Bytes(), &printed); err != nil {
+		t.Fatalf("stdout did not decode as JSON: %v — %q", err, out.String())
+	}
+	if printed["token"] != "tok-1" {
+		t.Errorf("printed token = %v, want tok-1", printed["token"])
+	}
+	if !strings.Contains(out.String(), "\n  ") {
+		t.Errorf("output was not indented, so Run's writeJSON was bypassed: %q", out.String())
+	}
+}
+
+// The other half of behaving like a generated command: a rejection reaches the
+// operator as the server's problem document, with a non-zero exit, rather than
+// as a decoding error.
+func TestHandWrittenCommandRendersAProblem(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"title":"Unauthorized","status":401,"detail":"email or password is wrong"}`))
+	}))
+	defer server.Close()
+
+	c := &client.Client{BaseURL: server.URL}
+	root := New(c)
+	root.AddCommand(NewLoginCommand(c))
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"login", "--email", "you@example.com", "--password", "wrong"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("login against a 401 returned no error, so the command would exit 0")
+	}
+	if !strings.Contains(err.Error(), "email or password is wrong") {
+		t.Errorf("error = %v, want the problem document's detail", err)
+	}
+}

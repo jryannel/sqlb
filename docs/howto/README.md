@@ -52,6 +52,7 @@ than three guesses.
 | Notify another system when a row changes | [Events](../rest/events.md) and [Webhooks](../rest/webhooks.md) |
 | Control what a filter may express | [Filtering](../rest/filtering.md), and the [filter grammar reference](https://jryannel.github.io/sqlb/reference/filter-grammar/) |
 | Understand a rejection a client is seeing | [Errors](../rest/errors.md), and the [rejection reference](https://jryannel.github.io/sqlb/reference/rejections/) |
+| Add a command for an endpoint the generator cannot see | [Adding a command of your own](../cli/README.md#adding-a-command-of-your-own) — the seam `Client.Run` leaves, and the one client both halves share |
 
 ## Leaving
 
