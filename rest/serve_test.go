@@ -13,7 +13,7 @@ import (
 // exercised live in example/tasks2 against real Postgres instead.
 
 func TestServeRefusesAnEmptyDSN(t *testing.T) {
-	err := rest.Serve(context.Background(), rest.ServeConfig{}, func(*rest.Server, sqlb.Executor) error {
+	err := rest.Serve(context.Background(), rest.ServeConfig{}, func(*rest.Server, *sqlb.DB) error {
 		t.Fatal("mount was called despite an empty DSN")
 		return nil
 	})

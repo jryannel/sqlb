@@ -276,9 +276,80 @@ reading stdout both behave.
 
 Interactive prompts, a config file, output formatting beyond `--compact`,
 credential storage, and any command for an endpoint you wrote by hand.
-`example/tasks` has `POST /auth/login` on the same router, and the CLI has no
-command for it — the generated tree covers the generated CRUD and stops there.
+`example/tasks` has `POST /auth/login` on the same router, and nothing generic
+can emit a command for it — the endpoint mints the credential every other
+command sends, which is not a shape a schema describes.
 [ADR-0029](../architecture.md#go-cli) records why, and what would change it.
+
+## Adding a command of your own
+
+The boundary above is not a dead end, and the seam it leaves is deliberate.
+`Client.Run` takes a `context.Context` and an `io.Writer` rather than a
+`*cobra.Command`, precisely so a caller outside the generated tree can have the
+conventions the generated commands have: the response written to stdout as
+JSON, `--compact` honoured, a rejection rendered to stderr with its allow-list
+intact, and a non-zero exit. `New` returns the root, so `AddCommand` is right
+there.
+
+```go
+func NewLoginCommand(c *client.Client) *cobra.Command {
+    var email, password string
+    cmd := &cobra.Command{
+        Use:   "login",
+        Short: "Exchange an email and password for a bearer token",
+        Args:  cobra.NoArgs,
+        RunE: func(cmd *cobra.Command, _ []string) error {
+            return c.Run(cmd.Context(), cmd.OutOrStdout(), client.Request{
+                Method: http.MethodPost,
+                Path:   "/auth/login",
+                Body:   map[string]any{"email": email, "password": password},
+            }, false)
+        },
+    }
+    cmd.Flags().StringVar(&email, "email", "", "The account's email address. Required.")
+    _ = cmd.MarkFlagRequired("email")
+    cmd.Flags().StringVar(&password, "password", "", "The account's password. Required.")
+    _ = cmd.MarkFlagRequired("password")
+    return cmd
+}
+```
+
+Two arguments carry the whole convention. `cmd.Context()` is what `--timeout`
+and a Ctrl-C cancellation travel on — a `context.Background()` there compiles
+and silently un-bounds the request. `cmd.OutOrStdout()` is what a test captures,
+and what makes the command's output redirectable the way the generated ones are.
+
+**Then the part the four-line `main` above hides.** `cli.New(nil)` builds the
+`client.Client` internally and never hands it back, so the client your command
+holds has to be constructed in `main` and passed in — otherwise the hand-written
+command has a second configuration, and the root's `--base-url`, `--token` and
+`--timeout` reach everything except it:
+
+```go
+func main() {
+    c := &client.Client{}          // one client for the whole tree
+    root := cli.New(c)             // the root's persistent flags bind to it
+    root.AddCommand(cli.NewLoginCommand(c))
+
+    if err := root.Execute(); err != nil {
+        os.Exit(1)
+    }
+}
+```
+
+That failure has no compile error and no visible symptom until the first flag,
+which is why it is worth the paragraph. `example/tasks` is this, worked:
+[`cli/login.go`](../../example/tasks/cli/login.go) beside the generated
+`cli_gen.go`, assembled in
+[`cmd/taskctl/main.go`](../../example/tasks/cmd/taskctl/main.go), and pinned by
+two tests in
+[`cli/cli_test.go`](../../example/tasks/cli/cli_test.go) — one asserting that
+the root's `--base-url` and `--token` reach the hand-written command, one that a
+401 arrives as the server's problem document rather than a decoding error.
+
+A hand-written file lives in the generated package on purpose: the emitter names
+its own helper `runRequest` rather than `run` so that the name a consumer's file
+is likely to want stays free.
 
 ## Worked example
 

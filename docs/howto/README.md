@@ -45,11 +45,14 @@ than three guesses.
 | I want to | Read |
 |---|---|
 | Use my own router or middleware | [Bringing your own router](../rest/README.md#bringing-your-own-router) |
+| Find out who is calling, and scope the query to them | [Authenticating a request](../rest/auth.md) — the identity seam, then [Hooks](../queries/hooks.md) |
+| Resolve a tenant or role from a header, not just the token | [Identity is one stage; enrichment is another](../rest/auth.md#identity-is-one-stage-enrichment-is-another) |
 | Offer something CRUD does not cover | [Actions](../rest/actions.md) |
 | Give operators a way to browse the data | [Admin](../rest/admin.md) |
 | Notify another system when a row changes | [Events](../rest/events.md) and [Webhooks](../rest/webhooks.md) |
 | Control what a filter may express | [Filtering](../rest/filtering.md), and the [filter grammar reference](https://jryannel.github.io/sqlb/reference/filter-grammar/) |
 | Understand a rejection a client is seeing | [Errors](../rest/errors.md), and the [rejection reference](https://jryannel.github.io/sqlb/reference/rejections/) |
+| Add a command for an endpoint the generator cannot see | [Adding a command of your own](../cli/README.md#adding-a-command-of-your-own) — the seam `Client.Run` leaves, and the one client both halves share |
 
 ## Leaving
 

@@ -62,7 +62,7 @@ func main() {
 // mount is the seam rest.Serve leaves to the application — which resources,
 // which group, which middleware. Everything above it in main is the
 // boilerplate every sqlb server writes the same way.
-func mount(srv *rest.Server, db sqlb.Executor) error {
+func mount(srv *rest.Server, db *sqlb.DB) error {
 	// List has nothing that needs auth, so it mounts on the bare API — the
 	// same call the generated Register would make for it.
 	if err := rest.Resource[tasks2.List, tasks2.ListCreate, tasks2.ListPatch](srv.API, db, rest.Options{

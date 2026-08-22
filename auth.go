@@ -45,6 +45,34 @@ type Verifier[T any] interface {
 	Verify(ctx context.Context, cred string) (T, error)
 }
 
+// VerifierFunc adapts an ordinary function to [Verifier], the way
+// http.HandlerFunc adapts one to http.Handler.
+//
+// Most verifiers are a single function closing over one dependency — a token
+// service, a JWKS cache, a database handle — with no state beyond that
+// closure. Without this adapter each one still costs a named struct and a
+// method that does nothing but call through, which is a type declared to
+// satisfy an interface rather than to mean anything:
+//
+//	verify := sqlb.VerifierFunc[Claims](func(ctx context.Context, cred string) (Claims, error) {
+//	    t, err := pat.Resolve(ctx, cred)
+//	    if err != nil {
+//	        return Claims{}, err
+//	    }
+//	    return Claims{Subject: t.UserID}, nil
+//	})
+//	protected := sqlb.Middleware[Claims](verify, sqlb.BearerToken)
+//
+// A verifier that does have state — a JWKS refresher with a background
+// goroutine, say — is still better as a named type; this is for the ones that
+// do not.
+type VerifierFunc[T any] func(ctx context.Context, cred string) (T, error)
+
+// Verify calls f.
+func (f VerifierFunc[T]) Verify(ctx context.Context, cred string) (T, error) {
+	return f(ctx, cred)
+}
+
 // TransientError marks a Verify failure as not-a-verdict-on-the-credential —
 // a network error reaching the provider, a provider 5xx, a timeout — so
 // Middleware answers 500 instead of 401. "The provider is down" and "the
@@ -56,16 +84,31 @@ type Verifier[T any] interface {
 // verification, for instance — never has a transient failure mode and never
 // needs to return one; every error it returns is correctly a 401.
 //
-// Return this BY VALUE — TransientError{Err: err}, not &TransientError{Err:
-// err}. Middleware recognizes it with errors.As against a TransientError
-// (not *TransientError) target; a pointer does not match that check and
-// silently falls through to the 401 branch, which is precisely the
+// Return it by value — TransientError{Err: err} — which is the shape the rest
+// of this package and the WorkOS adapter use. A pointer is recognized too:
+// Go's error-wrapping idioms mostly return pointers, so &TransientError{Err:
+// err} is the natural slip, and when it was only matched by value that slip
+// fell silently through to the 401 branch — precisely the
 // provider-outage-looks-like-bad-credential conflation this type exists to
-// prevent.
+// prevent. A footgun a doc comment warns about is still a footgun, so
+// Middleware checks for both.
 type TransientError struct{ Err error }
 
 func (e TransientError) Error() string { return e.Err.Error() }
 func (e TransientError) Unwrap() error { return e.Err }
+
+// isTransient reports whether err carries a TransientError, returned either by
+// value or by pointer. errors.As matches one target type, and TransientError
+// and *TransientError are two — so this asks twice rather than obliging every
+// Verifier author to remember which one the check was written against.
+func isTransient(err error) bool {
+	var byValue TransientError
+	if errors.As(err, &byValue) {
+		return true
+	}
+	var byPointer *TransientError
+	return errors.As(err, &byPointer)
+}
 
 // Middleware wraps a Verifier[T] as net/http middleware: extract the
 // credential, verify it, and on success carry the resulting principal on
@@ -86,8 +129,7 @@ func Middleware[T any](v Verifier[T], extract CredentialExtractor) func(http.Han
 
 			principal, err := v.Verify(r.Context(), cred)
 			if err != nil {
-				var transient TransientError
-				if errors.As(err, &transient) {
+				if isTransient(err) {
 					writeProblem(w, http.StatusInternalServerError, "authentication could not be completed")
 					return
 				}

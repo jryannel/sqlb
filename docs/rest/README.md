@@ -107,7 +107,7 @@ defer stop()
 err := rest.Serve(ctx, rest.ServeConfig{
     DSN:     os.Getenv("DATABASE_URL"),
     Migrate: migrations.Apply,
-}, func(srv *rest.Server, db sqlb.Executor) error {
+}, func(srv *rest.Server, db *sqlb.DB) error {
     return blog.Register(srv.API, db)   // generated, or hand-written — whatever mounts
 })
 ```
@@ -116,6 +116,23 @@ err := rest.Serve(ctx, rest.ServeConfig{
 whether they need a `huma.Group`, what that group's middleware does. None of
 it is inferable from a schema value alone, and `Serve` does not try to guess
 it; everything before `mount` runs the same way in every application.
+
+`mount` receives a `*sqlb.DB`, not an `sqlb.Executor`. `Serve` opens the pool
+and wraps it a frame up, so it knows the concrete type — and the first thing a
+real mount usually does is attach its hook registry, which lives on `*sqlb.DB`:
+
+```go
+}, func(srv *rest.Server, db *sqlb.DB) error {
+    reg := sqlb.NewRegistry()
+    blog.RegisterHooks(reg)                 // your own, wherever they live
+    return blog.Register(srv.API, db.WithHooks(reg))
+})
+```
+
+That is the same handle a [`Scoped`](../schema/capabilities.md) model's
+mount-time obligation check runs against, so the seam hands you the value at
+the type the check needs. Passing `db` straight through still works wherever
+an `Executor` is wanted.
 
 | `ServeConfig` field | Default | |
 |---|---|---|
@@ -296,6 +313,7 @@ quietest wrong answer in the system. See
 - [Pagination](pagination.md) — offset, cursors, and `total`
 - [Expanding relations](expand.md) — `?expand`, both directions
 - [Actions](actions.md) — a domain verb with a generated envelope
+- [Authenticating a request](auth.md) — the identity seam, and the second stage it does not cover
 - [A cross-tenant admin surface](admin.md) — releasing a scope, and guarding the route it needs
 - [Change events](events.md) — an SSE stream of invalidations, and what it does not promise
 - [Webhooks and HTTP callbacks](webhooks.md) — receiving Stripe/Clerk-style callbacks, and sending your own
