@@ -26,6 +26,7 @@ than three guesses.
 |---|---|
 | Decide what a column should let clients do | [Capabilities](../schema/capabilities.md) — nothing is filterable, sortable or selectable unless it says so |
 | Point one table at another | [References and relations](../schema/references.md) |
+| Ship a library that declares its own tables | [A library that ships tables](../schema/libraries.md) — declare into the host's registry, never own the migrations |
 | Follow the project's schema conventions | [Schema and API practices](../best-practices.md) — each marked Enforced or Recommended |
 | Ship a schema edit to a running database | [Rolling out a migration](../migrations/rollout.md) |
 | Rename or drop a column without breaking clients | [Refactoring a database](../migrations/refactoring-a-database.md), then [REST compatibility](../rest/compatibility.md) — a clean rename is still a wire break |

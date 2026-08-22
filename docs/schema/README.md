@@ -699,6 +699,8 @@ verdict.
 - [Capabilities](capabilities.md) — what each column lets the outside world do
 - [References and relations](references.md) — foreign keys, and both directions
   of one
+- [A library that ships tables](libraries.md) — declaring into a host's registry
+  rather than owning a migration sequence
 - [Schema practices](../best-practices.md) — which opinions the DSL enforces,
   which it only recommends, and which refusals are merely unbuilt
 - [Migrations](../migrations/README.md) — turning a schema edit into DDL
