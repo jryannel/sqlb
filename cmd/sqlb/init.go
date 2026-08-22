@@ -341,7 +341,7 @@ func main() {
 // mount is the seam rest.Serve leaves to the application. This scaffold
 // declares one table and no actions, mutations or queries, so it is one
 // call; a schema that grows any of those grows this func, not rest.Serve.
-func mount(srv *rest.Server, db sqlb.Executor) error {
+func mount(srv *rest.Server, db *sqlb.DB) error {
 	return {{.Pkg}}.Register(srv.API, db)
 }
 

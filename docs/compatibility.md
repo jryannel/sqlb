@@ -240,6 +240,21 @@ Named in advance, so the break is a documented plan rather than a surprise.
   file when it drifts, so the mechanical edit is `sqlb generate`. A project
   that never sets `WiringMigrations` or `WiringOperations` has no exposure.
 
+- ~~**`rest.Serve`'s mount callback.**~~ Landed: `mount` is now
+  `func(*rest.Server, *sqlb.DB) error` rather than taking a `sqlb.Executor`.
+  `Serve` builds the handle itself, so it always knew the concrete type; handing
+  out the interface meant every mount that attaches a hook registry — which is
+  the seam's own headline use, since `WithHooks` and `WithTx` live on `*sqlb.DB`
+  and not on `Executor` — opened with a type assertion to recover what the
+  caller of the callback held one frame up
+  ([#277](https://github.com/jryannel/sqlb/issues/277)).
+
+  The mechanical edit is deleting that assertion, and nothing else: `*sqlb.DB`
+  satisfies `Executor`, so a mount that only passes `db` on to a generated
+  `Register` compiles unchanged. Listed here after the fact rather than before
+  it — the entry is owed either way, and the break is the cheap kind, a compile
+  error at one line in one function per application.
+
 ### Five that broke without being listed here first
 
 `v0.6.0` broke three surfaces that were not under *Will move*, `v0.11.0` broke

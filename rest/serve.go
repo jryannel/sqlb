@@ -66,10 +66,19 @@ type ServeConfig struct {
 //	err := rest.Serve(ctx, rest.ServeConfig{
 //	    DSN:     os.Getenv("DATABASE_URL"),
 //	    Migrate: migrations.Apply,
-//	}, func(srv *rest.Server, db sqlb.Executor) error {
-//	    return myapp.Register(srv.API, db, myapp.Actions{})
+//	}, func(srv *rest.Server, db *sqlb.DB) error {
+//	    return myapp.Register(srv.API, db.WithHooks(myapp.Hooks()), myapp.Actions{})
 //	})
-func Serve(ctx context.Context, cfg ServeConfig, mount func(*Server, sqlb.Executor) error) error {
+//
+// mount receives the handle at the type Serve built it as, *sqlb.DB, rather
+// than the sqlb.Executor interface. Serve constructs it a frame up, so it
+// knows the concrete type, and the thing a mount most often does first is
+// attach a hook registry — [sqlb.DB.WithHooks], which lives on *sqlb.DB and
+// not on Executor. Handing out the interface made every real mount open with
+// a type assertion to recover what the caller already held
+// ([#277](https://github.com/jryannel/sqlb/issues/277)). Passing db straight
+// on to a Register func still works: *sqlb.DB satisfies Executor.
+func Serve(ctx context.Context, cfg ServeConfig, mount func(*Server, *sqlb.DB) error) error {
 	if cfg.DSN == "" {
 		return errors.New("rest: ServeConfig.DSN is required")
 	}
