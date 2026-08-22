@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -181,9 +182,30 @@ func TestMiddleware_InvalidCredential(t *testing.T) {
 	}
 }
 
+// TestMiddleware_TransientError covers both shapes a Verifier can return a
+// TransientError in. By value is what the doc comment asks for; by pointer is
+// what Go's error-wrapping habits produce, and it used to fall through to the
+// 401 branch — the exact conflation the type exists to prevent (#278).
 func TestMiddleware_TransientError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"by value", sqlb.TransientError{Err: errors.New("dial tcp: i/o timeout")}},
+		{"by pointer", &sqlb.TransientError{Err: errors.New("dial tcp: i/o timeout")}},
+		{"wrapped by value", fmt.Errorf("verifying: %w", sqlb.TransientError{Err: errors.New("provider 503")})},
+		{"wrapped by pointer", fmt.Errorf("verifying: %w", &sqlb.TransientError{Err: errors.New("provider 503")})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transientCase(t, tc.err)
+		})
+	}
+}
+
+func transientCase(t *testing.T, verifyErr error) {
+	t.Helper()
 	v := sqlb.VerifierFunc[testPrincipal](func(ctx context.Context, cred string) (testPrincipal, error) {
-		return testPrincipal{}, sqlb.TransientError{Err: errors.New("dial tcp: i/o timeout")}
+		return testPrincipal{}, verifyErr
 	})
 	nextCalled := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
